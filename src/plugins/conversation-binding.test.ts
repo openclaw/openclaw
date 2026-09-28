@@ -7,10 +7,6 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -559,62 +555,52 @@ describe("plugin conversation binding approvals", () => {
 
   it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
     await closeOpenClawStateDatabaseAsync();
-    await withStateDatabaseCoordinatorRuntimeDirectory(
-      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-      async () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(1_000);
-        const request = await requestPendingBinding(
-          createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
-        );
-
-        // The deadline check is authoritative even when the event loop has not dispatched the timer.
-        vi.setSystemTime(1_000 + 30 * 60_000);
-        await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
-          status: "expired",
-        });
-        expect(sessionBindingState.bind).not.toHaveBeenCalled();
-        // Retire storage's independent idle timer before counting approval timers.
-        await closeOpenClawStateDatabaseAsync();
-        expect(vi.getTimerCount()).toBe(0);
-      },
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
     );
+
+    // The deadline check is authoritative even when the event loop has not dispatched the timer.
+    vi.setSystemTime(1_000 + 30 * 60_000);
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    // Retire storage's independent idle timer before counting approval timers.
+    await closeOpenClawStateDatabaseAsync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("evicts the oldest pending bind approval after 512 requests", async () => {
     await closeOpenClawStateDatabaseAsync();
-    await withStateDatabaseCoordinatorRuntimeDirectory(
-      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-      async () => {
-        vi.useFakeTimers();
-        const requests = [];
-        for (let index = 0; index < 513; index += 1) {
-          requests.push(
-            await requestPendingBinding(
-              createDiscordCodexBindRequest(
-                `channel:bounded-${index}`,
-                `Bind this conversation to Codex thread ${index}.`,
-              ),
-            ),
-          );
-        }
+    vi.useFakeTimers();
+    const requests = [];
+    for (let index = 0; index < 513; index += 1) {
+      requests.push(
+        await requestPendingBinding(
+          createDiscordCodexBindRequest(
+            `channel:bounded-${index}`,
+            `Bind this conversation to Codex thread ${index}.`,
+          ),
+        ),
+      );
+    }
 
-        // Pending approvals outlive database actors; count only their owned timers.
-        await closeOpenClawStateDatabaseAsync();
-        expect(vi.getTimerCount()).toBe(512);
-        const oldest = requests[0];
-        const newest = requests[512];
-        if (!oldest || !newest) {
-          throw new Error("expected bounded pending requests");
-        }
-        await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
-          status: "expired",
-        });
-        await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
-          status: "denied",
-        });
-      },
-    );
+    // Pending approvals outlive database actors; count only their owned timers.
+    await closeOpenClawStateDatabaseAsync();
+    expect(vi.getTimerCount()).toBe(512);
+    const oldest = requests[0];
+    const newest = requests[512];
+    if (!oldest || !newest) {
+      throw new Error("expected bounded pending requests");
+    }
+    await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
+      status: "denied",
+    });
   });
 
   it("keeps allow-once approval scoped to its requester and conversation", async () => {
@@ -948,34 +934,21 @@ describe("plugin conversation binding approvals", () => {
       decision: "allow-once" as const,
       expectedStatus: "approved" as const,
       expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: {
-            pluginId: string;
-            pluginRoot: string;
-            conversationId: string;
-          };
-          decision: string;
+        expect(payload).toMatchObject({
+          status: "approved",
+          binding: {
+            pluginId: "codex",
+            pluginRoot: "/plugins/callback-test",
+            conversationId: "channel:callback-test",
+          },
+          decision: "allow-once",
           request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("approved");
-        expect(callback.binding?.pluginId).toBe("codex");
-        expect(callback.binding?.pluginRoot).toBe("/plugins/callback-test");
-        expect(callback.binding?.conversationId).toBe("channel:callback-test");
-        expect(callback.decision).toBe("allow-once");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread abc.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
+            summary: "Bind this conversation to Codex thread abc.",
+            detachHint: undefined,
+            requestedBySenderId: "user-1",
+          },
+        });
+        expect(payload).toHaveProperty("request.conversation", {
           channel: "discord",
           accountId: "isolated",
           conversationId: "channel:callback-test",
@@ -1000,28 +973,17 @@ describe("plugin conversation binding approvals", () => {
       decision: "deny" as const,
       expectedStatus: "denied" as const,
       expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: unknown;
-          decision: string;
+        expect(payload).toMatchObject({
+          status: "denied",
+          binding: undefined,
+          decision: "deny",
           request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("denied");
-        expect(callback.binding).toBeUndefined();
-        expect(callback.decision).toBe("deny");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread deny.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
+            summary: "Bind this conversation to Codex thread deny.",
+            detachHint: undefined,
+            requestedBySenderId: "user-1",
+          },
+        });
+        expect(payload).toHaveProperty("request.conversation", {
           channel: "telegram",
           accountId: "default",
           conversationId: "8460800771",

@@ -159,7 +159,16 @@ live bucket. With the current 10,000-registration bucket, keep planned
 Blacksmith burst load under 6,000 registrations per 5 minutes with headroom for
 ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
-The compact cap is 90 rows; the final Node matrix caps are 70 push and 130 PR rows. With the conservative 80 potentially eligible non-Node jobs, this bounds main at 150 registrations and PRs at 210. The retained four-main/21-PR arrival envelope is `4 × 150 + 21 × 210 = 5,010`, leaving 990 below the 6,000 reference target for adjacent repositories, releases and carryover. Relative to the former 64/120 Node caps, this reserves six additional registrations per push or ten per PR: `4 × 6 + 21 × 10 = 234` per envelope. Compact rows are part of the final Node matrix, so do not count their ten-row increase again. This is a conditional arrival bound, not live organization-wide capacity proof.
+The compact cap is 90 rows; final Node caps are 70 push and 130 PR rows.
+The current automatic main/PR source has a conservative union of 71 potentially
+self-hosted non-Node rows, including five core-lint stripes for trusted forks,
+five type stripes, five Windows rows, and thirteen UI E2E rows. Retain an 84-row
+allowance with thirteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
+four-main/21-PR arrival envelope, leaving 890 below the 6,000 reference target.
+The six extension-lint rows remain hosted. Manual/frozen releases and other
+workflows are outside this envelope. This is conditional planning, not live
+organization-wide capacity proof; older 5,010/5,085/5,160 examples below describe
+historical inventories and do not replace this source-audited reserve.
 
 ## Safe Levers
 
@@ -208,9 +217,16 @@ These are intentionally guarded by the `ci-workflow-guards`,
   include short-publisher turnover in burst estimates. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- `ci-gate` always uses `ubuntu-24.04` for its Bash-only result aggregation,
-  without checkout or dependency setup. This removes one Blacksmith registration
-  from previously eligible runs; hosted assignment can still delay completion.
+- Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
+  4-class and the packed core-lint rows to the 16/8-classes after hosted assignment
+  added 416 seconds to main's critical chain. Admitted qualifications use the
+  same route. The first packed lint row took 621s on the 8-class; retain four
+  actual CPUs for that row. The gate has no checkout or dependency setup; retries, ordinary
+  manual dispatches, untrusted contexts, and the GitHub override stay hosted.
+  Core lint additionally retains hosted routing for frozen targets. Normal hybrid
+  main/same-repository PRs add three assignments; trusted fork PRs can add six
+  because their logical GitHub profile emits five lint rows. These fit the fresh
+  71-row union and reserved 84-row non-Node allowance described above.
   Trusted automatic hybrid first-attempt `preflight` requests the existing
   16-class after hosted assignment stalled across three nearby runs while
   Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
@@ -219,12 +235,26 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and the `github` override retain hosted routing. `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget two control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, one when admitted,
-  and one per normal Blacksmith run. Both jobs already occur in the retained
-  conservative non-Node inventory, preserving the 5,010-registration cap model.
-  The aggregate uses `!cancelled()` to report failed prerequisites without
-  holding a superseded run open after workflow cancellation.
+  outage override remains intact. Budget three control-job registrations per eligible
+  hybrid first attempt when optional hosted admission is closed, two when admitted,
+  and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
+  Optional compiler/check offloads reject observed hosted assignment waits at
+  sixty seconds; the former three-minute cutoff exceeded the latency objective.
+  API and job deadlines remain unchanged.
+  The aggregate preserves failure-triggered PR cancellation through the
+  `pr-fail-fast` cause outputs; superseded runs without a failure cause still
+  skip the aggregate. PR Node matrices use native fail-fast. The same-repository
+  PR first-attempt monitor alone has `actions: write` and adds one 4-class registration per
+  eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
+  matrices remain complete. The monitor starts after preflight, observes failures
+  while the installed check planner waits, and uses the planner's successful
+  versioned count step for exact completion rather than its early reservations.
+  Existing critical-path routing serves hybrid failures; only the uncovered
+  default/explicit-Blacksmith failure case adds the same 4-class route. Retries,
+  ordinary manual dispatches and the GitHub override retain hosted aggregation.
+  The monitor consumes one existing non-Node reserve slot: the 71-row union
+  leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
+
 - Automatic canonical hybrid first attempts count every selected hosted row in
   preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
   rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
@@ -242,8 +272,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   lists and package commands; channel invocations retain four project slots and
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 5,
-  and Android at 2. Every compact profile has an enforced 90-row budget, plugin
+- CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
+  trusted same-repository PR first attempts on a non-frozen Blacksmith or hybrid plan, and otherwise 96; Windows stays at 5 and Android at 2.
+  Hosted plans, RunsOn, forks, retries, main, and all manual/qualification dispatches
+  retain 96. This removes a second admission wave for 97–130-row PRs without
+  adding jobs or planned vCPU-minutes. Keep the 130/70/90 PR/main/compact row
+  caps and 5,110-registration arrival envelope; it already counts every PR row
+  inside five minutes. Actual provider capacity and the wall need native proof. Every compact profile has an enforced 90-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 70 push or
   130 PR rows, including precise plans. Preflight reserves actual appended
   plugin Node rows in compact admission so existing hosted tooling compaction
@@ -370,6 +405,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith and hybrid compact bins with multiple ordinary groups request the
   existing 32-vCPU class and two child slots with a 360s aggregate budget.
+  Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
+  budget. Ordinary self-hosted bins share promoted capacity across logical
+  classes; the existing group exchange fills stranded slots without raising caps.
+  Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
+  matrix predictions use that same queue. Admission retains aggregate work caps
+  and separately charges the measured 60s runtime preparation.
+  Hosted hourly tooling retains its 720s total budget (660s work plus 60s setup)
+  with complete hosted file prices and no native wall observations.
   Compatible two-slot bins use the time budget without the ten-group cutoff;
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s by default, and groups above their serial cap stay alone.
@@ -383,7 +426,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Prefer an exact measurement; otherwise use the maximum compatible contained
   workload as an advisory floor, never sum overlaps or treat globs as whole files.
   Whole pinned runtime groups may move to existing compatible ordinary jobs under
-  a 440s budget including the existing 100s build reserve. Keep runner anchors,
+  a 360s budget including the 60s build reserve. Keep runner anchors,
   test partitions, invocation counts and worker limits. An ordinary recipient
   becomes serial, explicitly retaining its old parallel groups' two-worker budget
   while preserving their prepared timing identities and complete parent
@@ -403,6 +446,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.
+  Gateway methods use four workers in serial, non-frozen self-hosted jobs with
+  at least eight actual CPUs and 28 GiB memory, with the existing two-worker
+  fallback elsewhere. Keep its worker-specific timing identity and require
+  three original-shard replays plus sampled memory evidence when changing it.
   The measured Gateway server-isolated/database-worker family uses at most eight
   workers only in a serial, non-frozen self-hosted job with at least eight actual
   CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
@@ -421,10 +468,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   current file costs by effective workers without dividing the longest file.
   Docker helper fixtures retain their separate serial config. This does not
   promote hosted or hybrid tooling; capacity alone is not a measured speedup.
-- Numbered tooling measurements are collected in `toolingFileSeconds` ahead of
-  planner activation, which remains blocked on hosted/hybrid row capacity. The daily refit samples the
-  newest five successful PR CI runs because main-push plans omit this family.
-  Those measurements describe the PR merge-ref and update only tooling files;
+- Numbered tooling measurements in `toolingFileSeconds` drive file packing with
+  native profile costs; a hosted fallback scales measured Blacksmith costs.
+  The daily refit samples the newest five contributing successful PR CI runs.
+  Those measurements describe the PR merge-ref and update exact compact and tooling identities;
   main compact and release sampling retain their existing provenance. Preserve
   independent-run medians, runner profiles and partial-plan history. An explicit
   `--tooling-run <id>` seed records its source and may use one successful run.
@@ -491,14 +538,17 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and QA; zero failures in 20 Docker and 80 QA main jobs is limited evidence,
   not a measured post-change saving. Keep backend settings, caps, budgets and
   timeouts unchanged, and verify actual emitted rows and timings.
-- GitHub/hybrid test types use three jobs: two paired core rows run the original
-  stripes 1+2 and 3+4 sequentially; the central row runs stripe 5 before the
-  extensions/scripts/root tail. Keep every canonical core test graph, at most two compiler
-  children per stripe, and one builder per child. The central fifth stripe
-  retains the standalone core resource environment. A failing stripe stops its
-  row; other matrix rows keep running. Pure Blacksmith and targets without
-  stripe support retain the full central path. Measure the combined jobs
-  natively; fewer registrations alone do not prove the eight-minute target.
+- Current GitHub/hybrid test types use five canonical core stripe jobs plus
+  the central extensions/scripts/root tail. Eligible core-change PRs keep the
+  same rows: each validates the complete graph boundary and intersects selected
+  consumers with its original stripe. Empty intersections stay empty; ambiguous
+  selection falls back to every canonical graph across those same stripes.
+  Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
+  with stripe 5 in the central row. Keep at most two compiler children per
+  stripe and one builder per child. A failing stripe stops its row; other
+  matrix rows keep running. Pure Blacksmith and targets without stripe support
+  retain the central path. Keep row caps and deadlines unchanged; measure actual
+  hosted completion rather than inferring wall-time savings from partitioning.
 - CPU-heavy test-type, core test-type stripe, and runtime-topology jobs in `ci.yml`
   request `blacksmith-16vcpu-ubuntu-2404`. The separate `openclaw-npm-preflight.yml`
   jobs retain `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
@@ -570,8 +620,11 @@ full 40-character head SHA:
 node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
-Use hosted exact-head gates for CI workflow tuning. Do not burn local
-`pnpm test` on unrelated full-suite proof.
+Use hosted exact-head gates for CI workflow tuning. This explicitly selects
+completed-proof mode, not the default pending-GitHub handoff in the
+[maintainer landing workflow](../openclaw-pr-maintainer/references/landing.md#review-prepare-merge).
+Do not burn local `pnpm test` on unrelated full-suite proof. Never combine
+`OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
 
 Only after the maintainer explicitly asks you to prepare or land the PR, run the
 repo-native mutating wrapper:
@@ -580,7 +633,7 @@ repo-native mutating wrapper:
 scripts/pr review-init <pr>
 scripts/pr review-artifacts-init <pr>
 scripts/pr review-validate-artifacts <pr>
-OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
+env -u OPENCLAW_PR_GATES_REMOTE OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
 ```
 
 `prepare-run` can push a prepared commit to the PR branch. Only run

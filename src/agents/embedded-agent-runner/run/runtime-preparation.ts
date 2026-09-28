@@ -573,7 +573,13 @@ export async function prepareEmbeddedRunRuntime(input: {
       authoredContextTokenCap,
       contextWindowInfo,
       outerContextTokenMeta,
-      activePreparedAuthPlan,
+      activePreparedAuthPlan: authState.apiKeyInfo
+        ? {
+            ...activePreparedAuthPlan,
+            selectedAuthMode: authState.apiKeyInfo.mode,
+            selectedAuthFlow: authState.apiKeyInfo.authFlow,
+          }
+        : activePreparedAuthPlan,
       thinkLevel: authState.thinkLevel,
       apiKeyInfo: authState.apiKeyInfo,
       lastProfileId: authState.lastProfileId,

@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway child process lifecycle behavior.
 import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { finished } from "node:stream/promises";
@@ -271,13 +270,6 @@ type QaGatewayChildStopOptions = {
   inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
 };
 
-function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
-  return {
-    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
-  };
-}
-
 function formatQaGatewayProcessTreeDiagnostics(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
@@ -302,17 +294,20 @@ export async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
-  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (
-    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+    await waitForQaGatewayChildExit(
+      child,
+      opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+      inspectLinuxProcessGroupFn,
+    )
   ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
   const stopped = await waitForQaGatewayChildExit(
     child,
-    timeouts.forceTimeoutMs,
+    opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
     inspectLinuxProcessGroupFn,
   );
   if (!stopped) {

@@ -178,8 +178,14 @@ describe("legacy managed outgoing image migration", () => {
         createdAt: "2026-07-15T00:00:00.000Z",
       },
     });
-    const rmSpy = vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
-      throw new Error("synthetic attachment remove failure");
+    const remove = fs.rmSync;
+    let attachmentRemovalFailed = false;
+    const rmSpy = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (target === legacy.originalPath) {
+        attachmentRemovalFailed = true;
+        throw new Error("synthetic attachment remove failure");
+      }
+      return remove(target, options);
     });
 
     let result!: ReturnType<typeof migrate>;
@@ -189,6 +195,7 @@ describe("legacy managed outgoing image migration", () => {
       rmSpy.mockRestore();
     }
 
+    expect(attachmentRemovalFailed).toBe(true);
     expect(result.warnings.join("\n")).toContain("synthetic attachment remove failure");
     await fsp.access(legacy.sourcePath);
     await fsp.access(legacy.originalPath);
@@ -198,7 +205,7 @@ describe("legacy managed outgoing image migration", () => {
   it("fails atomically on a conflicting SQLite row and retains every source", async () => {
     const first = await writeLegacyRecord({ stateDir, index: 1 });
     const second = await writeLegacyRecord({ stateDir, index: 2 });
-    insertManagedImageRecord(
+    await insertManagedImageRecord(
       {
         attachmentId: second.record.attachmentId,
         sessionKey: "agent:other:main",
@@ -243,8 +250,9 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.writeFile(targetPath, "{}");
     await fsp.symlink(targetPath, malformedPath);
     const symlinked = migrate(stateDir);
-    expect(symlinked.warnings.join("\n")).toContain("non-symlink file");
+    expect(symlinked.warnings.join("\n")).toContain("regular file");
     expect(fs.lstatSync(malformedPath).isSymbolicLink()).toBe(true);
+    expect(await fsp.readFile(targetPath, "utf8")).toBe("{}");
   });
 
   it.each([

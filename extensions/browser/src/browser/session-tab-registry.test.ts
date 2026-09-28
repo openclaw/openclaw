@@ -26,7 +26,7 @@ function trackSessionBrowserTab(params: Parameters<typeof trackSessionBrowserTab
   if (params.sessionKey) {
     trackedSessionKeys.add(params.sessionKey);
   }
-  trackSessionBrowserTabRuntime(params);
+  return trackSessionBrowserTabRuntime(params);
 }
 
 describe("session tab registry", () => {
@@ -52,7 +52,7 @@ describe("session tab registry", () => {
       return release.promise;
     };
     const sessionKey = "agent:main:main";
-    trackSessionBrowserTab({ sessionKey, targetId: "loading-client" });
+    await trackSessionBrowserTab({ sessionKey, targetId: "loading-client" });
     const onWarn = vi.fn();
     const closeTab = vi.fn<() => Promise<void>>(() => {
       throw new Error("close failed");
@@ -74,13 +74,13 @@ describe("session tab registry", () => {
   });
 
   it("tracks and closes tabs for normalized session keys", async () => {
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "Agent:Main:Main",
       targetId: "tab-a",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
       profile: "OpenClaw",
     });
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "tab-b",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
@@ -107,7 +107,7 @@ describe("session tab registry", () => {
   });
 
   it("closes tracked tabs through the raw target-id client path", async () => {
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW_TARGET",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
@@ -126,7 +126,7 @@ describe("session tab registry", () => {
 
   it("closes node-proxy tabs through their route-owned raw-target closer", async () => {
     const closeTarget = vi.fn(async () => ({ status: "closed" as const }));
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "NODE_TARGET",
       profile: "user",
@@ -150,7 +150,7 @@ describe("session tab registry", () => {
       .mockRejectedValueOnce(new Error("404: tab not found"))
       .mockResolvedValueOnce({ status: "closed" });
     const onWarn = vi.fn();
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "chrome-mcp:old-nonce:1",
       profile: "user",
@@ -171,7 +171,7 @@ describe("session tab registry", () => {
   });
 
   it("coalesces overlapping lifecycle and sweep cleanup for one volatile target", async () => {
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-tab",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
@@ -197,9 +197,9 @@ describe("session tab registry", () => {
   });
 
   it("untracks a specific tab and never adopts unknown user tabs", async () => {
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-b" });
-    untrackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-b" });
+    await untrackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
     const closeTab = vi.fn(async () => {});
 
     await expect(
@@ -225,14 +225,14 @@ describe("session tab registry", () => {
     "preserves %s activity semantics while the raw client loads",
     async (kind) => {
       const tab = { sessionKey: "agent:main:main", targetId: "active-tab" };
-      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await trackSessionBrowserTab({ ...tab, now: 1_000 });
       const cleanup =
         kind === "lifecycle"
           ? closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey] })
           : sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1 });
       await Promise.resolve();
       expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
-      touchSessionBrowserTab({ ...tab, now: 11_000 });
+      await touchSessionBrowserTab({ ...tab, now: 11_000 });
       await expect(cleanup).resolves.toBe(kind === "lifecycle" ? 1 : 0);
       expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
         kind === "lifecycle" ? 1 : 0,
@@ -244,7 +244,7 @@ describe("session tab registry", () => {
     "shares lifecycle cleanup after a preparing sweep is revoked (closeFails=%s)",
     async (closeFails) => {
       const tab = { sessionKey: "agent:main:main", targetId: "touched-sweep" };
-      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await trackSessionBrowserTab({ ...tab, now: 1_000 });
       const sweep = sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1 });
       const closeTab = vi.fn(() => {
         if (closeFails) {
@@ -255,7 +255,7 @@ describe("session tab registry", () => {
       const lifecycle = () =>
         closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab });
       const pending = [sweep, lifecycle(), lifecycle()];
-      touchSessionBrowserTab({ ...tab, now: 11_000 });
+      await touchSessionBrowserTab({ ...tab, now: 11_000 });
 
       await expect(Promise.all(pending)).resolves.toEqual([0, closeFails ? 0 : 1, 0]);
       expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
@@ -274,8 +274,8 @@ describe("session tab registry", () => {
   it("does not adopt a new registration while an earlier selected tab closes", async () => {
     const sessionKey = "agent:main:main";
     const next = { sessionKey, targetId: "next-tab" };
-    trackSessionBrowserTab({ sessionKey, targetId: "first-tab", now: 1_000 });
-    trackSessionBrowserTab({ ...next, now: 1_000 });
+    await trackSessionBrowserTab({ sessionKey, targetId: "first-tab", now: 1_000 });
+    await trackSessionBrowserTab({ ...next, now: 1_000 });
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const closeTab = vi.fn(async ({ targetId }: { targetId: string }) => {
@@ -287,8 +287,8 @@ describe("session tab registry", () => {
     const cleanup = closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab });
     try {
       await entered.promise;
-      untrackSessionBrowserTab(next);
-      trackSessionBrowserTab({ ...next, now: 1_000 });
+      await untrackSessionBrowserTab(next);
+      await trackSessionBrowserTab({ ...next, now: 1_000 });
     } finally {
       release.resolve();
     }
@@ -304,7 +304,7 @@ describe("session tab registry", () => {
     "preserves a registration replaced %s without dispatching against it",
     async (replacementPhase) => {
       const tab = { sessionKey: "agent:main:main", targetId: "replaced-tab" };
-      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await trackSessionBrowserTab({ ...tab, now: 1_000 });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       let replaced = false;
@@ -322,8 +322,8 @@ describe("session tab registry", () => {
           await entered.promise;
         }
         replaced = true;
-        untrackSessionBrowserTab(tab);
-        trackSessionBrowserTab({ ...tab, now: 1_000 });
+        await untrackSessionBrowserTab(tab);
+        await trackSessionBrowserTab({ ...tab, now: 1_000 });
       } finally {
         release.resolve();
       }
@@ -342,8 +342,8 @@ describe("session tab registry", () => {
     async (replace) => {
       const first = { sessionKey: "agent:main:first", targetId: "shared-target" };
       const second = { sessionKey: "agent:main:second", targetId: "shared-target" };
-      trackSessionBrowserTab({ ...first, now: 1_000 });
-      trackSessionBrowserTab({ ...second, now: 1_000 });
+      await trackSessionBrowserTab({ ...first, now: 1_000 });
+      await trackSessionBrowserTab({ ...second, now: 1_000 });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       const closeTab = vi.fn(async () => {
@@ -357,8 +357,8 @@ describe("session tab registry", () => {
       try {
         await entered.promise;
         if (replace) {
-          untrackSessionBrowserTab(second);
-          trackSessionBrowserTab({ ...second, now: 1_000 });
+          await untrackSessionBrowserTab(second);
+          await trackSessionBrowserTab({ ...second, now: 1_000 });
         }
       } finally {
         release.resolve();
@@ -379,7 +379,7 @@ describe("session tab registry", () => {
     "binds a queued lifecycle request to its registration (replace=%s)",
     async (replace) => {
       const tab = { sessionKey: "agent:main:main", targetId: "queued-target" };
-      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await trackSessionBrowserTab({ ...tab, now: 1_000 });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       const firstClose = vi.fn(async () => {
@@ -395,8 +395,8 @@ describe("session tab registry", () => {
       try {
         await entered.promise;
         if (replace) {
-          untrackSessionBrowserTab(tab);
-          trackSessionBrowserTab({ ...tab, now: 1_000 });
+          await untrackSessionBrowserTab(tab);
+          await trackSessionBrowserTab({ ...tab, now: 1_000 });
         }
         second = closeTrackedBrowserTabsForSessions({
           sessionKeys: [tab.sessionKey],
@@ -416,7 +416,7 @@ describe("session tab registry", () => {
     "shares the first owner's outcome %s without retrying the registration",
     async (ownerTiming) => {
       const tab = { sessionKey: "agent:main:main", targetId: "failed-owner" };
-      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await trackSessionBrowserTab({ ...tab, now: 1_000 });
       const release = createDeferred<void>();
       const closeTab = vi.fn(async () => {
         await release.promise;
@@ -449,7 +449,7 @@ describe("session tab registry", () => {
   );
 
   it("touches and untracks a volatile tab through same-process aliases", async () => {
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW-A",
       profile: "openclaw",
@@ -457,7 +457,7 @@ describe("session tab registry", () => {
       aliases: ["RAW-A", "t1", "docs"],
       now: 1_000,
     });
-    touchSessionBrowserTab({
+    await touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "docs",
       profile: "openclaw",
@@ -468,7 +468,7 @@ describe("session tab registry", () => {
     await expect(sweepTrackedBrowserTabs({ now: 10_000, idleMs: 5_000, closeTab })).resolves.toBe(
       0,
     );
-    untrackSessionBrowserTab({
+    await untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "t1",
       profile: "openclaw",
@@ -483,7 +483,7 @@ describe("session tab registry", () => {
   });
 
   it("isolates volatile aliases by browser surface", async () => {
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW-A",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9001" },
@@ -491,7 +491,7 @@ describe("session tab registry", () => {
       aliases: ["shared"],
       now: 1_000,
     });
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW-B",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9002" },
@@ -499,7 +499,7 @@ describe("session tab registry", () => {
       aliases: ["shared"],
       now: 1_000,
     });
-    touchSessionBrowserTab({
+    await touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9001" },
@@ -519,8 +519,8 @@ describe("session tab registry", () => {
   });
 
   it("retries transient close failures and retires missing targets", async () => {
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "missing" });
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "transient" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "missing" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "transient" });
     const warnings: string[] = [];
     const firstClose = vi.fn(async ({ targetId }: { targetId: string }) => {
       if (targetId === "missing") {
@@ -556,9 +556,9 @@ describe("session tab registry", () => {
 
   it("sweeps idle tabs while preserving recently touched tabs", async () => {
     vi.setSystemTime(1_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "old-tab" });
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "active-tab" });
-    touchSessionBrowserTab({
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "old-tab" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "active-tab" });
+    await touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "active-tab",
       now: 11_000,
@@ -583,12 +583,12 @@ describe("session tab registry", () => {
 
   it("caps each session by least-recently-used order and honors session filters", async () => {
     vi.setSystemTime(1_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
     vi.setSystemTime(2_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-b" });
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-b" });
     vi.setSystemTime(3_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-c" });
-    trackSessionBrowserTab({
+    await trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-c" });
+    await trackSessionBrowserTab({
       sessionKey: "agent:main:subagent:child",
       targetId: "child-tab",
     });

@@ -252,6 +252,7 @@ export async function withUpdateCandidateAdmission<T>(
     return await execute(params.stagedPackage);
   }
   if (
+    target.packageAlreadyCurrent ||
     !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
     target.updateInstallKind !== "package"
   ) {
@@ -285,6 +286,7 @@ export async function withUpdateCandidateAdmission<T>(
       tag: target.tag,
       installSpec: target.packageInstallSpec ?? undefined,
       timeoutMs: params.timeoutMs,
+      workTimeoutMs: prepared.timeoutMs ?? null,
       startedAt: prepared.startedAt,
       progress: params.presentation.progress,
       invocationCwd: params.invocationCwd,

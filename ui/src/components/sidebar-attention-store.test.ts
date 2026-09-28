@@ -629,8 +629,11 @@ describe("sidebar attention source publication", () => {
       }),
     );
     store = createStore(harness.gateway);
+    const publishedCounts: number[] = [];
+    store.subscribe(() => publishedCounts.push(store?.entries.length ?? 0));
     store.activate(SidebarAttentionStoreController);
     await waitForFast(() => expect(store?.entries).toHaveLength(1));
+    expect(publishedCounts).toContain(1);
 
     try {
       for (const index of [0, 1]) {
@@ -709,6 +712,14 @@ describe("sidebar attention source publication", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(authCalls).toBe(1);
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+    harness.emitEvent("chat.metadata.changed", {
+      agentId: "main",
+      usageUpdatedAt: now,
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    await Promise.resolve();
+    expect(authCalls).toBe(1);
     harness.emitEvent("chat.metadata.changed", {});
     await waitForFast(() => expect(store?.entries).toMatchObject([{ label: `cron-${now}` }]));
     expect(authCalls).toBe(2);
@@ -866,36 +877,6 @@ describe("sidebar attention source publication", () => {
       }
     },
   );
-
-  it("publishes cron attention while model auth is still pending", async () => {
-    let resolveModelAuth!: (status: ModelAuthStatusResult) => void;
-    const modelAuth = new Promise<ModelAuthStatusResult>((resolve) => {
-      resolveModelAuth = resolve;
-    });
-    const request = vi.fn((method: string) => {
-      if (method === "cron.list") {
-        return Promise.resolve(cronPage("failed-cron"));
-      }
-      if (method === "cron.status") {
-        return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 });
-      }
-      if (method === "models.authStatus") {
-        return modelAuth;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const gateway = createGatewayHarness(mockClient(request)).gateway;
-    store = createStore(gateway);
-    const publishedCounts: number[] = [];
-    store.subscribe(() => publishedCounts.push(store?.entries.length ?? 0));
-    store.activate(SidebarAttentionStoreController);
-
-    try {
-      await waitForFast(() => expect(publishedCounts).toContain(1));
-    } finally {
-      resolveModelAuth({ ts: 1, providers: [] });
-    }
-  });
 
   it("creates one mention owner on activation, retains it without listeners, and disposes it", async () => {
     const mention: MentionInboxItem = {

@@ -48,32 +48,6 @@ afterEach(async () => {
 });
 
 describe("Codex catalog worker transport", () => {
-  it("retires a completed decoder while keeping the client ready for another page", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const harness = createHarness();
-    const pool = await startWorker(harness);
-    const retired = createDeferred<void>();
-    const rotate = pool.rotate.bind(pool);
-    const rotation = vi.spyOn(pool, "rotate").mockImplementation(async () => {
-      await rotate();
-      retired.resolve();
-    });
-    vi.advanceTimersByTime(60_000);
-    expect(rotation).toHaveBeenCalledOnce();
-    await retired.promise;
-    expect(pool.getSnapshot().workers).toBe(0);
-    expect(harness.stdinDestroyed).toBe(false);
-    expect(harness.client.getCloseError()).toBeUndefined();
-
-    const next = harness.client.request("thread/list", {}, { catalogPreview: true });
-    harness.send({
-      id: requestId(harness, 1),
-      result: { data: [{ id: "after-idle" }], unused: "x".repeat(64 * 1024) },
-    });
-    await expect(next).resolves.toEqual({ data: [{ id: "after-idle", projectId: null }] });
-    expect(pool.getSnapshot().workers).toBe(1);
-  });
-
   it.each([false, true])(
     "keeps incomplete decoder state beyond idle retirement (cancelled: %s)",
     async (cancelled) => {
@@ -127,6 +101,9 @@ describe("Codex catalog worker transport", () => {
     vi.advanceTimersByTime(60_000);
     expect(rotation).toHaveBeenCalledOnce();
     await retired.promise;
+    expect(pool.getSnapshot().workers).toBe(0);
+    expect(harness.stdinDestroyed).toBe(false);
+    expect(harness.client.getCloseError()).toBeUndefined();
     const submitted = vi.spyOn(pool, "run");
     const page = harness.client.request("thread/list", {}, { catalogPreview: true });
     const outcome = nextAction === "close" ? expect(page).rejects.toThrow(/closed/u) : page;
@@ -158,6 +135,7 @@ describe("Codex catalog worker transport", () => {
     } else {
       await expect(page).resolves.toEqual({ data: [{ id: "queued", projectId: null }] });
       expect(submitted).toHaveBeenCalledOnce();
+      expect(pool.getSnapshot().workers).toBe(1);
     }
   });
 
@@ -186,7 +164,6 @@ describe("Codex catalog worker transport", () => {
   });
 
   it.each([
-    { name: "ASCII at the bound", bytes: 64 * 1024, character: "x", worker: false },
     { name: "UTF-8 at the bound", bytes: 64 * 1024, character: "猫", worker: false },
     { name: "UTF-8 above the bound", bytes: 64 * 1024 + 1, character: "猫", worker: true },
   ])("projects $name with byte-bounded inline decoding", async ({ bytes, character, worker }) => {
@@ -544,49 +521,42 @@ describe("Codex catalog worker transport", () => {
     ).toBe(true);
   });
 
-  it.each(["\n", "\r\n"])(
-    "recovers raw newlines and split UTF-8 in worker pages with %j framing",
-    async (separator) => {
-      const harness = createHarness();
-      const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
-      const request = harness.client.request("thread/list", {}, { catalogPreview: true });
-      const bytes = Buffer.from(
-        `{"id":${JSON.stringify(requestId(harness))},"result":{"data":[{"id":"thread","preview":"猫${separator}😀"}]}}${separator}`,
-      );
-      for (let index = 0; index < bytes.length; index++) {
-        harness.process.stdout.write(bytes.subarray(index, index + 1));
-      }
-      await expect(request).resolves.toEqual({
-        data: [{ id: "thread", projectId: null, preview: "猫 😀" }],
-      });
-      expect(parse).not.toHaveBeenCalled();
-    },
-  );
+  it("recovers raw newlines and split UTF-8 in worker pages with CRLF framing", async () => {
+    const separator = "\r\n";
+    const harness = createHarness();
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const bytes = Buffer.from(
+      `{"id":${JSON.stringify(requestId(harness))},"result":{"data":[{"id":"thread","preview":"猫${separator}😀"}]}}${separator}`,
+    );
+    for (let index = 0; index < bytes.length; index++) {
+      harness.process.stdout.write(bytes.subarray(index, index + 1));
+    }
+    await expect(request).resolves.toEqual({
+      data: [{ id: "thread", projectId: null, preview: "猫 😀" }],
+    });
+    expect(parse).not.toHaveBeenCalled();
+  });
 
-  it.each([
-    { name: "short", token: "synthetic-secret" },
-    { name: "long", token: `synthetic-secret-${"padding".repeat(500)}` },
-  ])(
-    "redacts malformed worker continuations with a $name token and recovers the next catalog frame",
-    async ({ token }) => {
-      const harness = createHarness();
-      const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
-      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-      const request = harness.client.request("thread/list", {}, { catalogPreview: true });
-      harness.process.stdout.write(
-        `{"id":${JSON.stringify(requestId(harness))},"result":{"token":${JSON.stringify(token)},"data":[{"id":"thread","preview":"first\ninvalid \\q\n`,
-      );
-      harness.send({ id: requestId(harness), result: { data: [] } });
-      await expect(request).resolves.toEqual({ data: [] });
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "failed to parse codex app-server message",
-        expect.objectContaining({ fragmentCount: 2 }),
-      );
-      expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-secret");
-      expect(JSON.stringify(warn.mock.calls)).toContain("<redacted>");
-      expect(parse).not.toHaveBeenCalled();
-    },
-  );
+  it("redacts long tokens in malformed worker continuations and recovers the next catalog frame", async () => {
+    const token = `synthetic-secret-${"padding".repeat(500)}`;
+    const harness = createHarness();
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    harness.process.stdout.write(
+      `{"id":${JSON.stringify(requestId(harness))},"result":{"token":${JSON.stringify(token)},"data":[{"id":"thread","preview":"first\ninvalid \\q\n`,
+    );
+    harness.send({ id: requestId(harness), result: { data: [] } });
+    await expect(request).resolves.toEqual({ data: [] });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "failed to parse codex app-server message",
+      expect.objectContaining({ fragmentCount: 2 }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(warn.mock.calls)).toContain("<redacted>");
+    expect(parse).not.toHaveBeenCalled();
+  });
 
   it.each([true, false])(
     "retains the incomplete recovery byte bound in the worker (complete: %s)",

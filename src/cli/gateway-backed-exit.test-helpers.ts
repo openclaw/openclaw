@@ -31,7 +31,7 @@ export const EMPTY_STABILITY_SNAPSHOT = {
   summary: { byType: {} },
 };
 
-export async function startCronListGateway(token?: string): Promise<{ url: string }> {
+export async function startCliReadGateway(token?: string): Promise<{ url: string }> {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
@@ -47,7 +47,7 @@ export async function startCronListGateway(token?: string): Promise<{ url: strin
           ws,
           frame.id,
           buildMinimalGatewayHelloOkPayload({
-            methods: ["cron.list", "cron.status"],
+            methods: ["cron.list", "cron.status", "message.action"],
             auth: { role: "operator", scopes: ["operator.admin"] },
           }),
         );
@@ -67,6 +67,15 @@ export async function startCronListGateway(token?: string): Promise<{ url: strin
       }
       if (frame.method === "cron.status") {
         sendMinimalGatewayResponse(ws, frame.id, { enabled: true, jobs: 0 });
+      }
+      if (frame.method === "message.action") {
+        expect(frame.params).toMatchObject({
+          channel: "discord",
+          action: "read",
+          params: { target: "123456789012345678", limit: "1" },
+          conversationReadOrigin: "direct-operator",
+        });
+        sendMinimalGatewayResponse(ws, frame.id, { messages: [] });
       }
     });
   });

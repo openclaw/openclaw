@@ -1,4 +1,5 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
@@ -82,12 +83,7 @@ export function lookupClientGeolocation(ip: string): Promise<ClientGeolocationRe
     }
     return result;
   });
-  if (lookupCache.size >= LOOKUP_CACHE_MAX_ENTRIES) {
-    const oldest = lookupCache.keys().next();
-    if (!oldest.done) {
-      lookupCache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(lookupCache, LOOKUP_CACHE_MAX_ENTRIES - 1);
   lookupCache.set(ip, pending);
   return pending;
 }

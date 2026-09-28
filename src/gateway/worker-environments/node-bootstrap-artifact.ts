@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { finished, pipeline } from "node:stream/promises";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { valid } from "semver";
 import * as tar from "tar";
 import {
@@ -22,7 +23,6 @@ import {
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sha256File } from "../../infra/directory-durability.js";
-import { readFileHandleBounded } from "../../infra/fs-safe-advanced.js";
 import { walkDirectory } from "../../infra/fs-safe.js";
 import {
   collectPackageDistInventory,
@@ -61,6 +61,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-host-launcher.mjs",
+  "node-compile-cache.mjs",
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);

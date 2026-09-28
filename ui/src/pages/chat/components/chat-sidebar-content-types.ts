@@ -122,13 +122,15 @@ type FileSidebarEdit = {
 
 export type FileSidebarNavigation = { line: number };
 
-type FileSidebarContent = {
+export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
   content: string;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
+  /** Captured display context; the draft key is opaque and never a UI label. */
+  draftContext?: { sessionKey: string; sessionTitle: string; paneLabel?: string };
   root?: string | null;
   mimeType?: string;
   language?: string;

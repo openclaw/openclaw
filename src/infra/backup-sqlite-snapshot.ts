@@ -1,17 +1,20 @@
 // Snapshots every SQLite database owned by the frozen backup resource inventory.
-import type { Dirent, Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isPathInside } from "@openclaw/fs-safe/path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import {
   sealBackupResourceInventory,
   type BackupCoreDatabase,
   type BackupResourceInventory,
   type BackupResourcePlan,
 } from "../commands/backup-resource-inventory.js";
-import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
@@ -33,7 +36,6 @@ import {
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   isAppleDoubleMetadataFile,
   resolveSqliteDatabaseFilePaths,
@@ -92,9 +94,9 @@ export function classifyBackupSqliteSource(
     return undefined;
   }
   const withinOwnedRoot =
-    isPathWithin(resolvedSourcePath, inventory.stateDir) ||
+    isPathInside(inventory.stateDir, resolvedSourcePath) ||
     inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
-      isPathWithin(resolvedSourcePath, agentRoot),
+      isPathInside(agentRoot, resolvedSourcePath),
     );
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
@@ -120,53 +122,46 @@ async function discoverBackupSqliteSources(params: {
   const visitedDirectories = new Set<string>();
   const gatewayLockDir = resolveGatewayLockDir(params.inventory.stateDir);
 
-  async function visit(directoryPath: string): Promise<void> {
-    const resolvedDirectoryPath = path.resolve(directoryPath);
-    if (visitedDirectories.has(resolvedDirectoryPath)) {
-      return;
+  const isRetainedPath = (pathname: string) =>
+    !isPathInside(gatewayLockDir, pathname) && !params.inventory.isVolatile(pathname);
+  for (const directory of [
+    params.inventory.stateDir,
+    ...params.inventory.agentRoots.map(({ sourcePath }) => sourcePath),
+  ]) {
+    const root = path.resolve(directory);
+    if (visitedDirectories.has(root)) {
+      continue;
     }
-    visitedDirectories.add(resolvedDirectoryPath);
-
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(resolvedDirectoryPath, { withFileTypes: true });
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return;
-      }
-      throw error;
-    }
-
-    for (const entry of entries) {
-      const entryPath = path.join(resolvedDirectoryPath, entry.name);
-      if (isPathWithin(entryPath, gatewayLockDir) || params.inventory.isVolatile(entryPath)) {
-        continue;
-      }
-      if (entry.isDirectory()) {
+    visitedDirectories.add(root);
+    const { entries, failedDirs } = await walkDirectory(root, {
+      symlinks: "include",
+      include: (entry) =>
+        (entry.kind === "file" || entry.kind === "symlink") &&
+        isRetainedPath(entry.path) &&
+        classifyBackupSqliteSource(entry.path, params.inventory) === "sqlite",
+      descend: (entry) => {
         if (
-          params.inventory.isTraversable(entryPath) &&
-          !params.inventory.isPackageContent(entryPath)
+          visitedDirectories.has(entry.path) ||
+          !isRetainedPath(entry.path) ||
+          !params.inventory.isTraversable(entry.path) ||
+          params.inventory.isPackageContent(entry.path)
         ) {
-          await visit(entryPath);
+          return false;
         }
-        continue;
-      }
-      if (
-        (!entry.isFile() && !entry.isSymbolicLink()) ||
-        classifyBackupSqliteSource(entryPath, params.inventory) !== "sqlite"
-      ) {
-        continue;
-      }
-      discoveredSourcePaths.add(entryPath);
+        visitedDirectories.add(entry.path);
+        return true;
+      },
+    });
+    const failure = failedDirs.find(({ error }) => !hasErrnoCode(error, "ENOENT"));
+    if (failure) {
+      throw failure.error;
+    }
+    for (const entry of entries) {
+      discoveredSourcePaths.add(entry.path);
       if (entry.name.endsWith(".sqlite")) {
-        snapshotPaths.add(entryPath);
+        snapshotPaths.add(entry.path);
       }
     }
-  }
-
-  await visit(params.inventory.stateDir);
-  for (const { sourcePath } of params.inventory.agentRoots) {
-    await visit(sourcePath);
   }
 
   for (const sourcePath of params.inventory.coreDatabaseSourcePaths) {
@@ -384,7 +379,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
   const coreDatabases: BackupCoreDatabase[] = [
     { role: "global", sourcePath: globalPath, identity: globalIdentity },
   ];
-  for (const database of [
+  const defaultDatabases = await listDefaultAgentDatabasePaths(params.resources.stateDir);
+  const discoveredDatabasePaths: string[] = [];
+  const candidates: Array<BackupCoreDatabase & { discoveredPath?: string }> = [
     {
       role: "quarantine" as const,
       sourcePath: resolveQuarantineStorePath({
@@ -393,7 +390,21 @@ export async function createBackupSqliteSnapshotPlan(params: {
       }),
     },
     ...capturedAgents,
-  ]) {
+    ...params.resources.agentRoots.map(({ agentId, databasePath }) => ({
+      role: "agent" as const,
+      agentId,
+      sourcePath: databasePath,
+    })),
+    ...defaultDatabases
+      .toSorted((a, b) => a.path.localeCompare(b.path))
+      .map(({ agentId, path: sourcePath }) => ({
+        role: "agent" as const,
+        agentId: normalizeAgentId(agentId),
+        sourcePath,
+        discoveredPath: sourcePath,
+      })),
+  ];
+  for (const { discoveredPath, ...database } of candidates) {
     const identity = await fs.stat(database.sourcePath).catch((error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
         return undefined;
@@ -403,9 +414,23 @@ export async function createBackupSqliteSnapshotPlan(params: {
     if (identity && !identity.isFile()) {
       throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
     }
+    if (discoveredPath && !identity) {
+      continue;
+    }
+    if (discoveredPath) {
+      discoveredDatabasePaths.push(discoveredPath);
+      // Keep directory links as links; publish the database at its real archive path.
+      database.sourcePath = await fs.realpath(database.sourcePath);
+    }
     coreDatabases.push(Object.freeze({ ...database, identity }));
   }
-  const inventory = sealBackupResourceInventory(params.resources, coreDatabases);
+  const inventory = sealBackupResourceInventory(
+    {
+      ...params.resources,
+      protectedPaths: [...params.resources.protectedPaths, ...discoveredDatabasePaths],
+    },
+    coreDatabases,
+  );
   const discovery = await discoverBackupSqliteSources({ inventory });
   const { sources, groups } = await planBackupSqliteSources(inventory, discovery.snapshotPaths);
   for (const source of sources) {

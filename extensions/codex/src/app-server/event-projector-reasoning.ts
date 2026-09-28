@@ -6,7 +6,8 @@ import {
   readNullableString,
   splitPlanText,
 } from "./event-projector-values.js";
-import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import type { CodexNativePlan } from "./plan-compaction-state.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
@@ -17,7 +18,6 @@ type ReasoningItemText = {
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type PlanUpdateSource = "codex-app-server" | "openclaw";
-type NativePlanUpdate = { markdown?: string; steps: AgentPlanStep[] };
 
 export class CodexReasoningProjection {
   private readonly reasoningTextByItem = new Map<string, ReasoningItemText>();
@@ -29,7 +29,7 @@ export class CodexReasoningProjection {
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
-    private readonly onNativePlanUpdate?: (update: NativePlanUpdate) => void | Promise<void>,
+    private readonly onNativePlanUpdate?: (update: CodexNativePlan) => void | Promise<void>,
   ) {}
 
   async handleReasoningDelta(method: ReasoningDeltaMethod, params: JsonObject): Promise<void> {
@@ -78,15 +78,14 @@ export class CodexReasoningProjection {
     const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          if (!isJsonObject(entry)) {
             return [];
           }
-          const record = entry as JsonObject;
-          const step = readString(record, "step");
+          const step = readString(entry, "step");
           if (!step) {
             return [];
           }
-          return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
+          return [{ step, status: normalizePlanStepStatus(readString(entry, "status")) }];
         })
       : undefined;
     const planText = [

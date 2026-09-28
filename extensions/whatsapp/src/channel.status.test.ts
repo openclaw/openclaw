@@ -41,6 +41,65 @@ describe("WhatsApp channel status", () => {
     runtimeMocks.monitorWebChannel.mockResolvedValue(undefined);
   });
 
+  it.each([
+    { state: "not-linked", message: "Not linked (no WhatsApp Web session)." },
+    { state: "unstable", message: "Auth state is still stabilizing." },
+  ])(
+    "reports only the auth issue for $state auth with the default runtime",
+    async ({ state, message }) => {
+      runtimeMocks.readWebAuthSnapshot.mockResolvedValue({
+        state,
+        authAgeMs: null,
+        selfId: { e164: null, jid: null, lid: null },
+      });
+      const status = whatsappPlugin.status;
+      if (!status?.defaultRuntime) {
+        throw new Error("Missing WhatsApp default runtime");
+      }
+      const summary = await status.buildChannelSummary?.({
+        account: account as never,
+        cfg: {},
+        defaultAccountId: account.accountId,
+        snapshot: status.defaultRuntime,
+      });
+
+      expect(summary).toMatchObject({
+        statusState: state,
+        healthState: "stopped",
+        reconnectAttempts: 0,
+        lastDisconnect: null,
+        lastError: null,
+      });
+      expect(
+        status.collectStatusIssues?.([{ ...summary, accountId: account.accountId, enabled: true }]),
+      ).toEqual([expect.objectContaining({ kind: "auth", message })]);
+    },
+  );
+
+  it.each([
+    { name: "an error", runtime: { lastError: "socket closed" } },
+    { name: "a disconnect", runtime: { lastDisconnect: { at: 1_000, status: 408 } } },
+    { name: "a retry", runtime: { reconnectAttempts: 1 } },
+  ])(
+    "preserves the stopped warning when an unlinked account records $name",
+    async ({ runtime }) => {
+      const status = whatsappPlugin.status;
+      const snapshot = await status?.buildAccountSnapshot?.({
+        account: account as never,
+        cfg: {},
+        runtime: { ...status.defaultRuntime, accountId: account.accountId, ...runtime },
+      });
+
+      if (!snapshot) {
+        throw new Error("Missing WhatsApp account snapshot");
+      }
+      expect(status?.collectStatusIssues?.([snapshot])).toEqual([
+        expect.objectContaining({ kind: "auth", message: "Not linked (no WhatsApp Web session)." }),
+        expect.objectContaining({ kind: "runtime", message: expect.stringContaining("stopped") }),
+      ]);
+    },
+  );
+
   it("does not project cached revoked auth as linked", async () => {
     const snapshot = {
       accountId: "default",

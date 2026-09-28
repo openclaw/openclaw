@@ -42,15 +42,7 @@ public struct OpenClawChatAttentionRequest: Identifiable, Equatable, Sendable {
     private static func normalizedPreview(_ preview: String) -> String {
         let line = preview.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard line.utf16.count > 240 else { return line }
-        var result = ""
-        var length = 0
-        for scalar in line.unicodeScalars {
-            let scalarLength = scalar.value > 0xFFFF ? 2 : 1
-            guard length + scalarLength <= 239 else { break }
-            result.unicodeScalars.append(scalar)
-            length += scalarLength
-        }
-        return result + "…"
+        return ChatReplyQuote.truncateUTF16Safe(line, limit: 239) + "…"
     }
 }
 

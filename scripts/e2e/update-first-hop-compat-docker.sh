@@ -61,8 +61,6 @@ PACKAGE_TGZ="$(
 FIRST_HOP_TGZ="$FIXTURE_ROOT/first-hop.tgz"
 node "$FIXTURE_HELPER" first-hop-tarball "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" 0 \
   >"$ARTIFACT_DIR/first-hop-fixture.json"
-node "$FIXTURE_HELPER" negative-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/negative.tgz" \
-  >"$ARTIFACT_DIR/negative-fixture.json"
 node "$FIXTURE_HELPER" future-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/future.tgz" 1 \
   >"$ARTIFACT_DIR/second-hop-fixture.json"
 ADMISSION_PROTOCOL="$(tar -xOf "$PACKAGE_TGZ" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).openclaw?.updateAdmissionProtocol ?? ""')"
@@ -102,6 +100,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
   if [ -n "$version" ]; then
     lane_artifact_dir="$ARTIFACT_DIR/$version"
     mkdir -p "$lane_artifact_dir"
+    cp "$ARTIFACT_DIR/second-hop-fixture.json" "$lane_artifact_dir/second-hop-fixture.json"
     npm pack "openclaw@$version" --ignore-scripts --json --min-release-age=0 \
       --pack-destination "$FIXTURE_ROOT/source" >"$lane_artifact_dir/source-pack.json"
     source_package="$FIXTURE_ROOT/source/$(node -e '
@@ -117,12 +116,15 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     const source = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
     process.stdout.write(source.expectedMissingChunk ?? "");
   ' "$lane_artifact_dir/source.json")"
+  negative_tgz="$FIXTURE_ROOT/negative-${version:-explicit}.tgz"
+  node "$FIXTURE_HELPER" negative-tarball "$FIRST_HOP_TGZ" "$negative_tgz" \
+    "$expected_missing_chunk" >"$lane_artifact_dir/negative-fixture.json"
   {
     printf 'source=%s\n' "$source_package"
     printf 'original_candidate=%s\n' "$PACKAGE_TGZ"
     printf 'candidate=%s\n' "$FIRST_HOP_TGZ"
     printf 'expected_missing_chunk=%s\n' "$expected_missing_chunk"
-    shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/negative.tgz" "$FIXTURE_ROOT/future.tgz"
+    shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" "$negative_tgz" "$FIXTURE_ROOT/future.tgz"
     if [ "$ADMISSION_PROTOCOL" = "1" ]; then
       shasum -a 256 "$FIXTURE_ROOT/unsupported-admission.tgz"
     fi
@@ -142,7 +144,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     -v "$(docker_e2e_abs_path "$source_package"):/tmp/openclaw-update-first-hop-source.tgz:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     -v "$PACKAGE_TGZ:/tmp/openclaw-update-first-hop-original.tgz:ro" \
-    -v "$FIXTURE_ROOT/negative.tgz:/tmp/openclaw-update-first-hop-negative.tgz:ro" \
+    -v "$negative_tgz:/tmp/openclaw-update-first-hop-negative.tgz:ro" \
     -v "$FIXTURE_ROOT/future.tgz:/tmp/openclaw-update-first-hop-future.tgz:ro" \
     "$IMAGE_NAME" \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \

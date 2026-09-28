@@ -16,6 +16,12 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
+const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  // Gateway model runs need only non-observing client config validation.
+  configGuard: ({ options }) =>
+    options?.gateway === true && options.local !== true ? "validate" : "run",
+};
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -56,12 +62,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "default",
     },
   },
+  { commandPath: ["infer", "model", "run"], policy: modelRunStartupPolicy },
+  { commandPath: ["capability", "model", "run"], policy: modelRunStartupPolicy },
   {
     commandPath: ["transcripts"],
     // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
     policy: { ownsProtocolStdout: true, hideBanner: true },
   },
-  { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  // The message runner selects config preparation from the action's execution mode.
+  { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
   // Destructive maintenance owns a validity-aware, non-observing config read.
   // Startup migrations would mutate the SQLite state these commands may refuse to remove.
@@ -303,23 +312,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
     },
     route: { id: "models-status" },
-  },
-  {
-    commandPath: ["tasks", "list"],
-    exact: true,
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-list" },
-  },
-  {
-    commandPath: ["tasks", "audit"],
-    exact: true,
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-audit" },
-  },
-  {
-    commandPath: ["tasks"],
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-list" },
   },
   {
     // This unregistered root is reserved so plugin registration cannot claim it;

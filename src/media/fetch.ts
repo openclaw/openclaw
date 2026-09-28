@@ -287,10 +287,6 @@ async function readErrorBodySnippet(
   }
 }
 
-function redactMediaUrl(url: string): string {
-  return redactSensitiveText(url);
-}
-
 function createMediaFetchFailure(sourceUrl: string, cause: unknown): MediaFetchError {
   return new MediaFetchError(
     "fetch_failed",
@@ -318,7 +314,7 @@ async function fetchGuardedMediaResponse(
     shouldRetryFetchError,
     trustExplicitProxyDns,
   } = options;
-  const sourceUrl = redactMediaUrl(url);
+  const sourceUrl = redactSensitiveText(url);
 
   // Dispatcher attempts are fallback routes inside one logical guarded fetch operation.
   const attempts =
@@ -412,7 +408,7 @@ async function assertMediaResponseOk(params: {
     return;
   }
   const statusText = res.statusText ? ` ${res.statusText}` : "";
-  const redirected = finalUrl !== url ? ` (redirected to ${redactMediaUrl(finalUrl)})` : "";
+  const redirected = finalUrl !== url ? ` (redirected to ${redactSensitiveText(finalUrl)})` : "";
   let detail = `HTTP ${res.status}${statusText}`;
   // Failed response bodies may have been deliberately discarded by the caller.
   if (res.ok) {
@@ -635,7 +631,7 @@ async function withMediaFetchRetry<T>(
       retry.sleep ??
       ((delay) =>
         sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
-          throw createMediaFetchFailure(redactMediaUrl(options.url), cause);
+          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
         })),
   });
 }
@@ -645,7 +641,7 @@ export async function saveResponseMedia(
   res: Response,
   options: SaveResponseMediaOptions = {},
 ): Promise<SavedRemoteMedia> {
-  const sourceUrl = redactMediaUrl((options.sourceUrl ?? res.url) || "response");
+  const sourceUrl = redactSensitiveText((options.sourceUrl ?? res.url) || "response");
   const finalUrl = options.sourceUrl ?? res.url;
   await assertMediaResponseOk({
     res,
@@ -728,7 +724,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
         onOverflow: ({ maxBytes, res: resLocal }) =>
           new MediaFetchError(
             "max_bytes",
-            `Failed to fetch media from ${redactMediaUrl(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
+            `Failed to fetch media from ${redactSensitiveText(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
           ),
         chunkTimeoutMs: options.readIdleTimeoutMs,
       });
@@ -736,7 +732,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       if (err instanceof MediaFetchError) {
         throw err;
       }
-      throw createMediaFetchFailure(redactMediaUrl(res.url || options.url), err);
+      throw createMediaFetchFailure(redactSensitiveText(res.url || options.url), err);
     }
     let fileName = resolveRemoteFileName({
       res,

@@ -488,6 +488,11 @@ describe("schtasks Windows integration principal assertion", () => {
 const nativeEntrypoints = nativeSchtasksIntegrationEnabled
   ? (await import("./schtasks-native-entrypoints.test-support.js")).schtasksNativeEntrypoints
   : undefined;
+const installedInput = process.env.CI_WINDOWS_SCHTASKS_INSTALLED_INPUT?.trim();
+const installedCell = process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL;
+const installedFixture = installedInput
+  ? await import("./schtasks.installed-package.test-support.js")
+  : undefined;
 
 describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration", () => {
   let nativeLifetime: ReturnType<typeof createFixtureLifetime> | undefined;
@@ -1000,26 +1005,49 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     }
   }
 
-  it("isolates and completes the native Scheduled Task lifecycle", () => {
-    if (!nativeEntrypoints) {
-      throw new Error("Native Scheduled Task integration requires compiled subprocess entrypoints");
-    }
-    const moduleUrls = {
-      taskSupervisor: resolveRuntimeWorkerUrl(nativeEntrypoints.taskSupervisor),
-      hostedStop: resolveRuntimeWorkerUrl(nativeEntrypoints.hostedStop),
-      startupFallback: resolveRuntimeWorkerUrl(nativeEntrypoints.startupFallback),
-    };
-    if (Object.values(moduleUrls).some((url) => !url.pathname.endsWith(".js"))) {
-      throw new Error("Run native Scheduled Task integration through scripts/run-vitest.mjs");
-    }
-    const generationOwner = findVitestResourceOwner(
-      fileURLToPath(new URL(".", moduleUrls.taskSupervisor)),
-    );
-    if (!generationOwner) {
-      throw new Error("Native Scheduled Task compiled generation has no resource owner");
-    }
-    const lifetime = createFixtureLifetime(generationOwner.root);
-    nativeLifetime = lifetime;
-    return lifetime.run(() => runNativeLifecycle(moduleUrls, lifetime));
-  }, 240_000);
+  it(
+    "isolates and completes the native Scheduled Task lifecycle",
+    ({ signal }) => {
+      if (!nativeEntrypoints) {
+        throw new Error(
+          "Native Scheduled Task integration requires compiled subprocess entrypoints",
+        );
+      }
+      const moduleUrls = {
+        taskSupervisor: resolveRuntimeWorkerUrl(nativeEntrypoints.taskSupervisor),
+        hostedStop: resolveRuntimeWorkerUrl(nativeEntrypoints.hostedStop),
+        startupFallback: resolveRuntimeWorkerUrl(nativeEntrypoints.startupFallback),
+      };
+      if (Object.values(moduleUrls).some((url) => !url.pathname.endsWith(".js"))) {
+        throw new Error("Run native Scheduled Task integration through scripts/run-vitest.mjs");
+      }
+      const generationOwner = findVitestResourceOwner(
+        fileURLToPath(new URL(".", moduleUrls.taskSupervisor)),
+      );
+      if (!generationOwner) {
+        throw new Error("Native Scheduled Task compiled generation has no resource owner");
+      }
+      const lifetime = createFixtureLifetime(generationOwner.root);
+      nativeLifetime = lifetime;
+      return lifetime.run(async () =>
+        installedInput
+          ? (
+              await import("./schtasks.installed.integration.test-support.js")
+            ).runInstalledLifecycle(
+              installedInput,
+              lifetime,
+              {
+                cleanupNativeTask,
+                reserveLoopbackPort,
+                readTaskDefinitionSnapshot,
+                waitForLoopbackPortRelease,
+                canBindLoopbackPort,
+              },
+              signal,
+            )
+          : runNativeLifecycle(moduleUrls, lifetime),
+      );
+    },
+    installedFixture?.resolveInstalledCellBodyTimeoutMs(installedCell) ?? 240_000,
+  );
 });

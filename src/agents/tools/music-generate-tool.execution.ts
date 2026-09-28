@@ -21,12 +21,12 @@ import {
   type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
+  buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
   type MediaGenerateToolExecutionResult,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
-  buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
@@ -205,24 +205,14 @@ export async function executeMusicGenerationJob(params: {
       : []),
     ...formatGeneratedAttachmentLines(attachments),
   ].filter((entry): entry is string => Boolean(entry));
-  return {
-    provider: result.provider,
-    model: result.model,
-    count: savedTracks.length,
+  return buildMediaGenerateToolExecutionResult({
+    result,
     attachments,
-    contentText: lines.join("\n"),
-    wakeResult: lines.join("\n"),
+    mediaUrls: savedTracks.map((media) => media.path),
+    lines,
+    taskHandle: params.taskHandle,
+    warning,
     details: {
-      provider: result.provider,
-      model: result.model,
-      count: savedTracks.length,
-      media: {
-        mediaUrls: savedTracks.map((track) => track.path),
-        attachments,
-      },
-      attachments,
-      paths: savedTracks.map((track) => track.path),
-      ...buildTaskRunDetails(params.taskHandle),
       ...(!ignoredOverrideKeys.has("lyrics") && params.lyrics
         ? { requestedLyrics: params.lyrics }
         : {}),
@@ -253,11 +243,6 @@ export async function executeMusicGenerationJob(params: {
         getResolvedInput: (entry) => entry.resolvedInput,
       }),
       ...(result.lyrics?.length ? { lyrics: result.lyrics } : {}),
-      attempts: result.attempts,
-      ...(result.normalization ? { normalization: result.normalization } : {}),
-      metadata: result.metadata,
-      ...(warning ? { warning } : {}),
-      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
     },
-  };
+  });
 }

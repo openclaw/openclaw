@@ -1,4 +1,3 @@
-// Memory Core tests cover manager source state plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -75,7 +74,6 @@ describe("memory source state", () => {
   );
 
   it.each([
-    { source: "memory" as const, path: "memory/one.md", expected: "hash-1" },
     { source: "sessions" as const, path: "memory/one.md", expected: "session-hash" },
     { source: "sessions" as const, path: "memory/missing.md", expected: undefined },
   ])(

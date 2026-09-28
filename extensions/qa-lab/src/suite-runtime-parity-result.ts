@@ -51,23 +51,16 @@ export function buildRuntimeParityScenarioResult(params: {
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
   const driftStepStatus = runtimeParityScenarioResultStatus(params.result);
-  const openclawCell = params.result.cells.openclaw;
-  const codexCell = params.result.cells.codex;
   return {
     name: params.scenarioName,
     status: driftStepStatus,
     details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
     steps: [
-      {
-        name: openclawCell.runtime,
-        status: runtimeParityCellStatus(openclawCell),
-        details: formatRuntimeParityScenarioCellDetails(openclawCell),
-      },
-      {
-        name: codexCell.runtime,
-        status: runtimeParityCellStatus(codexCell),
-        details: formatRuntimeParityScenarioCellDetails(codexCell),
-      },
+      ...[params.result.cells.openclaw, params.result.cells.codex].map((cell) => ({
+        name: cell.runtime,
+        status: runtimeParityCellStatus(cell),
+        details: formatRuntimeParityScenarioCellDetails(cell),
+      })),
       {
         name: "runtime drift",
         status: driftStepStatus,

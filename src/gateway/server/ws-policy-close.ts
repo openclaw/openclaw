@@ -20,6 +20,7 @@ const policyMethods = new Set([
   "device.token.rotate",
   "device.token.revoke",
   "users.setRole",
+  "users.merge",
 ]);
 type PolicyResponse = { readonly pending: boolean; hold: () => void; finish: () => void };
 type PolicyClientState = { pending: number; close?: () => void };

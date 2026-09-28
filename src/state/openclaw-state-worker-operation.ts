@@ -29,7 +29,6 @@ export function runWithOpenClawStateWorkerStore<T>(
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
   assertCurrent?: (commandType?: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
 ): Promise<T> {
   const { admission } = context;
   return runSqliteWorkerStoreOperation<StoreOperations, T>(
@@ -41,7 +40,6 @@ export function runWithOpenClawStateWorkerStore<T>(
       assertCurrent?.(commandType);
     },
     createAdmission,
-    requireStateLifecycle,
   );
 }
 

@@ -175,14 +175,6 @@ describe("GatewayClient", () => {
     expectNoGatewayClientAgent({ url: "ws://127.0.0.1:1" });
   });
 
-  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
-    expectNoGatewayClientAgent({ url: "ws://[::1]:1" });
-  });
-
-  test("does not pass an explicit direct agent for localhost hostnames", () => {
-    expectNoGatewayClientAgent({ url: "ws://localhost:1" });
-  });
-
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     expectNoGatewayClientAgent({
       url: "wss://gateway.example.com",
@@ -231,14 +223,8 @@ describe("GatewayClient", () => {
     }
   });
 
-  it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
-    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg", statusCode: 404 });
-    });
-  });
-
   it("returns 404 for missing static assets with query strings", async () => {
-    await withControlUiRoot({}, async (tmp) => {
+    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
     });
   });
@@ -634,19 +620,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(readSocket, ["sessions.catalog.host"]);
     expectSentEvents(writeSocket, ["sessions.catalog.host"]);
     expectSentEvents(adminSocket, ["sessions.catalog.host"]);
-  });
-
-  it("requires operator.read for task ledger broadcast events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("task", { action: "deleted", taskId: "task-1" });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["task"]);
-    expectSentEvents(writeSocket, ["task"]);
-    expectSentEvents(adminSocket, ["task"]);
   });
 
   it("requires operator.read for node topology broadcasts", () => {

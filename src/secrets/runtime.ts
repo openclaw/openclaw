@@ -50,7 +50,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevisionState,
   graftActiveSecretsRuntimeAuthState,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
-  restoreSecretsRuntimeSnapshotStateIfCurrent,
+  prepareSecretsRuntimeSnapshotRestoreState,
   setPreparedSecretsRuntimeSnapshotRefreshContext,
   type PreparedSecretsRuntimeSnapshot,
   type SecretsRuntimeRefreshContext,
@@ -341,14 +341,14 @@ export function activateSecretsRuntimeSnapshotIfCurrent(
   });
 }
 
-/** Restores an owned predecessor while retaining changes after candidate preparation. */
-export function restoreSecretsRuntimeSnapshotIfCurrent(
+/** Prepares the exact rollback successor before the activation owner publishes it. */
+export function prepareSecretsRuntimeSnapshotRestore(
   snapshot: PreparedSecretsRuntimeSnapshot,
   expectedRevision: number,
   ownedSnapshot: PreparedSecretsRuntimeSnapshot,
   options?: { runtimeSourceConfig?: OpenClawConfig },
-): boolean {
-  return restoreSecretsRuntimeSnapshotStateIfCurrent({
+) {
+  return prepareSecretsRuntimeSnapshotRestoreState({
     ...createSecretsRuntimeSnapshotActivation(snapshot),
     expectedRevision,
     ownedSnapshot,

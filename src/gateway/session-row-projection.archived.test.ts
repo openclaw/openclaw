@@ -13,6 +13,7 @@ import {
   canRunSessionListBackgroundWork,
   retainSessionListForegroundWork,
 } from "./session-projection-work.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
@@ -25,6 +26,17 @@ afterEach(() => vi.restoreAllMocks());
 
 const { ready } = records;
 
+type Projection = Awaited<ReturnType<typeof createSessionRowProjection>>;
+type SnapshotQuery = Parameters<Projection["snapshot"]>[0];
+
+function preparedSnapshot(projection: Projection, query: SnapshotQuery) {
+  return withReadySessionRows(
+    projection,
+    () => [query],
+    () => projection.snapshot(query),
+  );
+}
+
 it("keeps archived rows cold at hydration and across broad refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
@@ -32,7 +44,7 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
     const archived = 8;
     const placements = createWorkerSessionPlacementStore();
     for (let index = 0; index < live + archived; index++) {
-      placements.startDispatch({
+      await placements.startDispatch({
         agentId: "main",
         sessionKey: `agent:main:row-${index}`,
         sessionId: `row-${index}`,
@@ -139,6 +151,9 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         if (!projection) {
           throw new Error("Expected a live projection");
         }
+        do {
+          await projection.prepareMembership();
+        } while (projection.needsMembershipPreparation());
         // Query the parent index first: describing the child would hide a stale cold edge.
         const selected = projection.selectEntries({
           parentSessionKey: literal ? parent : "global",
@@ -209,7 +224,7 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
       sessionChanges.emit(target);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(0);
-      expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
+      expect((await preparedSnapshot(projection, { agentId: "main", key })).row).toMatchObject({
         key,
         archivedAt: 1,
       });
@@ -217,7 +232,9 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
       replaceSessionEntrySync(target, { ...entry, archivedAt: 1, label: "Updated archive" });
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(2);
-      expect(projection.snapshot({ agentId: "main", key }).row?.label).toBe("Updated archive");
+      expect((await preparedSnapshot(projection, { agentId: "main", key })).row?.label).toBe(
+        "Updated archive",
+      );
 
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -236,7 +253,9 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
       expect(projection.selectEntries().filter(ready)).toHaveLength(0);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(3);
-      expect(projection.snapshot({ agentId: "main", key }).row?.archivedAt).toBe(2);
+      expect((await preparedSnapshot(projection, { agentId: "main", key })).row?.archivedAt).toBe(
+        2,
+      );
       expect(projection.materializedCount).toBe(4);
     } finally {
       projection.dispose();
@@ -277,7 +296,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
       expect(projection.selectEntries().filter(ready)).toHaveLength(100);
       const query = { agentId: "main", key: "agent:main:archive-127" };
       expect(projection.capture(query)?.materialized).toBeUndefined();
-      expect(projection.snapshot(query).row?.sessionId).toBe("archive-127");
+      expect((await preparedSnapshot(projection, query)).row?.sessionId).toBe("archive-127");
       expect(projection.materializedCount).toBe(129);
       expect(projection.selectEntries().filter(ready)).toHaveLength(100);
       const pagePrepared = createDeferredCore();
@@ -427,7 +446,7 @@ it("backfills only requested archives and discards enrichment after demotion", a
       expect(backfill.mock.calls[0]?.[0].sessionKey).toBe("agent:main:live");
       const query = { agentId: "main", key: "agent:main:archived" };
       expect(projection.capture(query)?.materialized).toBeUndefined();
-      expect(projection.snapshot(query).row?.sessionId).toBe("archived");
+      expect((await preparedSnapshot(projection, query)).row?.sessionId).toBe("archived");
       await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(2));
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -510,7 +529,9 @@ it("expires archives read while a newer catalog is still loading", async () => {
     try {
       refresh = true;
       sessionChanges.emit({ all: true, scope: "catalog" });
-      expect(projection.snapshot({ agentId: "main", key }).row?.contextTokens).toBe(8192);
+      expect(
+        (await preparedSnapshot(projection, { agentId: "main", key })).row?.contextTokens,
+      ).toBe(8192);
       expect(projection.materializedCount).toBe(1);
       loading.resolve([{ ...catalog[0]!, contextWindow: 16384, contextTokens: 16384 }]);
       await loading.promise;
@@ -519,7 +540,9 @@ it("expires archives read while a newer catalog is still loading", async () => {
       expect(projection.selectEntries().filter(ready)).toHaveLength(0);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(1);
-      expect(projection.snapshot({ agentId: "main", key }).row?.contextTokens).toBe(16384);
+      expect(
+        (await preparedSnapshot(projection, { agentId: "main", key })).row?.contextTokens,
+      ).toBe(16384);
       expect(projection.materializedCount).toBe(2);
     } finally {
       loading.resolve(catalog);

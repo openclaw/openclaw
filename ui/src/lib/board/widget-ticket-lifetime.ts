@@ -18,9 +18,7 @@ export function copyBoardWidgetTicketReceipt(
   previous: BoardWidgetTicketIdentity,
   fallbackReceivedAtMs = Date.now(),
 ): void {
-  if (widget.viewTicket && widget.viewTicketTtlMs) {
-    ticketReceivedAtMs.set(widget, ticketReceivedAtMs.get(previous) ?? fallbackReceivedAtMs);
-  }
+  recordBoardWidgetTicketReceipt(widget, ticketReceivedAtMs.get(previous) ?? fallbackReceivedAtMs);
 }
 
 export function remainingBoardWidgetTicketTtlMs(

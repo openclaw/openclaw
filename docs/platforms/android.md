@@ -21,6 +21,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
+- The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -40,7 +41,21 @@ capabilities; this prevents simultaneous Gateways from issuing camera,
 location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
-The sidebar footer opens **Add Gateway** when none are saved and Gateway
+The sidebar defaults to **Home → Threads → Skills → Overview**. Existing
+personalized orders and pinned work pages are preserved; **Pages pencil → Edit pinned items →
+Reset pinned items** restores these defaults. The **Settings** gear beside the
+Gateway selector opens all settings, including while offline. Settings stays in
+the footer rather than the Pages menu or pin editor.
+
+Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
+Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
+you use often with **Edit pinned items**. These work pages also remain reachable
+through search; Settings focuses on this phone, connections, configuration, and
+diagnostics. Settings, sidebar, search, and detail headers share the Web UI's
+icon meanings. Connection and approval states are written out rather than
+represented by unlabeled green or gray dots.
+
+The sidebar footer's Gateway selector opens **Add Gateway** when none are saved and Gateway
 settings when one is saved. With multiple saved Gateways, it opens a native
 quick picker with a checkmark for the focused route, **Add Gateway**, and **Manage Gateways**.
 
@@ -52,6 +67,15 @@ changing the current conversation, drafts, attachments, or saved Gateways.
 Adding an already saved Gateway uses its existing connection settings; use
 **Manage Gateways** to replace its setup.
 Saved offline entries remain listed; connection status is separate from selection.
+
+In **Manage Gateways**, tap **Rename** to choose a name used only on this phone.
+The name appears in the sidebar and picker and survives switching Gateways,
+reconnecting, app restarts, and discovery updates. The secondary address still
+distinguishes Gateways with the same name. Clear the name to restore the default.
+Renaming does not change the Gateway's address, identity, or saved credentials.
+Downgrading to an older Android build can discard these local names when that
+build starts and rewrites the registry. Gateway addresses and credentials are
+unaffected; after upgrading again, choose the local names again if needed.
 
 Unsent text and finished attachments stay with their Gateway, agent, and session
 when you switch away and back. Finish recording, stop dictation or Talk, and let
@@ -116,6 +140,27 @@ Google Play and standalone APK installs use different update channels and may ha
 <Note>
 Building a release artifact (APK or app bundle) from source or a fork requires your own Android signing identity. Debug builds use an automatically generated debug signing key. The official OpenClaw release key is not included in the repository. See [Sign your app](https://developer.android.com/studio/publish/app-signing) for how to generate and configure a signing key for release builds.
 </Note>
+
+## App and Gateway compatibility
+
+The Android app and Gateway do not need matching release version numbers.
+Connection compatibility depends on the Gateway protocol versions they support,
+not the release tag that contains the APK.
+
+Android uses separate connections for chat and UI actions (the operator
+connection) and device capabilities (the node connection). The operator connection
+must support the Gateway's current protocol. An authenticated node connection may
+use the previous protocol within the documented compatibility window; that
+exception does not extend to chat or UI actions. See [Gateway protocol
+versioning](/gateway/protocol/versioning) for the current versions and node
+capability restrictions.
+
+Successful pairing does not guarantee that every feature works across an arbitrary
+app/Gateway version combination. New features may require updates on both sides.
+If a connection reports `protocol mismatch`, check the protocol requirements and
+available updates for both the app and Gateway. For sideloaded apps, use the APK
+selection and verification steps above rather than assuming the latest Gateway
+release contains a newer app.
 
 ## Mirror and control Android from a remote Mac
 
@@ -311,6 +356,7 @@ In the Android app:
 
 - The app keeps its Gateway connection alive via a **foreground service** (persistent notification).
 - During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
+- After pairing, choose the phone permissions to enable. If the Gateway requires node approval, review the requested capabilities and tap **Approve access and continue** when offered. Setup finishes after the app verifies approval. Otherwise, follow the displayed Gateway approval commands, then tap **I have approved**.
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
@@ -394,15 +440,35 @@ openclaw gateway call node.list --params "{}"
 The draft has its own full-width row above the attachment and voice/send controls,
 so larger text and narrow screens do not squeeze it between buttons. The empty
 hint stays on one line; drafts show up to six lines and scroll when space is limited.
-The composer has narrower side gutters than the transcript, with readable draft
-text and 48dp action targets. Typography still follows system text scaling.
-Model and thinking controls sit together, opposite the microphone and primary
-action. The model name stays on one line and follows system text scaling;
-long names use a middle ellipsis to keep both ends visible. The full name remains
-in the model sheet and accessibility text. The thinking dial opens a menu without
-expanding the composer.
-Context usage is available in the model sheet and the model control's
-accessibility value, leaving more room for the model name in the toolbar.
+The composer has narrower side gutters than the transcript. **+**, model, and
+reasoning stay together on the left; the microphone and Talk/send
+stay on the right in one row. Controls remain 48dp tall; very short views use
+narrower icon buttons to make room for **Details** while retaining an editable line.
+The placeholder and typed text share the same alignment.
+
+Open **+** for a compact icon list with Camera, Gallery, Files, Location, and
+Permissions. The Permissions row shows the current access mode. Open the top-right
+**Chat actions** (⋮) menu to see the live Context usage ring. Choose **Context** to
+open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
+permission to change session settings. A reported model-call total remains visible
+when no cost breakdown is available. Missing usage is shown as unknown.
+Tap the model name to open a compact menu above the composer, search by model name,
+ID, or provider, and expand provider groups. Search accepts multiple terms and small
+typos in words of at least four letters, including swapped adjacent letters. Every
+term must match; short terms and version numbers are not typo-corrected. Exact
+matches rank first within each provider, and provider groups follow their best
+match. Clearing the search restores the usual ordering without changing your selection.
+The picker has no settings buttons. The Gateway's
+configured default is labeled on its model row. Selecting a named model pins that
+model to the session; **Default model** separately resets the override to follow the
+Gateway's current default.
+Pinned and recent models remain available. Long model names use a middle
+ellipsis, with the full name available in the picker. The effort dial opens its
+slider and Fast mode without expanding the composer. Dragging the slider previews
+the effort on the dial; releasing it applies the selection.
+
+With an empty draft and no active run, the trailing button starts Talk. Entering
+text changes it to Send; an active run with no draft shows Stop.
 During Talk, the live waveform replaces the microphone and remains tappable to
 end Talk. If a run is also active, a separate, softly tinted Stop button stays at
 the trailing edge to abort that run.
@@ -428,6 +494,35 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
+#### Agent browser in chat
+
+When the Browser plugin returns an identifiable tab, Chat shows a preview of
+the session's latest browser tab under **Agent browser**. Tap the upward chevron
+to interact without leaving the conversation or replacing your draft. The
+downward chevron or Android Back returns to the preview. Collapsing dismisses
+the browser's keyboard without changing your chat draft. **Open in your browser**
+is a separate, explicit action.
+Ordinary website links and **Desktop** keep their existing behavior.
+
+The close icon removes the card from chat without closing the agent's remote
+tab. To restore it, choose **Chat actions > Agent browser**. Refreshing the same
+browser result does not reopen a dismissed card; a new browser-tool presentation
+can show it again. Closing is also available while the browser is offline or
+unavailable.
+
+The preview uses the connected Gateway and the exact browser profile, host or
+node, and tab from the tool result. It never starts another browser or substitutes
+a different tab. Switching sessions or Gateways replaces the viewer; going offline
+removes its controls until the connection returns. A stopped or closed remote tab
+stays unavailable rather than creating a replacement.
+
+This uses the Gateway's existing Browser panel and `operator.admin` browser
+permission. The connected Gateway must advertise browser-focus support and use
+its bundled Control UI. Older Gateways, disabled Control UI, and custom UI roots
+show an unavailable notice instead of loading an unsupported page; update the
+Gateway and use its bundled UI to enable embedded control. The card remains
+closable. No additional browser service or session-sharing permission is created.
+
 ### 7. Camera
 
 Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camera.clip` (mp4). See [Camera node](/nodes/camera) for parameters and CLI helpers.
@@ -447,7 +542,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
-- To start continuous **Talk**, long-press the microphone and choose **Start Talk**.
+- To start continuous **Talk**, tap the trailing Talk button with an empty draft
+  and no active run. The microphone menu contains only dictation and voice notes.
   Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
 - Your selected agent stays bound to Talk and the main chat when the same Gateway
   reconnects, including while its agent list refreshes. Removing that agent falls
@@ -474,7 +570,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 9. Workspace files (read-only)
 
-Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
+Open **Overview** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
 
 If the app cannot prepare a file or open the share sheet, it shows **Could not share file** and keeps the preview open so you can retry or go back.
 

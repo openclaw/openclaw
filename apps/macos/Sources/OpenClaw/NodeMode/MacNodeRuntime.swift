@@ -425,12 +425,10 @@ actor MacNodeRuntime {
                 message: "INVALID_REQUEST: unknown command")
         }
         guard self.canvasEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+            return errorResponse(
+                req,
+                code: .unavailable,
+                message: "CANVAS_DISABLED: enable Canvas in Settings")
         }
         return nil
     }
@@ -551,12 +549,10 @@ private enum MacNodeCanvasTargetError: LocalizedError {
 extension MacNodeRuntime {
     private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         guard Self.cameraEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CAMERA_DISABLED: enable Camera in Settings"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "CAMERA_DISABLED: enable Camera in Settings")
         }
         switch req.command {
         case OpenClawCameraCommand.snap.rawValue:
@@ -634,12 +630,10 @@ extension MacNodeRuntime {
     private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let mode = Self.locationMode()
         guard mode != .off else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_DISABLED: enable Location in Settings"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_DISABLED: enable Location in Settings")
         }
         let params = (try? Self.decodeParams(OpenClawLocationGetParams.self, from: req.paramsJSON)) ??
             OpenClawLocationGetParams()
@@ -651,12 +645,10 @@ extension MacNodeRuntime {
             status: status,
             requireAlways: mode == .always)
         if !hasPermission {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_PERMISSION_REQUIRED: grant Location permission")
         }
         do {
             let location = try await services.currentLocation(
@@ -677,19 +669,15 @@ extension MacNodeRuntime {
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         } catch MacNodeLocationService.Error.timeout {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_TIMEOUT: no fix in time"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_TIMEOUT: no fix in time")
         } catch {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)")
         }
     }
 
@@ -698,12 +686,10 @@ extension MacNodeRuntime {
         desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> BridgeInvokeResponse
     {
         guard self.computerControlEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "COMPUTER_DISABLED: enable Computer Control in Settings"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "COMPUTER_DISABLED: enable Computer Control in Settings")
         }
         let params: OpenClawComputerActParams
         do {

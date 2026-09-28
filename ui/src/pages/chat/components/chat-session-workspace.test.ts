@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -459,12 +460,17 @@ describe("openSessionWorkspaceFile", () => {
       hello: gatewayHelloForMethods(["sessions.files.set"]),
       sessionKey: "agent:main:current",
       sessionWorkspaceDraftScope: "pane-left",
+      sessionWorkspaceDraftContext: { sessionTitle: "Research", paneLabel: "Column 1, row 1" },
       settings: { gatewayUrl: "wss://gateway-a.example" },
       sidebarContent: null,
       sessions: { getFile },
     } as unknown as SessionWorkspaceHost;
 
     openSessionWorkspaceFile(state, { path: "readme.md" });
+    state.sessionWorkspaceDraftContext = {
+      sessionTitle: "Later selection",
+      paneLabel: "Column 2, row 1",
+    };
 
     expect(await loadedSidebarContent(state)).toMatchObject({
       kind: "file",
@@ -472,6 +478,11 @@ describe("openSessionWorkspaceFile", () => {
       content: "# Before\n",
       draftKey:
         "wss://gateway-a.example\u0000pane-left\u0000agent:main:current\u0000/workspace\u0000README.md",
+      draftContext: {
+        sessionKey: "agent:main:current",
+        sessionTitle: "Research",
+        paneLabel: "Column 1, row 1",
+      },
       edit: { hash: "a".repeat(64) },
     });
   });
@@ -479,7 +490,7 @@ describe("openSessionWorkspaceFile", () => {
   it.each(["current", "replaced", "refresh-error"] as const)(
     "refreshes saved file metadata only for its %s workspace",
     async (scope) => {
-      const saved = Promise.withResolvers<{ file: { hash: string } }>();
+      const saved = createDeferred<{ file: { hash: string } }>();
       const state = {
         client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
         connected: true,
@@ -507,7 +518,7 @@ describe("openSessionWorkspaceFile", () => {
           }),
         },
       } as unknown as SessionWorkspaceHost;
-      const opened = Promise.withResolvers<void>();
+      const opened = createDeferred();
       state.requestUpdate = () => {
         if (state.sessionWorkspaceState?.previews[0]?.content.kind === "file") {
           opened.resolve();
@@ -523,7 +534,7 @@ describe("openSessionWorkspaceFile", () => {
       workspace.browserSearch = "notes";
       const oldDiff = resolveSessionDiffSidebarContent(state);
       state.sidebarContent = oldDiff;
-      const savedUpdate = Promise.withResolvers<void>();
+      const savedUpdate = createDeferred();
       state.requestUpdate = () => {
         if (!workspace.loading) {
           savedUpdate.resolve();

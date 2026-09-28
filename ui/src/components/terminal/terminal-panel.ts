@@ -32,9 +32,6 @@ import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-conn
 import { renderTerminalPanelViewport } from "./terminal-panel-chrome.ts";
 import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
-  fitActiveTerminalSession,
-  fitAllTerminalSessions,
-  prepareTerminalSessionHostVisibility,
   reattachTerminalSessionHosts,
   updateTerminalSessionTheme,
 } from "./terminal-panel-session-rendering.ts";
@@ -128,7 +125,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     isAvailable: () => this.isDockLayoutAvailable(),
     isFullscreen: () => this.fullscreen,
     onResize: () =>
-      fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId),
+      this.terminalSessions.tabs
+        .find((tab) => tab.id === this.terminalSessions.activeId)
+        ?.controller.fit(),
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private readonly onDocumentPointerDown = (event: PointerEvent) =>
@@ -434,7 +433,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       return;
     }
     this.dockLayout.setDock(dock);
-    void this.updateComplete.then(() => fitAllTerminalSessions(this.terminalSessions.tabs));
+    void this.updateComplete.then(() => {
+      for (const tab of this.terminalSessions.tabs) {
+        tab.controller.fit();
+      }
+    });
   }
 
   private openFullscreen(): void {
@@ -546,10 +549,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   }
 
   override willUpdate(): void {
-    prepareTerminalSessionHostVisibility(
-      this.terminalSessions.tabs,
-      this.terminalSessions.activeId,
-    );
+    // Ghostty measures its canvas; only the active session may occupy the viewport.
+    for (const tab of this.terminalSessions.tabs) {
+      tab.host.style.display = tab.id === this.terminalSessions.activeId ? "block" : "none";
+    }
   }
 
   static override styles = [

@@ -185,9 +185,16 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
+    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional through the next Plugin SDK major for existing external queue implementations; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
+
     Plugin-state leases were removed in 2026.8.1. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
 
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
+
+    Shared ingress monitors keep their drain alive during shutdown until completion,
+    release, and failure writes that have already started settle. If a write fails
+    while the drain still owns the claim, shutdown reports the error and retains
+    that ownership.
 
     <Warning>
     `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
@@ -318,8 +325,14 @@ input validation, and JSON serialization remain on the calling thread.
 Callback-based `update` and `deleteIf` retain the native synchronous transaction;
 do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
 state errors use their existing codec; other native causes retain bounded causal
-messages and error codes. Arbitrary custom properties and original stacks do not
-cross the worker boundary.
+messages, error codes, and numeric `errno` values. Structured file logs include
+the process ID, thread ID, and OpenClaw version that constructed the plugin-state
+error in `owner`, plus nested cause details. Failures before command dispatch
+are wrapped on the caller thread. Native cause codes appear as `errorCode` in these
+records; the in-memory error keeps its original `code`. Existing log redaction
+still applies. Arbitrary custom properties and original stacks do not cross the
+worker boundary. `PLUGIN_STATE_OPEN_FAILED` can describe a rejected admission
+before SQLite opens; inspect the cause and owner before diagnosing a file error.
 
 Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire

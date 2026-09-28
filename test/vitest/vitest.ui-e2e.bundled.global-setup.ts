@@ -5,6 +5,8 @@ import {
   startBuiltControlUiE2eServer,
   startBundledControlUiE2eServer,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { prepareNativeControlUiPluginFixtures } from "../../ui/src/test-helpers/control-ui-plugin-fixture.ts";
+import { workboardUi } from "../../ui/src/test-helpers/control-ui-workboard-fixture.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.ts";
 
 declare module "vitest" {
@@ -27,10 +29,15 @@ export default async function setup(project: TestProject) {
     return undefined;
   }
 
+  const prebuilt = root.getProvidedContext().controlUiE2ePrebuiltAssets;
+  // Publish native plugin fixtures before test transforms can borrow the shared
+  // compiled-subprocess owner and seal its resolution namespace.
+  if (!prebuilt) {
+    await prepareNativeControlUiPluginFixtures(workboardUi.nativePlugins);
+  }
   // Local full-suite runs can fan shards into separate processes in one checkout.
   // Keep every build out of canonical dist so those processes cannot clobber it.
   const tempDirs = createTempDirTracker();
-  const prebuilt = root.getProvidedContext().controlUiE2ePrebuiltAssets;
   const startServer = prebuilt
     ? startBuiltControlUiE2eServer(prebuilt.root)
     : startBundledControlUiE2eServer(tempDirs.make("openclaw-ui-e2e-"));

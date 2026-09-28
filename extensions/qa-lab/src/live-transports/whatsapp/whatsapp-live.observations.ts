@@ -1,6 +1,6 @@
-// QA Lab WhatsApp observed-message matching and diagnostics.
 import type { WhatsAppQaDriverObservedMessage } from "@openclaw/whatsapp/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type {
   WhatsAppObservedMessage,
   WhatsAppQaDriverQuotedMessageKey,
@@ -127,9 +127,7 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
         `timed out waiting for WhatsApp status reaction sequence ${params.emojis.join(" -> ")}`,
       );
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    await sleep(250);
   }
   return matched;
 }

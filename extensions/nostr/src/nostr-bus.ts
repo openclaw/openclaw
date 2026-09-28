@@ -42,7 +42,6 @@ const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 const NOSTR_INGRESS_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const NOSTR_INGRESS_MAX_PENDING_EVENTS = 1_000;
-const DEFAULT_INBOUND_GUARD_POLICY = createDirectDmPreCryptoGuardPolicy();
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -123,42 +122,21 @@ interface CircuitBreakerState {
   state: "closed" | "open" | "half_open";
   failures: number;
   lastFailure: number;
-  lastSuccess: number;
 }
 
-interface CircuitBreaker {
-  /** Check if requests should be allowed */
-  canAttempt: () => boolean;
-  /** Record a success */
-  recordSuccess: () => void;
-  /** Record a failure */
-  recordFailure: () => void;
-  /** Get current state */
-  getState: () => CircuitBreakerState["state"];
-}
+type CircuitBreaker = ReturnType<typeof createCircuitBreaker>;
 
-function createCircuitBreaker(
-  relay: string,
-  metrics: NostrMetrics,
-  threshold: number = CIRCUIT_BREAKER_THRESHOLD,
-  resetMs: number = CIRCUIT_BREAKER_RESET_MS,
-): CircuitBreaker {
+function createCircuitBreaker(relay: string, metrics: NostrMetrics) {
   const state: CircuitBreakerState = {
     state: "closed",
     failures: 0,
     lastFailure: 0,
-    lastSuccess: Date.now(),
   };
 
   return {
     canAttempt(): boolean {
-      if (state.state === "closed") {
-        return true;
-      }
-
       if (state.state === "open") {
-        // Check if enough time has passed to try half-open
-        if (Date.now() - state.lastFailure >= resetMs) {
+        if (Date.now() - state.lastFailure >= CIRCUIT_BREAKER_RESET_MS) {
           state.state = "half_open";
           metrics.emit("relay.circuit_breaker.half_open", 1, { relay });
           return true;
@@ -166,7 +144,6 @@ function createCircuitBreaker(
         return false;
       }
 
-      // half_open: allow one attempt
       return true;
     },
 
@@ -178,24 +155,19 @@ function createCircuitBreaker(
       } else if (state.state === "closed") {
         state.failures = 0;
       }
-      state.lastSuccess = Date.now();
     },
 
     recordFailure(): void {
       state.failures++;
       state.lastFailure = Date.now();
 
-      if (state.state === "half_open") {
-        state.state = "open";
-        metrics.emit("relay.circuit_breaker.open", 1, { relay });
-      } else if (state.state === "closed" && state.failures >= threshold) {
+      if (
+        state.state === "half_open" ||
+        (state.state === "closed" && state.failures >= CIRCUIT_BREAKER_THRESHOLD)
+      ) {
         state.state = "open";
         metrics.emit("relay.circuit_breaker.open", 1, { relay });
       }
-    },
-
-    getState(): CircuitBreakerState["state"] {
-      return state.state;
     },
   };
 }
@@ -208,7 +180,6 @@ interface RelayHealthStats {
   successCount: number;
   failureCount: number;
   latencySum: number;
-  latencyCount: number;
   lastSuccess: number;
   lastFailure: number;
 }
@@ -234,7 +205,6 @@ function createRelayHealthTracker(): RelayHealthTracker {
         successCount: 0,
         failureCount: 0,
         latencySum: 0,
-        latencyCount: 0,
         lastSuccess: 0,
         lastFailure: 0,
       };
@@ -248,7 +218,6 @@ function createRelayHealthTracker(): RelayHealthTracker {
       const s = getOrCreate(relay);
       s.successCount++;
       s.latencySum += latencyMs;
-      s.latencyCount++;
       s.lastSuccess = Date.now();
     },
 
@@ -280,14 +249,14 @@ function createRelayHealthTracker(): RelayHealthTracker {
           : 0;
 
       // Latency penalty (lower is better)
-      const avgLatency = s.latencyCount > 0 ? s.latencySum / s.latencyCount : 1000;
+      const avgLatency = s.successCount > 0 ? s.latencySum / s.successCount : 1000;
       const latencyPenalty = Math.min(0.2, avgLatency / 10000);
 
       return Math.max(0, Math.min(1, successRate + recencyBonus - latencyPenalty));
     },
 
     getSortedRelays(relays: string[]): string[] {
-      return [...relays].toSorted((a, b) => this.getScore(b) - this.getScore(a));
+      return relays.toSorted((a, b) => this.getScore(b) - this.getScore(a));
     },
   };
 }
@@ -312,14 +281,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
-  const guardPolicy = createDirectDmPreCryptoGuardPolicy({
-    ...DEFAULT_INBOUND_GUARD_POLICY,
-    ...options.guardPolicy,
-    rateLimit: {
-      ...DEFAULT_INBOUND_GUARD_POLICY.rateLimit,
-      ...options.guardPolicy?.rateLimit,
-    },
-  });
+  const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
 
   // Initialize metrics
   const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
@@ -377,28 +339,19 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     );
   };
 
-  const rejectIfGlobalRateLimited = (): boolean => {
+  const rejectIfRateLimited = (
+    limiter: ReturnType<typeof createFixedWindowRateLimiter>,
+    key: string,
+    metric: "rate_limit.global" | "rate_limit.per_sender",
+  ): boolean => {
     updateRateLimiterSizeMetric();
-    if (globalRateLimiter.isRateLimited("global")) {
-      metrics.emit("rate_limit.global");
+    const limited = limiter.isRateLimited(key);
+    if (limited) {
+      metrics.emit(metric);
       metrics.emit("event.rejected.rate_limited");
-      updateRateLimiterSizeMetric();
-      return true;
     }
     updateRateLimiterSizeMetric();
-    return false;
-  };
-
-  const rejectIfVerifiedSenderRateLimited = (senderPubkey: string): boolean => {
-    updateRateLimiterSizeMetric();
-    if (perSenderRateLimiter.isRateLimited(senderPubkey)) {
-      metrics.emit("rate_limit.per_sender");
-      metrics.emit("event.rejected.rate_limited");
-      updateRateLimiterSizeMetric();
-      return true;
-    }
-    updateRateLimiterSizeMetric();
-    return false;
+    return limited;
   };
 
   async function dispatchEvent(event: Event, lifecycle: NostrIngressLifecycle): Promise<void> {
@@ -419,14 +372,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       return;
     }
 
-    let targetsUs = false;
-    for (const tag of event.tags) {
-      if (tag[0] === "p" && tag[1] === pk) {
-        targetsUs = true;
-        break;
-      }
-    }
-    if (!targetsUs) {
+    if (!event.tags.some((tag) => tag[0] === "p" && tag[1] === pk)) {
       metrics.emit("event.rejected.wrong_kind");
       return;
     }
@@ -447,13 +393,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     };
 
     if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
-      if (rejectIfGlobalRateLimited()) {
+      if (rejectIfRateLimited(globalRateLimiter, "global", "rate_limit.global")) {
         throw new Error(`Nostr event ${event.id} hit the global rate limit.`);
       }
       metrics.emit("event.rejected.oversized_ciphertext");
       return;
     }
-    if (rejectIfGlobalRateLimited()) {
+    if (rejectIfRateLimited(globalRateLimiter, "global", "rate_limit.global")) {
       throw new Error(`Nostr event ${event.id} hit the global rate limit.`);
     }
 
@@ -468,7 +414,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       throw error;
     }
 
-    if (rejectIfVerifiedSenderRateLimited(event.pubkey)) {
+    if (rejectIfRateLimited(perSenderRateLimiter, event.pubkey, "rate_limit.per_sender")) {
       throw new Error(`Nostr sender ${event.pubkey} hit the rate limit.`);
     }
 

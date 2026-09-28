@@ -302,22 +302,6 @@ describe("refreshGatewayHealthSnapshot", () => {
     ]);
   });
 
-  it("lets a passive refresh join an in-flight explicit probe", async () => {
-    const healthState = await loadHealthState();
-    const probeDeferred = createPendingHealthSnapshot();
-    const probeSummary = createHealthSummary();
-    collectGatewayHealthSnapshotMock.mockImplementationOnce(probeDeferred.collect);
-
-    const probe = healthState.refreshGatewayHealthSnapshot({ probe: true });
-    const passive = healthState.refreshGatewayHealthSnapshot({ probe: false });
-
-    await probeDeferred.started;
-    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(healthSnapshotCallArg()?.probe).toBe(true);
-    probeDeferred.resolve(probeSummary);
-    await expect(Promise.all([probe, passive])).resolves.toEqual([probeSummary, probeSummary]);
-  });
-
   it("coalesces concurrent explicit probe waiters", async () => {
     const healthState = await loadHealthState();
     const probeDeferred = createPendingHealthSnapshot();

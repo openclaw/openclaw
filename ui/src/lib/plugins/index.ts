@@ -1,18 +1,8 @@
 // Shared Control UI plugin catalog Gateway contracts.
 import type {
-  PluginCatalogEntry,
-  PluginDiscoveryCategory as ProtocolPluginDiscoveryCategory,
-  PluginDiscoveryEntry as ProtocolPluginDiscoveryEntry,
-  PluginDeclaredSurface as ProtocolPluginDeclaredSurface,
-  PluginHookGrant as ProtocolPluginHookGrant,
-  PluginInspectSource as ProtocolPluginInspectSource,
-  PluginOperatorGrants as ProtocolPluginOperatorGrants,
-  PluginsInspectResult as ProtocolPluginsInspectResult,
-  PluginsInstallParams,
   PluginsInstallResult,
-  PluginsCatalogBrowseResult as ProtocolPluginsCatalogBrowseResult,
-  PluginsCatalogGetResult as ProtocolPluginsCatalogGetResult,
-  PluginsListResult as ProtocolPluginsListResult,
+  PluginsCatalogGetResult,
+  PluginsListResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
   PluginsUninstallResult,
@@ -20,23 +10,24 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
-export type PluginCatalogItem = PluginCatalogEntry;
-export type PluginDiscoveryCategory = ProtocolPluginDiscoveryCategory;
-export type PluginDiscoveryEntry = ProtocolPluginDiscoveryEntry;
-export type PluginDiscoveryResult = ProtocolPluginsCatalogBrowseResult;
-export type PluginDiscoveryDetailResult = ProtocolPluginsCatalogGetResult;
-export type PluginDeclaredSurface = ProtocolPluginDeclaredSurface;
-export type PluginHookGrant = ProtocolPluginHookGrant;
-export type PluginInspectSource = ProtocolPluginInspectSource;
-export type PluginOperatorGrants = ProtocolPluginOperatorGrants;
-export type PluginsInspectResult = ProtocolPluginsInspectResult;
-export type PluginListResult = ProtocolPluginsListResult;
-export type PluginInstallRequest = PluginsInstallParams;
+export type {
+  PluginCatalogEntry as PluginCatalogItem,
+  PluginDiscoveryCategory,
+  PluginDiscoveryEntry,
+  PluginDeclaredSurface,
+  PluginHookGrant,
+  PluginInspectSource,
+  PluginOperatorGrants,
+  PluginsInspectResult,
+  PluginsInstallParams as PluginInstallRequest,
+  PluginsCatalogBrowseResult as PluginDiscoveryResult,
+  PluginsCatalogGetResult as PluginDiscoveryDetailResult,
+  PluginsListResult as PluginListResult,
+} from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
-type PluginUninstallResult = PluginsUninstallResult;
 
-export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginListResult> {
-  return client.request<PluginListResult>("plugins.list", {});
+export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginsListResult> {
+  return client.request<PluginsListResult>("plugins.list", {});
 }
 
 export function loadPluginDiscoveryDetail(
@@ -44,8 +35,8 @@ export function loadPluginDiscoveryDetail(
   id: string,
   signal?: AbortSignal,
   version?: string,
-): Promise<PluginDiscoveryDetailResult> {
-  return client.request<PluginDiscoveryDetailResult>(
+): Promise<PluginsCatalogGetResult> {
+  return client.request<PluginsCatalogGetResult>(
     "plugins.catalog.get",
     { id, ...(version ? { version } : {}) },
     signal ? { signal } : undefined,
@@ -55,8 +46,8 @@ export function loadPluginDiscoveryDetail(
 export function uninstallPlugin(
   client: GatewayBrowserClient,
   pluginId: string,
-): Promise<PluginUninstallResult> {
-  return client.request<PluginUninstallResult>("plugins.uninstall", { pluginId });
+): Promise<PluginsUninstallResult> {
+  return client.request<PluginsUninstallResult>("plugins.uninstall", { pluginId });
 }
 
 export function setPluginEnabled(

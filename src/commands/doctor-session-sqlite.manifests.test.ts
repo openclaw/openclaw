@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import * as replaceFile from "../infra/replace-file.js";
 import { assertSafeSessionSqliteMigrationMove } from "../infra/session-sqlite-migration-manifest.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -16,6 +16,10 @@ import {
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+}));
+
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
@@ -24,7 +28,7 @@ describe("runDoctorSessionSqlite", () => {
     ["different session", "other", 2, false, "sqlite_entry_mismatch", 0, 0],
     ["short transcript", "session-1", 1, false, "sqlite_transcript_count_mismatch", 1, 0],
     ["matching transcript", "session-1", 2, false, undefined, 1, 2],
-    ["longer transcript", "session-1", 3, false, "sqlite_transcript_count_mismatch", 1, 0],
+    ["longer transcript", "session-1", 3, false, undefined, 1, 3],
     ["missing source", "session-1", 2, true, undefined, 1, 2],
   ] as const)(
     "validates a %s against SQLite",
@@ -38,7 +42,7 @@ describe("runDoctorSessionSqlite", () => {
       validatedTranscriptEvents,
     ) => {
       const events = [
-        { type: "session", id: "session-1", version: 3 },
+        { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         {
           type: "message",
           id: "one",

@@ -125,6 +125,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var operatorScopes: Set<String>?
+    private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
     private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
@@ -136,6 +137,7 @@ public actor GatewayNodeSession {
     private var computerInvokeReceiptOrder: [ComputerInvokeReceiptKey] = []
     #if DEBUG
     private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    var testBeforeChannelShutdown: (@Sendable () async -> Void)?
     #endif
 
     private struct ServerEventSubscriber {
@@ -215,7 +217,7 @@ public actor GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
@@ -240,6 +242,7 @@ public actor GatewayNodeSession {
 
         let channelGeneration: UInt64
         if shouldReconnect {
+            self.channel?.retireSocketAdmission()
             let invalidatedAdmissionGeneration = self.admissionGeneration
             self.channelGeneration &+= 1
             self.admissionGeneration &+= 1
@@ -287,13 +290,6 @@ public actor GatewayNodeSession {
                 // without forcing a new channel.
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
-            self.connectOptions = connectOptions
-            self.onConnected = onConnected
-            self.onDisconnected = onDisconnected
-            self.onInvoke = onInvoke
-            self.onInvokeInput = onInvokeInput
-            self.onInvokeCancel = onInvokeCancel
-            self.onRouteInvalidated = onRouteInvalidated
             self.activeURL = url
             self.activeCredentials = credentials
             self.activeConnectOptionsKey = nextOptionsKey
@@ -301,14 +297,15 @@ public actor GatewayNodeSession {
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
         } else {
             channelGeneration = self.channelGeneration
-            self.connectOptions = connectOptions
-            self.onConnected = onConnected
-            self.onDisconnected = onDisconnected
-            self.onInvoke = onInvoke
-            self.onInvokeInput = onInvokeInput
-            self.onInvokeCancel = onInvokeCancel
-            self.onRouteInvalidated = onRouteInvalidated
         }
+
+        self.connectOptions = connectOptions
+        self.onConnected = onConnected
+        self.onDisconnected = onDisconnected
+        self.onInvoke = onInvoke
+        self.onInvokeInput = onInvokeInput
+        self.onInvokeCancel = onInvokeCancel
+        self.onRouteInvalidated = onRouteInvalidated
 
         guard let channel else {
             throw NSError(domain: "Gateway", code: 0, userInfo: [
@@ -316,26 +313,22 @@ public actor GatewayNodeSession {
             ])
         }
 
-        do {
-            // Bind this connect attempt to the admission epoch that owns the socket.
-            // An in-place disconnect keeps the channel object/generation but advances
-            // admission, so a drained snapshot waiter must not report a stale connect.
-            let expectedAdmissionGeneration = self.admissionGeneration
-            try await channel.connect()
-            guard self.channelGeneration == channelGeneration,
-                  self.admissionGeneration == expectedAdmissionGeneration,
-                  self.channel === channel
-            else { throw CancellationError() }
-            _ = await self.waitForSnapshot(timeoutMs: 500)
-            guard self.channelGeneration == channelGeneration,
-                  self.admissionGeneration == expectedAdmissionGeneration,
-                  self.channel === channel
-            else { throw CancellationError() }
-            await self.notifyConnectedIfNeeded(
-                admissionGeneration: expectedAdmissionGeneration)
-        } catch {
-            throw error
-        }
+        // Bind this connect attempt to the admission epoch that owns the socket.
+        // An in-place disconnect keeps the channel object/generation but advances
+        // admission, so a drained snapshot waiter must not report a stale connect.
+        let expectedAdmissionGeneration = self.admissionGeneration
+        try await channel.connect()
+        guard self.channelGeneration == channelGeneration,
+              self.admissionGeneration == expectedAdmissionGeneration,
+              self.channel === channel
+        else { throw CancellationError() }
+        _ = await self.waitForSnapshot(timeoutMs: 500)
+        guard self.channelGeneration == channelGeneration,
+              self.admissionGeneration == expectedAdmissionGeneration,
+              self.channel === channel
+        else { throw CancellationError() }
+        await self.notifyConnectedIfNeeded(
+            admissionGeneration: expectedAdmissionGeneration)
     }
 
     /// Keeps the flat overload source-compatible while credentials remain one reconnect identity.
@@ -346,7 +339,7 @@ public actor GatewayNodeSession {
         password: String? = nil,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
@@ -372,6 +365,7 @@ public actor GatewayNodeSession {
     }
 
     public func disconnect() async {
+        self.channel?.retireSocketAdmission()
         let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
         self.admissionGeneration &+= 1
@@ -424,7 +418,15 @@ public actor GatewayNodeSession {
         // Stop the detached transport concurrently with owner cleanup. Input release
         // must not wait on socket cancellation, but the old endpoint must not retain
         // automatic reconnect ownership while lifecycle callbacks are suspended.
-        let channelShutdown = Task { await channel.shutdown() }
+        #if DEBUG
+        let beforeChannelShutdown = self.testBeforeChannelShutdown
+        #endif
+        let channelShutdown = Task {
+            #if DEBUG
+            await beforeChannelShutdown?()
+            #endif
+            await channel.shutdown()
+        }
         let immediateTeardown = Task {
             await Self.$executingLifecycleCallbackID.withValue(invalidationCallbackID) {
                 await onRouteInvalidated?()
@@ -469,14 +471,11 @@ public actor GatewayNodeSession {
         return barrier
     }
 
-    private func clearLifecycleCallbackBarrier(_ id: UUID) {
-        guard self.lifecycleCallbackBarrier?.id == id else { return }
-        self.lifecycleCallbackBarrier = nil
-    }
-
     private func finishLifecycleCallback(_ id: UUID) {
         self.executingLifecycleCallbackIDs.remove(id)
-        self.clearLifecycleCallbackBarrier(id)
+        if self.lifecycleCallbackBarrier?.id == id {
+            self.lifecycleCallbackBarrier = nil
+        }
     }
 
     private func isExecutingLifecycleCallback() -> Bool {
@@ -742,6 +741,10 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
+        self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
+    }
+
     private func currentRouteValue<T>(
         _ value: T?,
         ifCurrentRoute route: GatewayNodeSessionRoute) -> T?
@@ -919,6 +922,7 @@ extension GatewayNodeSession {
             self.serverCapabilities = Set(
                 GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
             self.operatorScopes = ok.advertisedOperatorScopes()
+            self.attachmentLimits = ok.advertisedAttachmentLimits()
             let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
             let trimmedMainSessionKey = snapshotMainSessionKey?
                 .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
@@ -951,6 +955,7 @@ extension GatewayNodeSession {
         self.serverMethods = nil
         self.serverCapabilities = nil
         self.operatorScopes = nil
+        self.attachmentLimits = nil
         self.mainSessionKey = nil
         self.drainSnapshotWaiters(returning: false)
         self.drainSnapshotReadyWaiters(returning: false)
@@ -1031,22 +1036,18 @@ extension GatewayNodeSession {
     }
 
     private func drainSnapshotWaiters(returning value: Bool) {
-        if !self.snapshotWaiters.isEmpty {
-            let waiters = self.snapshotWaiters.values
-            self.snapshotWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(returning: value)
-            }
+        let waiters = self.snapshotWaiters.values
+        self.snapshotWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: value)
         }
     }
 
     private func drainSnapshotReadyWaiters(returning value: Bool) {
-        if !self.snapshotReadyWaiters.isEmpty {
-            let waiters = self.snapshotReadyWaiters
-            self.snapshotReadyWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(returning: value)
-            }
+        let waiters = self.snapshotReadyWaiters
+        self.snapshotReadyWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: value)
         }
     }
 
@@ -1159,7 +1160,7 @@ extension GatewayNodeSession {
         self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
-            let request = try decodeInvokeRequest(from: payload)
+            let request: NodeInvokeRequestPayload = try self.decodeEventPayload(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
             self.logger.info(
                 """
@@ -1600,10 +1601,6 @@ extension GatewayNodeSession {
             #endif
         }
         return true
-    }
-
-    private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
-        try self.decodeEventPayload(from: payload)
     }
 
     private func decodeEventPayload<T: Decodable>(from payload: OpenClawProtocol.AnyCodable) throws -> T {

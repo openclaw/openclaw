@@ -127,7 +127,7 @@ describe("resolveModelDirectiveSelection", () => {
         raw: "openai/gpt-5.6-luna",
         defaultProvider: "anthropic",
         defaultModel: "claude-sonnet-4-6",
-        aliasIndex: state.policyAliasIndex,
+        aliasIndex: state.modelPolicy.policyAliasIndex,
         allowedModelKeys: state.allowedModelKeys,
         modelPolicy: state.modelPolicy,
         cfg,

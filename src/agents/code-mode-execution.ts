@@ -4,7 +4,10 @@ import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
 } from "./code-mode-catalog.js";
-import type { CodeModeExecutorInlineHost } from "./code-mode-executor-types.js";
+import type {
+  CodeModeExecutorContinuation,
+  CodeModeExecutorInlineHost,
+} from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import {
@@ -27,7 +30,6 @@ import {
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
   codeModeAbortedResult,
-  createCodeModeBridgeDispatchState,
   createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeRequestsReplaySafe,
@@ -43,6 +45,7 @@ import {
   type CodeModeBridgeDispatchState,
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -70,7 +73,7 @@ export async function runCodeModeExec(params: {
     validateInput: true,
   });
   params.onRuntime?.(runtime);
-  const bridgeDispatch = createCodeModeBridgeDispatchState();
+  const bridgeDispatch = { started: false };
   const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
   const namespaceCatalog = runtime.namespaceEntries();
   const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
@@ -361,6 +364,38 @@ function createInlineHost(
   };
 }
 
+async function resumeCodeModeExecution(
+  params: Omit<CodeModeSettlementContext, "result">,
+  continuation: CodeModeExecutorContinuation,
+  pending: PendingBridgeState[],
+  delivery: ReturnType<typeof takeSettledBridgeRequests>,
+  timeoutMs: number,
+): Promise<CodeModeWorkerResult> {
+  // Delivery remains owned until the worker consumes it or the resume fails.
+  try {
+    return await params.owner.runExecution(() =>
+      runCodeModeExecutor(
+        {
+          kind: "resume",
+          retainFinalValue: !params.replaySafe,
+          continuation,
+          config: { ...params.config, timeoutMs },
+          settledRequests: delivery.requests,
+          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+        },
+        {
+          timeoutMs: timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+          executor: params.config.executor,
+          signal: params.signal,
+          inlineHost: createInlineHost(params, pending, () => {}, delivery.release),
+        },
+      ),
+    );
+  } finally {
+    delivery.release();
+  }
+}
+
 async function settleCodeModeResult(params: CodeModeSettlementContext) {
   let result = params.result;
   let pending = params.pending ?? [];
@@ -456,33 +491,14 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
       // attached to their original bridge ids across the restored snapshot.
       const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
-      const continuation = result.continuation;
       // Resuming inherits the remaining guest budget; host watchdog grace adds no guest time.
-      try {
-        result = await params.owner.runExecution(() =>
-          runCodeModeExecutor(
-            {
-              kind: "resume",
-              retainFinalValue: !params.replaySafe,
-              continuation,
-              config: {
-                ...params.config,
-                timeoutMs: resumeBudgetMs,
-              },
-              settledRequests: delivery.requests,
-              pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-            },
-            {
-              timeoutMs: resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-              executor: params.config.executor,
-              signal: params.signal,
-              inlineHost: createInlineHost(params, pending, () => {}, delivery.release),
-            },
-          ),
-        );
-      } finally {
-        delivery.release();
-      }
+      result = await resumeCodeModeExecution(
+        params,
+        result.continuation,
+        pending,
+        delivery,
+        resumeBudgetMs,
+      );
       output.append(result.output);
       if (result.status === "waiting") {
         cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
@@ -559,11 +575,16 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     telemetry: telemetry(params.runtime),
   };
   const networkContent = params.runtime.hasNetworkContent();
-  return output.takeResult(metadata, channels, networkContent, (source) =>
+  const delivered = output.takeResult(metadata, channels, networkContent, (source) =>
     params.replaySafe
       ? { reason: "Not retained in restart-safe mode. Return less data." }
       : params.owner.results.retain(source, networkContent),
   );
+  // Automatic retention changes the receipt, not the value the guest returned.
+  return recordCodeModeToolOutcome(delivered, {
+    ...delivered,
+    ...(result.status === "completed" ? { value: result.value } : {}),
+  });
 }
 
 export async function runWait(params: {
@@ -603,6 +624,23 @@ export async function runWait(params: {
       ? AbortSignal.any([params.ctx.abortSignal, params.signal])
       : (params.signal ?? params.ctx.abortSignal),
   );
+  const context = {
+    owner: state.owner,
+    output: state.output,
+    replaySafe: state.replaySafe,
+    budget,
+    parentToolCallId: state.parentToolCallId,
+    codeModeReplayId: state.replayId,
+    ctx: state.ctx,
+    config: state.config,
+    runtime: state.runtime,
+    catalogProjection: state.catalogProjection,
+    namespaceRuntime: state.namespaceRuntime,
+    bridgeDispatch: state.bridgeDispatch,
+    approvalWait,
+    signal,
+    onUpdate: params.onUpdate,
+  };
   let releaseActiveRunSlot: (() => void) | undefined;
   try {
     // Active waits own their slot and call deadline; idle expiry applies only after parking.
@@ -628,73 +666,19 @@ export async function runWait(params: {
     const delivery = takeSettledBridgeRequests(state.pending);
     // The resumed guest inherits only the remaining shared execution budget;
     // the extra host margin is watchdog grace only.
-    let result: CodeModeWorkerResult;
-    try {
-      result = await state.owner.runExecution(() =>
-        runCodeModeExecutor(
-          {
-            kind: "resume",
-            retainFinalValue: !state.replaySafe,
-            continuation: state.continuation,
-            config: {
-              ...state.config,
-              timeoutMs: resumeBudgetMs,
-            },
-            settledRequests: delivery.requests,
-            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-          },
-          {
-            timeoutMs: resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-            executor: state.config.executor,
-            signal,
-            inlineHost: createInlineHost(
-              {
-                owner: state.owner,
-                output: state.output,
-                replaySafe: state.replaySafe,
-                budget,
-                parentToolCallId: state.parentToolCallId,
-                codeModeReplayId: state.replayId,
-                ctx: state.ctx,
-                config: state.config,
-                runtime: state.runtime,
-                catalogProjection: state.catalogProjection,
-                namespaceRuntime: state.namespaceRuntime,
-                bridgeDispatch: state.bridgeDispatch,
-                approvalWait,
-                signal,
-                onUpdate: params.onUpdate,
-              },
-              pending,
-              () => {},
-              delivery.release,
-            ),
-          },
-        ),
-      );
-    } finally {
-      delivery.release();
-    }
+    const result = await resumeCodeModeExecution(
+      context,
+      state.continuation,
+      pending,
+      delivery,
+      resumeBudgetMs,
+    );
     state.output.append(result.output);
     return await settleCodeModeResult({
-      owner: state.owner,
+      ...context,
       result,
-      output: state.output,
-      replaySafe: state.replaySafe,
-      budget,
-      parentToolCallId: state.parentToolCallId,
-      codeModeReplayId: state.replayId,
-      ctx: state.ctx,
-      config: state.config,
-      runtime: state.runtime,
-      catalogProjection: state.catalogProjection,
-      namespaceRuntime: state.namespaceRuntime,
-      bridgeDispatch: state.bridgeDispatch,
-      approvalWait,
       pending,
       reservedActiveRunSlot: true,
-      signal,
-      onUpdate: params.onUpdate,
     });
   } catch (error) {
     const aborted = signal.aborted;

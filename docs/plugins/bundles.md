@@ -201,7 +201,9 @@ MCP servers can use stdio or HTTP transport.
   descriptions and logs.
 - `connectionTimeoutMs` overrides the default 30-second connection timeout for
   both stdio and HTTP transports. Request timeout defaults to 60 seconds and
-  can be overridden with `requestTimeoutMs`.
+  can be overridden with `requestTimeoutMs`. Tool listing (`tools/list`) at
+  session start uses `requestTimeoutMs` when it is set, and 10 seconds
+  otherwise.
 
 ### Tool naming
 

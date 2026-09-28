@@ -14,7 +14,6 @@ import {
   MEMORY_INDEX_VECTOR_TABLE,
   type MemoryProviderStatus,
   type MemorySearchManager,
-  type MemorySessionSyncTarget,
   type MemorySyncParams,
   type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -23,7 +22,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
@@ -56,7 +55,7 @@ import {
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 import {
-  enqueueMemoryTargetedSessionSync,
+  MemoryTargetedSessionSyncQueue,
   hasTargetedSessionSyncParams,
 } from "./manager-sync-control.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
@@ -88,15 +87,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected readonly providerRequirement: MemoryEmbeddingProviderRequirement;
-  protected readonly requestedProvider: EmbeddingProviderRequest;
-  protected providerInitPromise: Promise<void> | null = null;
-  protected providerInitialized = false;
-  protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
-  protected providerRetirementPromise: Promise<void> = Promise.resolve();
-  protected providersPendingRetirement = new Set<EmbeddingProvider>();
   private closePromise: Promise<void> | null = null;
   private closeTeardownComplete = false;
-  protected activeBackgroundSearchSyncs = new Set<Promise<void>>();
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected batch: {
@@ -108,15 +100,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   };
   protected publishedDatabase: MemoryIndexDatabase;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
-  protected indexIdentityDirty = false;
-  protected sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
   private syncingMemoryWatchGeneration = 0;
-  private queuedArchiveFiles = new Set<string>();
-  private queuedSessions = new Map<string, MemorySessionSyncTarget>();
-  private queuedForce = false;
-  private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
-  private queuedSessionSync: Promise<void> | null = null;
+  private readonly sessionSyncQueue = new MemoryTargetedSessionSyncQueue({
+    isClosed: () => this.closing || this.closed,
+    getSyncing: () => this.syncing,
+    sync: (params) => this.syncAdmitted(params, { queuedSessionOwner: true }),
+  });
   protected indexIdentityState: MemoryIndexIdentityState;
 
   static async get(params: {
@@ -255,8 +245,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       store: { ...effectiveSettings.store, databasePath: dbPath },
     };
     this.providerRequirement = params.providerRequirement;
-    this.requestedProvider = effectiveSettings.provider;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
@@ -346,15 +335,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     // Close must drain accepted syncs through provider initialization and final writes.
     return await this.withManagerOperation(async () => {
-      if (
-        hasTargetedSessionSyncParams(params) &&
-        (this.queuedSessionSync !== null ||
-          this.queuedArchiveFiles.size > 0 ||
-          this.queuedSessions.size > 0)
-      ) {
+      if (hasTargetedSessionSyncParams(params) && this.sessionSyncQueue.hasPending) {
         // A failed queued batch stays manager-owned. Route the next targeted
         // call through the queue even while idle so it adopts that retained work.
-        return await this.enqueueTargetedSessionSync(params);
+        return await this.sessionSyncQueue.enqueue(params);
       }
       return await this.syncAdmitted(params);
     });
@@ -400,7 +384,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           }
           return await this.syncAdmitted(params, options);
         }
-        return this.enqueueTargetedSessionSync(params);
+        return this.sessionSyncQueue.enqueue(params);
       }
       try {
         await this.syncing;
@@ -532,30 +516,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return this.syncing ?? Promise.resolve();
   }
 
-  private enqueueTargetedSessionSync(
-    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles" | "force" | "progress">,
-  ): Promise<void> {
-    return enqueueMemoryTargetedSessionSync(
-      {
-        isClosed: () => this.closing || this.closed,
-        getSyncing: () => this.syncing,
-        getQueuedArchiveFiles: () => this.queuedArchiveFiles,
-        getQueuedSessions: () => this.queuedSessions,
-        getQueuedForce: () => this.queuedForce,
-        setQueuedForce: (value) => {
-          this.queuedForce = value;
-        },
-        getQueuedProgressCallbacks: () => this.queuedProgressCallbacks,
-        getQueuedSessionSync: () => this.queuedSessionSync,
-        setQueuedSessionSync: (value) => {
-          this.queuedSessionSync = value;
-        },
-        sync: async (params) => await this.syncAdmitted(params, { queuedSessionOwner: true }),
-      },
-      targets,
-    );
-  }
-
   status(): MemoryProviderStatus {
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
@@ -586,7 +546,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const providerInfo = resolveStatusProviderInfo({
       provider: this.embeddingBootstrapFailure ? null : this.provider,
       providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
-      requestedProvider: this.requestedProvider,
+      requestedProvider: this.settings.provider,
       resolveConfiguredModel: () =>
         this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
     });
@@ -610,7 +570,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       storage,
       provider: providerInfo.provider,
       model: providerInfo.model,
-      requestedProvider: this.requestedProvider,
+      requestedProvider: this.settings.provider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
       sourceCounts: aggregateState.sourceCounts.map((entry) =>
@@ -705,10 +665,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
 
   private async closeOnce(): Promise<void> {
     this.closing = true;
-    this.queuedArchiveFiles.clear();
-    this.queuedSessions.clear();
-    this.queuedForce = false;
-    this.queuedProgressCallbacks.clear();
+    this.sessionSyncQueue.clear();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

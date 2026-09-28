@@ -9,6 +9,33 @@ import { withTestDir } from "../../../test-helpers/temp-dir.js";
 import { recordAcpParentStreamEvents } from "./acp-parent-stream-store.sqlite.js";
 import { listAcpParentStreamEventsForTest } from "./acp-parent-stream-store.sqlite.test-support.js";
 
+function seedSession(options: { agentId: string; env: NodeJS.ProcessEnv }, sessionKey: string) {
+  runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<
+      Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
+    >(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_nodes").values({
+        session_key: sessionKey,
+        current_session_id: "session-1",
+        entry_json: "{}",
+        updated_at: 1,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_windows").values({
+        session_id: "session-1",
+        session_key: sessionKey,
+        session_scope: "conversation",
+        created_at: 1,
+        updated_at: 1,
+      }),
+    );
+  }, options);
+}
+
 describe("ACP parent stream SQLite store", () => {
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
@@ -20,30 +47,7 @@ describe("ACP parent stream SQLite store", () => {
         agentId: "codex",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       };
-      runOpenClawAgentWriteTransaction((database) => {
-        const db = getNodeSqliteKysely<
-          Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
-        >(database.db);
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("session_nodes").values({
-            session_key: "agent:codex:acp:child",
-            current_session_id: "session-1",
-            entry_json: "{}",
-            updated_at: 1,
-          }),
-        );
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("session_windows").values({
-            session_id: "session-1",
-            session_key: "agent:codex:acp:child",
-            session_scope: "conversation",
-            created_at: 1,
-            updated_at: 1,
-          }),
-        );
-      }, options);
+      seedSession(options, "agent:codex:acp:child");
 
       recordAcpParentStreamEvents({
         ...options,
@@ -83,30 +87,7 @@ describe("ACP parent stream SQLite store", () => {
         agentId: "codex",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       };
-      runOpenClawAgentWriteTransaction((database) => {
-        const db = getNodeSqliteKysely<
-          Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
-        >(database.db);
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("session_nodes").values({
-            session_key: "agent:codex:acp:invalid",
-            current_session_id: "session-1",
-            entry_json: "{}",
-            updated_at: 1,
-          }),
-        );
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("session_windows").values({
-            session_id: "session-1",
-            session_key: "agent:codex:acp:invalid",
-            session_scope: "conversation",
-            created_at: 1,
-            updated_at: 1,
-          }),
-        );
-      }, options);
+      seedSession(options, "agent:codex:acp:invalid");
       const circular: Record<string, unknown> = { kind: "circular" };
       circular.self = circular;
 

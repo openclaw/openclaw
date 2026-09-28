@@ -215,9 +215,10 @@ suite.define(() => {
       await screenshot(page, "09-configure-models-no-tooltip.png");
       await configureModels.tap();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
-      await page.locator("[data-models-login-search]").waitFor({ state: "visible" });
-      await screenshot(page, "10-models-connection-navigation.png");
+      expect(new URL(page.url()).searchParams.get("provider")).toBe("openai");
+      expect(new URL(page.url()).searchParams.has("connect")).toBe(false);
+      await page.locator('[data-provider-id="openai"]').waitFor({ state: "visible" });
+      await screenshot(page, "10-provider-settings-navigation.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

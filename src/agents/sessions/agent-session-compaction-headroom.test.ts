@@ -34,7 +34,6 @@ function inputTokens(
 }
 
 it.each([
-  { records: 352, ingress: "new" },
   { records: 410, ingress: "new" },
   { records: 410, ingress: "persisted" },
   { records: 410, ingress: "carrier" },

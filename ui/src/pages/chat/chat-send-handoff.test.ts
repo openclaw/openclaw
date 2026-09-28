@@ -6,7 +6,8 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
-import { readQueuedMessageById, updateVolatileQueuedMessage } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { readQueuedMessageById } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { admitInitialTurnHandoff, prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
@@ -166,11 +167,11 @@ it.each([false, true])(
     // check, before the handoff's awaiting continuation resumes.
     const edit = historyState.promise.then(() => {
       if (edited) {
-        updateVolatileQueuedMessage(
+        chatOutboxOwner(host).change(
           host,
           item.id,
           (current) => ({ ...current, text: "A newer unconfirmed edit" }),
-          { retryable: true },
+          true,
         );
       }
     });

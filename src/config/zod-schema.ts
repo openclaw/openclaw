@@ -39,19 +39,9 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
   // Bindings referencing a missing agent id silently misroute at gateway
   // load time. Match routing's normalized id semantics; otherwise valid
   // configured routes like "Team Ops" -> "team-ops" would fail at load.
-  const bindings = cfg.bindings;
-  if (agents.length > 0 && Array.isArray(bindings)) {
-    for (let idx = 0; idx < bindings.length; idx += 1) {
-      const binding = bindings[idx];
-      if (!binding || typeof binding !== "object") {
-        continue;
-      }
-      const agentId = (binding as { agentId?: unknown }).agentId;
-      if (
-        typeof agentId === "string" &&
-        agentId !== DEFAULT_AGENT_ID &&
-        !effectiveAgentIds.has(normalizeAgentId(agentId))
-      ) {
+  if (agents.length > 0) {
+    for (const [idx, { agentId }] of (cfg.bindings ?? []).entries()) {
+      if (agentId !== DEFAULT_AGENT_ID && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["bindings", idx, "agentId"],

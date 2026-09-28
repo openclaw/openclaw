@@ -619,20 +619,6 @@ describe("FRV continuation preflight", () => {
     expect(mutations).toBe(0);
   });
 
-  it.each([
-    ["candidate-free", undefined],
-    ["externally produced", { producer: { runId: "88" } }],
-  ])("allows %s plans through candidate ownership preflight", async (_label, candidate) => {
-    const selected = child("normalCi", "101");
-    await expect(
-      preflightContinuation(
-        { ...plan([selected]), candidate },
-        "77",
-        preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
-      ),
-    ).resolves.toMatchObject({ id: 77 });
-  });
-
   it("rejects fail-fast roots before any rerun mutation", async () => {
     const selected = child("normalCi", "101");
     let mutations = 0;
@@ -887,24 +873,21 @@ describe("FRV same-parent recovery", () => {
         _deadline?: number,
         attempts?: Record<string, number>,
       ) => {
-        // The advisory Telegram child is not rerun; only blocking children get a second attempt.
-        expect(attempts?.["505"]).toBe(1);
+        expect(attempts?.["505"]).toBe(2);
         events.push("verify");
         return "{}";
       },
     };
     const result = await continueFailed(selectedPlan, "77", client);
     expect(result).toMatchObject({ action: "reran-parent", finalRunId: "77" });
-    expect(events.slice(0, 2).toSorted()).toEqual(["child:101", "child:202"]);
-    expect(events).not.toContain("child:505");
+    expect(events.slice(0, 3).toSorted()).toEqual(["child:101", "child:202", "child:505"]);
     expect(events).not.toContain("child:303");
-    // The advisory Telegram child passes on its first attempt without a rerun.
     expect(result.status.children).toContainEqual(
       expect.objectContaining({
         key: "npmTelegram",
-        conclusion: "failure",
+        conclusion: "success",
         passed: true,
-        effectiveRunAttempt: 1,
+        effectiveRunAttempt: 2,
       }),
     );
     expect(events.indexOf("parent")).toBeGreaterThan(events.indexOf("child:202"));

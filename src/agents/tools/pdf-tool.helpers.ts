@@ -1,8 +1,7 @@
-/**
- * PDF tool parsing and response helpers.
- *
- * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
- */
+import {
+  filterStringEntries,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -20,24 +19,10 @@ type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
 /** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {
-  const pdfCandidates: string[] = [];
-  if (typeof record.pdf === "string") {
-    pdfCandidates.push(record.pdf);
-  }
-  if (Array.isArray(record.pdfs)) {
-    pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
-  }
-
-  const seenPdfs = new Set<string>();
-  const pdfInputs: string[] = [];
-  for (const candidate of pdfCandidates) {
-    const trimmed = candidate.trim();
-    if (!trimmed || seenPdfs.has(trimmed)) {
-      continue;
-    }
-    seenPdfs.add(trimmed);
-    pdfInputs.push(trimmed);
-  }
+  const pdfInputs = normalizeUniqueTrimmedStringList([
+    record.pdf,
+    ...filterStringEntries(record.pdfs),
+  ]);
   if (pdfInputs.length === 0) {
     throw new Error("pdf required: provide a path or URL to a PDF document");
   }
@@ -108,21 +93,18 @@ export function coercePdfAssistantText(params: {
 }): string {
   const label = `${params.provider}/${params.model}`;
   const errorMessage = params.message.errorMessage?.trim();
-  const fail = (message?: string) => {
+  if (
+    params.message.stopReason === "error" ||
+    params.message.stopReason === "aborted" ||
+    errorMessage
+  ) {
     throw new Error(
-      message ? `PDF model failed (${label}): ${message}` : `PDF model failed (${label})`,
+      errorMessage ? `PDF model failed (${label}): ${errorMessage}` : `PDF model failed (${label})`,
     );
-  };
-  if (params.message.stopReason === "error" || params.message.stopReason === "aborted") {
-    fail(errorMessage);
   }
-  if (errorMessage) {
-    fail(errorMessage);
-  }
-  const text = extractEmbeddedAssistantText(params.message);
-  const trimmed = text.trim();
-  if (trimmed) {
-    return trimmed;
+  const text = extractEmbeddedAssistantText(params.message).trim();
+  if (text) {
+    return text;
   }
   throw new Error(`PDF model returned no text (${label}).`);
 }
@@ -169,7 +151,6 @@ export function buildPdfExtractionContext(
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
 
-  // Add extracted text and images
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
     if (extraction.text.trim() || notice) {
@@ -187,7 +168,6 @@ export function buildPdfExtractionContext(
     }
   }
 
-  // Add the user prompt
   content.push({ type: "text", text: prompt });
 
   const systemPrompt =

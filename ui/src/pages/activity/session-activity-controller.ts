@@ -61,6 +61,7 @@ export class SessionActivityController implements ReactiveController {
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
   private filters: ActivityQuery | null = null;
+  private dayRollover?: ReturnType<typeof setTimeout>;
   private readonly pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
   private normalizedLocation = "";
@@ -88,14 +89,20 @@ export class SessionActivityController implements ReactiveController {
     this.resetQuery();
   }
 
-  private resetQuery(): void {
-    this.eventRefresh.reset();
-    this.pending?.controller.abort();
-    this.pending = undefined;
+  private resetSummaries(): void {
     this.summaryPending?.abort();
     this.summaryPending = undefined;
     this.summaryAttempts.clear();
     this.summaryRetries.clear();
+  }
+
+  private resetQuery(): void {
+    clearTimeout(this.dayRollover);
+    this.dayRollover = undefined;
+    this.eventRefresh.reset();
+    this.pending?.controller.abort();
+    this.pending = undefined;
+    this.resetSummaries();
     this.requestState = "idle";
     this.incomplete = false;
     this.error = undefined;
@@ -315,10 +322,7 @@ export class SessionActivityController implements ReactiveController {
     const interrupted = this.pending !== undefined || this.summaryPending !== undefined;
     this.pageActive = !leaving && document.visibilityState !== "hidden";
     if (!this.pageActive) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     this.eventRefresh.setActive(this.pageActive, leaving || interrupted);
   };
@@ -366,15 +370,19 @@ export class SessionActivityController implements ReactiveController {
   ): Promise<void> {
     this.canEnsureSummaries = canEnsureSummaries;
     if (!canEnsureSummaries) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     if (!client || !filters) {
       this.resetQuery();
       this.host.requestUpdate();
       return Promise.resolve();
+    }
+    const now = new Date();
+    const until = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+    clearTimeout(this.dayRollover);
+    this.dayRollover = undefined;
+    if (filters !== "current" && typeof setTimeout === "function") {
+      this.dayRollover = setTimeout(() => this.eventRefresh.schedule(), until - Date.now() + 1_000);
     }
     const request =
       filters === "current"
@@ -391,6 +399,12 @@ export class SessionActivityController implements ReactiveController {
             includeGlobal: true,
             includeUnknown: true,
             includePeople: true,
+            activityPulseSince: new Date(
+              now.getFullYear(),
+              now.getMonth(),
+              now.getDate(),
+            ).getTime(),
+            activityPulseUntil: until,
             excludeSubagents: true,
             includeActivitySummary: true,
             includeDerivedTitles: true,
@@ -429,10 +443,7 @@ export class SessionActivityController implements ReactiveController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
       this.result = undefined;
       this.incomplete = false;
     }

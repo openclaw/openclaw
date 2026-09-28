@@ -19,8 +19,12 @@ import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../../infra/system-agent-approvals.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -42,7 +46,11 @@ import type { PlacementStandingGrantRuntime } from "../operator-approval-placeme
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
-import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
+import type {
+  GatewayBroadcastFn,
+  GatewayBroadcastOpts,
+  GatewayBroadcastToConnIdsFn,
+} from "../server-broadcast-types.js";
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
@@ -83,11 +91,6 @@ import type {
 import type { GatewayClient } from "./client-types.js";
 import type { RespondFn } from "./response-types.js";
 
-/**
- * Shared gateway request types used by every server-method module.
- */
-type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
 export type {
   GatewayAgentRunTaskOwner,
   GatewayClient,
@@ -104,9 +107,10 @@ export type PreparedSessionApprovalReplay = {
   replay: SessionApprovalReplay;
   /** Check in the response frame; a publication may race promise delivery. */
   isCurrent: () => boolean;
+  /** Retain publication fencing through the response, then release the replay scope. */
+  release: () => void;
 };
 
-/** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
  * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
  * leaf contract: importing the assistant module here closes a madge cycle
@@ -117,35 +121,24 @@ type SystemAgentHistoryTurn = {
   text: string;
 };
 
+type SystemAgentReply = {
+  text: string;
+  action: "none" | "exit" | "open-tui" | "open-setup";
+  sensitive?: boolean;
+  question?: SystemAgentChatQuestion;
+};
+
+/** Minimal hosted OpenClaw contract retained by the gateway request router. */
 export type GatewaySystemAgentSession = {
   engine: {
     handle: (
       message: string,
       options?: { uiContext?: { page: string } },
-    ) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    answerWizard: (answer: WizardAnswer) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    cancelWizard: (cancel: SystemAgentWizardCancel) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
+    ) => Promise<SystemAgentReply>;
+    answerWizard: (answer: WizardAnswer) => Promise<SystemAgentReply>;
+    cancelWizard: (cancel: SystemAgentWizardCancel) => Promise<SystemAgentReply>;
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => SystemAgentReply & {
       wizardInputPending?: boolean;
-      question?: SystemAgentChatQuestion;
       step?: import("../../wizard/session.js").WizardStep;
     };
     noteAssistantMessage: (text: string) => void;
@@ -224,6 +217,8 @@ type GatewayKernelContext = {
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
   forwardExecApprovalRequest?: (request: ExecApprovalRequest) => Promise<boolean>;
+  forwardSystemAgentApprovalRequest?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
+  forwardSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   execApprovalIosPushDelivery?: {
     handleRequested?: (
       request: ExecApprovalRequest,
@@ -279,8 +274,9 @@ type GatewayKernelContext = {
   getHealthCache: () => HealthSummary | null;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
-  incrementPresenceVersion: () => number;
-  getHealthVersion: () => number;
+  publishPresence: () => void;
+  /** Current live transports, independent of the bounded legacy beacon cache. */
+  getPresenceSnapshot: () => import("../../../packages/gateway-protocol/src/schema/snapshot.js").PresenceEntry[];
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
@@ -321,7 +317,12 @@ type GatewayTransportContext = {
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  nodeSendToSession: (
+    sessionKey: string,
+    event: string,
+    payload: unknown,
+    opts?: GatewayBroadcastOpts,
+  ) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
@@ -357,6 +358,7 @@ type GatewayTransportContext = {
   terminalSessions?: TerminalSessionManager;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
+  forgetConnectionAncestors: (connId: string) => void;
   subscribeSessionMessageEvents: (
     connId: string,
     sessionKey: string,
@@ -454,6 +456,8 @@ export type GatewayRequestContext = GatewayKernelContext &
 
 /** Full dispatch context for raw request frames before params are normalized. */
 export type GatewayRequestOptions = {
+  /** Transport can forward trusted worker JSON without materializing it. */
+  acceptsSerializedJson?: boolean;
   req: RequestFrame;
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
@@ -495,21 +499,14 @@ export type SessionMutationAuthorization = {
 };
 
 /** Normalized method invocation options passed to registered handlers. */
-export type GatewayRequestHandlerOptions = {
-  req: RequestFrame;
+export type GatewayRequestHandlerOptions = Omit<
+  GatewayRequestOptions,
+  "methodRegistry" | "expectedProfileBinding"
+> & {
   params: Record<string, unknown>;
-  client: GatewayClient | null;
-  isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  sessionMutationCommitGuard?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** Host-prepared session resource authority; services explicitly retain their own borrow. */
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
-  /** In-process caller lifetime; absent for ordinary transport requests. */
-  signal?: AbortSignal;
-  /** Live transport authority; in-process only and never derived from request data. */
-  hasCurrentClientAuthority?: () => boolean;
 };
 
 /** Single gateway method implementation. */

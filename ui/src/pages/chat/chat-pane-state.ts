@@ -1,7 +1,6 @@
 import { downloadArtifact } from "../../api/artifact-download.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -86,14 +85,6 @@ export class SessionParticipationTracker {
       this.lastBlocked.delete(oldest);
     }
   }
-}
-
-export function resolveAssistantAttachmentAuthToken(state: {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  password?: string | null;
-  settings?: { token?: string | null } | null;
-}) {
-  return resolveControlUiAuthToken(state);
 }
 
 export async function resolveChatArtifactDownload(

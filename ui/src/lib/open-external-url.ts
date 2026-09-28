@@ -1,4 +1,3 @@
-// Control UI module implements open external url behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const DATA_URL_PREFIX = "data:";

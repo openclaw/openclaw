@@ -1,8 +1,3 @@
-/**
- * Channel message action discovery.
- *
- * Builds agent tool schema contributions from loaded or bundled channel action hooks.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
@@ -13,7 +8,6 @@ import {
   type PreparedMessageToolCatalog,
 } from "../../plugins/prepared-message-tool-catalog.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { ChatType } from "../chat-type.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -36,23 +30,12 @@ export const listMessageActionDiscoveryChannels = (
 ) =>
   (preparedMessageToolCatalog ?? getPreparedMessageToolCatalog())?.channels ?? listChannelPlugins();
 
-/**
- * Input used to discover channel message actions for agent tool schemas.
- */
-export type ChannelMessageActionDiscoveryInput = {
+export type ChannelMessageActionDiscoveryInput = Omit<
+  ChannelMessageActionDiscoveryContext,
+  "cfg"
+> & {
   cfg?: OpenClawConfig;
   channel?: string | null;
-  chatType?: ChatType | null;
-  currentChannelProvider?: string | null;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  accountId?: string | null;
-  sessionKey?: string | null;
-  sessionId?: string | null;
-  agentId?: string | null;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 type ChannelMessageActionDiscoveryParams = ChannelMessageActionDiscoveryInput & {
@@ -66,16 +49,10 @@ type ChannelMessageToolMediaSourceParamKeyInput = ChannelMessageActionDiscoveryP
 
 const loggedMessageActionErrors = new Set<string>();
 
-/**
- * Normalizes a raw channel/provider id before consulting action discovery hooks.
- */
 export function resolveMessageActionDiscoveryChannelId(raw?: string | null): string | undefined {
   return normalizeAnyChannelId(raw) ?? normalizeOptionalString(raw);
 }
 
-/**
- * Builds the context object passed to plugin message-tool discovery hooks.
- */
 export function createMessageActionDiscoveryContext(
   params: ChannelMessageActionDiscoveryInput,
 ): ChannelMessageActionDiscoveryContext {
@@ -134,9 +111,6 @@ function describeMessageToolSafely(params: {
   }
 }
 
-/**
- * Normalizes plugin schema contributions into a list for merge callers.
- */
 function normalizeToolSchemaContributions(
   value:
     | ChannelMessageToolSchemaContribution
@@ -159,9 +133,6 @@ type ResolvedChannelMessageActionDiscovery = {
 
 type MessageToolMediaSourceParamMap = Partial<Record<ChannelMessageActionName, readonly string[]>>;
 
-/**
- * Resolves media-source parameter names, optionally scoped to one action.
- */
 function normalizeMessageToolMediaSourceParams(
   mediaSourceParams: ChannelMessageToolDiscovery["mediaSourceParams"],
   action?: ChannelMessageActionName,
@@ -182,9 +153,6 @@ function normalizeMessageToolMediaSourceParams(
   );
 }
 
-/**
- * Finds the lightest available message-tool discovery adapter for one channel.
- */
 export function resolveCurrentChannelMessageToolDiscoveryAdapter(
   channel?: string | null,
   preparedMessageToolCatalog?: PreparedMessageToolCatalog,
@@ -227,9 +195,6 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
   return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
 }
 
-/**
- * Resolves one plugin's message action metadata with caller-selected fields.
- */
 export function resolveMessageActionDiscoveryForPlugin(params: {
   pluginId: string;
   actions?: ChannelMessageToolDiscoveryAdapter;
@@ -271,9 +236,6 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
   };
 }
 
-/**
- * Lists actions whose schemas do not block cross-channel tool usage.
- */
 export function listCrossChannelSchemaSupportedMessageActions(
   params: ChannelMessageActionDiscoveryParams & {
     channel?: string;
@@ -343,9 +305,6 @@ function mergeToolSchemaProperties(
   }
 }
 
-/**
- * Resolves extra message-tool schema properties from channel discovery hooks.
- */
 export function resolveChannelMessageToolSchemaProperties(
   params: ChannelMessageActionDiscoveryParams & {
     /** Internal caller-owned account selection after the usual provider scoping. */
@@ -410,9 +369,6 @@ export function resolveChannelMessageToolSchemaProperties(
   return properties;
 }
 
-/**
- * Resolves tool parameter names that should be treated as media source selectors.
- */
 export function resolveChannelMessageToolMediaSourceParamKeys(
   params: ChannelMessageToolMediaSourceParamKeyInput,
 ): string[] {
@@ -433,9 +389,6 @@ export function resolveChannelMessageToolMediaSourceParamKeys(
   return uniqueStrings(described.mediaSourceParams);
 }
 
-/**
- * Returns whether any registered channel advertises a message capability.
- */
 export function channelSupportsMessageCapability(
   cfg: OpenClawConfig,
   capability: ChannelMessageCapability,
@@ -455,9 +408,6 @@ export function channelSupportsMessageCapability(
   );
 }
 
-/**
- * Returns whether the current channel advertises a message capability.
- */
 export function channelSupportsMessageCapabilityForChannel(
   params: ChannelMessageActionDiscoveryParams,
   capability: ChannelMessageCapability,

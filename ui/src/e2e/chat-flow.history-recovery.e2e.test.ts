@@ -315,28 +315,12 @@ suite.define(() => {
       timestamp: baseTs + index,
     }));
     const gateway = await installMockGateway(page, {
-      historyMessages: currentSessionMessages,
+      // Background prefetch and foreground startup must read the same session transcript.
+      sessionTranscripts: {
+        "agent:main:session-a": { messages: currentSessionMessages },
+        "agent:main:session-b": { messages: historyMessages },
+      },
       methodResponses: {
-        "chat.startup": {
-          cases: [
-            {
-              match: { sessionKey: "agent:main:session-b" },
-              response: {
-                messages: historyMessages,
-                sessionId: "control-ui-e2e-history-session-b",
-                thinkingLevel: null,
-              },
-            },
-            {
-              match: { sessionKey: "agent:main:session-a" },
-              response: {
-                messages: currentSessionMessages,
-                sessionId: "control-ui-e2e-history-session-a",
-                thinkingLevel: null,
-              },
-            },
-          ],
-        },
         "sessions.list": chatSessionListResponse([
           {
             key: "agent:main:session-a",

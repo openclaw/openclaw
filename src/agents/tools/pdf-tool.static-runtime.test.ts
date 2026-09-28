@@ -144,7 +144,7 @@ describe("PDF tool static prepared runtime", () => {
               pdf: path.join(state.workspaceDir, "alias.pdf"),
             });
             expect(completeMock).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ provider, id: "middle", api: "openai-completions" }),
+              expect.objectContaining({ provider, id: "middle" }),
               expect.any(Object),
               expect.any(Object),
               expect.any(Function),

@@ -43,14 +43,6 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions;
 let resolveProviderModelPickerFlowContributions: ResolveProviderModelPickerFlowContributions;
 
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 describe("provider flow install catalog contributions", () => {
   beforeAll(async () => {
     vi.resetModules();
@@ -111,14 +103,9 @@ describe("provider flow install catalog contributions", () => {
       },
     ]);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledTimes(1);
-    const [authChoiceOptions] = requireFirstMockCall(
-      resolveManifestProviderAuthChoices,
-      "manifest auth choices",
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
+      expect.objectContaining({ includeUntrustedWorkspacePlugins: false }),
     );
-    expect(
-      (authChoiceOptions as { includeUntrustedWorkspacePlugins?: boolean })
-        .includeUntrustedWorkspacePlugins,
-    ).toBe(false);
     expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
@@ -207,7 +194,7 @@ describe("provider flow install catalog contributions", () => {
     ]);
   });
 
-  it("surfaces install-catalog provider choices when runtime setup options are absent", () => {
+  it("surfaces install-catalog choices without loading runtime setup options", () => {
     resolveProviderInstallCatalogEntries.mockReturnValue([
       {
         pluginId: "vllm",
@@ -247,15 +234,11 @@ describe("provider flow install catalog contributions", () => {
         source: "install-catalog",
       },
     ]);
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
     expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledTimes(1);
-    const [installCatalogOptions] = requireFirstMockCall(
-      resolveProviderInstallCatalogEntries,
-      "provider install catalog",
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ includeUntrustedWorkspacePlugins: false }),
     );
-    expect(
-      (installCatalogOptions as { includeUntrustedWorkspacePlugins?: boolean })
-        .includeUntrustedWorkspacePlugins,
-    ).toBe(false);
   });
 
   it("adds a fallback group when install-catalog entries omit group metadata", () => {

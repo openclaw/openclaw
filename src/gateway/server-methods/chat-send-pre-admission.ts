@@ -7,6 +7,7 @@ import {
   SessionGoalOperationError,
 } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   loadExactSessionEntryCandidates,
   readSessionSubmittedInput,
@@ -36,7 +37,7 @@ import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
-import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   assertExpectedLeafActive,
@@ -115,7 +116,7 @@ export function respondChatSendAdmissionError(
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
 }
 
-type ChatSendPreAdmissionParams = {
+export type ChatSendPreAdmissionParams = {
   request: NormalizedChatSendRequest;
   session: LoadedChatSendSession;
   respond: GatewayRequestHandlerOptions["respond"];

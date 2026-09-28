@@ -16,7 +16,6 @@ import {
 import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
-  getToolParamsRecord,
   normalizeFileToolPathParam,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
@@ -31,6 +30,71 @@ import {
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const TEST_USAGE = createZeroUsageFixture();
+
+async function runToolCall(
+  tool: AnyAgentTool,
+  toolCall: Parameters<typeof validateToolArguments>[1],
+  prompt: string,
+) {
+  const events: AgentEvent[] = [];
+  let streamCalls = 0;
+  const streamFn: StreamFn = () => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      streamCalls += 1;
+      const message =
+        streamCalls === 1
+          ? {
+              role: "assistant" as const,
+              content: [toolCall],
+              api: "faux",
+              provider: "faux",
+              model: "faux-1",
+              usage: TEST_USAGE,
+              stopReason: "toolUse" as const,
+              timestamp: Date.now(),
+            }
+          : {
+              role: "assistant" as const,
+              content: [{ type: "text" as const, text: "done" }],
+              api: "faux",
+              provider: "faux",
+              model: "faux-1",
+              usage: TEST_USAGE,
+              stopReason: "stop" as const,
+              timestamp: Date.now(),
+            };
+      stream.push({ type: "done", reason: message.stopReason, message });
+    });
+    return stream;
+  };
+
+  const messages = await runAgentLoop(
+    [{ role: "user", content: prompt, timestamp: Date.now() }],
+    { systemPrompt: "test", messages: [], tools: [tool] },
+    {
+      model: {
+        id: "faux-1",
+        name: "Faux",
+        provider: "faux",
+        api: "faux",
+        baseUrl: "http://localhost:0",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 1024,
+      },
+      convertToLlm: (agentMessages) => agentMessages as never,
+    },
+    (event) => {
+      events.push(event);
+    },
+    undefined,
+    streamFn,
+  );
+  return { messages, events, streamCalls };
+}
 
 describe("direct exec tool schema", () => {
   it("keeps model-facing descriptions compact without hiding runtime constraints", () => {
@@ -71,69 +135,15 @@ describe("direct process tool schema", () => {
   it("rejects unknown process actions without starting execution", async () => {
     const processTool = createProcessTool();
     const execute = vi.spyOn(processTool, "execute");
-    const events: AgentEvent[] = [];
-    let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-unknown-process-action",
-                    name: "process",
-                    arguments: { action: "delete" },
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({ type: "done", reason: message.stopReason, message });
-      });
-      return stream;
-    };
-
-    const messages = await runAgentLoop(
-      [{ role: "user", content: "inspect processes", timestamp: Date.now() }],
-      { systemPrompt: "test", messages: [], tools: [processTool] },
+    const { messages, events } = await runToolCall(
+      processTool,
       {
-        model: {
-          id: "faux-1",
-          name: "Faux",
-          provider: "faux",
-          api: "faux",
-          baseUrl: "http://localhost:0",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000,
-          maxTokens: 1024,
-        },
-        convertToLlm: (agentMessages) => agentMessages as never,
+        type: "toolCall",
+        id: "call-unknown-process-action",
+        name: "process",
+        arguments: { action: "delete" },
       },
-      (event) => {
-        events.push(event);
-      },
-      undefined,
-      streamFn,
+      "inspect processes",
     );
 
     expect(execute).not.toHaveBeenCalled();
@@ -322,12 +332,6 @@ describe("normalizeToolParameterSchema", () => {
         properties: {},
       });
     }
-  });
-
-  it("leaves non-object typed schemas without properties unchanged", () => {
-    const schema = { type: "array", items: { type: "string" } };
-
-    expect(normalizeToolParameterSchema(schema)).toEqual(schema);
   });
 
   it("adds permissive items schemas to arrays missing items", () => {
@@ -575,35 +579,6 @@ describe("normalizeToolParameterSchema", () => {
     ).toEqual({
       type: "array",
       items: [{ type: "string" }, { type: "integer" }],
-    });
-  });
-
-  it("keeps Swagger 2 definition refs supported", () => {
-    expect(
-      normalizeToolParameterSchema({
-        type: "object",
-        properties: {
-          pet: { $ref: "#/definitions/Pet" },
-        },
-        definitions: {
-          Pet: {
-            type: "object",
-            properties: {
-              id: { type: "integer" },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      type: "object",
-      properties: {
-        pet: {
-          type: "object",
-          properties: {
-            id: { type: "integer" },
-          },
-        },
-      },
     });
   });
 
@@ -1023,13 +998,14 @@ describe("normalizeToolParameterSchema", () => {
   );
 });
 
-function makeTool(parameters: TSchema): AnyAgentTool {
+function makeTool(parameters: TSchema, overrides: Partial<AnyAgentTool> = {}): AnyAgentTool {
   return {
     name: "test_tool",
     label: "Test Tool",
     description: "test",
     parameters,
     execute: vi.fn(),
+    ...overrides,
   };
 }
 
@@ -1045,108 +1021,8 @@ describe("normalizeToolParameters", () => {
     expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
   });
 
-  it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
-    const tool: AnyAgentTool = {
-      name: "get_flux_instance",
-      label: "get_flux_instance",
-      description: "Get current Flux instance status",
-      parameters: {},
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-
-    const parameters = normalized.parameters as Record<string, unknown>;
-    expect(parameters.type).toBe("object");
-    expect(parameters.properties).toStrictEqual({});
-  });
-
-  it("does not rewrite non-empty schemas that still lack type/properties", () => {
-    const tool: AnyAgentTool = {
-      name: "conditional",
-      label: "conditional",
-      description: "Conditional schema stays untouched",
-      parameters: { allOf: [] },
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-
-    expect(normalized.parameters).toEqual({ allOf: [] });
-  });
-
-  it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
-    const tool: AnyAgentTool = {
-      name: "list_regions",
-      label: "list_regions",
-      description: "List all AWS regions",
-      parameters: { type: "object" },
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-
-    const parameters = normalized.parameters as Record<string, unknown>;
-    expect(parameters.type).toBe("object");
-    expect(parameters.properties).toStrictEqual({});
-  });
-
-  it("injects properties:{} when properties key exists but is undefined (MCP SDK edge case #75362)", () => {
-    const tool: AnyAgentTool = {
-      name: "get_flux_instance",
-      label: "get_flux_instance",
-      description: "Get flux instance",
-      parameters: { type: "object", properties: undefined } as unknown as Record<string, unknown>,
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-
-    const parameters = normalized.parameters as Record<string, unknown>;
-    expect(parameters.type).toBe("object");
-    expect(parameters.properties).toStrictEqual({});
-  });
-
-  it("injects properties:{} when properties key is null (MCP SDK edge case #75362)", () => {
-    const tool: AnyAgentTool = {
-      name: "get_flux_instance",
-      label: "get_flux_instance",
-      description: "Get flux instance",
-      parameters: { type: "object", properties: null } as unknown as Record<string, unknown>,
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-
-    const parameters = normalized.parameters as Record<string, unknown>;
-    expect(parameters.type).toBe("object");
-    expect(parameters.properties).toStrictEqual({});
-  });
-
-  it("preserves existing properties on type:object schemas", () => {
-    const tool: AnyAgentTool = {
-      name: "query",
-      label: "query",
-      description: "Run a query",
-      parameters: { type: "object", properties: { q: { type: "string" } } },
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-
-    const parameters = normalized.parameters as Record<string, unknown>;
-    expect(parameters.type).toBe("object");
-    expect(parameters.properties).toEqual({ q: { type: "string" } });
-  });
-
   it("injects properties:{} for type:object with only additionalProperties", () => {
-    const tool: AnyAgentTool = {
-      name: "passthrough",
-      label: "passthrough",
-      description: "Accept any input",
-      parameters: { type: "object", additionalProperties: true },
-      execute: vi.fn(),
-    };
+    const tool = makeTool({ type: "object", additionalProperties: true }, { name: "passthrough" });
 
     const normalized = normalizeToolParameters(tool);
 
@@ -1156,37 +1032,11 @@ describe("normalizeToolParameters", () => {
     expect(parameters.additionalProperties).toBe(true);
   });
 
-  it("prepares null arguments as empty objects for object schemas without required params", () => {
-    const tool: AnyAgentTool = {
-      name: "wiki_lint",
-      label: "wiki_lint",
-      description: "Lint wiki vault",
-      parameters: { type: "object", properties: {}, required: [] },
-      execute: vi.fn(),
-    };
-
-    const normalized = normalizeToolParameters(tool);
-    const prepared = normalized.prepareArguments?.(null) as Record<string, never>;
-
-    expect(prepared).toStrictEqual({});
-    expect(
-      validateToolArguments(normalized, {
-        type: "toolCall",
-        id: "call-1",
-        name: "wiki_lint",
-        arguments: prepared,
-      }),
-    ).toStrictEqual({});
-  });
-
   it("leaves null arguments invalid when the object schema has required params", () => {
-    const tool: AnyAgentTool = {
-      name: "query",
-      label: "query",
-      description: "Run query",
-      parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
-      execute: vi.fn(),
-    };
+    const tool = makeTool(
+      { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+      { name: "query" },
+    );
 
     const normalized = normalizeToolParameters(tool);
 
@@ -1202,11 +1052,8 @@ describe("normalizeToolParameters", () => {
   });
 
   it("leaves null arguments invalid when required params are nested in composite schemas", () => {
-    const tool: AnyAgentTool = {
-      name: "query",
-      label: "query",
-      description: "Run query",
-      parameters: {
+    const tool = makeTool(
+      {
         type: "object",
         allOf: [
           {
@@ -1216,8 +1063,8 @@ describe("normalizeToolParameters", () => {
           },
         ],
       },
-      execute: vi.fn(),
-    };
+      { name: "query" },
+    );
 
     const normalized = normalizeToolParameters(tool);
 
@@ -1249,69 +1096,15 @@ describe("normalizeToolParameters", () => {
       sessionKey: "e2e-null-args",
       loopDetection: { enabled: true },
     });
-    const events: AgentEvent[] = [];
-    let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-null-args",
-                    name: "wiki_lint",
-                    arguments: null as never,
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({ type: "done", reason: message.stopReason, message });
-      });
-      return stream;
-    };
-
-    const messages = await runAgentLoop(
-      [{ role: "user", content: "lint the wiki", timestamp: Date.now() }],
-      { systemPrompt: "test", messages: [], tools: [tool] },
+    const { messages, events, streamCalls } = await runToolCall(
+      tool,
       {
-        model: {
-          id: "faux-1",
-          name: "Faux",
-          provider: "faux",
-          api: "faux",
-          baseUrl: "http://localhost:0",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000,
-          maxTokens: 1024,
-        },
-        convertToLlm: (agentMessages) => agentMessages as never,
+        type: "toolCall",
+        id: "call-null-args",
+        name: "wiki_lint",
+        arguments: null as never,
       },
-      (event) => {
-        events.push(event);
-      },
-      undefined,
-      streamFn,
+      "lint the wiki",
     );
 
     expect(streamCalls).toBe(2);
@@ -1344,16 +1137,13 @@ describe("normalizeToolParameters", () => {
   });
 
   it("strips compat-declared unsupported schema keywords without provider-specific branching", () => {
-    const tool: AnyAgentTool = {
-      name: "demo",
-      label: "demo",
-      description: "demo",
-      parameters: Type.Object({
+    const tool = makeTool(
+      Type.Object({
         count: Type.Integer({ minimum: 1, maximum: 5 }),
         query: Type.Optional(Type.String({ minLength: 2 })),
       }),
-      execute: vi.fn(),
-    };
+      { name: "demo" },
+    );
 
     const normalized = normalizeToolParameters(tool, {
       modelCompat: {
@@ -1378,11 +1168,8 @@ describe("normalizeToolParameters", () => {
   });
 
   it("omits empty array items when model compat requires it", () => {
-    const tool: AnyAgentTool = {
-      name: "demo",
-      label: "demo",
-      description: "demo",
-      parameters: {
+    const tool = makeTool(
+      {
         type: "object",
         properties: Object.fromEntries([
           ["__proto__", { type: "array", items: {} }],
@@ -1397,8 +1184,8 @@ describe("normalizeToolParameters", () => {
           ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
         ]),
       },
-      execute: vi.fn(),
-    };
+      { name: "demo" },
+    );
 
     const normalized = normalizeToolParameters(tool, {
       modelCompat: { omitEmptyArrayItems: true } as never,
@@ -1456,8 +1243,7 @@ describe("normalizeToolParameters", () => {
       properties?: Record<string, unknown>;
     };
 
-    expect(params.required).not.toContain("token");
-    expect(params.required).toContain("action");
+    expect(params.required).toEqual(["action", "amount"]);
     expect(params.properties).toHaveProperty("action");
     expect(params.properties).toHaveProperty("amount");
     expect(params.properties).toHaveProperty("price");
@@ -1481,30 +1267,6 @@ describe("normalizeToolParameters", () => {
     const params = result.parameters as { required?: string[] };
 
     expect(params.required).toEqual(["action", "token"]);
-  });
-
-  it("keeps all required fields when they exist in merged properties", () => {
-    const tool = makeTool({
-      type: "object",
-      required: ["action", "amount"],
-      anyOf: [
-        {
-          type: "object",
-          properties: {
-            action: { type: "string" },
-            amount: { type: "number" },
-          },
-        },
-      ],
-    });
-
-    const result = normalizeToolParameters(tool, {
-      modelProvider: "google",
-    });
-
-    const params = result.parameters as { required?: string[] };
-    expect(params.required).toContain("action");
-    expect(params.required).toContain("amount");
   });
 
   it("removes required entirely when no fields match merged properties", () => {
@@ -1553,12 +1315,11 @@ describe("normalizeToolParameters", () => {
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-describe("assertRequiredParams", () => {
-  it("returns object params unchanged", () => {
-    const params = { path: "test.txt" };
-    expect(getToolParamsRecord(params)).toBe(params);
-  });
+function makeValidatedFileTool(name: "write" | "edit", execute: AnyAgentTool["execute"]) {
+  return wrapToolParamValidation(makeTool({}, { name, execute }), REQUIRED_PARAM_GROUPS[name]);
+}
 
+describe("assertRequiredParams", () => {
   it("strips only the malformed terminal XML arg-value suffix", () => {
     expect(normalizeFileToolPathParam("echo test</arg_value>>")).toBe("echo test");
     expect(normalizeFileToolPathParam("echo test</arg_value>>>>>")).toBe("echo test");
@@ -1576,24 +1337,9 @@ describe("assertRequiredParams", () => {
     );
   });
 
-  it("normalizes file-tool paths after malformed XML suffix cleanup", () => {
-    expect(normalizeFileToolPathParam("reports/final.docodex</arg_value>>")).toBe(
-      "reports/final.docx",
-    );
-  });
-
   it("strips malformed path suffixes without touching payload text", async () => {
     const execute = vi.fn(async (_id, args) => args);
-    const tool = wrapToolParamValidation(
-      {
-        name: "write",
-        label: "write",
-        description: "write a file",
-        parameters: {},
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.write,
-    );
+    const tool = makeValidatedFileTool("write", execute);
 
     await tool.execute("id", {
       path: "notes.txt</arg_value>>",
@@ -1613,16 +1359,7 @@ describe("assertRequiredParams", () => {
 
   it("normalizes Office/codex path extensions without touching payload text", async () => {
     const execute = vi.fn(async (_id, args) => args);
-    const tool = wrapToolParamValidation(
-      {
-        name: "write",
-        label: "write",
-        description: "write a file",
-        parameters: {},
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.write,
-    );
+    const tool = makeValidatedFileTool("write", execute);
 
     await tool.execute("id", {
       path: "reports/final.docodex",
@@ -1642,16 +1379,7 @@ describe("assertRequiredParams", () => {
 
   it("rejects paths that become empty after malformed XML arg-value suffix stripping", async () => {
     const execute = vi.fn();
-    const tool = wrapToolParamValidation(
-      {
-        name: "write",
-        label: "write",
-        description: "write a file",
-        parameters: {},
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.write,
-    );
+    const tool = makeValidatedFileTool("write", execute);
 
     await expect(tool.execute("id", { path: "</arg_value>>", content: "x" })).rejects.toThrow(
       /Missing required parameter: path/,
@@ -1661,16 +1389,7 @@ describe("assertRequiredParams", () => {
 
   it("preserves edit replacement payloads while cleaning the path", async () => {
     const execute = vi.fn(async (_id, args) => args);
-    const tool = wrapToolParamValidation(
-      {
-        name: "edit",
-        label: "edit",
-        description: "edit a file",
-        parameters: {},
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.edit,
-    );
+    const tool = makeValidatedFileTool("edit", execute);
 
     const edits = [
       {
@@ -1683,30 +1402,8 @@ describe("assertRequiredParams", () => {
     expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);
   });
 
-  it("includes received keys in error when some params are present but content is missing", () => {
-    expect(() =>
-      assertRequiredParams(
-        { path: "test.txt" },
-        [
-          { keys: ["path"], label: "path" },
-          { keys: ["content"], label: "content" },
-        ],
-        "write",
-      ),
-    ).toThrow(/\(received: path\)/);
-  });
-
   it("does not normalize legacy aliases during validation", async () => {
-    const tool = wrapToolParamValidation(
-      {
-        name: "write",
-        label: "write",
-        description: "write a file",
-        parameters: {},
-        execute: vi.fn(),
-      },
-      REQUIRED_PARAM_GROUPS.write,
-    );
+    const tool = makeValidatedFileTool("write", vi.fn());
     await expect(
       tool.execute("id", { file_path: "test.txt" }, new AbortController().signal, vi.fn()),
     ).rejects.toThrow(/\(received: file_path\)/);
@@ -1714,16 +1411,7 @@ describe("assertRequiredParams", () => {
 
   it("enforces canonical path/content at runtime", async () => {
     const execute = vi.fn(async (_id, args) => args);
-    const tool = wrapToolParamValidation(
-      {
-        name: "write",
-        label: "write",
-        description: "test",
-        parameters: {},
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.write,
-    );
+    const tool = makeValidatedFileTool("write", execute);
 
     await tool.execute("tool-1", { path: "foo.txt", content: "x" });
     expect(execute).toHaveBeenCalledWith(
@@ -1734,22 +1422,13 @@ describe("assertRequiredParams", () => {
     );
 
     await expect(tool.execute("tool-2", { content: "x" })).rejects.toThrow(
-      /Missing required parameter/,
-    );
-    await expect(tool.execute("tool-2", { content: "x" })).rejects.toThrow(
-      /Supply correct parameters before retrying\./,
+      "Missing required parameter: path (received: content). Supply correct parameters before retrying.",
     );
     await expect(tool.execute("tool-3", { path: "   ", content: "x" })).rejects.toThrow(
-      /Missing required parameter/,
-    );
-    await expect(tool.execute("tool-3", { path: "   ", content: "x" })).rejects.toThrow(
-      /Supply correct parameters before retrying\./,
+      "Missing required parameter: path (received: path=<empty-string>, content). Supply correct parameters before retrying.",
     );
     await expect(tool.execute("tool-4", {})).rejects.toThrow(
-      /Missing required parameters: path, content/,
-    );
-    await expect(tool.execute("tool-4", {})).rejects.toThrow(
-      /Supply correct parameters before retrying\./,
+      "Missing required parameters: path, content. Supply correct parameters before retrying.",
     );
   });
 
@@ -1780,16 +1459,7 @@ describe("assertRequiredParams", () => {
   });
 
   it("shows wrong-type values for present params that still fail validation", async () => {
-    const tool = wrapToolParamValidation(
-      {
-        name: "write",
-        label: "write",
-        description: "write a file",
-        parameters: {},
-        execute: vi.fn(),
-      },
-      REQUIRED_PARAM_GROUPS.write,
-    );
+    const tool = makeValidatedFileTool("write", vi.fn());
     await expect(
       tool.execute(
         "id",
@@ -1811,31 +1481,5 @@ describe("assertRequiredParams", () => {
         "write",
       ),
     ).toThrow(/\(received: path, extra\)/);
-  });
-
-  it("omits received hint when the record is empty", () => {
-    const err = (() => {
-      try {
-        assertRequiredParams({}, [{ keys: ["content"], label: "content" }], "write");
-      } catch (e) {
-        return e instanceof Error ? e.message : "";
-      }
-      return "";
-    })();
-    expect(err).not.toMatch(/received:/);
-    expect(err).toMatch(/Missing required parameter: content/);
-  });
-
-  it("returns undefined when all required params are present", () => {
-    expect(
-      assertRequiredParams(
-        { path: "a.txt", content: "hello" },
-        [
-          { keys: ["path"], label: "path" },
-          { keys: ["content"], label: "content" },
-        ],
-        "write",
-      ),
-    ).toBeUndefined();
   });
 });

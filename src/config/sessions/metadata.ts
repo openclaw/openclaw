@@ -1,4 +1,3 @@
-// Session metadata derives stable origin, group, and display fields from message context.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -28,7 +27,6 @@ import {
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
-// Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -61,35 +59,24 @@ const mergeSessionOrigin = (
     delete merged.accountId;
     delete merged.threadId;
   }
-  if (next?.label) {
-    merged.label = next.label;
-  }
-  if (next?.provider) {
-    merged.provider = next.provider;
-  }
-  if (next?.surface) {
-    merged.surface = next.surface;
-  }
-  if (next?.chatType) {
-    merged.chatType = next.chatType;
-  }
-  if (next?.from) {
-    merged.from = next.from;
-  }
-  if (next?.to) {
-    merged.to = next.to;
-  }
-  if (next?.nativeChannelId) {
-    merged.nativeChannelId = next.nativeChannelId;
-  }
-  if (next?.nativeDirectUserId) {
-    merged.nativeDirectUserId = next.nativeDirectUserId;
-  }
-  if (next?.avatar) {
-    merged.avatar = next.avatar;
-  }
-  if (next?.accountId) {
-    merged.accountId = next.accountId;
+  const mergeField = <K extends keyof SessionOrigin>(field: K, value: SessionOrigin[K]) => {
+    if (value) {
+      merged[field] = value;
+    }
+  };
+  for (const field of [
+    "label",
+    "provider",
+    "surface",
+    "chatType",
+    "from",
+    "to",
+    "nativeChannelId",
+    "nativeDirectUserId",
+    "avatar",
+    "accountId",
+  ] as const) {
+    mergeField(field, next?.[field]);
   }
   if (next?.threadId != null && next.threadId !== "") {
     merged.threadId = next.threadId;

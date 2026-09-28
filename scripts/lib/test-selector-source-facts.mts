@@ -6,6 +6,7 @@ import nodeModule from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
+import { createSourceTermMatcher } from "./test-source-term-matcher.mts";
 
 type SourceFile = { file: string; parseImports: boolean };
 type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean };
@@ -68,7 +69,7 @@ function sourceTokens(source: string): {
         const codepoint = escaped === "u" && source[offset] === "{";
         const end = codepoint ? source.indexOf("}", offset) : offset + (escaped === "u" ? 4 : 2);
         const digits = source.slice(offset + Number(codepoint), end);
-        if (/^[0-9a-f]+$/iu.test(digits)) {
+        if (end >= offset && /^[0-9a-f]+$/iu.test(digits)) {
           value += String.fromCodePoint(Number.parseInt(digits, 16));
           offset = end + Number(codepoint);
         }
@@ -670,7 +671,7 @@ async function readSourceFacts() {
     }
     return { file: value.file, parseImports: value.parseImports };
   });
-  const terms = parseStrings(request.terms);
+  const matchTerms = createSourceTermMatcher(parseStrings(request.terms));
   const readFacts = async ({ file, parseImports }: SourceFile) => {
     let source: string;
     try {
@@ -679,8 +680,7 @@ async function readSourceFacts() {
       // Git inventories include deleted files; preserve the selector's unreadable-file behavior.
       return null;
     }
-    const matches = terms.filter((term) => source.includes(term));
-    const tokens = matches.length > 0 ? new Set(source.match(/[A-Za-z0-9_.@+/-]{4,}/gu)) : null;
+    const { matches, references } = matchTerms(source);
     const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };
     if (parseImports) {
       // Vitest loads these modules from config values instead of JavaScript imports.
@@ -693,7 +693,7 @@ async function readSourceFacts() {
     return {
       ...facts,
       matches,
-      references: matches.filter((term) => tokens?.has(term)),
+      references,
     };
   };
   const facts: (ReturnType<typeof parseFacts> | null)[] = files.map(() => null);

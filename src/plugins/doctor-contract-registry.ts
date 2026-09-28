@@ -24,7 +24,6 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
-  type PluginDoctorMigrationBackupResource,
   type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationEntry,
 } from "./doctor-contract-module.js";
@@ -160,9 +159,6 @@ function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
   surface: PluginDoctorContractSurface,
 ): PluginDoctorContractEntry | null {
-  if (isPluginDoctorMigrationDeferred(record.id)) {
-    return null;
-  }
   const declaration = record.doctorContract;
   // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
   if (declaration && !declaresPluginDoctorContractSurface(declaration, surface)) {
@@ -405,12 +401,13 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
+  inventory?: PluginDoctorStateMigrationInventory;
   validateDeclarations?: boolean;
   onInspectedPlugin?: (pluginId: string) => void;
   onInspectedStatelessPlugin?: (pluginId: string) => void;
 }): PluginDoctorStateMigrationEntry[] {
   return loadPluginDoctorStateMigrationEntries(
-    resolvePluginDoctorStateMigrationRecords(params ?? {}),
+    params?.inventory?.records ?? resolvePluginDoctorStateMigrationRecords(params ?? {}),
     params?.validateDeclarations,
     params?.onInspectedPlugin,
     params?.onInspectedStatelessPlugin,
@@ -552,6 +549,8 @@ function filterPluginDoctorStateMigrationRecords(
 }
 
 export type PluginDoctorStateMigrationInventory = {
+  /** Live selection, retained across maintenance scopes without rediscovery. */
+  records?: readonly PluginManifestRegistryRecord[];
   knownPluginIds: string[];
   sessionStoreOwnerPluginIds: string[];
   descriptors: Array<{
@@ -713,6 +712,7 @@ export function resolveLivePluginDoctorStateMigrationInventory(params: {
   }
 
   return {
+    records,
     knownPluginIds: [...new Set([...bundledInventory.knownPluginIds, ...records.map((r) => r.id)])],
     sessionStoreOwnerPluginIds: records
       .filter((record) => record.doctorContract?.resolveSessionStoreAgentIds === true)
@@ -759,12 +759,12 @@ export function applyPluginDoctorCompatibilityMigrations(
 }
 
 /** Inspect plugin-owned migration paths before the updater captures its recovery set. */
-export async function collectPluginDoctorMigrationBackupResources(
+export async function preparePluginDoctorMigrationBackupResources(
   params: PluginDoctorMigrationResourceCollectionParams,
-): Promise<PluginDoctorMigrationBackupResource[]> {
+) {
   const entries = loadPluginDoctorStateMigrationEntries(
     resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
   );
-  const { collectPluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
-  return await collectPluginDoctorMigrationResources(entries, params);
+  const { preparePluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
+  return await preparePluginDoctorMigrationResources(entries, params);
 }

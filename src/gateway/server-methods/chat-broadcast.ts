@@ -77,14 +77,20 @@ export function sendGlobalAwareNodeChatPayload(params: {
   agentId?: string;
   event: string;
   payload: unknown;
+  opts?: GatewayBroadcastOpts;
 }): void {
-  const deliveryKeys = resolveChatSessionKeys({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  for (const deliveryKey of deliveryKeys) {
-    params.context.nodeSendToSession(deliveryKey, params.event, params.payload);
+  const deliveryKeys =
+    params.opts?.sessionKeys ??
+    resolveChatSessionKeys({
+      context: params.context,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+  if (deliveryKeys[0]) {
+    const opts = params.opts?.sessionKeys
+      ? params.opts
+      : { ...params.opts, sessionKeys: deliveryKeys };
+    params.context.nodeSendToSession(deliveryKeys[0], params.event, params.payload, opts);
   }
 }
 
@@ -147,20 +153,28 @@ function broadcastChatFrame(
     ...frame,
   };
   const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup?.signal;
-  params.context.broadcast("chat", payload, {
-    ...(liveText ? { liveText, dropIfSlow: true } : group ? { liveText: { group } } : {}),
+  const delivery: GatewayBroadcastOpts["liveText"] =
+    liveText ??
+    (group
+      ? { group, settle: params.state === "final" || params.state === "error" ? true : undefined }
+      : undefined);
+  const opts: GatewayBroadcastOpts = {
+    ...(delivery ? { liveText: delivery } : {}),
+    ...(liveText ? { dropIfSlow: true } : {}),
     sessionKeys: resolveChatSessionKeys({
       context: params.context,
       sessionKey: params.sessionKey,
       agentId: payloadAgentId,
     }),
-  });
+  };
+  params.context.broadcast("chat", payload, opts);
   sendGlobalAwareNodeChatPayload({
     context: params.context,
     sessionKey: params.sessionKey,
     agentId: payloadAgentId,
     event: "chat",
     payload,
+    opts,
   });
 }
 
@@ -178,7 +192,6 @@ export function broadcastChatDelta(
   const run = params.context.chatRunState.getOrCreate(params.runId);
   run.buffer = text;
   run.bufferIsCurrent = params.isCurrent;
-  run.bufferUpdatedAt = Date.now();
   run.liveTextGroup ??= new AbortController();
   // Command snapshots share the run's bounded queue and retire with its abort owner.
   broadcastChatFrame(

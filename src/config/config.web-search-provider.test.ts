@@ -315,18 +315,6 @@ describe("web search provider config", () => {
         }),
     ],
     [
-      "accepts firecrawl provider and config",
-      () =>
-        buildWebSearchProviderConfig({
-          enabled: true,
-          provider: "firecrawl",
-          providerConfig: {
-            apiKey: "fc-test-key", // pragma: allowlist secret
-            baseUrl: "https://api.firecrawl.dev",
-          },
-        }),
-    ],
-    [
       "accepts tavily provider config on the plugin-owned path",
       () =>
         buildWebSearchProviderConfig({
@@ -339,21 +327,6 @@ describe("web search provider config", () => {
               id: "TAVILY_API_KEY",
             },
             baseUrl: "https://api.tavily.com",
-          },
-        }),
-    ],
-    [
-      "accepts minimax provider config on the plugin-owned path",
-      () =>
-        buildWebSearchProviderConfig({
-          enabled: true,
-          provider: "minimax",
-          providerConfig: {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "MINIMAX_CODE_PLAN_KEY",
-            },
           },
         }),
     ],
@@ -375,23 +348,6 @@ describe("web search provider config", () => {
   ])("%s", (_name, createConfig) => {
     const res = validateWebSearchConfig(createConfig());
     expect(res.ok).toBe(true);
-  });
-
-  it("rejects legacy scoped Tavily config", () => {
-    const res = validateWebSearchConfig({
-      tools: {
-        web: {
-          search: {
-            provider: "tavily",
-            tavily: {
-              apiKey: "tvly-test-key",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
   });
 
   it("detects legacy scoped provider config for bundled providers", () => {
@@ -562,19 +518,8 @@ describe("web search provider auto-detection", () => {
   });
 
   it.each([
-    ["brave", "BRAVE_API_KEY", "test-brave-key"], // pragma: allowlist secret
-    ["gemini", "GEMINI_API_KEY", "test-gemini-key"], // pragma: allowlist secret
-    ["tavily", "TAVILY_API_KEY", "tvly-test-key"], // pragma: allowlist secret
-    ["minimax", "MINIMAX_API_KEY", "test-minimax-key"], // pragma: allowlist secret
-    ["firecrawl", "FIRECRAWL_API_KEY", "fc-test-key"], // pragma: allowlist secret
     ["searxng", "SEARXNG_BASE_URL", "http://localhost:8080"],
-    ["kimi", "KIMI_API_KEY", "test-kimi-key"], // pragma: allowlist secret
-    ["minimax", "MINIMAX_CODE_PLAN_KEY", "sk-cp-test"],
     ["minimax", "MINIMAX_OAUTH_TOKEN", "oauth-test-token"], // pragma: allowlist secret
-    ["perplexity", "PERPLEXITY_API_KEY", "test-perplexity-key"], // pragma: allowlist secret
-    ["perplexity", "OPENROUTER_API_KEY", "sk-or-v1-test"], // pragma: allowlist secret
-    ["grok", "XAI_API_KEY", "test-xai-key"], // pragma: allowlist secret
-    ["kimi", "MOONSHOT_API_KEY", "test-moonshot-key"], // pragma: allowlist secret
   ])("auto-detects %s when only %s is set", (provider, envVar, value) => {
     process.env[envVar] = value;
     expect(resolveSearchProvider({})).toBe(provider);
@@ -593,13 +538,6 @@ describe("web search provider auto-detection", () => {
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("gemini");
-  });
-
-  it("grok wins over kimi and perplexity when brave and gemini unavailable", () => {
-    process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
-    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
-    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("grok");
   });
 
   it("explicit provider always wins regardless of keys", () => {

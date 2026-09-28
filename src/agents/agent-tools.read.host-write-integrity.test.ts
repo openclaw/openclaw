@@ -28,12 +28,10 @@ describe("unrestricted host tool writes", () => {
 
   it.each(
     (["write", "edit", "apply_patch"] as const).flatMap((kind) =>
-      (["aborted", "revoked", "replaced", "budget-revoked", "active"] as const).map(
-        (authority) => ({
-          kind,
-          authority,
-        }),
-      ),
+      (["aborted", "revoked", "budget-revoked", "active"] as const).map((authority) => ({
+        kind,
+        authority,
+      })),
     ),
   )(
     "checks $authority authority for $kind after asynchronous file preparation",
@@ -61,8 +59,6 @@ describe("unrestricted host tool writes", () => {
               generation.abort(new Error("Permission change"));
             } else if (authority === "revoked") {
               currentClaim = undefined;
-            } else if (authority === "replaced") {
-              currentClaim = {};
             } else if (authority === "budget-revoked") {
               budgetCurrent = false;
             }

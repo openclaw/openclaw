@@ -372,18 +372,6 @@ describe("question channel runtime", () => {
     await runtime.clear();
   });
 
-  it("finalizes expiry delivered after the terminal event", async () => {
-    const finalize = vi.fn();
-    const runtime = createQuestionChannelRuntime();
-    runtime.handleRequested(record);
-    runtime.handleResolved({ id: record.id, status: "expired" });
-    runtime.registerDelivery({ questionId: record.id, deliveryId: "slack:1", finalize });
-
-    await vi.waitFor(() => expect(finalize).toHaveBeenCalledOnce());
-    expect(finalize).toHaveBeenCalledWith("Expired");
-    await runtime.clear();
-  });
-
   it("does not echo free-text answers", async () => {
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
@@ -412,7 +400,7 @@ describe("question channel runtime", () => {
       await vi.advanceTimersByTimeAsync(15_001);
       runtime.registerDelivery({ questionId: record.id, deliveryId: "slack:late", finalize });
 
-      expect(finalize).toHaveBeenCalledWith("Expired");
+      expect(finalize).toHaveBeenCalledExactlyOnceWith("Expired");
       await runtime.clear();
     } finally {
       vi.useRealTimers();

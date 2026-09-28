@@ -7,7 +7,15 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runPluginHttpRoute } from "../../plugins/http-route-owner.js";
+import {
+  getWebhookLegacyListener,
+  isLegacyPluginRouteHandoff,
+  permitsLegacyPluginRoute,
+} from "../../plugins/http-legacy-listener.js";
+import {
+  respondPluginHttpRouteHandoff,
+  runPluginHttpRoute,
+} from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -15,6 +23,11 @@ import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
+import {
+  bindHttpResponseAuthority,
+  finishGatewayHttpAuthorityError,
+  GatewayHttpRequestAuthorityError,
+} from "../http-request-authority.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
@@ -99,9 +112,6 @@ async function withPluginRouteRuntimeScope<T>(
   scope: PluginRouteRuntimeScope,
   run: () => Promise<T>,
 ): Promise<T> {
-  if (scope.hasCurrentClientAuthority?.() === false) {
-    throw new Error("HTTP request authority expired");
-  }
   // HTTP clients are not in the connected-client set. Keep their prepared role/aliases
   // current across handler and projection awaits, using the same publication owner.
   const client = scope.client;
@@ -148,45 +158,45 @@ function createPluginRouteRuntimeScope(params: {
   registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
+  res?: ServerResponse;
   gatewayRequestContext?: GatewayRequestContext;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
   gatewayRequestClientIp?: string;
 }): PluginRouteRuntimeScope {
+  const requestAuth = params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined;
   const runtimeScopes =
     params.route.auth !== "gateway"
       ? []
-      : params.gatewayRequestAuth?.controlUiPluginGrant
+      : requestAuth?.controlUiPluginGrant
         ? params.gatewayRequestOperatorScopes!
         : params.route.gatewayRuntimeScopeSurface === "trusted-operator"
-          ? resolvePluginRouteRuntimeOperatorScopes(
-              params.req,
-              params.gatewayRequestAuth!,
-              "trusted-operator",
-            )
+          ? resolvePluginRouteRuntimeOperatorScopes(params.req, requestAuth!, "trusted-operator")
           : params.gatewayRequestOperatorScopes!;
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,
-    params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined,
+    requestAuth,
   );
   const operatorAccessAuthority = runtimeClient?.internal?.operatorAccessAuthority;
-  operatorAccessAuthority?.assertCurrent();
-  const hasCurrentClientAuthority =
-    params.route.auth === "gateway"
-      ? params.gatewayRequestAuth?.hasCurrentClientAuthority
-      : undefined;
+  const hasCurrentClientAuthority = () =>
+    requestAuth?.hasCurrentClientAuthority?.() !== false &&
+    hasCurrentGatewayOperatorAccess(operatorAccessAuthority);
+  if (params.res) {
+    bindHttpResponseAuthority(
+      { operatorAccessAuthority },
+      params.res,
+      hasCurrentClientAuthority,
+    ).assertCurrent();
+  } else if (!hasCurrentClientAuthority()) {
+    params.req.socket.destroy();
+    throw new GatewayHttpRequestAuthorityError("HTTP request authority expired");
+  }
   return {
     pluginRegistry: params.registry,
-    ...(params.route.auth === "gateway" && params.gatewayRequestAuth?.revalidate
-      ? { revalidate: params.gatewayRequestAuth.revalidate }
-      : {}),
-    ...(hasCurrentClientAuthority || operatorAccessAuthority
-      ? {
-          hasCurrentClientAuthority: () =>
-            hasCurrentClientAuthority?.() !== false &&
-            hasCurrentGatewayOperatorAccess(operatorAccessAuthority),
-        }
+    ...(requestAuth?.revalidate ? { revalidate: requestAuth.revalidate } : {}),
+    ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority
+      ? { hasCurrentClientAuthority }
       : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
@@ -237,8 +247,23 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
 
-    const pathContext = resolvePluginRoutePathContextForRequest(req, providedPathContext);
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    const legacyRequest = getWebhookLegacyListener(req) !== undefined;
+    const pathContext = legacyRequest
+      ? resolvePluginRoutePathContext(
+          URL.parse(req.url ?? "/", "http://localhost")?.pathname ?? "/",
+        )
+      : resolvePluginRoutePathContextForRequest(req, providedPathContext);
+    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext).filter((route) =>
+      permitsLegacyPluginRoute(req, route),
+    );
+    if (legacyRequest) {
+      // The original listener's handler owns unmatched paths too (including auth/parser errors).
+      for (const route of routes) {
+        if (permitsLegacyPluginRoute(req, route) && !matchedRoutes.includes(route)) {
+          matchedRoutes.push(route);
+        }
+      }
+    }
     if (matchedRoutes.length === 0) {
       return false;
     }
@@ -309,20 +334,27 @@ export function createGatewayPluginRequestHandler(params: {
         continue;
       }
       try {
-        const runRoute = async () =>
-          (await withPluginRouteRuntimeScope(
-            createPluginRouteRuntimeScope({
-              registry,
-              route,
-              req,
-              gatewayRequestContext,
-              gatewayRequestAuth,
-              gatewayRequestOperatorScopes,
-              gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
-            }),
-            async () =>
-              runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
-          )) !== false;
+        const runRoute = async () => {
+          if (isLegacyPluginRouteHandoff(req, route)) {
+            return respondPluginHttpRouteHandoff(req, res);
+          }
+          return (
+            (await withPluginRouteRuntimeScope(
+              createPluginRouteRuntimeScope({
+                registry,
+                route,
+                req,
+                res,
+                gatewayRequestContext,
+                gatewayRequestAuth,
+                gatewayRequestOperatorScopes,
+                gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+              }),
+              async () =>
+                runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
+            )) !== false
+          );
+        };
         // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
         const handled = canRunPluginHttpRouteWithoutAdmission(route)
@@ -332,8 +364,15 @@ export function createGatewayPluginRequestHandler(params: {
           return true;
         }
       } catch (err) {
+        if (finishGatewayHttpAuthorityError(res, err)) {
+          return true;
+        }
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-        finishFailedGatewayHttpResponse(res);
+        if (legacyRequest) {
+          res.destroy(err instanceof Error ? err : undefined);
+        } else {
+          finishFailedGatewayHttpResponse(res);
+        }
         return true;
       }
     }

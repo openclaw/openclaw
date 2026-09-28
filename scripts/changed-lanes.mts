@@ -108,7 +108,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-  "apps/mobile/version.json",
   ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
   "docs/install/updating/automatic-updates.md",
@@ -461,7 +460,8 @@ export function listChangedPathsFromGit(params: {
 }
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
+  // Keep rename sources so checks still cover the removed path's consumers.
+  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",

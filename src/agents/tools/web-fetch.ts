@@ -1,8 +1,3 @@
-/**
- * web_fetch built-in tool.
- *
- * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
- */
 import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
@@ -160,11 +155,7 @@ const WebFetchOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { fetch?: infer Fetch }
-    ? Fetch
-    : undefined
-  : undefined;
+type WebFetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
 type ResolveWebFetchDefinition =
   (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
 type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
@@ -215,37 +206,6 @@ function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | u
     .map(({ name, value }) => [name, value] as const)
     .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
-/**
- * Secret-free cache discriminator for operator headers. The fetch cache is a
- * process-wide map and routing headers can point the same URL at a different
- * backend, so the header set must partition the cache without storing its values.
- */
-function resolveFetchHeadersCacheKey(headers?: Record<string, string>): string | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  return sha256Hex(JSON.stringify(Object.entries(headers)));
-}
-
-/**
- * Builds the outgoing header record. Fetch-owned headers keep their canonical
- * casing and order because a plain record reaches the wire verbatim: undici does
- * not re-normalize it, so switching to `Headers` here would change the request
- * fingerprint of every fetch, including ones with no configured headers.
- * `resolveFetchHeaders` has already removed anything that could collide.
- */
-function buildWebFetchRequestHeaders(params: {
-  userAgent: string;
-  operatorHeaders?: Record<string, string>;
-}): Record<string, string> {
-  return {
-    Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-    "User-Agent": params.userAgent,
-    "Accept-Language": "en-US,en;q=0.9",
-    ...params.operatorHeaders,
-  };
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -344,35 +304,30 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   if (maxChars <= 0) {
     return { text: "", truncated: true, rawLength: value.length, length: 0 };
   }
-  const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
+  // Keep framing from outweighing source content in truncated previews. Short
+  // sources can still retain the warning when both fit in full.
+  const includeWarning =
+    maxChars >=
+    WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD +
+      Math.min(value.length, WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD);
   const wrapperOverhead = includeWarning
     ? WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD
     : WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD;
-  if (wrapperOverhead > maxChars) {
-    const minimal = includeWarning
-      ? wrapWebContent("", "web_fetch")
-      : wrapExternalContent("", { source: "web_fetch", includeWarning: false });
-    const truncatedWrapper = truncateWebFetchText(minimal, maxChars);
-    return {
-      text: truncatedWrapper.text,
-      truncated: true,
-      rawLength: value.length,
-      length: truncatedWrapper.text.length,
-    };
-  }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
   // Charge sanitizer expansion before wrapping; clipping a later marker can
   // increase output size, so a second raw-length adjustment is not sufficient.
   const truncated = truncateSanitizedExternalContent(value, maxInner);
-  const wrappedText = includeWarning
-    ? wrapWebContent(truncated.text, "web_fetch")
-    : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+  // Tiny budgets may be shorter than the boundary markers themselves.
+  const wrapped = truncateWebFetchText(
+    wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning }),
+    maxChars,
+  );
 
   return {
-    text: wrappedText,
-    truncated: truncated.truncated,
+    text: wrapped.text,
+    truncated: truncated.truncated || wrapped.truncated,
     rawLength: value.length,
-    length: wrappedText.length,
+    length: wrapped.text.length,
   };
 }
 
@@ -502,14 +457,8 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-/**
- * Sanitize a web_fetch URL parameter that may contain LLM-injected whitespace.
- *
- * Fixes the reported case where a model emits a space between the scheme and
- * authority (e.g. `https:// docs.openclaw.ai`), which causes `new URL()` to
- * throw. Path and query whitespace is intentionally preserved — the WHATWG URL
- * parser percent-encodes those characters correctly per RFC 3986.
- */
+// Repair model-injected scheme/authority whitespace; preserve path/query whitespace
+// for the URL parser to percent-encode.
 function sanitizeWebFetchUrl(raw: string): string {
   let end = raw.length;
   while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
@@ -631,40 +580,6 @@ async function buildWebFetchPayload(params: {
   };
 }
 
-async function maybeFetchProviderWebFetchPayload(
-  params: WebFetchRuntimeParams & {
-    urlToFetch: string;
-    tookMs: number;
-  },
-): Promise<Record<string, unknown> | null> {
-  const providerFallback = await params.resolveProviderFallback();
-  throwIfFetchAborted(params.signal);
-  if (!providerFallback) {
-    return null;
-  }
-  let rawPayload: unknown;
-  try {
-    rawPayload = await providerFallback.definition.execute(
-      { url: params.urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
-      { signal: params.signal },
-    );
-  } catch (error) {
-    // A provider failure landing after cancellation must surface the caller's abort
-    // reason, not a late error from fallback work the caller already abandoned.
-    throwIfFetchAborted(params.signal);
-    throw error;
-  }
-  throwIfFetchAborted(params.signal);
-  return await buildWebFetchPayload({
-    providerId: providerFallback.provider.id,
-    payload: rawPayload,
-    requestedUrl: params.url,
-    extractMode: params.extractMode,
-    maxChars: params.maxChars,
-    tookMs: params.tookMs,
-  });
-}
-
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   throwIfFetchAborted(params.signal);
   const ssrfPolicy = params.ssrfPolicy;
@@ -678,7 +593,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
-  const headersCacheKey = resolveFetchHeadersCacheKey(params.headers);
+  // Routing headers partition the process-wide cache without retaining their secrets.
+  const headersCacheKey = params.headers
+    ? sha256Hex(JSON.stringify(Object.entries(params.headers)))
+    : undefined;
   // Append the operator header set after the existing cache discriminators so
   // requests without custom headers keep their current cache key.
   const cacheDiscriminators = [
@@ -711,6 +629,35 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
 async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const start = Date.now();
+  async function fetchProviderPayload(urlToFetch: string): Promise<Record<string, unknown> | null> {
+    const tookMs = Date.now() - start;
+    const providerFallback = await params.resolveProviderFallback();
+    throwIfFetchAborted(params.signal);
+    if (!providerFallback) {
+      return null;
+    }
+    let rawPayload: unknown;
+    try {
+      rawPayload = await providerFallback.definition.execute(
+        { url: urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
+        { signal: params.signal },
+      );
+    } catch (error) {
+      // Cancellation wins over a provider failure arriving after the caller abandoned it.
+      throwIfFetchAborted(params.signal);
+      throw error;
+    }
+    throwIfFetchAborted(params.signal);
+    return await buildWebFetchPayload({
+      providerId: providerFallback.provider.id,
+      payload: rawPayload,
+      requestedUrl: params.url,
+      extractMode: params.extractMode,
+      maxChars: params.maxChars,
+      tookMs,
+    });
+  }
+
   let res: Response;
   let release: () => Promise<void>;
   let finalUrl = params.url;
@@ -728,17 +675,19 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
         ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
         : undefined,
       init: {
-        headers: buildWebFetchRequestHeaders({
-          userAgent: params.userAgent,
-          operatorHeaders: params.headers,
-        }),
+        // Preserve casing and order on the wire; operator headers are already collision-free.
+        headers: {
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+          "User-Agent": params.userAgent,
+          "Accept-Language": "en-US,en;q=0.9",
+          ...params.headers,
+        },
       },
     });
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
 
-    // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
     if (markdownTokens) {
       logDebug(
@@ -749,11 +698,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     if (error instanceof SsrFBlockedError || params.signal?.aborted) {
       throw error;
     }
-    const payload = await maybeFetchProviderWebFetchPayload({
-      ...params,
-      urlToFetch: finalUrl,
-      tookMs: Date.now() - start,
-    });
+    const payload = await fetchProviderPayload(finalUrl);
     if (payload) {
       return payload;
     }
@@ -763,11 +708,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
   try {
     if (!res.ok) {
       throwIfFetchAborted(params.signal);
-      const payload = await maybeFetchProviderWebFetchPayload({
-        ...params,
-        urlToFetch: params.url,
-        tookMs: Date.now() - start,
-      });
+      const payload = await fetchProviderPayload(params.url);
       if (payload) {
         return payload;
       }
@@ -796,7 +737,6 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     let extractor = "raw";
     let text = body;
     if (normalizedContentType === "text/markdown") {
-      // Cloudflare Markdown for Agents: server returned pre-rendered markdown
       extractor = "cf-markdown";
       if (params.extractMode === "text") {
         text = markdownToText(body);
@@ -816,11 +756,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
         } else {
           let payload: Record<string, unknown> | null = null;
           try {
-            payload = await maybeFetchProviderWebFetchPayload({
-              ...params,
-              urlToFetch: finalUrl,
-              tookMs: Date.now() - start,
-            });
+            payload = await fetchProviderPayload(finalUrl);
           } catch {
             throwIfFetchAborted(params.signal);
           }
@@ -844,11 +780,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
           }
         }
       } else {
-        const payload = await maybeFetchProviderWebFetchPayload({
-          ...params,
-          urlToFetch: finalUrl,
-          tookMs: Date.now() - start,
-        });
+        const payload = await fetchProviderPayload(finalUrl);
         if (payload) {
           return payload;
         }
@@ -937,21 +869,15 @@ export function createWebFetchTool(options?: {
         (typeof executionFetch?.userAgent === "string" && executionFetch.userAgent) ||
         DEFAULT_FETCH_USER_AGENT;
       const maxResponseBytes = resolveFetchMaxResponseBytes(executionFetch);
-      let providerFallbackResolved = false;
-      let providerFallbackCache: WebFetchProviderFallback;
-      const resolveProviderFallback = async () => {
-        if (!providerFallbackResolved) {
-          const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
-          providerFallbackCache = resolveWebFetchDefinition({
-            config,
-            sandboxed: options?.sandboxed,
-            runtimeWebFetch,
-            preferRuntimeProviders,
-          });
-          providerFallbackResolved = true;
-        }
-        return providerFallbackCache;
-      };
+      const resolveProviderFallback = createLazyPromise(async () => {
+        const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
+        return resolveWebFetchDefinition({
+          config,
+          sandboxed: options?.sandboxed,
+          runtimeWebFetch,
+          preferRuntimeProviders,
+        });
+      });
       const params = args as Record<string, unknown>;
       const url = sanitizeWebFetchUrl(
         readToolStringParam(params, "url", { required: true, trim: false }),

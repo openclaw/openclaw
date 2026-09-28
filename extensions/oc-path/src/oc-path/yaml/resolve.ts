@@ -3,11 +3,9 @@ import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
-  isQuotedSeg,
   parseArrayIndexSegment,
   resolvePositionalSeg,
-  splitRespectingBrackets,
-  unquoteSeg,
+  splitOcPathSlots,
 } from "../oc-path.js";
 import type { YamlAst } from "./ast.js";
 
@@ -30,22 +28,7 @@ type YamlOcPathMatch =
     };
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
-  const segments: string[] = [];
-  if (path.section !== undefined) {
-    for (const s of splitRespectingBrackets(path.section, ".")) {
-      segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
-    }
-  }
-  if (path.item !== undefined) {
-    for (const s of splitRespectingBrackets(path.item, ".")) {
-      segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
-    }
-  }
-  if (path.field !== undefined) {
-    for (const s of splitRespectingBrackets(path.field, ".")) {
-      segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
-    }
-  }
+  const segments = splitOcPathSlots(path.section, path.item, path.field);
 
   if (segments.length === 0) {
     return { kind: "root", node: ast };
@@ -87,7 +70,7 @@ function walkNode(
   }
 
   if (isPositionalSeg(seg)) {
-    const concrete = positionalForYaml(node, seg);
+    const concrete = resolveYamlPositionalSegment(node, seg);
     if (concrete !== null) {
       seg = concrete;
     }
@@ -129,7 +112,7 @@ function walkNode(
   return null;
 }
 
-function positionalForYaml(node: Node, seg: string): string | null {
+export function resolveYamlPositionalSegment(node: Node, seg: string): string | null {
   if (isMap(node)) {
     const pairs = (node as { items: Pair[] }).items;
     const keys = pairs.map((p) => String(isScalar(p.key) ? p.key.value : p.key));

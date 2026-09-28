@@ -29,7 +29,7 @@ import {
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
   resolveSessionPermissionExecMode,
@@ -45,7 +45,6 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
-import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
@@ -192,7 +191,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     sessionId: attempt.sessionId,
     runId: attempt.runId,
     agentDir: params.agentDir,
-    messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    messageProvider: attempt.messageProvider ?? attempt.messageChannel,
     messageChannel: attempt.messageChannel,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
@@ -377,77 +376,93 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const baseExecOverrides = {
     ...(attempt.permissionChange?.baseExecOverrides ?? attempt.execOverrides),
   };
-  const toolsRaw = constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
-  runCleanups.push(async (reason) => {
+  const releaseTools = async (reason: string) => {
     toolAbortController.abort();
     retireToolGeneration(reason);
     await Promise.all(retiringGenerations);
     if (retiredCleanupFailed) {
       recordAgentCleanupFailure();
     }
-  });
-
-  return {
-    toolHookContext: {
-      agentId: params.setup.sessionAgentId,
-      config: attempt.config,
-      cwd: params.setup.effectiveCwd,
-      sessionKey: params.setup.sandboxSessionKey,
-      sessionId: attempt.sessionId,
-      runId: attempt.runId,
-      approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
-      channelId: attempt.currentChannelId,
-      trace: params.runTrace,
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: attempt.config,
-        agentId: params.setup.sessionAgentId,
-      }),
-      onToolOutcome: attempt.onToolOutcome,
-      allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-    },
-    get toolAbortSignal() {
-      return toolAbortSignal;
-    },
-    refreshPermissionMode: (mode: SessionPermissionMode | null, revokeApprovals: () => void) => {
-      // Revoke prepared calls before resolving approval waiters; their old
-      // signal must already be closed when an allowed decision wakes them.
-      toolAbortController.abort(createCodeModePermissionChangeReason());
-      revokeApprovals();
-      retireToolGeneration("cancel");
-      params.runAbortController.signal.throwIfAborted();
-      toolAbortController = new AbortController();
-      toolAbortSignal = AbortSignal.any([
-        params.runAbortController.signal,
-        toolAbortController.signal,
-      ]);
-      attempt.permissionMode = mode ?? undefined;
-      attempt.execOverrides = { ...baseExecOverrides };
-      const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
-      const nextTools = constructTools(policy, toolAbortSignal);
-      toolsRaw.splice(0, toolsRaw.length, ...nextTools);
-    },
-    codeModeControlsEnabledForRun,
-    codeModeSkills,
-    computerContextEpoch,
-    skillInstructionDeliveryCache,
-    cronCreatorToolAllowlist,
-    cronCreatorToolAllowlistCaptureRef,
-    effectiveToolsAllow,
-    forceDirectMessageTool,
-    requireExplicitMessageTarget,
-    inheritedToolAllowlist,
-    localModelLeanEnabled,
-    localModelLeanPreserveToolNames,
-    replaySafetyOptions,
-    runtimeCapabilityProfile,
-    runCleanups,
-    toolSearchCatalogRef,
-    toolSurfaceRuntime,
-    toolSearchConfig,
-    toolSearchControlsEnabledForRun,
-    toolSearchRuntimeConfig,
-    nestedToolActivities,
-    toolsEnabled,
-    toolsRaw,
   };
+  runCleanups.push(releaseTools);
+
+  // Until preparation returns, the attempt cannot own these registered resources.
+  try {
+    const toolsRaw = constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
+    return {
+      toolHookContext: {
+        agentId: params.setup.sessionAgentId,
+        config: attempt.config,
+        cwd: params.setup.effectiveCwd,
+        sessionKey: params.setup.sandboxSessionKey,
+        sessionId: attempt.sessionId,
+        runId: attempt.runId,
+        approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
+        channelId: attempt.currentChannelId,
+        trace: params.runTrace,
+        loopDetection: resolveToolLoopDetectionConfig({
+          cfg: attempt.config,
+          agentId: params.setup.sessionAgentId,
+        }),
+        onToolOutcome: attempt.onToolOutcome,
+        allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
+      },
+      get toolAbortSignal() {
+        return toolAbortSignal;
+      },
+      refreshPermissionMode: (mode: SessionPermissionMode | null, revokeApprovals: () => void) => {
+        // Revoke prepared calls before resolving approval waiters; their old
+        // signal must already be closed when an allowed decision wakes them.
+        toolAbortController.abort(createCodeModePermissionChangeReason());
+        revokeApprovals();
+        retireToolGeneration("cancel");
+        params.runAbortController.signal.throwIfAborted();
+        toolAbortController = new AbortController();
+        toolAbortSignal = AbortSignal.any([
+          params.runAbortController.signal,
+          toolAbortController.signal,
+        ]);
+        attempt.permissionMode = mode ?? undefined;
+        attempt.execOverrides = { ...baseExecOverrides };
+        const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
+        const nextTools = constructTools(policy, toolAbortSignal);
+        toolsRaw.splice(0, toolsRaw.length, ...nextTools);
+      },
+      codeModeControlsEnabledForRun,
+      codeModeSkills,
+      computerContextEpoch,
+      skillInstructionDeliveryCache,
+      cronCreatorToolAllowlist,
+      cronCreatorToolAllowlistCaptureRef,
+      effectiveToolsAllow,
+      forceDirectMessageTool,
+      requireExplicitMessageTarget,
+      inheritedToolAllowlist,
+      localModelLeanEnabled,
+      localModelLeanPreserveToolNames,
+      replaySafetyOptions,
+      runtimeCapabilityProfile,
+      runCleanups,
+      toolSearchCatalogRef,
+      toolSurfaceRuntime,
+      toolSearchConfig,
+      toolSearchControlsEnabledForRun,
+      toolSearchRuntimeConfig,
+      nestedToolActivities,
+      toolsEnabled,
+      toolsRaw,
+    };
+  } catch (error) {
+    try {
+      await runOwnedAgentCleanup({
+        ...attempt,
+        step: "embedded-tool-preparation",
+        cleanup: () => releaseTools("error"),
+        log,
+      });
+    } catch {
+      recordAgentCleanupFailure();
+    }
+    throw error;
+  }
 }

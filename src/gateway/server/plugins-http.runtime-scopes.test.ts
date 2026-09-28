@@ -1,6 +1,3 @@
-/**
- * Plugin HTTP runtime-scope integration tests.
- */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -178,6 +175,10 @@ describe("plugin HTTP route runtime scopes", () => {
           auth: params.auth,
           gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface,
           handler: async () => {
+            const scope = getPluginRuntimeGatewayRequestScope();
+            if (params.auth === "plugin") {
+              expect(scope?.hasCurrentClientAuthority).toBeUndefined();
+            }
             assertWriteHelperAllowed();
             return true;
           },
@@ -229,25 +230,18 @@ describe("plugin HTTP route runtime scopes", () => {
       const grant = new AbortController();
       let current = true;
       const nextRoute = vi.fn(() => true);
+      const firstRoute = createRoute({
+        path: SECURE_HOOK_PATH,
+        auth: "gateway",
+        handler: async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(grant.signal);
+          entered.resolve();
+          await release.promise;
+          return false;
+        },
+      });
       const handler = createPluginRequestHandler({
-        routes: [
-          createRoute({
-            path: SECURE_HOOK_PATH,
-            auth: "gateway",
-            handler: async () => {
-              expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(grant.signal);
-              entered.resolve();
-              await release.promise;
-              return false;
-            },
-          }),
-          createRoute({
-            path: SECURE_HOOK_PATH,
-            match: "prefix",
-            auth: "gateway",
-            handler: nextRoute,
-          }),
-        ],
+        routes: [firstRoute, { ...firstRoute, match: "prefix", handler: nextRoute }],
       });
       const pending = dispatchPluginRequest(handler, {
         path: SECURE_HOOK_PATH,
@@ -279,7 +273,11 @@ describe("plugin HTTP route runtime scopes", () => {
       } finally {
         release.resolve();
       }
-      expect((await pending).handled).toBe(true);
+      const { handled, res } = await pending;
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(
+        changed === "unchanged" ? 200 : changed === "request policy" ? 401 : 403,
+      );
       expect(nextRoute).toHaveBeenCalledTimes(changed === "unchanged" ? 1 : 0);
     },
   );

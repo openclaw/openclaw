@@ -1,9 +1,9 @@
-// Mattermost plugin module implements client behavior.
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   collectErrorGraphCandidates,
   PlatformMessageNotDispatchedError,
+  readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -25,8 +25,10 @@ import {
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asOptionalObjectRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 
@@ -43,6 +45,11 @@ const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
+  /**
+   * The caller discards the success receipt of this mutation. Once Mattermost
+   * accepted it, a lost or unreadable body must not report the mutation failed.
+   */
+  discardResponse?: boolean;
   /** Internal dispatch evidence; never forwarded to the HTTP transport. */
   isMessagePost?: boolean;
 };
@@ -85,6 +92,7 @@ export const MattermostPostSchema = z
     type: z.string().nullable().optional(),
     root_id: z.string().nullable().optional(),
     create_at: z.number().nullable().optional(),
+    delete_at: z.number().nullable().optional(),
     props: z.record(z.string(), z.unknown()).nullable().optional(),
   })
   .passthrough();
@@ -301,13 +309,14 @@ export function createMattermostClient(params: {
 
   const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
-    const headers = new Headers(init?.headers);
+    const { discardResponse, ...requestInit } = init ?? {};
+    const headers = new Headers(requestInit.headers);
     headers.set("Authorization", `Bearer ${token}`);
-    if (typeof init?.body === "string" && !headers.has("Content-Type")) {
+    if (typeof requestInit.body === "string" && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
     const isMessagePost = path === "/posts" && init?.method?.toUpperCase() === "POST";
-    const res = await fetchImpl(url, { ...init, headers, isMessagePost });
+    const res = await fetchImpl(url, { ...requestInit, headers, isMessagePost });
     if (!res.ok) {
       const detail = await readMattermostError(res, headers);
       throw new Error(
@@ -319,13 +328,13 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
-    if (path === "/reactions" && init?.method?.toUpperCase() === "POST") {
+    if (discardResponse) {
       try {
         await res.body?.cancel();
       } catch {
         // Ignore cancellation failures.
       }
-      // SAFETY: Reaction creation is a no-result mutation; its caller discards the receipt.
+      // SAFETY: The caller declared a no-result mutation and discards the receipt.
       return undefined as T;
     }
 
@@ -443,9 +452,10 @@ export async function sendMattermostTyping(
   if (parentId) {
     payload.parent_id = parentId;
   }
-  await client.request<Record<string, unknown>>("/users/me/typing", {
+  await client.request<void>("/users/me/typing", {
     method: "POST",
     body: JSON.stringify(payload),
+    discardResponse: true,
   });
 }
 
@@ -538,7 +548,6 @@ export async function createMattermostDirectChannelWithRetry(
 
   return await retryAsync(
     async () => {
-      // Use AbortController for per-request timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -577,19 +586,19 @@ export function isRetryableError(error: Error): boolean {
     ...(Array.isArray(current.errors) ? current.errors : []),
   ]);
   const messages = candidates
-    .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
+    .map((candidate) =>
+      normalizeLowercaseStringOrEmpty(
+        readStringField(asOptionalObjectRecord(candidate), "message"),
+      ),
+    )
     .filter((message): message is string => Boolean(message));
 
-  // Retry on 5xx server errors FIRST (before checking 4xx)
-  // Use "mattermost api" prefix to avoid matching port numbers (e.g., :443) or IP octets
-  // This prevents misclassification when a 5xx error detail contains a 4xx substring
-  // e.g., "Mattermost API 503: upstream returned 404"
+  // Provider status takes precedence over statuses mentioned in its details and network errors.
+  // Require the API prefix so port numbers and IP octets cannot become HTTP statuses.
   if (messages.some((message) => /mattermost api 5\d{2}\b/.test(message))) {
     return true;
   }
 
-  // Check for explicit 429 rate limiting FIRST (before generic "429" text match)
-  // This avoids retrying when error detail contains "429" but it's not the status code
   if (
     messages.some(
       (message) => /mattermost api 429\b/.test(message) || message.includes("too many requests"),
@@ -598,17 +607,10 @@ export function isRetryableError(error: Error): boolean {
     return true;
   }
 
-  // Check for explicit 4xx status codes - these are client errors and should NOT be retried
-  // (except 429 which is handled above)
-  // Use "mattermost api" prefix to avoid matching port numbers like :443
   if (messages.some((message) => /mattermost api 4\d{2}\b/.test(message))) {
     return false;
   }
 
-  // Retry on network/transient errors only if no explicit Mattermost API status code is present
-  // This avoids false positives like:
-  // - "400 Bad Request: connection timed out" (has status code)
-  // - "connect ECONNRESET 104.18.32.10:443" (has port number, not status)
   const hasMattermostApiStatusCode = messages.some((message) =>
     /mattermost api \d{3}\b/.test(message),
   );
@@ -624,33 +626,13 @@ export function isRetryableError(error: Error): boolean {
     return true;
   }
 
-  if (
-    candidates.some((candidate) =>
-      RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate) ?? ""),
-    )
-  ) {
+  if (candidates.some((candidate) => RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate)))) {
     return true;
   }
 
   return messages.some((message) =>
     RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
   );
-}
-
-function readErrorMessage(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const message = (error as { message?: unknown }).message;
-  return typeof message === "string" && message.trim() ? message : undefined;
-}
-
-function readErrorName(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const name = (error as { name?: unknown }).name;
-  return typeof name === "string" && name.trim() ? name : undefined;
 }
 
 function readErrorCode(error: unknown): string | undefined {
@@ -756,6 +738,7 @@ export async function deleteMattermostPost(
 ): Promise<void> {
   await client.request<void>(`/posts/${postId}`, {
     method: "DELETE",
+    discardResponse: true,
   });
 }
 

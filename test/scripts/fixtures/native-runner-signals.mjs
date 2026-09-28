@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { registerSourceRunnerServiceFixture } from "./source-runner-service.mjs";
 
 const root = process.env.OPENCLAW_TEST_NATIVE_RUNNER_ROOT;
 const sourceRoot = process.env.OPENCLAW_TEST_NATIVE_RUNNER_SOURCE;
@@ -10,6 +11,7 @@ const mode = process.env.OPENCLAW_TEST_NATIVE_RUNNER_MODE;
 if (!root || !sourceRoot || (mode !== "runner" && mode !== "watch")) {
   throw new Error("Native runner signal fixture is missing its private scope");
 }
+registerSourceRunnerServiceFixture(sourceRoot);
 const fixture = fileURLToPath(import.meta.url);
 const release = path.join(root, "release");
 const terminate = path.join(root, "terminate");

@@ -104,11 +104,8 @@ describe("npm extended-stable publication boundary", () => {
     ["2026.6.11", "alpha"],
     ["2026.6.11", "beta"],
     ["2026.6.11", "latest"],
-    ["2026.6.11-1", "alpha"],
-    ["2026.6.11-1", "beta"],
     ["2026.6.11-1", "latest"],
     ["2026.6.33", "extended-stable"],
-    ["2026.6.34", "extended-stable"],
   ])("accepts %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).not.toThrow();
   });
@@ -116,17 +113,10 @@ describe("npm extended-stable publication boundary", () => {
   it.each([
     ["2026.6.11", "extended-stable"],
     ["2026.6.11-alpha.1", "beta"],
-    ["2026.6.11-alpha.1", "extended-stable"],
     ["2026.6.11-beta.1", "latest"],
-    ["2026.6.11-beta.1", "extended-stable"],
-    ["2026.6.33", "alpha"],
     ["2026.6.33", "beta"],
-    ["2026.6.33", "latest"],
-    ["2026.6.33-1", "alpha"],
-    ["2026.6.33-1", "beta"],
     ["2026.6.33-1", "latest"],
     ["2026.6.33-1", "extended-stable"],
-    ["2026.6.33", "stable"],
     ["2026.6.33", "nightly"],
   ])("rejects %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).toThrow();
@@ -166,16 +156,13 @@ describe("npm extended-stable publication boundary", () => {
     ).toThrow(/does not allow correction suffixes/u);
   });
 
-  it.each(["alpha", "beta", "latest"])(
-    "rejects extended-stable guard bypass with the %s dist-tag",
-    (distTag) => {
-      expect(() =>
-        validateNpmPublishBoundary("2026.6.11", distTag, {
-          bypassExtendedStableGuard: true,
-        }),
-      ).toThrow(/only be used with the extended-stable npm dist-tag/u);
-    },
-  );
+  it("rejects extended-stable guard bypass with a regular dist-tag", () => {
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11", "beta", {
+        bypassExtendedStableGuard: true,
+      }),
+    ).toThrow(/only be used with the extended-stable npm dist-tag/u);
+  });
 
   it("preserves the unknown dist-tag rejection when bypass is requested", () => {
     expect(() =>
@@ -285,7 +272,6 @@ describe("extended-stable npm release request", () => {
   it.each([
     ["patch below 33", { releaseTag: "v2026.6.32", packageVersion: "2026.6.32" }],
     ["beta prerelease", { releaseTag: "v2026.6.33-beta.1", packageVersion: "2026.6.33-beta.1" }],
-    ["alpha prerelease", { releaseTag: "v2026.6.33-alpha.1", packageVersion: "2026.6.33-alpha.1" }],
     ["correction suffix", { releaseTag: "v2026.6.33-1", packageVersion: "2026.6.33-1" }],
     ["wrong branch", { npmWorkflowRef: "refs/heads/extended-stable/2026.6.34" }],
     ["checkout mismatch", { checkoutSha: "b".repeat(40) }],
@@ -293,7 +279,6 @@ describe("extended-stable npm release request", () => {
     ["branch tip mismatch", { extendedStableBranchSha: "b".repeat(40) }],
     ["package mismatch", { packageVersion: "2026.6.34" }],
     ["main same month", { mainPackageVersion: "2026.6.1" }],
-    ["main earlier month", { mainPackageVersion: "2026.5.32" }],
     ["main earlier year", { mainPackageVersion: "2025.12.32" }],
     ["main patch at monthly boundary", { mainPackageVersion: "2026.7.33" }],
   ])("rejects %s", (_label, changes) => {

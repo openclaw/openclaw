@@ -160,10 +160,11 @@ function validatePluginCommandDefinition(
     if (!Array.isArray(command.requiredScopes)) {
       return "Command requiredScopes must be an array of operator scopes";
     }
-    const unknownScope = (command.requiredScopes as readonly unknown[]).find(
+    const unknownScopeIndex = (command.requiredScopes as readonly unknown[]).findIndex(
       (scope) => !isOperatorScope(scope),
     );
-    if (unknownScope) {
+    if (unknownScopeIndex !== -1) {
+      const unknownScope: unknown = command.requiredScopes[unknownScopeIndex];
       return typeof unknownScope === "string"
         ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
         : "Command requiredScopes contains unknown operator scope";

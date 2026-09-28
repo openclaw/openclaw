@@ -7,7 +7,7 @@ import type {
   TeamsMeetingsSession,
 } from "./transports/types.js";
 
-const probes = MeetingPlatformAdapter.createRuntimeProbes<
+export const teamsMeetingsProbes = MeetingPlatformAdapter.createRuntimeProbes<
   TeamsMeetingsConfig,
   TeamsMeetingsMode,
   TeamsMeetingsTransport,
@@ -22,6 +22,3 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   shouldWaitForListening: ({ chrome }) => Boolean(chrome?.launched || chrome?.browserTab?.targetId),
   talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });
-
-export const testTeamsMeetingListening = probes.testListening;
-export const testTeamsMeetingSpeech = probes.testSpeech;

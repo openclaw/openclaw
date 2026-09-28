@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../../shared/update-outcome.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
@@ -13,7 +14,25 @@ import {
 export function completeUpdateCommandResult(
   params: Pick<FinishUpdateParams, "startedAt" | "rollbackBlockedReason">,
   result: UpdateRunResult,
+  serviceStop?: FinishUpdateParams["preManagedServiceStop"],
 ): UpdateRunResult {
+  if (
+    serviceStop?.stopped &&
+    serviceStop.serviceMembershipSourceAbsent &&
+    !result.steps.some((step) => step.name === "managed-service-membership")
+  ) {
+    const message =
+      "Service membership unverifiable on this host; using managed stop/update/start.";
+    defaultRuntime.error(message);
+    result.steps.push({
+      name: "managed-service-membership",
+      command: "openclaw update",
+      cwd: result.root ?? "",
+      durationMs: 0,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance", message },
+    });
+  }
   return normalizeControlPlaneUpdateResult({
     ...result,
     ...(result.status === "error" &&

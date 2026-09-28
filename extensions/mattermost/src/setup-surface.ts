@@ -1,4 +1,3 @@
-// Mattermost plugin module implements setup surface behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   applySetupAccountConfigPatch,

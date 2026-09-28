@@ -24,6 +24,8 @@ export type CronRunExecutionParams = Pick<
   | "suppressExecNotifyOnExit"
   | "resolvedDelivery"
   | "deliveryRequested"
+  | "deliverySystemPrompt"
+  | "messageToolFormatPrompt"
   | "sourceDelivery"
   | "skillsSnapshot"
   | "agentPayload"

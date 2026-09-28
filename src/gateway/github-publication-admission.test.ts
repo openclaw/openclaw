@@ -32,7 +32,7 @@ const rejection = (idempotencyKey: string) => ({
   idempotencyKey,
 });
 
-function sharedAdmission(surface: "local" | "deferred" | "claim") {
+async function sharedAdmission(surface: "local" | "deferred" | "claim") {
   const database = openOpenClawStateDatabase();
   const db = database.db;
   const placements = createWorkerSessionPlacementStore({ database });
@@ -45,11 +45,11 @@ function sharedAdmission(surface: "local" | "deferred" | "claim") {
       sessionId,
       ownerEpoch: 2,
     });
-    seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
+    await seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
   }
   const claim =
     surface === "claim"
-      ? placements.claimTurn({
+      ? await placements.claimTurn({
           sessionId,
           sessionKey,
           agentId: "main",
@@ -85,18 +85,22 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(
-    ["options", "publish", "status", "confirm"].flatMap((method) =>
-      [
-        { sessionKey: "agent:main:main", agentId: "research" },
-        { sessionKey: "agent:main:main", agentId: "main" },
-        { sessionKey: "global", agentId: "---" },
-        { sessionKey: "global", agentId: "retired" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
-      ].map(({ sessionKey, agentId, fixedOwner }) => ({ method, sessionKey, agentId, fixedOwner })),
-    ),
-  )(
+  it.each([
+    ...[
+      { sessionKey: "agent:main:main", agentId: "research" },
+      { sessionKey: "agent:main:main", agentId: "main" },
+      { sessionKey: "global", agentId: "---" },
+      { sessionKey: "global", agentId: "retired" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
+    ].map((owner) => Object.assign({}, owner, { method: "publish" })),
+    ...["options", "status", "confirm"].map((method) => ({
+      method,
+      sessionKey: "agent:main:main",
+      agentId: "research",
+      fixedOwner: undefined,
+    })),
+  ])(
     "rejects explicit publication owner $agentId for $sessionKey at $method admission (fixed owner: $fixedOwner)",
     async ({ method, sessionKey, agentId, fixedOwner }) => {
       const fixture = await createPersonalPublicationFixture();
@@ -159,7 +163,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["local", "deferred", "claim"] as const)(
     "records a fresh %s selection rejection before any durable request or Git effect",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       const error = await fixture.request().catch((caught: unknown) => caught);
       expect(fixture.read()).toBeUndefined();
       expect(commands).toEqual([]);
@@ -170,7 +174,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["local", "deferred", "claim"] as const)(
     "does not reinterpret an existing %s receipt as a pre-admission rejection",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       await fixture.request(publisher);
       const before = fixture.read();
       const effects = [...commands];
@@ -185,7 +189,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["deferred", "claim"] as const)(
     "observes a same-key %s admission committed while identity preparation awaits",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const identity = await mocks.prepareIdentity();
@@ -211,7 +215,7 @@ describe("GitHub publication selection admission", () => {
   );
 
   it("does not make a key-wide promise when another invocation is still preparing", async () => {
-    const fixture = sharedAdmission("local");
+    const fixture = await sharedAdmission("local");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const identity = await mocks.prepareIdentity();
@@ -237,7 +241,7 @@ describe("GitHub publication selection admission", () => {
   });
 
   it("does not forget a receipt already observed before an awaited identity refresh", async () => {
-    const fixture = sharedAdmission("deferred");
+    const fixture = await sharedAdmission("deferred");
     await fixture.request(publisher);
     mocks.refreshIdentity.mockImplementationOnce(async () => {
       fixture.db

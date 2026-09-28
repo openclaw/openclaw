@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
@@ -39,13 +41,13 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   FreeBsdPkgOwnershipError,
 } from "./update-freebsd-pkg-ownership.js";
 import { verifyPackageUpdateRecovery } from "./update-global.js";
+import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import {
   finalizeNativePackageStage,
   NativePackageRollbackError,
@@ -53,7 +55,7 @@ import {
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
 export type {
@@ -417,7 +419,7 @@ export async function swapStagedPackageInstall(
             }
           }
         : rootLink?.verifyRuntime;
-      params.onTransaction({
+      await params.onTransaction({
         backupRoot,
         ...(assertRollbackSafe ? { assertRollbackSafe } : {}),
         rollback: (assertion) => {
@@ -490,21 +492,12 @@ export async function swapStagedPackageInstall(
           // Seal automatic rollback once retirement begins, but retain the actual
           // outcome. A repeated completion must not report a renamed backup gone.
           retirement = (async () => {
+            const cleanupStartedAt = performance.now();
+            const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
             const messages: string[] = [];
             // The filesystem fallback can recheck an assertion after catching it.
             // A later successful read cannot turn that authority failure into cleanup.
-            let assertionFailure: { cause: unknown } | undefined;
-            const assertRetirementCurrent = () => {
-              if (assertionFailure) {
-                throw assertionFailure.cause;
-              }
-              try {
-                assertCurrent();
-              } catch (cause) {
-                assertionFailure = { cause };
-                throw cause;
-              }
-            };
+            const assertRetirementCurrent = retainMutationAuthority(assertCurrent);
             const linkRetention =
               rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
             assertRetirementCurrent();
@@ -517,6 +510,7 @@ export async function swapStagedPackageInstall(
                 "old package",
                 targetLayout.globalRoot,
                 assertRetirementCurrent,
+                cleanupDeadlineAtMs,
               );
               if (message) {
                 messages.push(message);
@@ -526,6 +520,7 @@ export async function swapStagedPackageInstall(
               launchers,
               targetLayout.globalRoot,
               assertRetirementCurrent,
+              cleanupDeadlineAtMs,
             );
             if (launcherCleanup) {
               messages.push(launcherCleanup);
@@ -537,6 +532,7 @@ export async function swapStagedPackageInstall(
               return {
                 ...step(1, null, messages.join("\n")),
                 name: "package-backup-retention",
+                durationMs: Math.round(performance.now() - cleanupStartedAt),
                 // Only this verified obsolete-resource path qualifies the warning.
                 // Recovery refusal and unclassified link outcomes remain hard.
                 advisory: {

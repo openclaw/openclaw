@@ -417,7 +417,11 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   const configuredManifestEnvChannelIds = new Set(
     manifestEnv?.signals.map((signal) => normalizeOptionalLowercaseString(signal.channelId)),
   );
-  for (const channelId of listExplicitConfiguredChannelIdsForConfig(params.config)) {
+  // Runtime auto-enable can synthesize channel blocks; only the authored source
+  // establishes explicit consent when startup or reload supplies both snapshots.
+  for (const channelId of listExplicitConfiguredChannelIdsForConfig(
+    params.activationSourceConfig ?? params.config,
+  )) {
     addPolicySignal(entrySources, channelId, "explicit-config");
   }
   for (const signal of potentialSignals) {

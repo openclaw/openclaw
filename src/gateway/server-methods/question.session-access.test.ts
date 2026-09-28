@@ -86,7 +86,7 @@ async function fixture(state: OpenClawTestState, options?: { foreign?: boolean }
       assertCurrent: () => sourceController.signal.throwIfAborted(),
     },
   };
-  const source = captureGatewayOperatorRunAuthority({
+  const source = await captureGatewayOperatorRunAuthority({
     client: owner,
     context: { getRuntimeConfig: () => cfg },
   });
@@ -642,7 +642,7 @@ it("prepares question session data in the worker across RPCs and real narrow, br
       canReceiveSessionEvent: fallback,
     });
     broadcast.mockImplementation(broadcaster.broadcast);
-    const sql = observeHostDataSql(state.env);
+    const sql = observeHostDataSql();
     try {
       expect((await f.request())[0]).toBe(true);
       expect((await f.call("question.get", { id: "ordinary-question" }))[0]).toBe(true);

@@ -14,7 +14,6 @@ import {
   resolveTaskName,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
-  resolveTaskUser,
 } from "./schtasks-layout.js";
 import {
   isInstallerServiceDescription,
@@ -24,6 +23,7 @@ import type {
   GatewayServiceExpectedCommand,
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
+import { resolveTaskUser } from "./service-process-env.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 function elementKey(node: ReturnType<DOMParser["parseFromString"]>["documentElement"]): string {
@@ -110,6 +110,29 @@ export async function auditScheduledTaskDefinition(
     }
   }
   const nativeDefaults: Record<string, string> = {
+    // https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema
+    // DeleteExpiredTaskAfter is excluded: omission disables deletion, unlike explicit PT0S.
+    "Principals.Principal.RunLevel": "LeastPrivilege",
+    "Triggers.LogonTrigger.Enabled": "true",
+    "Triggers.LogonTrigger.ExecutionTimeLimit": "PT72H",
+    "Triggers.LogonTrigger.Delay": "PT0M",
+    "Settings.AllowStartOnDemand": "true",
+    "Settings.MultipleInstancesPolicy": "IgnoreNew",
+    "Settings.DisallowStartIfOnBatteries": "true",
+    "Settings.StopIfGoingOnBatteries": "true",
+    "Settings.AllowHardTerminate": "true",
+    "Settings.StartWhenAvailable": "false",
+    "Settings.RunOnlyIfNetworkAvailable": "false",
+    "Settings.WakeToRun": "false",
+    "Settings.Enabled": "true",
+    "Settings.Hidden": "false",
+    "Settings.ExecutionTimeLimit": "PT72H",
+    "Settings.Priority": "7",
+    "Settings.RunOnlyIfIdle": "false",
+    "Settings.IdleSettings.Duration": "PT10M",
+    "Settings.IdleSettings.WaitTimeout": "PT1H",
+    "Settings.IdleSettings.StopOnIdleEnd": "true",
+    "Settings.IdleSettings.RestartOnIdle": "false",
     "Settings.UseUnifiedSchedulingEngine": "false",
     "Settings.DisallowStartOnRemoteAppSession": "false",
     "Settings.Volatile": "false",
@@ -208,8 +231,10 @@ export async function auditScheduledTaskDefinition(
       node.children.length ||
       (!expectedXml && preserved.test(key)) ||
       (expectedXml && key === "Settings.Enabled") ||
-      // Task Scheduler omits the default run level when exporting XML.
-      (key === "Principals.Principal.RunLevel" && node.textContent === "LeastPrivilege")
+      // Default leaf values do not imply that a missing trigger or principal exists.
+      (nativeDefaults[key] === node.textContent &&
+        (key.startsWith("Settings.") ||
+          installed.querySelector(elementKey(node.parentElement!).replaceAll(".", " > "))))
     ) {
       continue;
     }
@@ -254,6 +279,8 @@ export async function auditScheduledTaskDefinition(
         sourcePath
     ) {
       const legacy = `CreateObject("WScript.Shell").Run """${sourcePath.replaceAll('"', '""')}""", 0, False`;
+      // 2026.9.3 emitted this waiting launcher before the supervisor environment marker.
+      const releasedWaiting = `WScript.Quit CreateObject("WScript.Shell").Run("""${sourcePath.replaceAll('"', '""')}""", 0, True)`;
       const generated = buildHiddenLauncherScript({
         scriptPath: sourcePath,
         taskSupervisor: command?.environment?.OPENCLAW_SERVICE_KIND === "gateway",
@@ -266,7 +293,7 @@ export async function auditScheduledTaskDefinition(
       });
       if (
         installedLauncher !== undefined &&
-        ![legacy, generated].some(
+        ![legacy, releasedWaiting, generated].some(
           (candidate) => normalize(candidate) === normalize(installedLauncher),
         )
       ) {

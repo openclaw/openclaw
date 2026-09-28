@@ -6,6 +6,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
@@ -17,6 +18,10 @@ import * as databaseFactsRead from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
+import {
+  reportPlacementTransition,
+  type WorkerSessionPlacementRecord,
+} from "./worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -24,24 +29,31 @@ afterEach(() => vi.restoreAllMocks());
 const cfg = { agents: { entries: { main: {} } } };
 const query = { agentId: "main", key: "agent:main:dashboard:incognito-prepared" };
 
+type PlacementRow = {
+  key: string;
+  sessionId: string;
+  placement: WorkerSessionPlacementRecord;
+};
+
 async function heldPlacementReads(
   sessionCount: number,
   options: { sessionId?: (index: number) => string; maxPendingBytes?: number } = {},
 ) {
   const placements = createWorkerSessionPlacementStore();
-  const rows = Array.from({ length: sessionCount }, (_, index) => {
+  const rows: PlacementRow[] = [];
+  for (let index = 0; index < sessionCount; index++) {
     const sessionId = options.sessionId?.(index) ?? `held-placement-${index}`;
     const key = `agent:main:held-placement-${index}`;
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: key },
       { sessionId, updatedAt: 1, archivedAt: 1 },
     );
-    return {
+    rows.push({
       key,
       sessionId,
-      placement: placements.startDispatch({ agentId: "main", sessionKey: key, sessionId }),
-    };
-  });
+      placement: await placements.startDispatch({ agentId: "main", sessionKey: key, sessionId }),
+    });
+  }
   const entered = createDeferredCore();
   const atCapacity = createDeferredCore();
   const release = createDeferredCore();
@@ -75,6 +87,7 @@ async function heldPlacementReads(
           moves: new Map(),
           environments: new Map(),
           workspaceResultReconcilingSessionIds: new Set(),
+          workspaceRecoveryPendingSessionIds: new Set(),
         };
         entered.resolve();
         await release.promise;
@@ -299,55 +312,71 @@ it("reuses settled exact placement facts while archived row preparation is compl
   });
 });
 
-it("keeps an exact placement read usable across an unrelated session publication", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await heldPlacementReads(2);
-    const row = fixture.rows[0]!;
-    const unrelated = fixture.rows[1]!;
-    const request = fixture.describe(row);
-    const completed = Promise.allSettled([request.completion]);
-    try {
-      await fixture.entered.promise;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: unrelated.key },
-        { sessionId: unrelated.sessionId, updatedAt: 2, archivedAt: 1, label: "Unrelated update" },
-      );
-      fixture.release.resolve();
-      expect(await completed).toEqual([{ status: "fulfilled", value: undefined }]);
-      expect(request.respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          key: row.key,
-          sessionId: row.sessionId,
-          placement: projectWorkerSessionPlacement(row.placement),
-        }),
-      });
-      expect(
-        fixture.projection.capture({ agentId: "main", key: unrelated.key })?.entry?.label,
-      ).toBe("Unrelated update");
-      expect(
-        fixture.readProjection.mock.calls.filter(([ids]) => ids.includes(row.sessionId)),
-      ).toHaveLength(1);
-    } finally {
-      fixture.release.resolve();
-      await completed;
-      fixture.dispose();
-    }
-  });
-});
+it.each([
+  { scope: "session", expectedReads: 1 },
+  { scope: "stores", expectedReads: 2 },
+  { scope: "config", expectedReads: 1 },
+] as const)(
+  "keeps an exact placement read usable across an unrelated $scope publication",
+  async ({ scope, expectedReads }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = await heldPlacementReads(2);
+      const row = fixture.rows[0]!;
+      const unrelated = fixture.rows[1]!;
+      const request = fixture.describe(row);
+      const completed = Promise.allSettled([request.completion]);
+      try {
+        await fixture.entered.promise;
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: unrelated.key },
+          {
+            sessionId: unrelated.sessionId,
+            updatedAt: 2,
+            archivedAt: 1,
+            label: "Unrelated update",
+          },
+        );
+        if (scope !== "session") {
+          sessionChanges.emit({ all: true, scope });
+        }
+        fixture.release.resolve();
+        expect(await completed).toEqual([{ status: "fulfilled", value: undefined }]);
+        expect(request.respond).toHaveBeenCalledExactlyOnceWith(true, {
+          session: expect.objectContaining({
+            key: row.key,
+            sessionId: row.sessionId,
+            placement: projectWorkerSessionPlacement(row.placement),
+          }),
+        });
+        expect(
+          fixture.projection.capture({ agentId: "main", key: unrelated.key })?.entry?.label,
+        ).toBe("Unrelated update");
+        expect(
+          fixture.readProjection.mock.calls.filter(([ids]) => ids.includes(row.sessionId)),
+        ).toHaveLength(expectedReads);
+      } finally {
+        fixture.release.resolve();
+        await completed;
+        fixture.dispose();
+      }
+    });
+  },
+);
 
 it("serves an exact description while an unrelated bulk placement refresh is held", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const placements = createWorkerSessionPlacementStore();
-    const rows = ["exact", "bulk"].map((name) => {
+    const rows: PlacementRow[] = [];
+    for (const name of ["exact", "bulk"]) {
       const sessionId = `independent-placement-${name}`;
       const key = `agent:main:${sessionId}`;
       replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
-      return {
+      rows.push({
         key,
         sessionId,
-        placement: placements.startDispatch({ agentId: "main", sessionKey: key, sessionId }),
-      };
-    });
+        placement: await placements.startDispatch({ agentId: "main", sessionKey: key, sessionId }),
+      });
+    }
     const exactRow = rows[0]!;
     const bulkRow = rows[1]!;
     const bulkEntered = createDeferredCore();
@@ -365,6 +394,7 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         moves: new Map(),
         environments: new Map(),
         workspaceResultReconcilingSessionIds: new Set(),
+        workspaceRecoveryPendingSessionIds: new Set(),
       };
       if (holdBulk && ids.includes(bulkRow.sessionId)) {
         bulkEntered.resolve();
@@ -391,10 +421,13 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         );
       }
       holdBulk = true;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: bulkRow.key },
-        { sessionId: bulkRow.sessionId, updatedAt: 2 },
-      );
+      bulkRow.placement = placements.transition({
+        sessionId: bulkRow.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: bulkRow.placement.generation,
+      });
+      reportPlacementTransition(undefined, bulkRow.placement);
       const bulk = projection.ensureMaterialized();
       pending.push(Promise.allSettled([bulk]));
       await withTestTimeout(bulkEntered.promise, 2_000, "Bulk placement refresh did not enter");
@@ -402,6 +435,13 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         { agentId: "main", sessionKey: exactRow.key },
         { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
       );
+      exactRow.placement = placements.transition({
+        sessionId: exactRow.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: exactRow.placement.generation,
+      });
+      reportPlacementTransition(undefined, exactRow.placement);
       const respond = vi.fn();
       const description = Promise.resolve(
         sessionByKeyReadHandlers["sessions.describe"]!({
@@ -429,6 +469,9 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
       });
       releaseBulk.resolve();
       await bulk;
+      expect(projection.snapshot({ agentId: "main", key: bulkRow.key }).row?.placement).toEqual(
+        projectWorkerSessionPlacement(bulkRow.placement),
+      );
     } finally {
       releaseBulk.resolve();
       await Promise.all(pending);
@@ -451,7 +494,7 @@ it.each([false, true])(
       });
       expect(loadSessionEntryReadOnly(target)?.sessionId).toBe(sessionId);
       const placements = createWorkerSessionPlacementStore();
-      placements.startDispatch({ ...target, sessionId });
+      await placements.startDispatch({ ...target, sessionId });
       const projection = await createSessionRowProjection({
         cfg,
         modelCatalog: [],
@@ -497,7 +540,7 @@ it("consumes an incognito describe response without SQLite or resident private r
       },
     );
     const placements = createWorkerSessionPlacementStore();
-    placements.startDispatch({
+    await placements.startDispatch({
       agentId: query.agentId,
       sessionKey: query.key,
       sessionId: "private-description",

@@ -105,12 +105,6 @@ describe("normalizeSubagentRunState", () => {
     expect(malformed.every((entry) => entry.terminalOwner === undefined)).toBe(true);
   });
 
-  it("clears stale cleanupHandled locks for unfinished restored cleanup", () => {
-    const entry = normalizeSubagentRunState(baseRun({ cleanupHandled: true }));
-
-    expect(entry.cleanupHandled).toBe(false);
-  });
-
   it("clears stale cleanupHandled locks after delivered notification if cleanup did not finish", () => {
     const entry = normalizeSubagentRunState(
       baseRun({

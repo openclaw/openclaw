@@ -18,7 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProjectCheckout } from "../../projects/project-checkout.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
-import { buildDashboardSessionKey } from "../session-create-service.js";
+import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   authorizeSessionSharingTarget,

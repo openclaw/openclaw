@@ -9,7 +9,12 @@ import type { MusicGenerationOutputFormat } from "../../music-generation/types.j
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
-import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readToolStringParam,
+  type AnyAgentTool,
+} from "./common.js";
 import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
 import {
   musicGenerationTaskLifecycle,
@@ -24,7 +29,6 @@ import {
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   resolveGenerateAction,
-  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import {
@@ -36,7 +40,6 @@ import {
   executeMusicGenerationJob,
   normalizeMusicGenerationTimeoutMs,
 } from "./music-generate-tool.execution.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
@@ -239,7 +242,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
           }
           signal?.throwIfAborted();
           acquired?.assertOpen();
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
           const loadedReferenceImages = await loadMediaToolReferences({
             inputs: imageInputs,
             toolName: "music_generate",

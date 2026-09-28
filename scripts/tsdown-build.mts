@@ -752,24 +752,6 @@ export function describeInsufficientTsdownHeap(
   };
 }
 
-function parseMaxOldSpaceSizeMb(value: unknown, fallbackMb: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallbackMb;
-  }
-  return Math.trunc(parsed);
-}
-
-function normalizeMaxOldSpaceSizeMb(value: unknown, maxOldSpaceMb: number) {
-  // Build wrappers may inherit smaller runner-level caps; tsdown needs the
-  // resolved build heap while still respecting cgroup-derived upper bounds.
-  const parsed = parseMaxOldSpaceSizeMb(value, maxOldSpaceMb);
-  if (parsed < maxOldSpaceMb) {
-    return maxOldSpaceMb;
-  }
-  return Math.min(parsed, maxOldSpaceMb);
-}
-
 function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
   const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
@@ -784,16 +766,14 @@ function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryL
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = normalizeMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       continue;
     }
 
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const value = normalizeMaxOldSpaceSizeMb(next, maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       if (next !== undefined) {
         index += 1;
       }
@@ -1202,12 +1182,15 @@ export async function runTsdownBuildInvocation(
     relayParentSignal("SIGHUP");
   }
 
-  const processTreeAlive = () =>
-    inspectManagedProcessGroup(child, {
+  let observedProcessState: ReturnType<typeof inspectManagedProcessGroup> | undefined;
+  const processTreeAlive = () => {
+    observedProcessState = inspectManagedProcessGroup(child, {
       errorPolicy: "alive-on-eperm",
       inspectLeaderWhenNoGroup: true,
       platform,
-    }) === "live";
+    });
+    return observedProcessState === "live";
+  };
   const waitForProcessTreeExit = (timeoutMsToWait: number) =>
     waitForManagedProcessGroupExit(child, timeoutMsToWait, {
       errorPolicy: "alive-on-eperm",
@@ -1290,13 +1273,34 @@ export async function runTsdownBuildInvocation(
     });
     child.once("close", (status, signal) => {
       let exitStatus = status;
+      let cleanup = parentSignal ? "parent-signal" : timedOut ? "timeout" : "none";
+      const reportFailure = (finalStatus: number | null) => {
+        // Cleanup can reject a successful compiler. Preserve both outcomes so a
+        // failed build does not look like a compiler error with missing output.
+        stderr.write(
+          `[tsdown-build] child result${pidText}: ${JSON.stringify({
+            status,
+            signal,
+            parentSignal: parentSignal ?? null,
+            timedOut,
+            cleanup,
+            observedProcessState: observedProcessState ?? "not-observed",
+            observationScope: useProcessGroup ? "process-group" : "leader",
+            finalStatus,
+          })}\n`,
+        );
+      };
       function finish() {
         settled = true;
         cleanupParentSignalHandlers();
         clearInterval(heartbeat ?? undefined);
         clearTimeout(timeout ?? undefined);
+        const finalStatus = parentSignal ? signalExitCode(parentSignal) : exitStatus;
+        if (finalStatus !== 0 || timedOut) {
+          reportFailure(finalStatus);
+        }
         resolve({
-          status: parentSignal ? signalExitCode(parentSignal) : exitStatus,
+          status: finalStatus,
           signal: parentSignal ?? signal,
           timedOut,
           error: null,
@@ -1308,6 +1312,7 @@ export async function runTsdownBuildInvocation(
         if (timedOut || parentSignal) {
           await finishTimedOutProcessTree();
         } else if (processTreeAlive()) {
+          cleanup = "remaining-descendants";
           signalChild("SIGKILL");
           await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
           exitStatus = 1;
@@ -1325,6 +1330,7 @@ export async function runTsdownBuildInvocation(
         cleanupParentSignalHandlers();
         clearInterval(heartbeat ?? undefined);
         clearTimeout(timeout ?? undefined);
+        reportFailure(1);
         resolve({
           status: 1,
           signal,

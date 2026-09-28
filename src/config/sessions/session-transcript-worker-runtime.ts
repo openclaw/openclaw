@@ -39,6 +39,7 @@ import {
   historyClearTimeout,
   historyLane,
   pruneHistoryDatabases,
+  refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
   type HistoryDatabaseResource,
@@ -125,6 +126,7 @@ export function retainSessionHistoryWorkerDatabase(
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
   owned.pending++;
+  refreshDatabaseWorkerPressureSubscription();
   let countsReleased = false;
   let releaseFinished = false;
   const releaseCleanup: SessionDatabaseCleanup = { run: async () => release() };
@@ -202,7 +204,7 @@ export function retainSessionHistoryWorkerDatabase(
         if (
           typeof received !== "boolean" &&
           !Array.isArray(received) &&
-          received.kind === "session-entry-read" &&
+          (received.kind === "session-entry-read" || received.kind === "session-diagnostic-text") &&
           received.source
         ) {
           const source = received.source;
@@ -417,6 +419,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     }
     historyClearTimeout(lane.idleTimer);
     lane.pending++;
+    refreshDatabaseWorkerPressureSubscription();
     const hostEffects = new Set<Promise<WorkerTaskResponse>>();
     const onRequest = runOptions.onRequest;
     let sequence = 0;

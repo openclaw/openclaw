@@ -131,10 +131,30 @@ and revalidates the owned parent around each staged swap.
 On macOS, OpenClaw exposes the selected desktop app's bundled marketplace
 through a real, isolated-home-owned wrapper at
 `$CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled`. Codex reserves that
-path for the `openai-bundled` marketplace; the wrapper links only the manifest
-and plugin directory from the selected standard desktop app. OpenClaw then asks
+path for the `openai-bundled` marketplace. Legacy desktop bundles use links to
+their manifest and plugin directory. When a newer desktop bundle replaces the
+legacy MCP plugin with `unified-computer-use`, the wrapper materializes that
+plugin's launch descriptor using the same selected desktop's Node, Node REPL,
+and CUA package. Its `cua_repl` server uses the isolated home's signed Computer
+Use service. Native installation and reinstallation copy this prepared source;
+the desktop bundle and desktop user's plugin cache are not modified or copied.
+Other plugins, including separate browser integrations, retain their source links.
+OpenClaw then asks
 Codex app-server to register the wrapper. If setup still cannot make the MCP
 server available, the turn fails before the thread starts.
+
+The legacy default plugin/server pair follows this replacement automatically,
+including an explicitly configured `pluginName: "computer-use"` with the default
+server name. Custom plugin, server, or marketplace selections remain unchanged.
+An explicit native `mcp_servers.computer-use` entry or legacy plugin MCP tool
+policy keeps the legacy identity, so a renamed server cannot bypass those
+restrictions. Update that native policy explicitly before selecting the unified
+server. Native `cua_repl` overrides continue to take precedence over the plugin.
+The managed unified runtime enables its **computer** surface, preserving desktop
+app discovery and control. It does not attach the agent to the desktop app's
+browser sessions or advertise the unified browser surface. Native MCP policy,
+tool restrictions, and macOS permissions still apply. Desktop updates refresh
+the prepared source and client generation together.
 With the default `strictReadiness: false`, startup does not create a temporary
 probe thread or wait for a readiness tool call. Use `/codex computer-use status`
 to verify live desktop access, or enable `healthCheckEnabled` for periodic
@@ -148,10 +168,11 @@ runtime through its normal policy checks.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS, managed startup for Computer Use prefers the desktop app binary at
-`/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
-back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
-standalone installs. This also applies to one-off Computer Use status and
+On macOS, managed startup for Computer Use prefers `ChatGPT.app`, then
+`Codex.app` for standalone installs. Within each app's `Contents/Resources`,
+it checks `codex-cli/CodexCLI.app/Contents/MacOS/codex` before the older `codex`
+layout. Computer Use dependencies stay rooted in that app's `Contents/Resources`
+for either executable layout. This also applies to one-off Computer Use status and
 install commands that start their own client. It keeps desktop control under
 the app bundle that owns the local macOS permissions. If the desktop app is not
 installed, OpenClaw falls back to the managed Codex binary installed beside the

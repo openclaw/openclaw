@@ -39,16 +39,16 @@ import {
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
+  buildExecRuntimeErrorOutcome,
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
-  ExecProcessPreflightError,
   type ExecProcessHandle,
-  normalizePathPrepend,
-  resolveExecTarget,
-  resolveApprovalRunningNoticeMs,
-  buildExecRuntimeErrorOutcome,
-  runExecProcess,
+  ExecProcessPreflightError,
   execSchema,
+  normalizePathPrepend,
+  resolveApprovalRunningNoticeMs,
+  resolveExecTarget,
+  runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
   shouldSkipExecScriptPreflight,
@@ -62,7 +62,6 @@ import {
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { createBackgroundExecTask } from "./bash-tools.exec-task-tracking.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -140,6 +139,9 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
+  const backgroundFollowUp = notifyOnExit
+    ? BACKGROUND_EXEC_FOLLOW_UP
+    : `${BACKGROUND_EXEC_FOLLOW_UP} Automatic completion wake is disabled (tools.exec.notifyOnExit=false). If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.`;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
@@ -600,7 +602,6 @@ export function createExecTool(
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
           onSettledBeforeNotify: settlement.settle,
-          onActivity: settlement.activity,
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -671,15 +672,6 @@ export function createExecTool(
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        // Only the guarded yield transition owns task registration. A process
-        // that settles before this timer fires must stay out of the task ledger.
-        settlement.backgroundTask = createBackgroundExecTask({
-          processSessionId: run.session.id,
-          command: run.session.command,
-          sessionKey: notifySessionKey,
-          agentId,
-          startedAt: run.startedAt,
-        });
         backgrounded.resolve({ status: "backgrounded" });
       };
 
@@ -710,7 +702,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
+                    }). ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
@@ -721,7 +713,7 @@ export function createExecTool(
                   cwd: run.session.cwd,
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
-                  followUp: BACKGROUND_EXEC_FOLLOW_UP,
+                  followUp: backgroundFollowUp,
                 },
               },
           approvalReview,

@@ -147,7 +147,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -1384,6 +1384,7 @@ jobs:
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
+      run_bun_only_runtime_smoke: true
       update_baseline_version: ${{ needs.resolve_target.outputs.source_upgrade_baseline }}
 
   cross_os_release_checks:
@@ -1689,7 +1690,9 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          sparse-checkout: extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          sparse-checkout: |
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
           sparse-checkout-cone-mode: false
           submodules: false
 
@@ -1700,6 +1703,9 @@ jobs:
           set -euo pipefail
           trusted_checkout=.release-qa-tooling-trusted
           trap 'rm -rf -- "$trusted_checkout"' EXIT
+          install -m 0644 \
+            "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts" \
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts
           install -m 0644 \
             "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \
             extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts

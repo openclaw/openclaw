@@ -1,6 +1,9 @@
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 // Owns durable approval matching and allow-always persistence.
-import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
+import {
+  buildExecApprovalPolicyRuleKey,
+  canonicalizeExecApprovalPolicyRules,
+} from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
@@ -118,13 +121,6 @@ export function buildAllowlistEntryMatchKey(
   entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
 ): string {
   return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
-}
-
-function buildExecApprovalPolicyRuleKey(
-  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,
-): string {
-  // A JSON tuple preserves exact regex bytes without delimiter collisions.
-  return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
 }
 
 function buildAllowAlwaysUpgradeRuleKey(

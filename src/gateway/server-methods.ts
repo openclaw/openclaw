@@ -5,10 +5,6 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
-  GATEWAY_RESTART_UNAVAILABLE_REASON,
-  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
-} from "../../packages/gateway-protocol/src/restart-unavailable.js";
-import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
@@ -28,6 +24,7 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
@@ -65,6 +62,10 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
+import {
+  runWithGatewayObservationScope,
+  workAdmissionUnavailableError,
+} from "./server-request-lifecycle.js";
 import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import {
   prepareGatewaySessionAccessAuthority,
@@ -480,24 +481,7 @@ export async function runWithGatewayRequestEnvelope<T>(
     getGatewayRestartDrainSignal().aborted &&
     getGatewaySuspendAdmissionPhase() === "accepting";
   if (!rootWorkAdmission && !SUSPEND_CONTROL_METHODS.has(method) && !restartProgressRead) {
-    const restartDraining = isGatewayRestartDraining();
-    return await options.reject(
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
-        {
-          retryable: true,
-          retryAfterMs: 1_000,
-          details: {
-            method,
-            reason: restartDraining
-              ? GATEWAY_RESTART_UNAVAILABLE_REASON
-              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
-            phase: getGatewaySuspendAdmissionPhase(),
-          },
-        },
-      ),
-    );
+    return await options.reject(workAdmissionUnavailableError(method));
   }
   async function invokeWithRequestScope() {
     const postAdmissionRateLimitError = isSuspendPrepare
@@ -515,21 +499,33 @@ export async function runWithGatewayRequestEnvelope<T>(
         getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
         getActivePluginRegistry() ??
         undefined;
-      return await withPluginRuntimeGatewayRequestScope(
-        {
-          context: options.context,
-          // Detached turn admission needs the live instance resolver, not a captured request context.
-          resolveGatewayContext: options.context.resolveGatewayContext,
-          client,
-          signal: options.signal,
-          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-          isWebchatConnect: options.isWebchatConnect,
-          // Only an owner-bound in-process stream may retain admitted Full authority.
-          ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
-          ...(pluginRegistry ? { pluginRegistry } : {}),
-        },
-        fn,
-      );
+      const invoke = () =>
+        withPluginRuntimeGatewayRequestScope(
+          {
+            context: options.context,
+            // Detached turn admission needs the live instance resolver, not a captured request context.
+            resolveGatewayContext: options.context.resolveGatewayContext,
+            client,
+            signal: options.signal,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+            isWebchatConnect: options.isWebchatConnect,
+            // Only an owner-bound in-process stream may retain admitted Full authority.
+            ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
+            ...(pluginRegistry ? { pluginRegistry } : {}),
+          },
+          fn,
+        );
+      return await (options.methodRegistry.isObservation(method)
+        ? runWithGatewayObservationScope(invoke, [options.signal, client?.connectionSignal], () =>
+            options.reject(
+              getGatewayRestartDrainSignal().aborted
+                ? workAdmissionUnavailableError(method)
+                : errorShape(ErrorCodes.UNAVAILABLE, `${method} observation cancelled`, {
+                    retryable: true,
+                  }),
+            ),
+          )
+        : invoke());
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         return await options.reject(error.error);
@@ -641,7 +637,7 @@ export async function handleGatewayRequest(
           }
         : undefined,
     );
-    const respondToHandler: GatewayRequestOptions["respond"] =
+    const respondAuthorized: GatewayRequestOptions["respond"] =
       authorization.sessionScope === "operator.sessions.read"
         ? (...response) => {
             try {
@@ -656,6 +652,15 @@ export async function handleGatewayRequest(
             respond(...response);
           }
         : respond;
+    const observation = methodRegistry.isObservation(req.method);
+    let observationResponded = false;
+    const respondToHandler: GatewayRequestOptions["respond"] = observation
+      ? (...response) => {
+          getAsyncWorkSignal()?.throwIfAborted();
+          respondAuthorized(...response);
+          observationResponded = true;
+        }
+      : respondAuthorized;
     const invokeHandler = async () => {
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
       const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
@@ -666,6 +671,7 @@ export async function handleGatewayRequest(
           client,
           isWebchatConnect,
           respond: respondToHandler,
+          acceptsSerializedJson: opts.acceptsSerializedJson,
           context,
           signal,
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
@@ -706,7 +712,11 @@ export async function handleGatewayRequest(
       methodRegistry,
       requestParams: req.params,
       admission: opts.admission,
-      reject: (error) => respond(false, undefined, error),
+      reject: (error) => {
+        if (!observation || (!observationResponded && !client?.connectionSignal?.aborted)) {
+          respond(false, undefined, error);
+        }
+      },
     });
   } finally {
     sessionAccessAuthority?.release();

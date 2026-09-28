@@ -1,18 +1,67 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("collectPackageDistImports", () => {
+  it.each(["mjs", "cjs"])(
+    "keeps binding searches bounded while rejecting a redeclaration in a large %s artifact",
+    (extension) => {
+      const bindings = 2048;
+      const source =
+        Array.from(
+          { length: bindings },
+          (_, index) => `const package_binding_${index} = ${index};`,
+        ).join("\n") + "\nlet package_binding_0;";
+      let searchedSlots = 0;
+      const indexOf = Array.prototype.indexOf;
+      const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
+        this: unknown[],
+        value: unknown,
+        fromIndex?: number,
+      ) {
+        if (typeof value === "string" && value.startsWith("package_binding_")) {
+          searchedSlots += this.length;
+        }
+        return indexOf.call(this, value, fromIndex);
+      });
+      try {
+        expect(() =>
+          collectPackageDistImports({
+            files: [`dist/index.${extension}`],
+            readText: () => source,
+          }),
+        ).toThrow("Identifier 'package_binding_0' has already been declared");
+      } finally {
+        observed.mockRestore();
+      }
+      expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
+    },
+  );
+
+  it("preserves sloppy CommonJS bindings and its explicit strict directive", () => {
+    const source = [
+      "function value(arg, arg) {}",
+      "var value; var value;",
+      "try {} catch (value) { var value; }",
+      'return require("./leaf.cjs");',
+    ].join("\n");
+    expect(
+      collectPackageDistImports({ files: ["dist/index.cjs"], readText: () => source }),
+    ).toEqual([{ importerPath: "dist/index.cjs", importedPath: "dist/leaf.cjs" }]);
+    expect(() =>
+      collectPackageDistImports({
+        files: ["dist/index.cjs"],
+        readText: () => `"use strict";\n${source}`,
+      }),
+    ).toThrow("Argument name clash");
+  });
+
   it("leaves installed dependency modules to their own package scope", () => {
     expect(
       collectPackageDistImports({
@@ -37,6 +86,7 @@ describe("collectPackageDistImports", () => {
           'function load() { return import("./dynamic.js"); }',
           'require("./common.cjs");',
           'new URL("./worker.mjs", import.meta.url);',
+          "export { later }; const later = 1;",
         ].join("\n"),
     });
     expect(imports).toEqual(
@@ -95,6 +145,29 @@ describe("collectPackageDistImports", () => {
 });
 
 describe("check-package-dist-imports", () => {
+  it("checks large bundles in a bounded heap and still rejects missing trailing imports", () => {
+    const root = tempDirs.make("openclaw-package-dist-imports-large-");
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist", "leaf.mjs"), "export {};\n");
+    const source = 'import "./leaf.mjs";\n' + "void 0;\n".repeat(400_000);
+
+    for (const target of ["leaf.mjs", "missing.mjs"]) {
+      writeFileSync(join(root, "dist", "index.mjs"), `${source}export * from "./${target}";\n`);
+      const result = spawnSync(process.execPath, ["--max-old-space-size=48", CHECK_SCRIPT, root], {
+        encoding: "utf8",
+      });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.signal, result.stderr).toBeNull();
+      if (target === "leaf.mjs") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+      } else {
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("dist/index.mjs imports missing dist/missing.mjs");
+      }
+    }
+  });
+
   it("prints help before reading package state", () => {
     const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
 
@@ -130,7 +203,7 @@ describe("check-package-dist-imports", () => {
   ])(
     "enforces one dist root with leading $leading and tail $tail",
     ({ leading, tail, accepted }) => {
-      const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+      const root = tempDirs.make("openclaw-package-dist-imports-");
       mkdirSync(join(root, "dist"), { recursive: true });
       writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
 
@@ -150,7 +223,7 @@ describe("check-package-dist-imports", () => {
   );
 
   it("rejects missing chunks across ESM import, re-export, and CommonJS forms", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    const root = tempDirs.make("openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });
     const sources = {
       "named-import.js": 'import { value } from "./missing.js";\n',
@@ -174,7 +247,7 @@ describe("check-package-dist-imports", () => {
   });
 
   it("ignores import-like text inside multiline template literals", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    const root = tempDirs.make("openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });
     writeFileSync(
       join(root, "dist", "index.js"),
@@ -189,7 +262,7 @@ describe("check-package-dist-imports", () => {
   });
 
   it("ignores import.meta.url probes outside packaged dist", () => {
-    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    const root = tempDirs.make("openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });
     const probes = [
       "../../openclaw.mjs",

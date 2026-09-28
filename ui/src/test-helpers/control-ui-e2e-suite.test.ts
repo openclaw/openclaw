@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { expect, it, type TestContext } from "vitest";
+import { afterAll, beforeAll, expect, it, type TestContext } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import { hasErrnoCode } from "../../../src/infra/errno.ts";
 import { runVitestShutdownCommand } from "../../../test/helpers/vitest-shutdown-command.ts";
@@ -14,6 +14,9 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const helperPath = path.join(repoRoot, "ui/src/e2e/control-ui-e2e-suite.test-support.ts");
 
 type FixtureMode =
+  | "page-concurrent"
+  | "page-concurrent-timeout"
+  | "diagnostic-page-timeout"
   | "diagnostic-tracked-timeout"
   | "diagnostic-scenario-timeout"
   | "tracked-close-success"
@@ -94,7 +97,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         isClosed: () => true,
         url: () => "about:blank",
       });
-      if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
+      if (${JSON.stringify(mode)}.startsWith("diagnostic-") || ${JSON.stringify(mode)}.startsWith("page-concurrent")) {
         let pageClosed = false;
         let context;
         const page = Object.assign(new EventEmitter(), {
@@ -119,6 +122,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             pageClosed = true;
             state.closeCalls++;
             state.events.push("close");
+            page.emit("close");
             state.pendingPageReject?.(new Error("synthetic page closed"));
             record();
           },
@@ -272,7 +276,44 @@ const suite = createControlUiE2eSuite({ name: "owned context fixture",
   },
 });
 suite.define(() => {
-  if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
+  if (${JSON.stringify(mode)} === "page-concurrent") {
+    it("keeps concurrent page callbacks independently alive", async () => {
+      let releaseShort;
+      let releaseLong;
+      let publishLong;
+      const shortGate = new Promise(resolve => { releaseShort = resolve; });
+      const longGate = new Promise(resolve => { releaseLong = resolve; });
+      const longReady = new Promise(resolve => { publishLong = resolve; });
+      const short = suite.withPage({}, async () => { await shortGate; });
+      const long = suite.withPage({}, async ({ page }) => {
+        publishLong(page);
+        await longGate;
+        expect(page.isClosed()).toBe(false);
+      });
+      try {
+        const page = await longReady;
+        releaseShort();
+        await short;
+        expect(page.isClosed()).toBe(false);
+      } finally {
+        releaseShort();
+        releaseLong();
+        await Promise.all([short, long]);
+      }
+    });
+  } else if (${JSON.stringify(mode)} === "page-concurrent-timeout") {
+    it("joins every concurrent callback after native cancellation", async () => {
+      await Promise.all([
+        suite.withPage({}, async ({ page }) => {
+          await new Promise(resolve => page.once("close", resolve));
+        }),
+        suite.withPage({}, async () => { await new Promise(() => {}); }),
+      ]);
+    }, 50);
+    it("never starts while a concurrent callback remains unjoined", () => {
+      fs.writeFileSync(${JSON.stringify(path.join(root, "successor.txt"))}, "started");
+    });
+  } else if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
     it("retains the native page timeout", async (context) => {
       const run = () => suite.withPage({}, async () => {
         await new Promise((resolve, reject) => { state.pendingPageReject = reject; });
@@ -372,9 +413,17 @@ suite.define(() => {
   } else if (${JSON.stringify(mode)} === "close-failure") {
     it("preserves the body and finalization failures", async () => {
       const bodyFault = new Error("synthetic page body failure");
-      await expect(suite.withPage({}, async () => { throw bodyFault; })).rejects.toMatchObject({
-        errors: [bodyFault, state.closeFault],
-      });
+      const failure = await suite.withPage({}, async () => { throw bodyFault; }).catch(error => error);
+      const leaves = error => error instanceof AggregateError ? error.errors.flatMap(leaves) : [error];
+      const errors = [...new Set(leaves(failure))];
+      expect(errors).toHaveLength(2);
+      expect(errors).toContain(bodyFault);
+      expect(errors).toContain(state.closeFault);
+      state.heldBodyErrorRetained = true;
+      record();
+    });
+    it("never starts after page cleanup fails", () => {
+      fs.writeFileSync(${JSON.stringify(path.join(root, "successor.txt"))}, "started");
     });
   } else if (${JSON.stringify(mode)} === "late-context") {
     it.fails("times out during context acquisition", async () => {
@@ -431,48 +480,70 @@ if (${JSON.stringify(mode)} === "scenario-late-close") {
 `;
 }
 
-async function runFixture(mode: FixtureMode, signal: AbortSignal) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ui-lifetime-fork-")));
-  const hookTimeout = mode === "late-setup" || mode === "resources-late-setup" ? 50 : 500;
-  let completed = false;
-  try {
-    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(
-      path.join(repoRoot, "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
-    await fs.mkdir(path.join(root, "home"));
-    await fs.mkdir(path.join(root, "tmp"));
-    await fs.writeFile(path.join(root, "fixture.test.ts"), fixtureSource(mode, root));
-    await fs.writeFile(
-      path.join(root, "vitest.config.ts"),
-      `
+let fixtureRoot: string;
+let hasUnjoinedFixture = false;
+
+beforeAll(async () => {
+  // openclaw-temp-dir: allow retain native-fork state if process-tree shutdown fails.
+  fixtureRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ui-lifetime-forks-")));
+  await fs.symlink(
+    path.join(repoRoot, "node_modules"),
+    path.join(fixtureRoot, "node_modules"),
+    "junction",
+  );
+  await fs.writeFile(
+    path.join(fixtureRoot, "vitest.config.ts"),
+    `
 import { defineConfig } from "vitest/config";
 import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
+const hookTimeout = Number(process.env.UI_LIFETIME_HOOK_TIMEOUT_MS);
 export default defineConfig({
-  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  cacheDir: ${JSON.stringify(path.join(fixtureRoot, ".vite"))},
   resolve: sharedVitestConfig.resolve,
   test: { pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
-    testTimeout: 1000, hookTimeout: ${hookTimeout},
+    fsModuleCache: true,
+    fsModuleCachePath: ${JSON.stringify(path.join(fixtureRoot, "transforms"))},
+    testTimeout: 1000, hookTimeout,
     provide: {
       controlUiE2eChromium: { available: true, executablePath: "/synthetic/chromium" },
-      controlUiE2eCleanup: { timeoutMs: ${hookTimeout}, pool: "forks", isolate: true },
+      controlUiE2eCleanup: { timeoutMs: hookTimeout, pool: "forks", isolate: true },
     },
   },
 });
 `,
-    );
+  );
+});
+
+afterAll(async () => {
+  if (!hasUnjoinedFixture) {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+async function runFixture(mode: FixtureMode, signal: AbortSignal) {
+  if (hasUnjoinedFixture) {
+    throw new Error("Cannot reuse transforms while a native UI fixture remains unjoined");
+  }
+  // The serial native children share transforms, never a worker or mutable case state.
+  const root = path.join(fixtureRoot, mode);
+  const hookTimeout = mode === "late-setup" || mode === "resources-late-setup" ? 50 : 500;
+  let completed = false;
+  try {
+    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+    await fs.mkdir(path.join(root, "home"), { recursive: true });
+    await fs.mkdir(path.join(root, "tmp"));
+    await fs.writeFile(path.join(root, "fixture.test.ts"), fixtureSource(mode, root));
     const report = path.join(root, "report.json");
     let child!: ChildProcess;
     const output = await runVitestShutdownCommand({
       args: [
         path.join(vitestPackageDir, "vitest.mjs"),
         "run",
+        path.join(root, "fixture.test.ts"),
         "--root",
-        root,
+        fixtureRoot,
         "--config",
-        path.join(root, "vitest.config.ts"),
+        path.join(fixtureRoot, "vitest.config.ts"),
         "--configLoader",
         "runner",
         "--reporter=verbose",
@@ -485,6 +556,7 @@ export default defineConfig({
       maxBytes: 4 * 1024 * 1024,
       env: {
         PATH: process.env.PATH,
+        UI_LIFETIME_HOOK_TIMEOUT_MS: String(hookTimeout),
         HOME: path.join(root, "home"),
         USERPROFILE: path.join(root, "home"),
         OPENCLAW_HOME: path.join(root, "home"),
@@ -569,6 +641,7 @@ export default defineConfig({
     if (completed) {
       await fs.rm(root, { recursive: true, force: true });
     } else {
+      hasUnjoinedFixture = true;
       console.warn(`Retained unjoined native UI fixture: ${root}`);
     }
   }
@@ -584,29 +657,50 @@ function runJoinedShutdownTest(context: TestContext, body: () => Promise<void>) 
   return run;
 }
 
-it.for(["diagnostic-tracked-timeout", "diagnostic-scenario-timeout"] as const)(
-  "captures a native timeout before its context closes: %s",
+it.for(["page-concurrent", "page-concurrent-timeout"] as const)(
+  "owns every concurrent page callback: %s",
   (mode, context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      expect(result.code, result.output).toBe(1);
-      expect(result.report.numFailedTests, result.output).toBe(1);
-      expect(result.report.numPassedTests, result.output).toBe(1);
-      expect(result.output).toContain("Test timed out in 50ms");
-      expect(result.successorStarted).toBe(true);
-      expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
-      expect(result.captures).toHaveLength(1);
-      expect(result.captures[0]?.public).toMatchObject({
-        hostBeforeRead: { pageClosed: false },
-        rendererRead: "completed",
-      });
-      expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
-      expect(result.journal).toMatchObject({
-        closeCalls: 1,
-        browserClosed: true,
-        serverClosed: true,
-      });
+      const timedOut = mode === "page-concurrent-timeout";
+      expect(result.code, result.output).toBe(timedOut ? 1 : 0);
+      expect(result.journal.closeCalls).toBe(2);
+      if (timedOut) {
+        expect(result.output).toContain("Test timed out in 50ms");
+        expect(result.output).toContain("retiring owned fork");
+        expect(result.successorStarted).toBe(false);
+      } else {
+        expect(result.report.numPassedTests, result.output).toBe(1);
+        expect(result.report.numFailedTests, result.output).toBe(0);
+      }
     }),
+);
+
+it.for([
+  "diagnostic-page-timeout",
+  "diagnostic-tracked-timeout",
+  "diagnostic-scenario-timeout",
+] as const)("captures a native timeout before its context closes: %s", (mode, context) =>
+  runJoinedShutdownTest(context, async () => {
+    const result = await runFixture(mode, context.signal);
+    expect(result.code, result.output).toBe(1);
+    expect(result.report.numFailedTests, result.output).toBe(1);
+    expect(result.report.numPassedTests, result.output).toBe(1);
+    expect(result.output).toContain("Test timed out in 50ms");
+    expect(result.successorStarted).toBe(true);
+    expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
+    expect(result.captures).toHaveLength(1);
+    expect(result.captures[0]?.public).toMatchObject({
+      hostBeforeRead: { pageClosed: false },
+      rendererRead: "completed",
+    });
+    expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
+    expect(result.journal).toMatchObject({
+      closeCalls: 1,
+      browserClosed: true,
+      serverClosed: true,
+    });
+  }),
 );
 
 it("drains held-module callbacks before closing the context after a body failure", (context) =>
@@ -649,17 +743,20 @@ it.for(["concurrent-close", "close-failure", "late-context"] as const)(
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
       expect(result.code, result.output).toBe(mode === "close-failure" ? 1 : 0);
-      expect(result.report?.numPassedTests, result.output).toBe(1);
-      expect(result.report?.numFailedTests, result.output).toBe(0);
+      expect(result.report?.numPassedTests, result.output).toBe(mode === "close-failure" ? 0 : 1);
+      expect(result.report?.numFailedTests, result.output).toBe(mode === "close-failure" ? 2 : 0);
       expect(result.journal).toMatchObject({
         closeCalls: 1,
         arrived: true,
         published: false,
-        browserClosed: true,
-        serverClosed: true,
+        browserClosed: mode !== "close-failure",
+        serverClosed: mode !== "close-failure",
       });
       if (mode === "close-failure") {
         expect(result.output).toContain("synthetic context close failure");
+        expect(result.journal.heldBodyErrorRetained).toBe(true);
+        expect(result.successorStarted).toBe(false);
+        expect(result.output).toContain("retiring owned fork");
       }
     }),
 );

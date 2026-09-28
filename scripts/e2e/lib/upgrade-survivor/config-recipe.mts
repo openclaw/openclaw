@@ -70,8 +70,7 @@ function option<T>(name: string, fallback?: T) {
   return value;
 }
 
-function tail(value: string, max = 2400) {
-  const text = value;
+function tail(text: string, max = 2400) {
   return text.length <= max ? text : text.slice(-max);
 }
 
@@ -91,7 +90,7 @@ function configSetJsonFile(
   id: string,
   intent: string,
   configPath: string,
-  fileName: string,
+  fileName = `${id}.json`,
 ): ConfigStep {
   return {
     id,
@@ -101,65 +100,47 @@ function configSetJsonFile(
 }
 
 const representativeConfigSteps: ConfigStep[] = [
-  configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
-  configSetJsonFile(
-    "models-anthropic",
-    "models-anthropic",
-    "models.providers.anthropic",
-    "models-anthropic.json",
-  ),
-  configSetJsonFile(
-    "models-google",
-    "models-google",
-    "models.providers.google",
-    "models-google.json",
-  ),
+  configSetJsonFile("models-openai", "models", "models.providers.openai"),
+  configSetJsonFile("models-anthropic", "models-anthropic", "models.providers.anthropic"),
+  configSetJsonFile("models-google", "models-google", "models.providers.google"),
   // Keep the migration specimen idle while baseline and candidate services run:
   // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
-  configSetJsonFile("agents", "agents", "agents", "agents.json"),
-  configSetJsonFile("skills", "skills", "skills", "skills.json"),
-  configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
-  configSetJsonFile(
-    "channels-discord",
-    "discord-channel",
-    "channels.discord",
-    "channels-discord.json",
-  ),
-  configSetJsonFile(
-    "channels-telegram",
-    "telegram-channel",
-    "channels.telegram",
-    "channels-telegram.json",
-  ),
-  configSetJsonFile(
-    "channels-whatsapp",
-    "whatsapp-channel",
-    "channels.whatsapp",
-    "channels-whatsapp.json",
-  ),
+  configSetJsonFile("agents", "agents", "agents"),
+  configSetJsonFile("skills", "skills", "skills"),
+  configSetJsonFile("plugins", "plugins", "plugins"),
+  configSetJsonFile("channels-discord", "discord-channel", "channels.discord"),
+  configSetJsonFile("channels-telegram", "telegram-channel", "channels.telegram"),
+  configSetJsonFile("channels-whatsapp", "whatsapp-channel", "channels.whatsapp"),
+  configSetJsonFile("tools-tool-search", "tool-search", "tools.toolSearch"),
 ];
 
 const configuredPluginInstallSteps = [
-  configSetJsonFile(
-    "plugins-configured-installs",
-    "configured-plugin-installs",
-    "plugins",
-    "plugins-configured-installs.json",
-  ),
+  configSetJsonFile("plugins-configured-installs", "configured-plugin-installs", "plugins"),
   {
     id: "channels-whatsapp-unset",
     intent: "configured-plugin-installs",
     argv: ["config", "unset", "channels.whatsapp"],
   },
-  configSetJsonFile(
-    "channels-matrix",
-    "configured-plugin-installs",
-    "channels.matrix",
-    "channels-matrix.json",
-  ),
+  configSetJsonFile("channels-matrix", "configured-plugin-installs", "channels.matrix"),
 ];
 
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
+  [
+    "base",
+    [
+      {
+        id: "logging-file",
+        intent: "logging",
+        // Raw debug output stays in the isolated home, outside uploaded artifact roots.
+        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
+      },
+      {
+        id: "logging-level",
+        intent: "logging",
+        argv: ["config", "set", "logging.level", "debug"],
+      },
+    ],
+  ],
   [
     "acpx-openclaw-tools-bridge",
     [
@@ -168,7 +149,6 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
           "plugins-acpx-openclaw-tools-bridge",
           "acpx-openclaw-tools-bridge",
           "plugins",
-          "plugins-acpx-openclaw-tools-bridge.json",
         ),
         // The candidate externalizes this runtime even when the baseline bundles it.
         prepublishPluginPackages: ["@openclaw/acpx"],
@@ -178,13 +158,8 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "feishu-channel",
     [
-      configSetJsonFile("plugins-feishu", "plugins", "plugins", "plugins-feishu.json"),
-      configSetJsonFile(
-        "channels-feishu",
-        "feishu-channel",
-        "channels.feishu",
-        "channels-feishu.json",
-      ),
+      configSetJsonFile("plugins-feishu", "plugins", "plugins"),
+      configSetJsonFile("channels-feishu", "feishu-channel", "channels.feishu"),
     ],
   ],
   [
@@ -231,7 +206,7 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
 }
 
 const sharedRecipe: ConfigStep[] = [
-  configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
+  configSetJsonFile("gateway", "gateway", "gateway"),
   ...representativeConfigSteps,
   {
     id: "validate",
@@ -288,10 +263,6 @@ export function resolveUpgradeSurvivorConfigSteps(
     ...resolveScenarioConfigSteps(scenario),
     ...(validateStep ? [validateStep] : []),
   ];
-}
-
-function selectedScenario() {
-  return process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
 }
 
 function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null): ConfigStep {
@@ -460,7 +431,7 @@ export function runUpgradeSurvivorOpenClawStep(step: ConfigStep, params: ConfigC
 function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
-  const scenario = selectedScenario();
+  const scenario = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
   const recipeSteps = resolveUpgradeSurvivorConfigSteps(scenario);
   const summary: {
     source: string;

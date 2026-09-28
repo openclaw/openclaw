@@ -57,6 +57,7 @@ export function projectResolvedProfileAuth(params: {
   provider: string;
   store: AuthProfileStore;
   mode: ResolvedProviderAuth["mode"];
+  authFlow?: string;
 }): ResolvedProviderAuth {
   const credential = params.store.profiles[params.profileId];
   const ref =
@@ -73,6 +74,7 @@ export function projectResolvedProfileAuth(params: {
     profileId: params.profileId,
     source: `profile:${params.profileId}`,
     mode: params.mode,
+    ...(params.authFlow ? { authFlow: params.authFlow } : {}),
   };
 }
 
@@ -189,11 +191,7 @@ export function resolveUsableCustomProviderApiKey(params: {
     }
     const source = input.resolvedEnvRef
       ? "models.json"
-      : resolveEnvSourceLabel({
-          applied: new Set(getShellEnvAppliedKeys()),
-          envVars: [envVarName],
-          label: `${envVarName} (models.json secretref)`,
-        });
+      : resolveEnvSourceLabel([envVarName], `${envVarName} (models.json secretref)`);
     return {
       apiKey: params.secretSentinels
         ? mintSecretSentinel(envValue, { label: `model-auth:${params.provider}` })
@@ -214,14 +212,9 @@ export function resolveUsableCustomProviderApiKey(params: {
     if (!envValue) {
       return null;
     }
-    const applied = new Set(getShellEnvAppliedKeys());
     return {
       apiKey: envValue,
-      source: resolveEnvSourceLabel({
-        applied,
-        envVars: [customKey],
-        label: `${customKey} (models.json marker)`,
-      }),
+      source: resolveEnvSourceLabel([customKey], `${customKey} (models.json marker)`),
     };
   }
   if (
@@ -501,6 +494,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       return { kind: "profile-unresolved", profileId: reference.profileId };
     }
     const resolvedProfileId = resolved.profileId ?? reference.profileId;
+    const credential = resolved.credential ?? reference.credential;
     return {
       kind: "profile-resolved",
       auth: projectResolvedProfileAuth({
@@ -510,6 +504,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
         provider: params.provider,
         store: params.store,
         mode: resolved.profileType ? profileTypeToAuthMode(resolved.profileType) : reference.mode,
+        authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
       }),
     };
   } catch (err) {
@@ -709,25 +704,19 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
   };
 }
 
-function resolveEnvSourceLabel(params: {
-  applied: Set<string>;
-  envVars: string[];
-  label: string;
-}): string {
-  const shellApplied = params.envVars.some((envVar) => params.applied.has(envVar));
+function resolveEnvSourceLabel(envVars: string[], label = envVars.join(" + ")): string {
+  const applied = new Set(getShellEnvAppliedKeys());
+  const shellApplied = envVars.some((envVar) => applied.has(envVar));
   const prefix = shellApplied ? "shell env: " : "env: ";
-  return `${prefix}${params.label}`;
+  return `${prefix}${label}`;
 }
 
 export function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
-  const applied = new Set(getShellEnvAppliedKeys());
   const envVar = resolveAwsSdkEnvVarName();
   const envVars =
     envVar === "AWS_ACCESS_KEY_ID" ? [envVar, "AWS_SECRET_ACCESS_KEY"] : envVar ? [envVar] : [];
   return {
     mode: "aws-sdk",
-    source: envVar
-      ? resolveEnvSourceLabel({ applied, envVars, label: envVars.join(" + ") })
-      : "aws-sdk default chain",
+    source: envVar ? resolveEnvSourceLabel(envVars) : "aws-sdk default chain",
   };
 }

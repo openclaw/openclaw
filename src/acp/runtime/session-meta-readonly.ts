@@ -21,7 +21,11 @@ import {
 
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
 export async function readAcpSessionMetaForEntries(params: {
-  entries: readonly { sessionKey: string; agentId: string; entry: AcpSessionEntryBinding }[];
+  entries: readonly {
+    sessionKey: string;
+    agentId: string;
+    entry: AcpSessionEntryBinding | undefined;
+  }[];
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
@@ -29,29 +33,42 @@ export async function readAcpSessionMetaForEntries(params: {
   if (params.entries.length === 0) {
     return [];
   }
+  const entries = params.entries.map((item) => ({
+    sessionKey: item.sessionKey,
+    agentId: item.agentId,
+    entry: item.entry
+      ? {
+          lifecycleRevision: item.entry.lifecycleRevision,
+          sessionId: item.entry.sessionId,
+          sessionStartedAt: item.entry.sessionStartedAt,
+        }
+      : undefined,
+  }));
   const result = await executeExistingOpenClawStateRead(
     { env: params.env, path: params.databasePath },
     {
       type: "acpSessions.metadata",
-      entries: params.entries.map(({ sessionKey, agentId, entry }) => ({
+      entries: entries.map(({ sessionKey, agentId, entry }) => ({
         keys: [
           buildAcpDatabaseSessionKey(sessionKey, agentId),
           ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
         ],
         legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
-        entry: {
-          lifecycleRevision: entry.lifecycleRevision,
-          sessionId: entry.sessionId,
-          sessionStartedAt: entry.sessionStartedAt,
-        },
+        entry,
       })),
     },
   );
   if (result === undefined) {
-    return params.entries.map(() => null);
+    return entries.map(() => null);
   }
   if (result.ok && result.type === "acpSessions.metadata") {
-    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
+    return result.rows.map((row, index) => {
+      const readable = resolveReadableAcpSessionRow({
+        row: row ?? undefined,
+        entry: entries[index]?.entry,
+      });
+      return readable ? rowToAcpSessionMeta(readable) : null;
+    });
   }
   throw new Error("Unexpected ACP session metadata read result");
 }

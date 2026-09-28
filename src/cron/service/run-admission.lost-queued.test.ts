@@ -127,7 +127,7 @@ it("releases the exact failed activation before another tick without releasing i
     const siblingReceiptBefore = receipt(siblingOwnership.runReceipt.receiptId);
     // Only activation of this partition/job fails; cleanup writes remain usable.
     database.exec(`
-      CREATE TEMP TRIGGER fail_cron_activation_before_start
+      CREATE TRIGGER fail_cron_activation_before_start
       AFTER UPDATE OF state_json ON cron_jobs
       WHEN NEW.store_key = '${cronStoreKey(store.storePath).replaceAll("'", "''")}'
         AND NEW.job_id = '${job.id}'

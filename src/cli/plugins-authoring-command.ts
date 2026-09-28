@@ -1,9 +1,9 @@
 // Plugin authoring commands for init/build/validate manifest generation.
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -216,12 +216,7 @@ export function buildToolPluginPackageManifest(params: {
   packageManifest: JsonObject;
   entry: string;
 }): JsonObject {
-  const openclaw =
-    params.packageManifest.openclaw &&
-    typeof params.packageManifest.openclaw === "object" &&
-    !Array.isArray(params.packageManifest.openclaw)
-      ? { ...(params.packageManifest.openclaw as JsonObject) }
-      : {};
+  const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
   const existingExtensions = Array.isArray(openclaw.extensions)
     ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
     : [];

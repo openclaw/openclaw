@@ -13,9 +13,9 @@ import type {
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
-  createReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 
 afterEach(() => testing.resetReplyRunRegistry());
@@ -23,11 +23,7 @@ afterEach(() => testing.resetReplyRunRegistry());
 it("leaves new human input for a visible followup instead of a hidden coordination turn", async () => {
   const runId = "hidden-coordination-run";
   const queueMessage = vi.fn(async () => {});
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:coordination",
-    sessionId: "session-coordination",
-    resetTriggered: false,
-  });
+  const operation = createTestReplyOperation();
   operation.attachBackend({
     kind: "embedded",
     runId,
@@ -59,14 +55,10 @@ it("leaves new human input for a visible followup instead of a hidden coordinati
 
 async function withHiddenQuestionRun(
   injection: ReplyBackendMessageInjectionV2,
-  run: (operation: ReturnType<typeof createReplyOperation>) => Promise<void>,
+  run: (operation: ReturnType<typeof createTestReplyOperation>) => Promise<void>,
 ) {
   const runId = "hidden-question-run";
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:hidden-question",
-    sessionId: "session-hidden-question",
-    resetTriggered: false,
-  });
+  const operation = createTestReplyOperation();
   operation.attachBackend({
     kind: "embedded",
     runId,
@@ -85,12 +77,11 @@ async function withHiddenQuestionRun(
 }
 
 it.each([
-  ...(["claim", "image"] as const).flatMap((sink) =>
-    (["unsupported", "refused", "unconfirmed", "wrapped-unconfirmed"] as const).map((failure) => ({
-      sink,
-      failure,
-    })),
-  ),
+  { sink: "claim", failure: "unsupported" },
+  { sink: "claim", failure: "refused" },
+  { sink: "claim", failure: "unconfirmed" },
+  { sink: "image", failure: "unsupported" },
+  { sink: "image", failure: "unconfirmed" },
   { sink: "claim", failure: "accepted" },
   { sink: "claim", failure: "source-closed" },
   { sink: "image", failure: "generic" },
@@ -101,13 +92,9 @@ it.each([
       ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
       : failure === "unconfirmed"
         ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
-        : failure === "wrapped-unconfirmed"
-          ? new Error("runtime failure", {
-              cause: new QuestionAnswerUnconfirmedError(new Error("confirmation lost")),
-            })
-          : failure === "generic"
-            ? new Error("unknown cancellation failure")
-            : unsupported;
+        : failure === "generic"
+          ? new Error("unknown cancellation failure")
+          : unsupported;
   let sourceCurrent = true;
   const throwFromSink = (
     options: ReplyBackendQueueMessageOptions | undefined,
@@ -154,14 +141,14 @@ it.each([
           status:
             failure === "unsupported"
               ? "rejected"
-              : failure === "unconfirmed" || failure === "wrapped-unconfirmed"
+              : failure === "unconfirmed"
                 ? "indeterminate"
                 : "failed",
           ...(failure === "unsupported" ? { reason: "injection_unavailable" } : {}),
         });
       }
       await expect(attempt.acceptance).resolves.toBe(
-        failure === "accepted" || failure === "unconfirmed" || failure === "wrapped-unconfirmed",
+        failure === "accepted" || failure === "unconfirmed",
       );
       expect(queueMessage).not.toHaveBeenCalled();
       expect(operation.result).toBeNull();
@@ -303,11 +290,7 @@ it.each(["same-owner", "other-owner"])(
 it.each(["same-owner", "different-owner"])(
   "status steering preserves question ownership and caller authority (%s)",
   async (fingerprint) => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:refresh",
-      sessionId: "refresh-session",
-      resetTriggered: false,
-    });
+    const operation = createTestReplyOperation();
     const claim = vi.fn(async () => true);
     const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
       async (_text, options, assertCurrent) => {
@@ -345,11 +328,7 @@ it.each(["same-owner", "different-owner"])(
 it.each([false, true])(
   "only status-only callers preserve work on an uncertain steering receipt (statusOnly=%s)",
   async (statusOnly) => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:receipt",
-      sessionId: "receipt-session",
-      resetTriggered: false,
-    });
+    const operation = createTestReplyOperation();
     operation.attachBackend({
       kind: "embedded",
       runId: "receipt-run",

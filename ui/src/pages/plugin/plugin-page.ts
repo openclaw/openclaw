@@ -12,7 +12,6 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -29,6 +28,7 @@ import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
+import type { renderLogbook } from "./logbook-view.ts";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
 import { pluginTabKey } from "./route.ts";
 
@@ -39,24 +39,7 @@ registerLoginEnglish();
  * mount through the contribution runtime; descriptor paths use sandboxed frames.
  */
 type BundledPluginTabView = {
-  render: (props: {
-    host: object;
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-    embed?: {
-      embedSandboxMode: ApplicationContext["config"]["current"]["embedSandboxMode"];
-      allowExternalEmbedUrls: boolean;
-    };
-    onRequestUpdate: () => void;
-    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
-    // key (prompt dispatch). Bundled views that don't use them ignore these.
-    basePath?: string;
-    sessionKey?: string;
-    /** Canonical sessions.list publication revision, used by session-backed widgets. */
-    sessionListRevision?: number;
-    /** Whether this connection can decide pending custom-widget code. */
-    canApproveWidgets?: boolean;
-  }) => unknown;
+  render: (props: Parameters<typeof renderLogbook>[0]) => unknown;
   stop: (host: object) => void;
 };
 
@@ -139,10 +122,6 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.updateGatewaySource(gateway),
-    )
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
     )
     .watch(
       () => this.context?.plugins,
@@ -681,22 +660,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
-      const config = context.config?.current;
       return viewState.view.render({
         host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.phase === "connected",
-        embed: config
-          ? {
-              embedSandboxMode: config.embedSandboxMode,
-              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
-            }
-          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
-        basePath: context.basePath,
-        sessionKey: snapshot.sessionKey,
-        sessionListRevision: context.sessions?.canonicalListRevision,
-        canApproveWidgets: hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       });
     }
     if (info?.path) {

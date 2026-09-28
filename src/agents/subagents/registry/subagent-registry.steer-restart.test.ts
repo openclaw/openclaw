@@ -8,10 +8,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import * as gatewayCallRuntime from "../../../gateway/call.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-runtime.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
@@ -220,8 +216,6 @@ describe("subagent registry steer restarts", () => {
     emitSessionLifecycleEventMock.mockReset();
     removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
   });
 
   const flushAnnounce = async () => {
@@ -244,8 +238,8 @@ describe("subagent registry steer restarts", () => {
     childSessionKey: string,
     task: string,
     options: Partial<Pick<RegisterSubagentRunInput, "spawnMode">> = {},
-  ): void => {
-    registerRun({
+  ) => {
+    return registerRun({
       runId,
       childSessionKey,
       task,
@@ -269,13 +263,13 @@ describe("subagent registry steer restarts", () => {
     } & Partial<
       Pick<RegisterSubagentRunInput, "spawnMode" | "requesterOrigin" | "expectsCompletionMessage">
     >,
-  ): void => {
+  ) => {
     sessionStore[params.childSessionKey] = {
       sessionId: `sess-${params.childSessionKey}`,
       lifecycleRevision: `revision-${params.childSessionKey}`,
       updatedAt: 1,
     };
-    mod.registerSubagentRun({
+    return mod.registerSubagentRun({
       runId: params.runId,
       childSessionKey: params.childSessionKey,
       requesterSessionKey: params.requesterSessionKey ?? MAIN_REQUESTER_SESSION_KEY,
@@ -353,13 +347,12 @@ describe("subagent registry steer restarts", () => {
     lifecycleHandler = undefined;
     removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
   });
 
   it("honors persisted steer suppression and only announces the replacement run", async () => {
-    {
-      registerRun({
+    const settleRootWork = observeRootWork();
+    try {
+      await registerRun({
         runId: "run-old",
         childSessionKey: "agent:main:subagent:steer",
         task: "initial task",
@@ -371,7 +364,7 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-old");
 
-      await settleSubagentRegistryPersistenceWork();
+      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       expect(announceSpy).not.toHaveBeenCalled();
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
       expect(emitSessionLifecycleEventMock).not.toHaveBeenCalled();
@@ -384,7 +377,7 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-new");
 
-      await settleSubagentRegistryPersistenceWork();
+      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       expect(announceSpy).toHaveBeenCalledTimes(1);
       const matchingCalls = runSubagentEndedHookMock.mock.calls.filter((call) => {
         const ctx = call[1] as { runId?: string } | undefined;
@@ -397,12 +390,14 @@ describe("subagent registry steer restarts", () => {
 
       const announce = requireFirstAnnounceCall();
       expect(announce.childRunId).toBe("run-new");
+    } finally {
+      await settleRootWork();
     }
   });
 
   it("defers subagent_ended hook for completion-mode runs until announce delivery resolves", async () => {
     const announce = createDeferredAnnounce();
-    registerCompletionModeRun(
+    await registerCompletionModeRun(
       "run-completion-delayed",
       "agent:main:subagent:completion-delayed",
       "completion-mode task",
@@ -428,7 +423,7 @@ describe("subagent registry steer restarts", () => {
 
   it("does not emit subagent_ended on completion for persistent session-mode runs", async () => {
     const announce = createDeferredAnnounce();
-    registerCompletionModeRun(
+    await registerCompletionModeRun(
       "run-persistent-session",
       "agent:main:subagent:persistent-session",
       "persistent session task",
@@ -450,9 +445,9 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears announce retry state when replacing after steer restart", () => {
+  it("clears announce retry state when replacing after steer restart", async () => {
     {
-      registerRun({
+      await registerRun({
         runId: "run-retry-reset-old",
         childSessionKey: "agent:main:subagent:retry-reset",
         task: "retry reset",
@@ -479,7 +474,7 @@ describe("subagent registry steer restarts", () => {
 
   it("clears terminal lifecycle state when replacing after steer restart", async () => {
     {
-      registerRun({
+      await registerRun({
         runId: "run-terminal-state-old",
         childSessionKey: "agent:main:subagent:terminal-state",
         task: "terminal state",
@@ -525,8 +520,8 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears frozen completion fields when replacing after steer restart", () => {
-    registerRun({
+  it("clears frozen completion fields when replacing after steer restart", async () => {
+    await registerRun({
       runId: "run-frozen-old",
       childSessionKey: "agent:main:subagent:frozen",
       task: "frozen result reset",
@@ -559,14 +554,14 @@ describe("subagent registry steer restarts", () => {
     expect(run.cleanupHandled).toBe(false);
   });
 
-  it("updates task to the dispatched steer message when provided", () => {
+  it("updates task to the dispatched steer message when provided", async () => {
     // Regression test: orphan-session recovery
     // Registry restart recovery rewraps
     // `entry.task` into the [Subagent Task] block. If steer replacement did
     // not update `task` to the new message, a gateway restart classified as
     // resumable-fresh would re-run the stale pre-steer instruction and lose
     // the user's steer update.
-    registerRun({
+    await registerRun({
       runId: "run-steer-task-old",
       childSessionKey: "agent:main:subagent:steer-task",
       task: "original pre-steer task",
@@ -592,8 +587,8 @@ describe("subagent registry steer restarts", () => {
     expect(run.generation).toBe(2);
   });
 
-  it("advances the generation from a fallback outside the live registry", () => {
-    registerRun({
+  it("advances the generation from a fallback outside the live registry", async () => {
+    await registerRun({
       runId: "run-fallback-generation-old",
       childSessionKey: "agent:main:subagent:fallback-generation",
       task: "restored replacement source",
@@ -619,11 +614,11 @@ describe("subagent registry steer restarts", () => {
     expect(run.generation).toBe(3);
   });
 
-  it("preserves the previous task when no replacement is provided", () => {
+  it("preserves the previous task when no replacement is provided", async () => {
     // Backwards-compatibility guard: callers that do not pass a new task
     // (legacy or test fixtures) should still inherit the prior task so that
     // orphan-session recovery remains deterministic.
-    registerRun({
+    await registerRun({
       runId: "run-task-preserve-old",
       childSessionKey: "agent:main:subagent:task-preserve",
       task: "preserve me verbatim",
@@ -644,8 +639,8 @@ describe("subagent registry steer restarts", () => {
     expect(run.task).toBe("preserve me verbatim");
   });
 
-  it("retains a legacy task owner fallback across another restart", () => {
-    registerRun({
+  it("retains a legacy task owner fallback across another restart", async () => {
+    await registerRun({
       runId: "run-legacy-owner-original",
       childSessionKey: "agent:main:subagent:legacy-owner",
       task: "legacy owner task",
@@ -673,8 +668,8 @@ describe("subagent registry steer restarts", () => {
     expect(second.generation).toBe(3);
   });
 
-  it("preserves cumulative session timing across steer replacement runs", () => {
-    registerRun({
+  it("preserves cumulative session timing across steer replacement runs", async () => {
+    await registerRun({
       runId: "run-runtime-old",
       childSessionKey: "agent:main:subagent:runtime",
       task: "keep timing stable",
@@ -714,8 +709,8 @@ describe("subagent registry steer restarts", () => {
     expect(mod.getSubagentSessionRuntimeMs(next, next.execution.endedAt)).toBe(150_000);
   });
 
-  it("rejects a replacement owned by a retired Gateway lifecycle", () => {
-    registerRun({
+  it("rejects a replacement owned by a retired Gateway lifecycle", async () => {
+    await registerRun({
       runId: "run-retired-generation-old",
       childSessionKey: "agent:main:subagent:retired-generation",
       task: "keep the current owner",
@@ -733,8 +728,8 @@ describe("subagent registry steer restarts", () => {
     ]);
   });
 
-  it("stamps the captured Gateway lifecycle on a replacement run", () => {
-    registerRun({
+  it("stamps the captured Gateway lifecycle on a replacement run", async () => {
+    await registerRun({
       runId: "run-current-generation-old",
       childSessionKey: "agent:main:subagent:current-generation",
       task: "continue under the dispatch owner",
@@ -755,8 +750,8 @@ describe("subagent registry steer restarts", () => {
     ]);
   });
 
-  it("rolls back a generation-owned replacement when persistence fails", () => {
-    registerRun({
+  it("rolls back a generation-owned replacement when persistence fails", async () => {
+    await registerRun({
       runId: "run-generation-persist-old",
       childSessionKey: "agent:main:subagent:generation-persist",
       task: "preserve the source owner",
@@ -782,8 +777,8 @@ describe("subagent registry steer restarts", () => {
     ]);
   });
 
-  it("clears completion delivery metadata when replacing for steer restart", () => {
-    registerRun({
+  it("clears completion delivery metadata when replacing for steer restart", async () => {
+    await registerRun({
       runId: "run-delivery-old",
       childSessionKey: "agent:main:subagent:delivery-clear",
       task: "clear old delivery timestamps",
@@ -820,8 +815,8 @@ describe("subagent registry steer restarts", () => {
     expect(next.delivery?.lastDropReason).toBeUndefined();
   });
 
-  it("preserves frozen completion as fallback when replacing for wake continuation", () => {
-    registerRun({
+  it("preserves frozen completion as fallback when replacing for wake continuation", async () => {
+    await registerRun({
       runId: "run-wake-old",
       childSessionKey: "agent:main:subagent:wake",
       task: "wake result fallback",
@@ -858,7 +853,7 @@ describe("subagent registry steer restarts", () => {
   it("marks killed runs terminated and inactive while reconciliation is pending", async () => {
     const childSessionKey = "agent:main:subagent:killed";
 
-    registerRun({
+    await registerRun({
       runId: "run-killed",
       childSessionKey,
       task: "kill me",
@@ -935,7 +930,7 @@ describe("subagent registry steer restarts", () => {
 
   it("recovers announce cleanup when completion arrives after a kill marker", async () => {
     const childSessionKey = "agent:main:subagent:kill-race";
-    registerRun({
+    await registerRun({
       runId: "run-kill-race",
       childSessionKey,
       task: "race test",
@@ -978,12 +973,12 @@ describe("subagent registry steer restarts", () => {
       return "delivered";
     });
 
-    registerRun({
+    await registerRun({
       runId: "run-parent",
       childSessionKey: "agent:main:subagent:parent",
       task: "parent task",
     });
-    registerRun({
+    await registerRun({
       runId: "run-child",
       childSessionKey: "agent:main:subagent:parent:subagent:child",
       requesterSessionKey: "agent:main:subagent:parent",
@@ -1027,7 +1022,7 @@ describe("subagent registry steer restarts", () => {
       try {
         announceSpy.mockResolvedValue("retryable");
 
-        registerCompletionModeRun(
+        await registerCompletionModeRun(
           "run-completion-retry",
           "agent:main:subagent:completion",
           "completion retry",
@@ -1074,12 +1069,12 @@ describe("subagent registry steer restarts", () => {
   it("keeps completion cleanup pending while descendants are still active", async () => {
     announceSpy.mockResolvedValue("retryable");
 
-    registerCompletionModeRun(
+    await registerCompletionModeRun(
       "run-parent-expiry",
       "agent:main:subagent:parent-expiry",
       "parent completion expiry",
     );
-    registerRun({
+    await registerRun({
       runId: "run-child-active",
       childSessionKey: "agent:main:subagent:parent-expiry:subagent:child-active",
       requesterSessionKey: "agent:main:subagent:parent-expiry",

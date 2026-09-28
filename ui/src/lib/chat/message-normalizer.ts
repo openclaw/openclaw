@@ -1,7 +1,4 @@
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-/**
- * Message normalization utilities for chat rendering.
- */
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -368,19 +365,26 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-export function stripMessageDisplayMetadataText(text: string): string {
-  return stripInboundMetadata(text);
-}
-
 function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripMessageDisplayMetadataText(item.text) };
+      return { ...item, text: stripInboundMetadata(item.text) };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
+}
+
+function resolveDeliveryReplyTarget(
+  delivery: MessageDelivery | undefined,
+): NormalizedMessage["replyTarget"] {
+  const replyToId = delivery?.replyToId?.trim();
+  return replyToId
+    ? { kind: "id", id: replyToId }
+    : delivery?.replyToCurrent === true
+      ? { kind: "current" }
+      : null;
 }
 
 function expandTextContent(
@@ -390,18 +394,12 @@ function expandTextContent(
 ): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
-  replyTarget: NormalizedMessage["replyTarget"];
 } {
   const extracted = extractCanvasShortcodes(text);
   const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
   const parts: MessageContentItem[] = [];
   const audioAsVoice = delivery?.audioAsVoice === true;
-  const replyToId = delivery?.replyToId?.trim();
-  const replyTarget: NormalizedMessage["replyTarget"] = replyToId
-    ? { kind: "id", id: replyToId }
-    : delivery?.replyToCurrent === true
-      ? { kind: "current" }
-      : null;
+  const replyTarget = resolveDeliveryReplyTarget(delivery);
   const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
   for (const segment of segments) {
@@ -454,13 +452,9 @@ function expandTextContent(
           ? [{ type: "text", text: parsed.text }]
           : [],
     audioAsVoice,
-    replyTarget,
   };
 }
 
-/**
- * Normalize a raw message object into a consistent structure.
- */
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
@@ -482,17 +476,15 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     return preview ? [preview] : [];
   });
 
-  // Extract content
   let content: MessageContentItem[] = [];
   let audioAsVoice = false;
-  let replyTarget: NormalizedMessage["replyTarget"] = null;
+  let replyTarget = resolveDeliveryReplyTarget(delivery);
 
   if (typeof contentRaw === "string") {
     if (isAssistantMessage) {
       const expanded = expandTextContent(contentRaw, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
-      replyTarget = expanded.replyTarget;
     } else {
       content = [{ type: "text", text: contentRaw }];
     }
@@ -557,11 +549,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         if (isAssistantMessage) {
           const expanded = expandTextContent(text, delivery, projectedCanvasPreviews);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
-          if (expanded.replyTarget?.kind === "id") {
-            replyTarget = expanded.replyTarget;
-          } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
-            replyTarget = expanded.replyTarget;
-          }
           return expanded.content;
         }
         return [

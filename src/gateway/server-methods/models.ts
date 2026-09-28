@@ -10,6 +10,7 @@ import {
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
@@ -21,10 +22,11 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
+import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
-export { buildModelsListResult };
 
 // Ordinary reads return saved rows while expired provider inventory refreshes in the background.
 export const modelsHandlers: GatewayRequestHandlers = {
@@ -37,7 +39,17 @@ export const modelsHandlers: GatewayRequestHandlers = {
     let publicationScope: ChatMetadataReadParams | undefined;
     try {
       const scoped = Boolean(params.sessionKey || params.authProfileId);
-      scope = scoped ? resolveChatMetadataReadParams(options, params) : undefined;
+      const draftAccountSelection =
+        !params.sessionKey && params.authProfileId
+          ? await preparePersonalModelAccountSelection(
+              options,
+              params.authProfileId,
+              SESSION_READ_SCOPE,
+            )
+          : undefined;
+      scope = scoped
+        ? resolveChatMetadataReadParams(options, params, draftAccountSelection)
+        : undefined;
       if (scoped && !scope) {
         return;
       }
@@ -83,6 +95,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
       if (!publicationScope) {
         return;
       }
+      if (params.refresh !== true) {
+        refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
+      }
       const result = await buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: resolved.agentId,
@@ -111,6 +126,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
       })?.forAgent(resolved.agentId, projected.models);
       respond(true, policy ? policy.catalog(projected) : projected, undefined);
     } catch (error) {
+      if (error instanceof UnknownModelCatalogProviderError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
       if (error instanceof SessionMutationAuthorizationChangedError) {
         respond(false, undefined, error.error);
         return;

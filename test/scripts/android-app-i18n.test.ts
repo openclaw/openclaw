@@ -47,24 +47,25 @@ describe("Android app i18n resources", () => {
     const kotlinPath = path.resolve(
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
     );
-    const currentKotlin = await readFile(kotlinPath, "utf8");
+    const catalog = await buildAndroidAppI18nCatalog();
+    const currentKotlin = catalog.kotlin;
     const obsoleteKotlin = '    "Talk stopped" to R.string.native_c38a575f77e9b336,\n';
     const obsoleteString =
       '    <string name="native_c38a575f77e9b336" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk stopped"</string>\n';
-    const catalog = await buildAndroidAppI18nCatalog();
     const warnings: string[] = [];
     const options = { reportObsolete: (message: string) => warnings.push(message) };
-    const stringPaths = [...catalog.resources.keys()].filter(
-      (filePath) => filePath.includes("/app/src/main/res/") && filePath.endsWith("/strings.xml"),
-    );
     const basePath = path.resolve("apps/android/app/src/main/res/values/strings.xml");
     try {
       generatedOverrides.set(kotlinPath, currentKotlin.replace("  )\n", `${obsoleteKotlin}  )\n`));
-      for (const filePath of stringPaths) {
-        const current = await readFile(filePath, "utf8");
+      // Source changes may await locale refresh; the fixture needs only obsolete drift.
+      for (const [filePath, current] of catalog.resources) {
+        const appStrings =
+          filePath.includes("/app/src/main/res/") && filePath.endsWith("/strings.xml");
         generatedOverrides.set(
           filePath,
-          current.replace("</resources>\n", `${obsoleteString}</resources>\n`),
+          appStrings
+            ? current.replace("</resources>\n", `${obsoleteString}</resources>\n`)
+            : current,
         );
       }
       await expect(checkAndroidAppI18n()).rejects.toThrow("Android generated localization drift");

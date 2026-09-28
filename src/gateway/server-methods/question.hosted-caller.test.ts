@@ -95,7 +95,7 @@ async function withHostedQuestion(
     context.resolveGatewayContext = () => context;
     const source = new AbortController();
     const captured = expectDefined(
-      captureGatewayOperatorRunAuthority({
+      await captureGatewayOperatorRunAuthority({
         client: browser,
         context,
         sourceAuthority: {
@@ -293,7 +293,7 @@ it("does not create a hosted question on another person's shared session", async
 it("does not register another hosted question after the original operator source closes", async () => {
   await withHostedQuestion(async (fixture) => {
     fixture.revoke();
-    await expect(fixture.ask()).rejects.toThrow("operator execution authority is no longer active");
+    await expect(fixture.ask()).rejects.toThrow("original question source revoked");
     expect(fixture.request).not.toHaveBeenCalled();
     expect(fixture.manager.list()).toEqual([]);
   });

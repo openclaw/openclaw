@@ -15,6 +15,7 @@ import { listSessionStateEventsSince } from "../sessions/session-state-events.js
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
   chatSendOwner,
@@ -519,7 +520,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
   const initialEntry = sessionStoreEntry("sess-fast-drain", { fastMode: false });
   await writeSessionStore({ entries: { main: initialEntry } });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     agentId: "main",
     sessionKey: key,
     sessionId: initialEntry.sessionId,
@@ -565,7 +566,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     releaseWriter.resolve();
     await heldWriter;
     expect(await persisted).toMatchObject({ status: "current", entry: { fastMode: true } });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
     admission.release();
     expect(await reset).toMatchObject({
       ok: false,
@@ -583,7 +584,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     releaseWriter.resolve();
     await heldWriter;
     if (placements.validateTurnClaim(claim)) {
-      placements.releaseTurn(claim);
+      await placements.releaseTurn(claim);
     }
     admission.release();
     await reset;
@@ -653,7 +654,7 @@ test("sessions.create reset-in-place preserves the node creation stamp", async (
       client: {
         connect: { scopes: ["operator.write"] },
         authenticatedUserProfile: {
-          profileId: "profile-resetter",
+          profileId: ensureProfileForEmail("session-resetter@example.test").id,
           displayName: null,
           hasAvatar: false,
           updatedAt: 1,
@@ -702,7 +703,7 @@ test("sessions.create adopting an existing key does not restamp node provenance"
         client: {
           connect: { scopes: ["operator.write"] },
           authenticatedUserProfile: {
-            profileId: "profile-adopter",
+            profileId: ensureProfileForEmail("session-adopter@example.test").id,
             displayName: null,
             hasAvatar: false,
             updatedAt: 1,
@@ -751,7 +752,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
       scopes: ["operator.write", "operator.admin"],
       device: { id: "control-ui-device" },
     },
-    authenticatedUserProfile: { profileId: "profile-owner" },
+    authenticatedUserProfile: { profileId: ensureProfileForEmail("replay@owner.test").id },
   };
   const params = {
     agentId: "main",
@@ -833,7 +834,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
 
     const differentOwner = await request(params, {
       ...client,
-      authenticatedUserProfile: { profileId: "profile-other" },
+      authenticatedUserProfile: { profileId: ensureProfileForEmail("other@owner.test").id },
     });
     expect(differentOwner.ok).toBe(true);
     expect(differentOwner.payload?.key).not.toBe(first.payload?.key);

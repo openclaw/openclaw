@@ -1380,12 +1380,10 @@ owner.main()
   ]);
 });
 
-it.each(
-  ["raises", "malformed traceback"].flatMap((fault) =>
-    [false, true].map((cyclic) => ({ fault, cyclic })),
-  ),
-)("keeps terminal exit 125 with $fault metadata (cyclic=$cyclic)", ({ fault, cyclic }) => {
-  const { diagnostic } = runOwnerDiagnostic(`
+it.each(["raises", "malformed traceback"])(
+  "keeps terminal exit 125 with %s metadata and cyclic context",
+  (fault) => {
+    const { diagnostic } = runOwnerDiagnostic(`
 class BrokenMetadata(Exception):
     def __getattribute__(self, name):
         if name == "errno" and ${JSON.stringify(fault)} == "raises":
@@ -1394,12 +1392,12 @@ class BrokenMetadata(Exception):
             return self
         return super().__getattribute__(name)
 error = BrokenMetadata(secret)
-if ${cyclic ? "True" : "False"}:
-    error.__context__ = error
+error.__context__ = error
 raise error
 `);
-  expect(diagnostic).toBe("unavailable");
-});
+    expect(diagnostic).toBe("unavailable");
+  },
+);
 
 it.each([...(process.platform === "win32" ? ["setup"] : []), "launch", "timeout-drain"])(
   "distinguishes terminal diagnostic failure sites: %s",

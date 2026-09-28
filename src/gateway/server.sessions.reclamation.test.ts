@@ -180,6 +180,8 @@ test("sessions.delete reclaims a large session off the Gateway thread", async ()
   const recordReclamation = (message: unknown) => {
     if (
       isRecord(message) &&
+      (message.reclamationKind === "historical-generation" ||
+        message.reclamationKind === "entry") &&
       (message.operation === "session.reclamation.worker-commit" ||
         message.operation === "session.reclamation.in-process")
     ) {

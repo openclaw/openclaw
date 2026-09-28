@@ -2,6 +2,8 @@ import type { FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 
 export const MATRIX_IDB_PERSIST_INTERVAL_MS = 60_000;
 
+// Restores and large snapshots can outlive the generic stale window. Reclaiming
+// their live lock would allow concurrent crypto-state writers.
 const IDB_SNAPSHOT_LOCK_STALE_MS = 5 * 60_000;
 const IDB_SNAPSHOT_LOCK_RETRY_BASE = {
   factor: 2,

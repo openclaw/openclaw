@@ -48,7 +48,6 @@ import {
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
-  deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
@@ -60,6 +59,7 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
+  preserveCreationStamp,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
@@ -109,18 +109,19 @@ import {
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type * as SessionLifecycle from "./session-create-service.types.js";
 import {
-  type PreparedGatewaySessionLifecycle,
-  type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
   closeChildAcpRuntimesForParent,
 } from "./session-reset-acp.js";
+import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import {
@@ -664,7 +665,7 @@ export async function performGatewaySessionReset(params: {
   /** Existing-row changes stay admin-gated across reset preparation and commit. */
   fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
   /** Prepares session-owned resources while the target lifecycle fence is held. */
-  prepareLifecycle?: PrepareGatewaySessionLifecycle;
+  prepareLifecycle?: SessionLifecycle.PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
   /** Bind session exec to host=node with this node id; caller scope-checks. */
   execNode?: string;
@@ -724,20 +725,14 @@ export async function performGatewaySessionReset(params: {
         : undefined;
     const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
     if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
-      };
+      return invalidSessionRequest(`Unknown agent id: ${requestedAgentId}`);
     }
     if (
       explicitAgentId &&
       parsedKey?.agentId &&
       normalizeAgentId(parsedKey.agentId) !== explicitAgentId
     ) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
+      return invalidSessionRequest("session key agent does not match agentId");
     }
     const target = resolveGatewaySessionStoreTarget({
       cfg,
@@ -810,18 +805,12 @@ export async function performGatewaySessionReset(params: {
     initialResetEntry,
   );
   if (missingHarnessSessionError) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
-    };
+    return invalidSessionRequest(missingHarnessSessionError);
   }
   // Reject before interrupting admitted work or firing reset hooks. The model lock is
   // session-id scoped, so rotating first would silently detach native harness ownership.
   if (isModelSelectionLocked(initialResetEntry)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
-    };
+    return invalidSessionRequest(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const workerPlacementContext =
     params.workerPlacementContext ??
@@ -860,10 +849,7 @@ export async function performGatewaySessionReset(params: {
     sessionId: normalizeOptionalString(initialResetEntry?.sessionId),
   });
   if (initialPlacementError) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementError.message),
-    };
+    return invalidSessionRequest(initialPlacementError.message);
   }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
@@ -891,7 +877,7 @@ export async function performGatewaySessionReset(params: {
   let admittedWorkReleased = true;
   let resetPreparationError: ReturnType<typeof errorShape> | undefined;
   let preparedResetSessionId: string | undefined;
-  let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
+  let preparedLifecycle: SessionLifecycle.PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
@@ -1027,10 +1013,7 @@ export async function performGatewaySessionReset(params: {
         sessionId: normalizeOptionalString(entry?.sessionId),
       });
       if (placementRetirementError) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, placementRetirementError.message),
-        };
+        return invalidSessionRequest(placementRetirementError.message);
       }
       if (entry?.worktree?.id) {
         const record = managedWorktrees.findLiveById(entry.worktree.id);
@@ -1170,43 +1153,28 @@ export async function performGatewaySessionReset(params: {
 
       if (incognito) {
         if (!entry) {
-          return {
-            ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
-          };
+          return invalidSessionRequest(`unknown session: ${params.key}`);
         }
-        await emitGatewayBeforeResetPluginHook({
-          cfg,
+        const deleted = await deleteIncognitoSessionForReset({
           key: params.key,
-          messages: beforeResetMessages,
+          agentId,
+          storePath,
           target,
-          storePath,
           entry,
-          reason: params.reason,
-        });
-        const deleted = await deleteSessionEntryLifecycle({
           commitGuard,
-          agentId: target.agentId,
-          archiveTranscript: false,
-          deleteDeliveryArtifacts: true,
-          deleteTranscriptWithoutArchive: true,
-          expectedEntry: entry,
-          expectedSessionId: entry.sessionId,
-          expectedUpdatedAt: entry.updatedAt,
-          storePath,
-          target: {
-            canonicalKey: target.canonicalKey,
-            storeKeys: target.storeKeys,
-          },
+          beforeDelete: () =>
+            emitGatewayBeforeResetPluginHook({
+              cfg,
+              key: params.key,
+              messages: beforeResetMessages,
+              target,
+              storePath,
+              entry,
+              reason: params.reason,
+            }),
         });
-        if (!deleted.deleted) {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              `Session ${params.key} changed before reset. Retry.`,
-            ),
-          };
+        if (!deleted.ok) {
+          return deleted;
         }
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
         notifyGatewaySessionReset(target.canonicalKey, target.agentId);
@@ -1230,7 +1198,7 @@ export async function performGatewaySessionReset(params: {
           agentId: target.agentId,
           storePath,
           incognitoDeleted: true,
-          deletedSessionId: deleted.deletedSessionId,
+          deletedSessionId: deleted.value.deletedSessionId,
         };
       }
 
@@ -1307,11 +1275,8 @@ export async function performGatewaySessionReset(params: {
               : currentEntry?.execNode;
           const creationStamp = currentEntry
             ? {
-                createdVia: currentEntry.createdVia,
-                createdActor: currentEntry.createdActor,
-                createdAt: currentEntry.createdAt,
+                ...preserveCreationStamp({}, currentEntry),
                 projectId: currentEntry.projectId,
-                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
               ? {

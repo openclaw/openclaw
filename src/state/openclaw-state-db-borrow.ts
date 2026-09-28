@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
@@ -19,7 +18,6 @@ export type StateDatabaseBorrowers = {
   retiring: boolean;
   cleanupComplete: boolean;
   retirement?: RetirementIntent;
-  closeCoordinator?: ReturnType<typeof acquireStateDatabaseCoordinator>;
 };
 
 /** The canonical cache supplies identity and custody; this owner manages its native references. */

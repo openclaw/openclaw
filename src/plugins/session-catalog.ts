@@ -110,6 +110,9 @@ export interface SessionCatalogEntrySummary {
 
 /** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
+  /** Opaque immutable-entry revision, including config and selection scope. Cache only derived
+   * facts by this token; release entry references when the list closes. Not live authority. */
+  revision?: object;
   entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
   /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
   entriesForCatalog?: () => SessionCatalogAgentEntry[];

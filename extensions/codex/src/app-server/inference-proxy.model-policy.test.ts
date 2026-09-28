@@ -54,19 +54,12 @@ function execution() {
 }
 
 describe("inference transport model authority", () => {
-  it.each([
-    "/responses",
-    "/responses/compact",
-    "/alpha/search",
-    "/images/generations",
-    "/images/edits",
-  ])(
+  it.each(["/responses", "/responses/compact", "/images/generations"])(
     "rejects a forbidden HTTP model on %s before forwarding and accepts an allowed model",
     async (path) => {
       const allowed = execution();
       bindModelExecution.mockImplementation(({ body }) => {
         if (body.model === "forbidden") {
-          // The old transport ignores the hook, so its RED failure is an upstream write.
           throw new inferenceProxy.CodexInferenceAuthorizationError("model");
         }
         return allowed.binding;

@@ -19,6 +19,7 @@ const enBrowser = {
     downloading: "Downloading…",
     downloadFile: "Download file",
     inputLabel: "Browser input: click a field in the page, then type or paste",
+    manualTextCorrection: "Autocorrect is unavailable in browser control. Edit the text directly.",
     errors: {
       pasteFailed: "Could not paste. Reconnect to a managed browser and try again.",
       requestFailed: "Browser request failed: {error}",

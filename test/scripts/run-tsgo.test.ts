@@ -655,12 +655,12 @@ syncBuiltinESMExports();
   // regression that matters: without saturation Node collapses the delay to 1ms and
   // would kill this sleeping child immediately.
   it.each([
-    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 2\nexit 0\n" },
+    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 0.25\nexit 0\n" },
     { bound: "30000", name: "an explicit bound", body: "#!/bin/sh\nexit 0\n" },
     {
       bound: "2147483648",
       name: "an override past Node's timer ceiling",
-      body: "#!/bin/sh\nsleep 1\nexit 0\n",
+      body: "#!/bin/sh\nsleep 0.25\nexit 0\n",
     },
   ])(
     "leaves a completing tsgo alone under $name",

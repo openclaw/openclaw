@@ -60,6 +60,14 @@ If it must cancel before repair starts, it reverses its own stop while its nativ
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
 
+If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
+or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
+admitted repair work and service restoration before exiting. An ordinary repair
+error also restores the managed service Doctor stopped, using the current saved
+configuration. Pending approval prompts cancel without interrupting admitted
+writes. Concrete data risks, lost service authority, and unverified child
+cleanup still prevent unsafe activation and report the recovery action.
+
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup
 reports what it removed or skipped; it does not guarantee a replacement service

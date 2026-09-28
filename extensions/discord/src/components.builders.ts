@@ -12,6 +12,7 @@ import type {
   DiscordComponentSelectType,
   DiscordModalEntry,
 } from "./components.types.js";
+import { AnySelectMenu } from "./internal/components.message.js";
 import {
   Button,
   ChannelSelectMenu,
@@ -197,16 +198,6 @@ function createSelectComponent(params: {
   };
 }
 
-function isSelectComponent(component: unknown): component is DiscordSelectMenu {
-  return (
-    component instanceof StringSelectMenu ||
-    component instanceof UserSelectMenu ||
-    component instanceof RoleSelectMenu ||
-    component instanceof MentionableSelectMenu ||
-    component instanceof ChannelSelectMenu
-  );
-}
-
 export function buildDiscordComponentMessage(params: {
   spec: DiscordComponentMessageSpec;
   fallbackText?: string;
@@ -218,22 +209,7 @@ export function buildDiscordComponentMessage(params: {
   const consumptionGroupId = createShortId("grp_");
   const modals: DiscordModalEntry[] = [];
   const components: TopLevelComponents[] = [];
-  const containerChildren: Array<
-    | Row<
-        | Button
-        | LinkButton
-        | StringSelectMenu
-        | UserSelectMenu
-        | RoleSelectMenu
-        | MentionableSelectMenu
-        | ChannelSelectMenu
-      >
-    | TextDisplay
-    | Section
-    | MediaGallery
-    | Separator
-    | File
-  > = [];
+  const containerChildren: Container["components"] = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
     const reusable = entry.reusable ?? params.spec.reusable;
@@ -288,15 +264,7 @@ export function buildDiscordComponentMessage(params: {
       continue;
     }
     if (block.type === "actions") {
-      const rowComponents: Array<
-        | Button
-        | LinkButton
-        | StringSelectMenu
-        | UserSelectMenu
-        | RoleSelectMenu
-        | MentionableSelectMenu
-        | ChannelSelectMenu
-      > = [];
+      const rowComponents: Array<Button | LinkButton | DiscordSelectMenu> = [];
       if (block.buttons) {
         if (block.buttons.length > 5) {
           throw new Error("Action rows support up to 5 buttons");
@@ -366,16 +334,14 @@ export function buildDiscordComponentMessage(params: {
     }
 
     const lastChild = containerChildren.at(-1);
-    if (lastChild instanceof Row) {
-      const row = lastChild;
-      const hasSelect = row.components.some((entryLocal) => isSelectComponent(entryLocal));
-      if (row.components.length < 5 && !hasSelect) {
-        row.addComponent(component as Button);
-      } else {
-        containerChildren.push(new Row([component as Button]));
-      }
+    if (
+      lastChild instanceof Row &&
+      lastChild.components.length < 5 &&
+      !lastChild.components.some((child) => child instanceof AnySelectMenu)
+    ) {
+      lastChild.addComponent(component);
     } else {
-      containerChildren.push(new Row([component as Button]));
+      containerChildren.push(new Row([component]));
     }
   }
 

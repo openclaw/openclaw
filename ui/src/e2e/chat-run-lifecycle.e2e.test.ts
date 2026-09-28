@@ -17,6 +17,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat run lifecycle",
 });
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 const rosterMatch = { includeGlobal: true };
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -535,10 +536,18 @@ suite.define(() => {
       runId,
       state: "delta",
       deltaText: "Waiting for the accepted abort to settle.",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Waiting for the accepted abort to settle." }],
+      },
     });
     await currentPage
       .getByText("Waiting for the accepted abort to settle.", { exact: false })
       .waitFor();
+    const interrupted = currentPage.locator(".chat-bubble [role=status]", {
+      hasText: "Interrupted",
+    });
+    expect(await interrupted.count()).toBe(0);
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
     expect(await composer.inputValue()).toBe("keep this draft");
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
@@ -550,6 +559,9 @@ suite.define(() => {
     await stop.waitFor({ state: "detached" });
     await composer.fill("next message");
     await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
+    await captureMockStopProof(currentPage, "stopped-live");
+    await interrupted.waitFor({ state: "visible" });
+    expect(await interrupted.count()).toBe(1);
   });
 
   it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {
@@ -769,7 +781,7 @@ suite.define(() => {
       const sessionListsBeforeActive = (await gateway.getRequests("sessions.list", rosterMatch))
         .length;
       await gateway.deferNext("sessions.list", rosterMatch);
-      const activeUpdatedAt = Date.now();
+      const activeUpdatedAt = await currentPage.evaluate(() => Date.now());
       const activeStartedAt = activeUpdatedAt - 1_000;
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [runId],
@@ -781,6 +793,7 @@ suite.define(() => {
         status: "running",
         updatedAt: activeUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeActive);
@@ -858,16 +871,18 @@ suite.define(() => {
         await gateway.getRequests("sessions.list", rosterMatch)
       ).length;
       await gateway.deferNext("sessions.list", rosterMatch);
+      const staleActiveUpdatedAt = await currentPage.evaluate(() => Date.now());
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [runId],
         hasActiveRun: true,
         key: "agent:main:main",
         kind: "direct",
         reason: "lifecycle",
-        startedAt: Date.now() - 1_000,
+        startedAt: staleActiveUpdatedAt - 1_000,
         status: "running",
-        updatedAt: Date.now(),
+        updatedAt: staleActiveUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeStaleActive);
@@ -893,6 +908,7 @@ suite.define(() => {
         reason: "lifecycle",
         updatedAt: otherSessionUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeOtherSession);
@@ -918,6 +934,7 @@ suite.define(() => {
         status: "running",
         updatedAt: lateStaleActiveUpdatedAt,
       });
+      await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeLateStaleActive);
@@ -931,6 +948,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
+    await currentPage.clock.install();
     const gateway = await installMockGateway(currentPage, {
       historyMessages: [
         {
@@ -963,16 +981,18 @@ suite.define(() => {
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list", rosterMatch))
       .length;
     await gateway.deferNext("sessions.list", rosterMatch);
+    const activeUpdatedAt = await currentPage.evaluate(() => Date.now());
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
       key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
-      startedAt: Date.now() - 1_000,
+      startedAt: activeUpdatedAt - 1_000,
       status: "running",
-      updatedAt: Date.now(),
+      updatedAt: activeUpdatedAt,
     });
+    await currentPage.clock.runFor(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeActive);

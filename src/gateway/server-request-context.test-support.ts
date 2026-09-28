@@ -34,6 +34,7 @@ export function makeContextParams(
   return {
     runtime: {
       getSessionRowProjection: () => undefined,
+      forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,
       runtimeState: {
@@ -60,6 +61,8 @@ export function makeContextParams(
       cancelRunBoundApprovals: undefined,
       forwardPluginApprovalRequest: undefined,
       forwardExecApprovalRequest: undefined,
+      forwardSystemAgentApprovalRequest: undefined,
+      forwardSystemAgentApprovalResolved: undefined,
       execApprovalIosPushDelivery: undefined,
       approvalWebPushDelivery: undefined,
       pluginApprovalIosPushDelivery: undefined,
@@ -81,6 +84,7 @@ export function makeContextParams(
       readPreparedGatewayModelCatalog: undefined,
       refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
       broadcast: vi.fn(),
+      publishPresence: vi.fn(),
       broadcastToConnIds: vi.fn(),
       nodeSendToSession: vi.fn(),
       nodeSendToAllSubscribed: vi.fn(),

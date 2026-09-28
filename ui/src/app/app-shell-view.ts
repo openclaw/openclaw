@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS } from "../app-routes.ts";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
@@ -41,7 +41,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
-import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import {
   floatingSidebarAttentionVisible,
@@ -73,7 +73,6 @@ export interface ShellViewHost
   readonly viewCallbacks: ShellViewCallbacks;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
-  enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
@@ -233,7 +232,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       router: host.runtime.router,
       activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-      enabledRouteIds: host.enabledRouteIds(),
+      enabledRouteIds: APP_ROUTE_IDS,
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       connectionStatus,
@@ -263,8 +262,10 @@ export function renderApplicationShell(host: ShellViewHost) {
       onPreloadRoute: callbacks.preloadRoute,
     });
   }
+  const embedNavigation =
+    nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
   const navigationContent =
-    settingsTakeover || nativeEmbed
+    settingsTakeover || embedNavigation
       ? renderLazySettingsSidebar(host, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
@@ -500,7 +501,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: host.refreshControlUi,
           onNavigate: host.navigate,
         })}
-        ${nativeEmbed ? navigationContent : nothing}
+        ${embedNavigation ? navigationContent : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked || reloadRequired}
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
@@ -596,7 +597,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     </div>
   `;
   // Keep plugin settings reachable when a replacement owns the workspace.
-  if (activeRoute === "plugins") {
+  if (activeRoute === "plugins" || activeRoute === "plugin-settings") {
     return workspace;
   }
   return renderPluginSurface(

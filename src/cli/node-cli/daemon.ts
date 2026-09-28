@@ -63,11 +63,7 @@ type NodeDaemonInstallOptions = {
   json?: boolean;
 };
 
-type NodeDaemonLifecycleOptions = {
-  json?: boolean;
-};
-
-type NodeDaemonStatusOptions = {
+type NodeDaemonOutputOptions = {
   json?: boolean;
 };
 
@@ -267,7 +263,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   });
 }
 
-export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = {}) {
+export async function runNodeDaemonUninstall(opts: NodeDaemonOutputOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Node",
     service: resolveNodeService(),
@@ -277,7 +273,7 @@ export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = 
   });
 }
 
-export async function runNodeDaemonStart(opts: NodeDaemonLifecycleOptions = {}) {
+export async function runNodeDaemonStart(opts: NodeDaemonOutputOptions = {}) {
   return await runServiceStart({
     serviceNoun: "Node",
     service: resolveNodeService(),
@@ -286,7 +282,7 @@ export async function runNodeDaemonStart(opts: NodeDaemonLifecycleOptions = {}) 
   });
 }
 
-export async function runNodeDaemonRestart(opts: NodeDaemonLifecycleOptions = {}) {
+export async function runNodeDaemonRestart(opts: NodeDaemonOutputOptions = {}) {
   await runServiceRestart({
     serviceNoun: "Node",
     service: resolveNodeService(),
@@ -295,7 +291,7 @@ export async function runNodeDaemonRestart(opts: NodeDaemonLifecycleOptions = {}
   });
 }
 
-export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
+export async function runNodeDaemonStop(opts: NodeDaemonOutputOptions = {}) {
   return await runServiceStop({
     serviceNoun: "Node",
     service: resolveNodeService(),
@@ -303,7 +299,7 @@ export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
   });
 }
 
-export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
+export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
   let loaded: boolean;

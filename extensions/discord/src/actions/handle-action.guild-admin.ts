@@ -45,6 +45,12 @@ const guildMetadataReads: Partial<
   "event-list": { action: "eventList", requiredParams: ["guildId"] },
 };
 
+const channelMutation = {
+  "channel-create": { action: "channelCreate", read: readDiscordChannelCreateParams },
+  "channel-edit": { action: "channelEdit", read: readDiscordChannelEditParams },
+  "channel-move": { action: "channelMove", read: readDiscordChannelMoveParams },
+};
+
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
   const currentProvider = normalizeOptionalString(ctx.toolContext?.currentChannelProvider);
   if (currentProvider?.toLowerCase() === "discord") {
@@ -202,24 +208,13 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
-  if (action === "channel-create") {
+  if (action === "channel-create" || action === "channel-edit" || action === "channel-move") {
+    const mutation = channelMutation[action];
     return await handleDiscordAction(
       {
-        action: "channelCreate",
+        action: mutation.action,
         accountId: accountId ?? undefined,
-        ...readDiscordChannelCreateParams(actionParams),
-        ...senderParam(senderUserId),
-      },
-      cfg,
-    );
-  }
-
-  if (action === "channel-edit") {
-    return await handleDiscordAction(
-      {
-        action: "channelEdit",
-        accountId: accountId ?? undefined,
-        ...readDiscordChannelEditParams(actionParams),
+        ...mutation.read(actionParams),
         ...senderParam(senderUserId),
       },
       cfg,
@@ -241,65 +236,28 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
-  if (action === "channel-move") {
-    return await handleDiscordAction(
-      {
-        action: "channelMove",
-        accountId: accountId ?? undefined,
-        ...readDiscordChannelMoveParams(actionParams),
-        ...senderParam(senderUserId),
-      },
-      cfg,
-    );
-  }
-
-  if (action === "category-create") {
-    const guildId = readStringParam(actionParams, "guildId", {
+  if (action === "category-create" || action === "category-edit" || action === "category-delete") {
+    const creating = action === "category-create";
+    const categoryId = readStringParam(actionParams, creating ? "guildId" : "categoryId", {
       required: true,
     });
-    const name = readStringParam(actionParams, "name", { required: true });
-    const position = readNonNegativeIntegerParam(actionParams, "position");
+    const fields =
+      action === "category-delete"
+        ? {}
+        : {
+            name: readStringParam(actionParams, "name", { required: creating }),
+            position: readNonNegativeIntegerParam(actionParams, "position"),
+          };
     return await handleDiscordAction(
       {
-        action: "categoryCreate",
+        action: creating
+          ? "categoryCreate"
+          : action === "category-edit"
+            ? "categoryEdit"
+            : "categoryDelete",
         accountId: accountId ?? undefined,
-        guildId,
-        name,
-        position: position ?? undefined,
-        ...senderParam(senderUserId),
-      },
-      cfg,
-    );
-  }
-
-  if (action === "category-edit") {
-    const categoryId = readStringParam(actionParams, "categoryId", {
-      required: true,
-    });
-    const name = readStringParam(actionParams, "name");
-    const position = readNonNegativeIntegerParam(actionParams, "position");
-    return await handleDiscordAction(
-      {
-        action: "categoryEdit",
-        accountId: accountId ?? undefined,
-        categoryId,
-        name: name ?? undefined,
-        position: position ?? undefined,
-        ...senderParam(senderUserId),
-      },
-      cfg,
-    );
-  }
-
-  if (action === "category-delete") {
-    const categoryId = readStringParam(actionParams, "categoryId", {
-      required: true,
-    });
-    return await handleDiscordAction(
-      {
-        action: "categoryDelete",
-        accountId: accountId ?? undefined,
-        categoryId,
+        ...(creating ? { guildId: categoryId } : { categoryId }),
+        ...fields,
         ...senderParam(senderUserId),
       },
       cfg,
