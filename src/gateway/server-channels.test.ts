@@ -226,6 +226,7 @@ function createManager(options?: {
     channelRuntimeEnvs[channelId] ??= runtime;
   }
   const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
     getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
     channelLogs,
@@ -3711,6 +3712,7 @@ describe("server-channels auto restart", () => {
     const channelLogs = {} as Record<ChannelId, SubsystemLogger>;
     const channelRuntimeEnvs = {} as Record<ChannelId, RuntimeEnv>;
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => ({}),
       getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs,

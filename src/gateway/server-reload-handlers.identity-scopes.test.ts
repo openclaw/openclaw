@@ -132,6 +132,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     });
     let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},
