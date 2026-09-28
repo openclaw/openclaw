@@ -3,7 +3,7 @@ import { createQaBusState } from "../../bus-state.js";
 import { runScenarioFlow } from "../../scenario-flow-runner.js";
 import { runQaSuiteScenarioSteps } from "../../suite-runtime-flow.js";
 import { makeQaSuiteTestScenario } from "../../suite-test-helpers.js";
-import type { QaMockContinuationHold } from "./mock-openai-request-log.js";
+import type { QaMockContinuationHold } from "../shared/types.js";
 import {
   createMockServerTestHarness,
   getJson,

@@ -1,6 +1,5 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { QaThinkingLevel } from "../../qa-thinking.js";
-import type { QaMockContinuationHold } from "../mock-openai/mock-openai-request-log.js";
 import type { QaTerminalRequesterSettlement } from "../mock-openai/terminal-requester-settlement.js";
 import type { MockProviderVariant } from "./mock-provider-variant.js";
 
@@ -20,6 +19,19 @@ export type QaMockRequestSnapshot = {
   plannedToolName?: string;
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
+};
+
+/** Provider observation only; Gateway run/receipt identity must be collected separately. */
+export type QaMockContinuationCheckpoint = Readonly<{
+  cursor: number;
+  sessionId: string;
+  toolOutputCallId: string;
+}>;
+
+export type QaMockContinuationHold = {
+  reached: Promise<QaMockContinuationCheckpoint>;
+  release(): void;
+  cancel(): void;
 };
 
 export type QaMockProviderServer = {

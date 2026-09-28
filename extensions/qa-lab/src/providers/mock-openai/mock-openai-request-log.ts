@@ -2,24 +2,12 @@ import type { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import type { QaMockContinuationCheckpoint, QaMockContinuationHold } from "../shared/types.js";
 import {
   MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotInput,
 } from "./mock-openai-contracts.js";
-
-/** Provider observation only; Gateway run/receipt identity must be collected separately. */
-export type QaMockContinuationCheckpoint = Readonly<{
-  cursor: number;
-  sessionId: string;
-  toolOutputCallId: string;
-}>;
-
-export type QaMockContinuationHold = {
-  reached: Promise<QaMockContinuationCheckpoint>;
-  release(): void;
-  cancel(): void;
-};
 
 export function createMockOpenAiRequestLog() {
   const requests: MockOpenAiRequestSnapshot[] = [];

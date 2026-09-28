@@ -1,31 +1,38 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdDecompressSync } from "node:zlib";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
-import { expect, it } from "vitest";
-import { buildQaRuntimeEnv } from "../../../../extensions/qa-lab/src/gateway-child-env.js";
-import type { MockOpenAiRequestSnapshot } from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.js";
-import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/src/qa-gateway-config.js";
-import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
-import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { stopChildProcess } from "../../../helpers/stop-child-process.js";
-import { createTempDirTracker } from "../../../helpers/temp-dir.js";
+import { createFixtureLifetime, stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it } from "vitest";
+import {
+  appendQaChildOutputTail,
+  createQaChildOutputTail,
+  readQaChildOutputTail,
+} from "./child-output.js";
+import { buildQaRuntimeEnv } from "./gateway-child-env.js";
+import type { MockOpenAiRequestSnapshot } from "./providers/mock-openai/mock-openai-contracts.js";
+import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
+import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
-it("runs both identity ingress turns in a cold process with distinct execution contexts", async () => {
-  const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-  const dirs = createTempDirTracker();
-  const root = dirs.make("identity-repeated-child-");
-  const stateDir = path.join(root, "state");
-  const workspaceDir = path.join(root, "workspace");
-  const configPath = path.join(root, "openclaw.json");
-  const mock = await startQaMockOpenAiServer();
-  let child: ChildProcess | undefined;
-  await runQaGatewayFixture(
-    async () => {
+const lifetime = createFixtureLifetime();
+afterEach(() => lifetime.cleanup());
+
+it(
+  "runs both identity ingress turns in a cold process with distinct execution contexts",
+  () =>
+    lifetime.run(async () => {
+      const repoRoot = path.resolve(import.meta.dirname, "../../..");
+      const root = lifetime.createTempDir("identity-repeated-child-");
+      const stateDir = path.join(root, "state");
+      const workspaceDir = path.join(root, "workspace");
+      const configPath = path.join(root, "openclaw.json");
+      const mock = await lifetime.acquire(async () => {
+        const server = await startQaMockOpenAiServer();
+        return { ...server, cleanup: () => server.stop() };
+      });
       await fs.mkdir(workspaceDir, { recursive: true });
       const config = buildQaGatewayConfig({
         bind: "loopback",
@@ -57,30 +64,39 @@ it("runs both identity ingress turns in a cold process with distinct execution c
       });
       const sessionId = "identity-repeated-regression";
       // In-process test setup already binds MCP; only the maintained child exposes this omission.
-      child = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          path.join(import.meta.dirname, "agent-run-identity-repeated-turn-child.ts"),
-          sessionId,
-        ],
-        {
-          cwd: repoRoot,
-          env,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      const output = createBoundedChildOutput();
-      child.stdout?.on("data", output.append);
-      child.stderr?.on("data", output.append);
+      const { child } = await lifetime.acquire(async () => {
+        const processChild = spawn(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            path.join(
+              repoRoot,
+              "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts",
+            ),
+            sessionId,
+          ],
+          {
+            cwd: repoRoot,
+            env,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        return { child: processChild, cleanup: () => stopChildProcess(processChild, 5_000) };
+      });
+      const output = createQaChildOutputTail(128 * 1024);
+      child.stdout?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
+      child.stderr?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
       const exit = await withTimeout(once(child, "close"), 60_000);
       const response = await fetch(`${mock.baseUrl}/debug/requests?after=0`);
       expect(response.ok).toBe(true);
       const requests: MockOpenAiRequestSnapshot[] = await response.json();
       expect(
         exit,
-        JSON.stringify({ output: output.text(), providerRequests: requests.length }),
+        JSON.stringify({
+          output: readQaChildOutputTail(output),
+          providerRequests: requests.length,
+        }),
       ).toEqual([0, null]);
       expect(requests.map((request) => request.outcome)).toEqual(["success", "success"]);
       expect(requests[0]?.prompt).toContain("REPEATED-TURN-ONE");
@@ -132,9 +148,6 @@ it("runs both identity ingress turns in a cold process with distinct execution c
       } finally {
         agent.close();
       }
-    },
-    () => child && stopChildProcess(child, 5_000),
-    () => mock.stop(),
-    () => dirs.cleanup(),
-  );
-}, 90_000);
+    }),
+  90_000,
+);
