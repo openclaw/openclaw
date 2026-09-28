@@ -2,7 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
-function loadPrecomputedChannelOptions(): string[] | null {
+export function resolveCliChannelOptions(): string[] {
   try {
     const parsed = readCliStartupMetadata(import.meta.url) as { channelOptions?: unknown } | null;
     if (parsed && Array.isArray(parsed.channelOptions)) {
@@ -15,12 +15,7 @@ function loadPrecomputedChannelOptions(): string[] | null {
   } catch {
     // Source checkouts may not have generated startup metadata yet.
   }
-  return null;
-}
-
-export function resolveCliChannelOptions(): string[] {
-  const precomputed = loadPrecomputedChannelOptions();
-  return precomputed ?? [];
+  return [];
 }
 
 export function formatCliChannelOptions(extra: string[] = []): string {

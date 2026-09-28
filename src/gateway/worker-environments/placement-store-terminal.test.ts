@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -27,21 +25,17 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker placement terminal persistence", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
   let nowMs: number;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-terminal-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-terminal-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   function advanceToActive(
