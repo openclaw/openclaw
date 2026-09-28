@@ -7,7 +7,9 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
+  TALK_READY_HISTORY_MESSAGE,
   videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -29,6 +31,8 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          heldMethods: ["chat.startup"],
+          historyMessages: [TALK_READY_HISTORY_MESSAGE],
           methodResponses: {
             "talk.catalog": videoTalkCatalog("openai"),
             "talk.client.create": {
@@ -41,6 +45,9 @@ suite.define(() => {
         });
         await installOpenAiTalkFixture(page);
         await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await gateway.resolveDeferred("chat.startup");
+        await waitForTalkReady(page);
         await page.getByRole("button", { name: "Start voice input" }).click();
         await gateway.waitForRequest("talk.client.create");
         await expect

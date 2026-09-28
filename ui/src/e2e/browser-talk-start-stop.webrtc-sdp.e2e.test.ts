@@ -7,7 +7,9 @@ import {
   installOversizedWebRtcSdpFixture,
   installWebRtcSdpFailureFixture,
   type WebRtcSdpE2eProof,
+  TALK_READY_HISTORY_MESSAGE,
   videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -33,7 +35,9 @@ async function waitForWebRtcSdpFetch(page: Page) {
 suite.define(() => {
   it("cancels a failed OpenAI WebRTC SDP response body in the live Control UI", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["chat.startup"],
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -49,6 +53,9 @@ suite.define(() => {
       await installWebRtcSdpFailureFixture(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
+      await waitForTalkReady(page);
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
         .toBe(0);
@@ -82,7 +89,9 @@ suite.define(() => {
 
   it("rejects and cancels an oversized OpenAI SDP answer before peer setup", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["chat.startup"],
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -98,6 +107,9 @@ suite.define(() => {
       await installOversizedWebRtcSdpFixture(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
+      await waitForTalkReady(page);
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
         .toBe(0);
