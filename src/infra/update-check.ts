@@ -522,6 +522,7 @@ export async function fetchNpmTagVersion(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus> {
   const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
@@ -543,6 +544,7 @@ export async function resolveNpmChannelTag(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const { channel, ...options } = params;
   const channelTag = channelToNpmTag(channel);

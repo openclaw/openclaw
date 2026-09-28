@@ -1517,9 +1517,14 @@ AFTER_CD
     expect(workflow.jobs.check["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '240') }}",
     );
-    expect(workflow.jobs.check["runs-on"]).toBe(
-      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
-    );
+    for (const [eventName, expectedRunner] of [
+      ["pull_request", "ubuntu-24.04"],
+      ["workflow_dispatch", "blacksmith-32vcpu-ubuntu-2404"],
+    ] as const) {
+      expect(evaluateWorkflowRunner(workflow.jobs.check["runs-on"], { eventName })).toBe(
+        expectedRunner,
+      );
+    }
     const beginStep = workflow.jobs.check.steps.find(
       (step: { name?: string }) => step.name === "Begin Testbox",
     );

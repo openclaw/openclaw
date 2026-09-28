@@ -310,6 +310,9 @@ export const zh_CN = {
       lookAroundYes: "可以，去看看吧",
       settingUp: "正在设置你的工作区、网关和会话…",
       setupDone: "一切就绪。",
+      setupFailed: "设置失败",
+      workspaceSetupFailed: "工作区设置失败",
+      gatewaySetupFailed: "Gateway 设置失败",
       appliedTitle: "推理已就绪",
       complete: "OpenClaw 已准备就绪。",
       completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
@@ -426,6 +429,11 @@ export const zh_CN = {
         "现有 agent 当前使用 {current}。请求的工作区是 {requested}。更改此 fleet-wide 默认值可能会使 agent 与其记忆和 bootstrap 文件断开连接。",
       workspaceConflictTitle: "现有 agent 工作区",
       workspaceDirectory: "工作区目录",
+      workspaceNotDirectory: '"{path}" 不是目录。请在目录中选择工作区路径。',
+      workspacePathError: '无法检查 "{path}"：{error}。请检查路径后重试。',
+      workspaceSymlinkLoop: '"{path}" 因符号链接循环而无法解析。请修复符号链接或选择其他工作区。',
+      workspaceSymlinkNotDirectory:
+        '"{path}" 是一个无法解析到现有目录的符号链接。请在目录中选择工作区路径。',
     },
     security: {
       askForHelp: "启用工具或暴露到互联网之前，请找有经验的人协助。",

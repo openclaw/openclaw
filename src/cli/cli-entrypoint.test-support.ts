@@ -5,6 +5,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../entry",
     distWorkerPath: "entry.js",
   },
+  daemon: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "daemon-cli",
+    distWorkerPath: "cli/daemon-cli.js",
+  },
   sessionAccessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../config/sessions/session-accessor",
