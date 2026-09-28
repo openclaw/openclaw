@@ -24,6 +24,7 @@ import {
 import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
 import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
+  createNativeSoloTimingKey,
   ciTestTimingsSchema,
   type CiTestTimings,
   type RuntimePlacementTiming,
@@ -84,6 +85,172 @@ const baseline: CiTestTimings = {
 };
 
 const sampleNow = "2026-08-28T12:00:00.000Z";
+
+describe("resource-qualified native solo timings", () => {
+  const descriptor = {
+    shard_name: "storage-hosted-2",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    includePatterns: ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts"],
+  };
+  const key =
+    "native-solo-8cpu-8workers:122cfdeb2f6b006ace10e2583ac92903cbb9137b74e884d7afba1d81560bc129";
+  const log = (span: number, group = descriptor) => {
+    const line = (second: number, body: string) =>
+      `${new Date(Date.parse("2026-08-27T23:00:00Z") + second * 1000).toISOString()} ${body}`;
+    const child = (second: number, body: string) =>
+      line(second, `[shard:${group.shard_name}] ${body}`);
+    return [
+      line(0, "OPENCLAW_VITEST_MAX_WORKERS: 8"),
+      line(0, "OPENCLAW_NODE_TEST_ENV_JSON: null"),
+      line(0, "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: []"),
+      line(0, "RUNNER_ENVIRONMENT: self-hosted"),
+      line(0, "FROZEN_TARGET: false"),
+      line(0, `OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([group])}`),
+      line(
+        0,
+        `[shard:resources] logicalCpuCount=8 totalMemoryBytes=${31 * 1024 ** 3} requested plans=1 admitted plans=1`,
+      ),
+      child(0, "begin"),
+      child(1, `[test] starting ${descriptor.configs[0]}`),
+      child(2, "RUN v5.0.1 /checkout"),
+      child(3, `✓ infra ${descriptor.includePatterns[0]} > case 1ms`),
+      child(span - 3, "Test Files 1 passed (1)"),
+      child(span - 3, "Duration 100s (tests 90%, import 10%)"),
+      child(span - 2, "[vitest-workers] verifying completed generation before cleanup"),
+      child(span - 1, `[test] passed 1 Vitest shard in ${span}s`),
+      child(span, "end (exit 0)"),
+    ].join("\n");
+  };
+  const refit = (texts: string[], labels = ["blacksmith-32vcpu-ubuntu-2404"]) =>
+    refitTestTimings(
+      texts.map((text, index) =>
+        Object.assign(timingRun(index + 1, [{ kind: "compact", labels, text }]), {
+          completeInventory: false,
+          pullRequestMergeRef: true,
+        }),
+      ),
+      baseline,
+    );
+
+  it("retains a complete child wall across renamed shards, without lowering legacy floors", () => {
+    const renamed = {
+      ...descriptor,
+      shard_name: "changed-storage-hosted-9",
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+    };
+    expect(createNativeSoloTimingKey(descriptor)).toBe(key);
+    expect(createNativeSoloTimingKey(renamed)).toBe(key);
+    expect(refit([log(121)]).timings.compactGroupSeconds.blacksmith[key]).toBeUndefined();
+    const previous = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { storage: 300 }, github: {} },
+    };
+    const runs = [log(121), log(125, renamed)].map((text, index) =>
+      Object.assign(
+        timingRun(index + 1, [
+          { kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text },
+        ]),
+        { completeInventory: false, pullRequestMergeRef: true },
+      ),
+    );
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith).toEqual({
+      storage: 300,
+      [key]: 123,
+    });
+  });
+
+  it.each([
+    ["four CPUs", "logicalCpuCount=8", "logicalCpuCount=4"],
+    ["low memory", String(31 * 1024 ** 3), String(15 * 1024 ** 3)],
+    ["different memory", String(31 * 1024 ** 3), String(64 * 1024 ** 3)],
+    ["overlap", "requested plans=1 admitted plans=1", "requested plans=2 admitted plans=2"],
+    ["clamped overlap", "requested plans=1", "requested plans=2"],
+    ["workers", "OPENCLAW_VITEST_MAX_WORKERS: 8", "OPENCLAW_VITEST_MAX_WORKERS: 4"],
+    ["frozen", "FROZEN_TARGET: false", "FROZEN_TARGET: true"],
+    ["hosted", "RUNNER_ENVIRONMENT: self-hosted", "RUNNER_ENVIRONMENT: github-hosted"],
+    [
+      "job filter",
+      "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: []",
+      'OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ["-t","case"]',
+    ],
+    [
+      "job environment",
+      "OPENCLAW_NODE_TEST_ENV_JSON: null",
+      'OPENCLAW_NODE_TEST_ENV_JSON: {"OTHER":"1"}',
+    ],
+    [
+      "job worker override",
+      "OPENCLAW_NODE_TEST_ENV_JSON: null",
+      'OPENCLAW_NODE_TEST_ENV_JSON: {"OPENCLAW_VITEST_MAX_WORKERS":"2"}',
+    ],
+    [
+      "observed build",
+      "RUN v5.0.1 /checkout",
+      "[test] preparing runtime runtime before Vitest workers",
+    ],
+    ["failed child", "end (exit 0)", "end (exit 1)"],
+    [
+      "incomplete cleanup",
+      "verifying completed generation before cleanup",
+      "unfinished generation",
+    ],
+    ["missing summary", "Test Files 1 passed (1)", "Test Files 0 passed (1)"],
+    [
+      "wrong file",
+      "✓ infra src/agents/main-session-recovery/main-session-restart-recovery.test.ts",
+      "✓ infra src/infra/other.test.ts",
+    ],
+  ])("rejects %s", (_name, from, to) => {
+    const texts = [121, 125].map((span) => log(span).replace(from, to));
+    expect(refit(texts).timings.compactGroupSeconds.blacksmith[key]).toBeUndefined();
+  });
+
+  it.each([
+    { requiresDist: true },
+    { pretestBuildMode: "runtime" },
+    { fallbackMaxWorkers: 2 },
+    { minTotalMemoryBytes: 28 * 1024 ** 3 },
+    { env: { OPENCLAW_VITEST_MAX_WORKERS: "4" } },
+    { env: { OPENCLAW_VITEST_SHARD: "1/2" } },
+    { configs: [...descriptor.configs, "test/vitest/vitest.commands.config.ts"] },
+    { includePatterns: ["src/**/*.test.ts"] },
+    { includePatterns: ["../outside.test.ts"] },
+    { includePatterns: [...descriptor.includePatterns, "src/infra/other.test.ts"] },
+  ])("rejects unmatched descriptor policy %j", (policy) => {
+    const group = { ...descriptor, ...policy };
+    expect(createNativeSoloTimingKey(group)).toBeUndefined();
+    expect(
+      refit([log(121, group), log(125, group)]).timings.compactGroupSeconds.blacksmith[key],
+    ).toBeUndefined();
+  });
+
+  it("rejects missing/conflicting provenance and multiple descriptors", () => {
+    const original = log(121);
+    const resources = original.split("\n").find((line) => line.includes("[shard:resources]"))!;
+    const groups = original
+      .split("\n")
+      .find((line) => line.includes("OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:"))!;
+    for (const text of [
+      original.replace(resources, ""),
+      `${original}\n${resources}`,
+      original.replace("FROZEN_TARGET: false", "UNRELATED: false"),
+      `${original}\n2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: {}`,
+      original.replace(
+        groups,
+        groups.replace(
+          encodeNodeTestGroups([descriptor]),
+          encodeNodeTestGroups([descriptor, { ...descriptor, shard_name: "second" }]),
+        ),
+      ),
+    ]) {
+      expect(refit([text, text]).timings.compactGroupSeconds.blacksmith[key]).toBeUndefined();
+    }
+    expect(
+      refit([original, log(125)], ["blacksmith-16vcpu-ubuntu-2404"]).timings.compactGroupSeconds
+        .blacksmith[key],
+    ).toBeUndefined();
+  });
+});
 
 describe("native singleton invocation timings", () => {
   const config = "test/vitest/vitest.extension-database-workers.config.ts";

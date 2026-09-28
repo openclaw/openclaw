@@ -606,6 +606,15 @@ jobs retain `planConcurrency: 1`. The refit preserves each complete child span,
 including contention, without subtracting setup or rewriting historical costs. Runner-profile
 calibration remains a separate admission policy.
 
+A source-only singleton on the native 32-class can also retain a stable timing
+identity across shard renaming and repartitioning. This profile requires eight
+actual CPUs, 28–32 GiB RAM, an eight-worker ceiling, one admitted outer plan,
+and a confirmed current self-hosted run. The exact config, file, and supported
+environment identify the measurement. Two independent successful observations
+are still required. Only the final serial singleton row uses this price; packing,
+shared rows, hosted execution, and fallback worker policies keep their existing
+estimates. These complete child spans already include process overhead.
+
 For split compact groups, the refit also records the parent cost from a complete
 generation within one run and runner profile. It sums each part's median span,
 takes the largest complete generation or direct parent measurement in that run,

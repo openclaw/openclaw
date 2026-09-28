@@ -206,6 +206,12 @@ update execution authority. A missing custom `plugins.load.paths` entry can
 therefore produce an admission warning while preserving the configured path
 and plugin configuration bytes. Admission does not promise to repair that path.
 
+Legacy plugin configuration, such as Discord's nested `dm.policy` and
+`dm.allowFrom`, is admitted with a warning when the candidate's Doctor planner
+produces a fully valid configuration. Admission checks the projected database
+targets while preserving the original config and state bytes. The normal
+update-time Doctor still owns saving the repair, backups, and rollback.
+
 A valid `admit` verdict replaces only the candidate-owned checks it reports.
 Installed Node preflight always runs for package updates, including selection or
 private provisioning of a compatible runtime after an informational Node warning.

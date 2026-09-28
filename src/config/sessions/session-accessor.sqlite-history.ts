@@ -1,10 +1,21 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
-import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-read.js";
+import {
+  hasTranscriptArchiveInDatabase,
+  listTranscriptArchivesFromDatabase,
+} from "./session-accessor.sqlite-archive-read.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import type {
   TranscriptArchivePageBinding,
@@ -23,6 +34,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getSessionKysely,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -33,6 +45,10 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
+import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { SessionEntry } from "./types.js";
 
 export async function readSessionTaskArchivePageReadOnly(
@@ -225,37 +241,114 @@ export async function findSessionTranscriptArchiveEventReadOnly(
   },
   runId: string,
 ): Promise<{ event: TranscriptEvent } | undefined> {
-  const resolved = resolveSqliteReadScope(scope);
-  const options = toDatabaseOptions(resolved);
-  return withSqliteTranscriptArchiveSession(options, async () => {
-    // Empty lookups must not hold completion roots through archive Worker startup.
-    const registered = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        listTranscriptArchivesFromDatabase(
-          database,
-          resolved.agentId,
-          [scope.sessionId ?? scope.sessionKey],
-          [],
-        ).some((archive) =>
-          scope.sessionId
-            ? archive.sessionId === scope.sessionId
-            : archive.sessionKey === scope.sessionKey,
-        ),
-      options,
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const context = captureOpenClawStateWorkerContext({ env: captured.env });
+  const assertStateCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
+  const native =
+    isIncognitoSessionKey(captured.sessionKey) ||
+    Boolean(
+      captured.storePath &&
+      isIncognitoOpenClawAgentSqlitePath(captured.storePath, {
+        agentId: captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey),
+        env: captured.env,
+      }),
     );
-    if (!registered.found || !registered.value) {
-      return undefined;
+  const candidates = native
+    ? undefined
+    : captureSessionStoreReadCandidates(
+        captured.storePath ??
+          resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(captured))),
+      );
+  const identities = new Map(
+    candidates?.map(
+      (candidate) =>
+        [candidate.physicalPath, readDatabasePathIdentitySync(candidate.path)] as const,
+    ),
+  );
+  const read = async (assertCurrent: () => void) => {
+    const resolved = native ? resolveSqliteReadScope(captured) : await prepareSqliteScope(captured);
+    assertCurrent();
+    const options = toDatabaseOptions(resolved);
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+    const expectedIdentity = candidates
+      ? identities.get(assertSessionStoreReadCandidate(databasePath, candidates))
+      : undefined;
+    if (candidates && !expectedIdentity) {
+      throw new Error("SQLite archive database identity changed during discovery");
     }
-    const [result] = await runSqliteTranscriptArchiveReadWorker([
-      {
-        agentId: options.agentId,
-        databasePath: resolveOpenClawAgentSqlitePath(options),
-        logicalAgentId: resolved.agentId,
-        sessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
-        runId,
-      },
-    ]);
-    return result?.event === undefined ? undefined : { event: result.event };
-  });
+    if (expectedIdentity) {
+      const current = readDatabasePathIdentitySync(databasePath);
+      if (
+        current.key !== expectedIdentity.key ||
+        current.birthtime !== expectedIdentity.birthtime
+      ) {
+        throw new Error("SQLite archive database identity changed during discovery");
+      }
+      if (!expectedIdentity.key.startsWith("file:")) {
+        return undefined;
+      }
+    }
+    const target = {
+      logicalAgentId: resolved.agentId,
+      sessionId: captured.sessionId,
+      sessionKey: captured.sessionKey,
+    };
+    return withSqliteTranscriptArchiveSession(options, async () => {
+      const readArchive = async () => {
+        const [result] = await runSqliteTranscriptArchiveReadWorker([
+          { agentId: options.agentId, databasePath, ...target, runId, expectedIdentity },
+        ]);
+        assertCurrent();
+        if (expectedIdentity) {
+          assertExistingDatabaseIdentity(
+            databasePath,
+            expectedIdentity.key,
+            expectedIdentity.birthtime,
+          );
+        }
+        return result?.event === undefined ? undefined : { event: result.event };
+      };
+      if (!expectedIdentity) {
+        // The existing process-held store remains with its native owner until namespace migration.
+        const registered = withOpenClawAgentDatabaseReadOnly(
+          (database) => hasTranscriptArchiveInDatabase(database, target),
+          options,
+        );
+        return registered.found && registered.value ? readArchive() : undefined;
+      }
+      const { withSessionHistoryWorkerDatabase } =
+        await import("./session-transcript-worker-runtime.js");
+      assertCurrent();
+      return withSessionHistoryWorkerDatabase(options, async (reader) => {
+        // Empty lookups never start the archive reader or retain its completion roots.
+        const registered = await reader.readArchivePresence({
+          ...target,
+          env: captured.env,
+          expectedIdentity,
+        });
+        assertCurrent();
+        reader.assertCurrent();
+        assertExistingDatabaseIdentity(
+          databasePath,
+          expectedIdentity.key,
+          expectedIdentity.birthtime,
+        );
+        return registered ? readArchive() : undefined;
+      });
+    });
+  };
+  return candidates
+    ? withSessionHistoryWorkerReadCandidates(candidates, (owner) =>
+        read(() => {
+          assertStateCurrent();
+          owner.assertCurrent();
+        }),
+      )
+    : read(assertStateCurrent);
 }

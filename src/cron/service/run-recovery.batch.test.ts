@@ -10,15 +10,14 @@ import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { observeCronTimerAdmissions } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
@@ -53,11 +52,16 @@ async function seedInterruptedBatch() {
   await writeCronStoreSnapshot({ storePath, jobs });
   for (const job of jobs) {
     const startedAtMs = job.state.runningAtMs!;
-    const prepared = prepareCronRunReceiptClaim({ storePath, job, agentId: "alpha", startedAtMs });
+    const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
+      storePath,
+      job,
+      agentId: "alpha",
+      startedAtMs,
+    });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
-        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: () => "alpha",
       }),

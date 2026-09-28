@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { seedSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { observeRootWork } from "../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
@@ -69,17 +70,22 @@ describe("subagent completion blocked Gateway E2E", () => {
             },
           },
         });
-        seedSubagentCompletionDelivery({ subagent });
         addSubagentRunForTests(subagent);
+        seedSubagentCompletionDelivery({ subagent });
 
-        resumeSubagentRun(subagent.runId);
+        // Native suspension completes in detached work. Join its owner before
+        // asserting or closing the Gateway, including cold worker startup.
+        const settleRootWork = observeRootWork();
+        try {
+          resumeSubagentRun(subagent.runId);
+        } finally {
+          await settleRootWork();
+        }
 
-        await vi.waitFor(() => {
-          expect(getSubagentRunByRunId(subagent.runId)?.delivery).toMatchObject({
-            status: "suspended",
-            disposition: "permanent_failure",
-            suspendedReason: "expiry",
-          });
+        expect(getSubagentRunByRunId(subagent.runId)?.delivery).toMatchObject({
+          status: "suspended",
+          disposition: "permanent_failure",
+          suspendedReason: "expiry",
         });
       });
     } finally {

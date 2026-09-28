@@ -15,6 +15,7 @@ import { UpdateRunRecordSchema } from "./update-run-schema.js";
 const JSON_BYTES = 16 * 1024;
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
+  "candidate-admission",
   "notice:ack",
   "notice:activating",
   "notice:verifying",

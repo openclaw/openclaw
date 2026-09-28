@@ -362,6 +362,12 @@
   color: var(--muted);
 }
 
+.cmd-palette__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .cmd-palette__footer kbd {
   display: inline-flex;
   align-items: center;
