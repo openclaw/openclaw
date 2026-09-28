@@ -200,7 +200,7 @@ function createGatewayReloadHandlers(
   const { requestRecoveryRestart, ...handlerParams } = params;
   let state = createDefaultGatewayReloadState();
   return createGatewayReloadHandlersImpl({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getPluginRegistry: requireActivePluginChannelRegistry,
     deps: {} as never,
     broadcast: vi.fn(),
@@ -235,7 +235,7 @@ function createGatewayReloadHandlers(
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   let state = createDefaultGatewayReloadState();
   return startManagedGatewayConfigReloaderImpl({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},

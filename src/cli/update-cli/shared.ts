@@ -381,9 +381,6 @@ async function cloneGitCheckoutTransactionally(params: {
           published = true;
           return targetDir;
         }
-      }
-
-      if (!preserveDir) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );
