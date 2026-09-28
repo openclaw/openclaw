@@ -1,11 +1,10 @@
 /** Parent task continuation with one completion owner across execution turns. */
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
 import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { loadSessionEntryByKey } from "../subagents/announce/subagent-announce-delivery.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -14,8 +13,12 @@ import {
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-helpers.js";
 
+type SessionsSendResumeCaller = TrustedAgentToolCaller & {
+  readonly assertCurrent: () => void;
+};
+
 /** Retain the admitted caller before asynchronous session resolution. */
-export function captureSessionsSendResumeCaller(): TrustedAgentToolCaller | undefined {
+export function captureSessionsSendResumeCaller(): SessionsSendResumeCaller | undefined {
   const caller = getGatewayToolCallerIdentity();
   const assertCurrent = captureGatewayToolCallerAssertion();
   return caller && assertCurrent
@@ -26,7 +29,7 @@ export function captureSessionsSendResumeCaller(): TrustedAgentToolCaller | unde
 /** Dispatches one exact paused-task successor and leaves final delivery to its registry owner. */
 export async function resumeSessionsSendTask(params: {
   cfg: OpenClawConfig;
-  caller: TrustedAgentToolCaller;
+  caller: SessionsSendResumeCaller;
   targetAgentId: string;
   sessionKey: string;
   displayKey: string;
@@ -36,15 +39,18 @@ export async function resumeSessionsSendTask(params: {
   callGateway: AgentToolGatewayRequestCaller;
 }): Promise<ReturnType<typeof jsonResult>> {
   try {
-    const entry = loadSessionEntryByKey(params.sessionKey, params.targetAgentId);
+    const session = await readAcpSessionEntryAsync({
+      cfg: params.cfg,
+      agentId: params.targetAgentId,
+      sessionKey: params.sessionKey,
+      assertCurrent: params.caller.assertCurrent,
+    });
+    params.caller.assertCurrent();
+    const entry = session?.entry;
     if (
       !entry ||
       entry.archivedAt !== undefined ||
-      readAcpSessionMeta({
-        cfg: params.cfg,
-        agentId: params.targetAgentId,
-        sessionKey: params.sessionKey,
-      }) ||
+      session.acp ||
       (params.expectedSessionId && entry.sessionId !== params.expectedSessionId)
     ) {
       throw new Error("Task resume requires the existing, unarchived native child session.");

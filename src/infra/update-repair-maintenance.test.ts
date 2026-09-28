@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import {
@@ -11,6 +11,7 @@ vi.mock("../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: external.entry,
 }));
 vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: external.command }));
+afterEach(() => vi.unstubAllGlobals());
 beforeEach(() => {
   external.entry.mockReset().mockResolvedValue("/synthetic/install/dist/index.js");
   external.command
@@ -27,6 +28,11 @@ const target = {
 it.each(["doctor-fix", "update-repair"] as const)(
   "executes only the typed %s continuation on the selected installation",
   async (operation) => {
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: "/synthetic/app-runtime",
+      versions: { ...process.versions, bun: "1.4.3" },
+    });
     const request = readUpdateRepairMaintenanceRequest({
       stopReason: "tool_calls",
       pendingToolCalls: [
@@ -50,7 +56,7 @@ it.each(["doctor-fix", "update-repair"] as const)(
     expect(current).toHaveBeenCalledOnce();
     expect(external.command).toHaveBeenCalledExactlyOnceWith(
       [
-        expect.any(String),
+        "/synthetic/app-runtime",
         "/synthetic/install/dist/index.js",
         ...(operation === "update-repair"
           ? ["update", "repair", "--yes", "--json", "--no-restart"]

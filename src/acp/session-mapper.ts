@@ -33,33 +33,13 @@ export async function resolveAcpSessionKey(params: {
   gateway: GatewayClient;
   opts: AcpServerOptions;
 }): Promise<string> {
-  const requestedLabel = params.meta.sessionLabel ?? params.opts.defaultSessionLabel;
+  // A per-session key outranks the server's default label.
+  const requestedLabel =
+    params.meta.sessionLabel ??
+    (params.meta.sessionKey ? undefined : params.opts.defaultSessionLabel);
   const requestedKey = params.meta.sessionKey ?? params.opts.defaultSessionKey;
   const requireExisting =
     params.meta.requireExisting ?? params.opts.requireExistingSession ?? false;
-
-  if (params.meta.sessionLabel) {
-    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
-      label: params.meta.sessionLabel,
-    });
-    if (!resolved?.key) {
-      throw new Error(`Unable to resolve session label: ${params.meta.sessionLabel}`);
-    }
-    return resolved.key;
-  }
-
-  if (params.meta.sessionKey) {
-    if (!requireExisting) {
-      return params.meta.sessionKey;
-    }
-    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
-      key: params.meta.sessionKey,
-    });
-    if (!resolved?.key) {
-      throw new Error(`Session key not found: ${params.meta.sessionKey}`);
-    }
-    return resolved.key;
-  }
 
   if (requestedLabel) {
     const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {

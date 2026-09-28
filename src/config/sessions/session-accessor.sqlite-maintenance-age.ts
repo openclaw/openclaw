@@ -167,11 +167,8 @@ function nextEntryAgeAt(
     [activityAt, isDashboardKey(key) ? maintenance.archiveDashboardAfterMs : null],
     [activityAt, maintenance.preserveRecentMs],
   ]) {
-    if (timestamp != null && age != null && age > 0) {
-      const at = timestamp + age + 1;
-      if (at > now) {
-        next = Math.min(next, at);
-      }
+    if (timestamp != null) {
+      next = Math.min(next, nextAgeAt(timestamp, age, now));
     }
   }
   return next;
@@ -198,10 +195,10 @@ function readActivityAt(row: {
 
 /** The caller's transaction keeps these indexed probes in one snapshot. */
 export function recordSessionEntryMaintenanceAgeFact(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   maintenance: ResolvedSessionMaintenanceConfig,
   plannedAt: number,
-): void {
+): SessionEntryMaintenanceAgeFact {
   const next = { at: Infinity };
   const fact: SessionEntryMaintenanceAgeFact = {
     maintenance,
@@ -249,6 +246,7 @@ export function recordSessionEntryMaintenanceAgeFact(
     }
   }
   stageSessionEntryMaintenanceAgeFact(database.db, fact);
+  return fact;
 }
 
 /** The kick uses the same periodic deadline as inline maintenance callers. */

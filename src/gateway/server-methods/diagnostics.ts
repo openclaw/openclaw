@@ -2,7 +2,11 @@
 // malformed queries out of logging internals.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { validateDiagnosticsHeapProfileParams } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import {
+  validateDiagnosticsHeapProfileParams,
+  validateDiagnosticsHeapSnapshotParams,
+} from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import type { DiagnosticProfileOutcome } from "../../logging/diagnostic-profile.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -13,7 +17,7 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 
 async function captureProfile(
   { client, signal, context, respond, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
-  label: "CPU" | "Heap",
+  label: "CPU profile" | "Heap profile" | "Heap snapshot",
   capture: (authority: {
     signal: AbortSignal;
     hasAuthority: () => boolean;
@@ -36,8 +40,8 @@ async function captureProfile(
   } else {
     const message =
       outcome.reason === "tracing-active"
-        ? `${label} profile unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile`
-        : `${label} profile unavailable: ${outcome.reason}`;
+        ? `${label} unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile`
+        : `${label} unavailable: ${outcome.reason}`;
     respond(
       false,
       undefined,
@@ -60,7 +64,7 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await captureProfile(options, "CPU", async (authority) => {
+    await captureProfile(options, "CPU profile", async (authority) => {
       const { captureDiagnosticCpuProfile } =
         await import("../../logging/diagnostic-cpu-profile.js");
       return captureDiagnosticCpuProfile(authority);
@@ -75,19 +79,42 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes",
+          "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes, and boolean includeObjectsCollectedByMajorGC and includeObjectsCollectedByMinorGC",
         ),
       );
       return;
     }
-    await captureProfile(options, "Heap", async (authority) => {
+    await captureProfile(options, "Heap profile", async (authority) => {
       const { captureDiagnosticHeapProfile } =
         await import("../../logging/diagnostic-heap-profile.js");
       return captureDiagnosticHeapProfile({ ...params, ...authority });
     });
   },
+  "diagnostics.heapSnapshot": async (options) => {
+    const params = options.req.params === undefined ? {} : options.req.params;
+    if (!validateDiagnosticsHeapSnapshotParams(params)) {
+      options.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "diagnostics.heapSnapshot accepts only an optional reason string (at most 256 characters)",
+        ),
+      );
+      return;
+    }
+    await captureProfile(options, "Heap snapshot", async (authority) => {
+      const { captureDiagnosticHeapSnapshot } =
+        await import("../../logging/diagnostic-heap-snapshot.js");
+      return captureDiagnosticHeapSnapshot({ ...params, ...authority });
+    });
+  },
   "diagnostics.lanes": ({ respond }) => {
-    respond(true, { ts: Date.now(), ...getCommandLaneDiagnostics() }, undefined);
+    respond(
+      true,
+      { ts: Date.now(), ...getCommandLaneDiagnostics(), ...getTrackedWorkerPoolSnapshot() },
+      undefined,
+    );
   },
   "diagnostics.stability": async ({ params, respond }) => {
     try {

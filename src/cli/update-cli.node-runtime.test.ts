@@ -326,13 +326,13 @@ describe("update-cli", () => {
       const logs = getLogOutput();
       expect(logs).not.toContain("Targeting managed gateway service package root");
       if (selected) {
-        expect(logs).toContain("differs from the managed gateway service Node");
+        expect(logs).toContain("differs from the managed gateway service runtime");
         expect(logs).toContain(serviceNode);
         expect(logs).toContain(
-          "Using the managed service Node for this update so the gateway can start after the upgrade",
+          "Using the managed service runtime for this update so the gateway can start after the upgrade",
         );
       } else {
-        expect(logs).not.toContain("differs from the managed gateway service Node");
+        expect(logs).not.toContain("differs from the managed gateway service runtime");
         expect(logs).not.toContain(serviceNode);
       }
     },

@@ -14,6 +14,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/markdown-core/src/image-spans.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
@@ -194,6 +195,14 @@ function isValidMedia(
   }
   if (hasHttpUrlPrefix(candidate)) {
     return isAllowedRemoteMediaUrl(candidate);
+  }
+
+  if (/^media:\/\//i.test(candidate)) {
+    try {
+      return parseInboundMediaUri(candidate) !== null;
+    } catch {
+      return false;
+    }
   }
 
   if (isLikelyLocalPath(candidate)) {

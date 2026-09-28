@@ -20,14 +20,12 @@ import {
 } from "./github-publication-failure.js";
 import {
   appendGitHubPublicationMessage,
+  githubPublicationApiArgs,
   hasGitHubPublicationMessageFooter,
   requirePublicationCommand,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
-import {
-  findGitHubPublicationPullRequest,
-  githubPublicationCreatePullRequestArgs,
-} from "./github-publication-pull-requests.js";
+import { findGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import {
   hasRepositoryGitHubPublicationWorkflowChanges,
@@ -43,19 +41,6 @@ import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
-function apiArgs(endpoint: string, method = "GET"): string[] {
-  return [
-    "gh",
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    method,
-    endpoint,
-    ...(method === "GET" ? [] : ["--input", "-"]),
-  ];
-}
-
 async function api(
   endpoint: string,
   identity: PreparedGitHubPublicationIdentity,
@@ -64,7 +49,7 @@ async function api(
 ): Promise<unknown> {
   assertCurrent();
   const raw = await requirePublicationCommand(
-    apiArgs(endpoint, body === undefined ? "GET" : "POST"),
+    githubPublicationApiArgs(endpoint, body === undefined ? "GET" : "POST"),
     {
       env: identity.env,
       beforeRun: assertCurrent,
@@ -200,7 +185,7 @@ export async function executeRepositoryGitHubPublication(params: {
     assertCurrent();
     const lineage = await requirePublicationCommand(
       [
-        ...apiArgs(
+        ...githubPublicationApiArgs(
           "repos/" +
             repository +
             "/compare/" +
@@ -246,7 +231,7 @@ export async function executeRepositoryGitHubPublication(params: {
     const observeHead = async () => {
       const observedIdentity = await refreshIdentity();
       const raw = await requirePublicationCommand(
-        apiArgs(endpoint + "matching-refs/heads/" + encodeURIComponent(branch)),
+        githubPublicationApiArgs(endpoint + "matching-refs/heads/" + encodeURIComponent(branch)),
         { env: observedIdentity.env },
       );
       const value: unknown = JSON.parse(raw);
@@ -423,7 +408,7 @@ export async function executeRepositoryGitHubPublication(params: {
       execution.recordEffect("push");
       dispatched = true;
       // GraphQL's beforeOid is an exact lease; REST's non-force update only checks ancestry.
-      const result = await runPublicationCommand(apiArgs("graphql", "POST"), {
+      const result = await runPublicationCommand(githubPublicationApiArgs("graphql", "POST"), {
         env: identity.env,
         beforeRun: assertAction,
         input: JSON.stringify({
@@ -484,7 +469,7 @@ export async function executeRepositoryGitHubPublication(params: {
       execution.recordEffect("pull_request");
       dispatched = true;
       const created = await runPublicationCommand(
-        githubPublicationCreatePullRequestArgs(repository),
+        githubPublicationApiArgs(`repos/${repository}/pulls`, "POST"),
         {
           env: identity.env,
           beforeRun: assertAction,

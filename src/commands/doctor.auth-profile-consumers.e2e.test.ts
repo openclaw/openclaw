@@ -177,6 +177,8 @@ describe("doctor auth-profile consumers", () => {
           prefix: "openclaw-doctor-auth-consumers-",
           scenario: "external-service",
           env: {
+            DBUS_SESSION_BUS_ADDRESS: undefined,
+            DBUS_SYSTEM_BUS_ADDRESS: undefined,
             OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
               new URL("../../extensions", import.meta.url),
             ),

@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type {
   BootstrapBudgetAnalysis,
   BootstrapPromptWarning,
@@ -15,20 +15,7 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
 }
 
 export function normalizeBootstrapWarningSignatures(signatures?: string[]): string[] {
-  if (!Array.isArray(signatures) || signatures.length === 0) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const signature of signatures) {
-    const value = normalizeOptionalString(signature) ?? "";
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
+  return normalizeUniqueTrimmedStringList(signatures);
 }
 
 function appendSeenSignature(signatures: string[], signature: string): string[] {

@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -87,21 +88,17 @@ function createSandboxTempDir(hostEnv: BaselineHostEnv): string {
   return mkdtempSync(path.join(resolveSandboxTempDir(hostEnv), "openclaw-mxc-sandbox-"));
 }
 
-function assertWorkdirInsideWorkspace(workspaceDir: string, workdir: string): string {
-  const workspace = realpathForExistingPath(workspaceDir, "sandbox workspace");
-  const candidate = realpathForPotentialPath(workdir);
-  if (isPathInside(workspace, candidate)) {
-    return candidate;
-  }
-  throw new Error(
-    `MXC sandbox workdir ${workdir} is outside the sandbox workspace ${workspaceDir}. ` +
-      `Use a workdir inside the sandbox workspace.`,
-  );
-}
-
 function resolveWorkdirInsideWorkspace(workspaceDir: string, workdir: string): string {
-  const candidate = assertWorkdirInsideWorkspace(workspaceDir, workdir);
+  const workspace = realpathForExistingPath(workspaceDir, "sandbox workspace");
   try {
+    const { existingPath, unresolvedSegments } = resolvePathPrefixSync(workdir);
+    const candidate = path.join(existingPath, ...unresolvedSegments);
+    if (!isPathInside(workspace, candidate)) {
+      throw new Error(
+        `MXC sandbox workdir ${workdir} is outside the sandbox workspace ${workspaceDir}. ` +
+          `Use a workdir inside the sandbox workspace.`,
+      );
+    }
     if (statSync(candidate).isDirectory()) {
       return candidate;
     }
@@ -125,31 +122,12 @@ function realpathForExistingPath(value: string, label: string): string {
   }
 }
 
-function realpathForPotentialPath(value: string): string {
-  const resolved = path.resolve(value);
-  try {
-    return realpathSync(resolved);
-  } catch (err) {
-    if (!isMissingPathError(err)) {
-      throw err;
-    }
-    const parent = path.dirname(resolved);
-    if (parent === resolved) {
-      throw new Error(`MXC sandbox workdir ${value} does not exist.`, { cause: err });
-    }
-    return path.join(realpathForPotentialPath(parent), path.basename(resolved));
-  }
-}
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err;
-}
-
 // ENOTDIR means a parent component is a file, so the path can never resolve to a
 // directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
 // for unusable workdirs" contract intact instead of leaking a raw filesystem error.
 function isMissingPathError(err: unknown): boolean {
-  return isNodeError(err) && (err.code === "ENOENT" || err.code === "ENOTDIR");
+  const code = extractErrorCode(err);
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 function buildMxcLauncherOptions(config: MxcConfig, usePty: boolean): MxcLauncherOptions {
@@ -286,14 +264,16 @@ export function createMxcSandboxBackendHandle(params: {
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
       const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
-      const commandBridge = createWindowsCommandBridge({
-        args: cmdParams.args,
-        script: cmdParams.script,
-        tempDir: sandboxTempDir,
-      });
-      const execInput = cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
+      let commandBridge: ReturnType<typeof createWindowsCommandBridge> | undefined;
 
       try {
+        commandBridge = createWindowsCommandBridge({
+          args: cmdParams.args,
+          script: cmdParams.script,
+          tempDir: sandboxTempDir,
+        });
+        const execInput =
+          cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
         const payload = buildMxcContainerConfig({
           config: restrictiveConfig,
           baseline,
@@ -349,7 +329,7 @@ export function createMxcSandboxBackendHandle(params: {
           cleanupLauncherPayloadFile(payloadFile);
         }
       } finally {
-        commandBridge.cleanup();
+        commandBridge?.cleanup();
         rmSync(sandboxTempDir, { force: true, recursive: true });
       }
     },

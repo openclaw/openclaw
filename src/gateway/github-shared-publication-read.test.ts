@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { GitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -128,7 +129,7 @@ describe("shared worktree receipt observation", () => {
           .run(row.request_id);
       }
       const databasePath = database.path;
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const bytes = await fs.readFile(databasePath);
       const files = await fs.readdir(path.dirname(databasePath));
       prohibitPublicationWork();

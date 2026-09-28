@@ -39,8 +39,8 @@ afterEach(async () => {
 function sourceContext(): OpenClawStateWorkerContext {
   return {
     environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
-    coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     admission: {
+      coordinationKey: "file:1:2",
       databasePath: "/synthetic-alias/state.sqlite",
       identity: { key: "file:1:2", canonicalPath: "/synthetic-state/state.sqlite" },
       assertCurrent() {},
@@ -116,7 +116,7 @@ describe("state lease group admission", () => {
     expect(members.every(({ owner }) => owner.canRelease())).toBe(true);
   });
 
-  it.each(["admission", "coordinator", "environment-values", "coordinator-values"] as const)(
+  it.each(["admission", "environment-values"] as const)(
     "refuses %s replacement during the bridge's first await",
     async (kind) => {
       const context = sourceContext();
@@ -129,12 +129,8 @@ describe("state lease group admission", () => {
       );
       if (kind === "admission") {
         context.admission = { ...context.admission };
-      } else if (kind === "coordinator") {
-        context.coordinatorRuntime = { ...context.coordinatorRuntime };
-      } else if (kind === "environment-values") {
-        context.environment.OPENCLAW_STATE_DIR = "/unrelated-state";
       } else {
-        Object.assign(context.coordinatorRuntime, { directory: "/unrelated-coordinator" });
+        context.environment.OPENCLAW_STATE_DIR = "/unrelated-state";
       }
       await expect(pending).rejects.toThrow("source binding was replaced");
       expect(runWorkerOperation).not.toHaveBeenCalled();
@@ -154,7 +150,9 @@ describe("state lease group admission", () => {
           throw withdrawn;
         }
       };
-      const maintenance = createOpenClawDatabaseMaintenanceScope(undefined, assertSourceCurrent);
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: assertSourceCurrent,
+      });
       if (kind === "admission") {
         context.admission.assertCurrent = assertSourceCurrent;
       } else {

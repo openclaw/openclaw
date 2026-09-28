@@ -1,5 +1,5 @@
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Google Meet plugin module implements calendar behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 import { normalizeMeetUrl } from "./meet-url.js";
@@ -152,18 +152,11 @@ export function buildGoogleMeetCalendarDayWindow(now = new Date()): {
   return { timeMin: start.toISOString(), timeMax: end.toISOString() };
 }
 
-function parseCalendarEventTime(value: GoogleCalendarEventDate | undefined): number | undefined {
-  const raw = value?.dateTime ?? value?.date;
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): number {
-  const startMs = parseCalendarEventTime(event.start) ?? Number.POSITIVE_INFINITY;
-  const endMs = parseCalendarEventTime(event.end) ?? startMs;
+  const startMs =
+    parseDateStringTimestampMs(event.start?.dateTime ?? event.start?.date) ??
+    Number.POSITIVE_INFINITY;
+  const endMs = parseDateStringTimestampMs(event.end?.dateTime ?? event.end?.date) ?? startMs;
   if (startMs <= nowMs && endMs >= nowMs) {
     return 0;
   }
@@ -193,7 +186,7 @@ function chooseBestMeetCalendarEvent(
   return selected;
 }
 
-async function fetchGoogleCalendarEvents(params: {
+type GoogleMeetCalendarQuery = {
   accessToken: string;
   calendarId?: string;
   eventQuery?: string;
@@ -201,7 +194,11 @@ async function fetchGoogleCalendarEvents(params: {
   timeMax?: string;
   maxResults?: number;
   now?: Date;
-}): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
+};
+
+async function fetchGoogleCalendarEvents(
+  params: GoogleMeetCalendarQuery,
+): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
   const calendarId = params.calendarId?.trim() || "primary";
   const now = params.now ?? new Date();
   const defaultTimeMax = new Date(now);
@@ -250,15 +247,9 @@ async function fetchGoogleCalendarEvents(params: {
   }
 }
 
-export async function listGoogleMeetCalendarEvents(params: {
-  accessToken: string;
-  calendarId?: string;
-  eventQuery?: string;
-  timeMin?: string;
-  timeMax?: string;
-  maxResults?: number;
-  now?: Date;
-}): Promise<GoogleMeetCalendarEventsResult> {
+export async function listGoogleMeetCalendarEvents(
+  params: GoogleMeetCalendarQuery,
+): Promise<GoogleMeetCalendarEventsResult> {
   const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
   const best = chooseBestMeetCalendarEvent(events, now);
   return {
@@ -272,15 +263,9 @@ export async function listGoogleMeetCalendarEvents(params: {
   };
 }
 
-export async function findGoogleMeetCalendarEvent(params: {
-  accessToken: string;
-  calendarId?: string;
-  eventQuery?: string;
-  timeMin?: string;
-  timeMax?: string;
-  maxResults?: number;
-  now?: Date;
-}): Promise<GoogleMeetCalendarLookupResult> {
+export async function findGoogleMeetCalendarEvent(
+  params: GoogleMeetCalendarQuery,
+): Promise<GoogleMeetCalendarLookupResult> {
   const result = await listGoogleMeetCalendarEvents(params);
   const selected = result.events.find((event) => event.selected) ?? result.events[0];
   if (!selected) {

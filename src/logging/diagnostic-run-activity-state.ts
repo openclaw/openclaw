@@ -12,24 +12,17 @@ import {
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
 } from "./diagnostic-repeated-request-activity.js";
-import type {
-  DiagnosticRecoveryEmbeddedRun,
-  DiagnosticRecoveryModelCall,
-  DiagnosticRecoveryTool,
+import {
+  queueRecoveryCutoffCleanup,
+  shouldIgnoreRecoveredOwnerStartEvent,
+  type DiagnosticRecoveryActivity,
 } from "./diagnostic-run-activity-recovery.js";
 
 export type SessionActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity & {
+  DiagnosticRepeatedRequestActivity &
+  DiagnosticRecoveryActivity & {
     sessionId?: string;
     sessionKey?: string;
-    activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
-    activeTools: Map<string, DiagnosticRecoveryTool>;
-    activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;
-    activeCoreModelCalls: Map<
-      CoreModelRequestOwnerGeneration,
-      Map<string, DiagnosticRecoveryModelCall>
-    >;
-    recoveredOwnerStartEventCutoffs: Map<string, number>;
     lastProgressAt: number;
     lastProgressReason?: string;
   };
@@ -72,14 +65,14 @@ export function sessionRefs(params: { sessionId?: string; sessionKey?: string })
 
 export function registerSessionActivityRefs(
   activity: SessionActivity,
-  params: { sessionId?: string; sessionKey?: string; runId?: string },
+  params: { sessionId?: string; sessionKey?: string; runId?: string; seq?: number },
 ): void {
   activity.sessionId ??= params.sessionId;
   activity.sessionKey ??= params.sessionKey;
   for (const ref of sessionRefs(params)) {
     activityByRef.set(ref, activity);
   }
-  if (params.runId) {
+  if (params.runId && !shouldIgnoreRecoveredOwnerStartEvent(activity, params)) {
     activityByRunId.set(params.runId, activity);
   }
 }
@@ -127,6 +120,7 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
       Math.max(cutoff, target.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0),
     );
   }
+  queueRecoveryCutoffCleanup(target);
   const sourceProgressIsNewer =
     source.lastProgressSequence !== undefined
       ? target.lastProgressSequence === undefined ||
@@ -146,6 +140,7 @@ export function resolveSessionActivity(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
+  seq?: number;
   create?: boolean;
 }): SessionActivity | undefined {
   let activity: SessionActivity | undefined;

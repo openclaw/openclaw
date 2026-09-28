@@ -1,7 +1,3 @@
-/**
- * Debounced steering queue for forwarding user messages to an active Codex
- * app-server turn.
- */
 import {
   embeddedAgentLog,
   type AgentMessage,
@@ -25,7 +21,6 @@ export class CodexSteeringAcceptedUnconfirmedError extends Error {
   }
 }
 
-/** Per-message options for Codex steering queue behavior. */
 export type CodexSteeringQueueOptions = Pick<
   AgentHarnessQueueMessageOptions,
   | "debounceMs"
@@ -74,10 +69,9 @@ export function createCodexSteeringQueue(params: {
   type PreparedSteerMessage = PendingSteerMessage & {
     prepared: Awaited<ReturnType<typeof params.prepareMessage>>;
   };
-  type PendingSteerBatch = { items: PreparedSteerMessage[] };
   const acceptedMessages: AgentMessage[] = [];
   let batchedMessages: PendingSteerMessage[] = [];
-  const dispatchedBatches = new Map<string, PendingSteerBatch>();
+  const dispatchedBatches = new Map<string, PreparedSteerMessage[]>();
   const pendingMessages = new Set<PendingSteerMessage>();
   let batchTimer: NodeJS.Timeout | undefined;
   let batchSequence = 0;
@@ -155,7 +149,7 @@ export function createCodexSteeringQueue(params: {
     // An issued RPC may have reached Codex before its response. Fence wire-dispatched
     // batches as accepted-unconfirmed so terminal cancellation cannot replay them.
     for (const batch of dispatchedBatches.values()) {
-      for (const item of batch.items) {
+      for (const item of batch) {
         acceptItem(item);
       }
     }
@@ -171,9 +165,7 @@ export function createCodexSteeringQueue(params: {
     sealedError = new Error("codex app-server steering queue admission sealed");
     clearBatchTimer();
     batchedMessages = [];
-    const dispatchedItems = new Set<PendingSteerMessage>(
-      [...dispatchedBatches.values()].flatMap((batch) => batch.items),
-    );
+    const dispatchedItems = new Set<PendingSteerMessage>([...dispatchedBatches.values()].flat());
     // Terminal receipt closes admission immediately, but a user-message
     // completion already ahead of it on the wire still owns its dispatched batch.
     for (const item of pendingMessages) {
@@ -252,7 +244,7 @@ export function createCodexSteeringQueue(params: {
       // No await between final owner validation and RPC dispatch. Only these
       // batches become accepted-unconfirmed if cancellation races the response.
       clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
-      dispatchedBatches.set(clientUserMessageId, { items: liveItems });
+      dispatchedBatches.set(clientUserMessageId, liveItems);
       const request = {
         threadId: params.threadId,
         expectedTurnId: params.turnId,
@@ -272,7 +264,7 @@ export function createCodexSteeringQueue(params: {
           // Rebuild only surviving material immediately before each physical write.
           liveItems = liveItems.filter(isCurrent);
           request.input = liveItems.flatMap((item) => item.prepared.input);
-          dispatchedBatches.set(request.clientUserMessageId, { items: liveItems });
+          dispatchedBatches.set(request.clientUserMessageId, liveItems);
           if (liveItems.length === 0) {
             skippedRevokedBatch = true;
             throw new Error("Codex steering batch has no authorized inputs");
@@ -388,7 +380,7 @@ export function createCodexSteeringQueue(params: {
         return false;
       }
       dispatchedBatches.delete(clientUserMessageId);
-      for (const item of batch.items) {
+      for (const item of batch) {
         resolveItem(item);
       }
       return true;

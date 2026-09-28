@@ -51,15 +51,6 @@ type PluginPackageContext = Pick<
   "packageDir" | "packageJson" | "pluginDir"
 > & { patchedDependencies?: WorkspacePatchedDependency[] };
 type SpawnResult = Pick<ReturnType<typeof spawnSync>, "error" | "status">;
-type PluginSpawnOptions = SpawnSyncOptions;
-type PluginNpmCommandParams = Omit<NpmRunnerParams, "npmArgs">;
-type PluginNpmCommand = {
-  args: string[];
-  command: string;
-  env?: NodeJS.ProcessEnv;
-  shell: boolean;
-  windowsVerbatimArguments?: boolean;
-};
 type PackageLockOptions = NonNullable<Parameters<typeof generateNpmPackageLock>[1]>;
 type GeneratePackageLock = (packageDir: string, options: PackageLockOptions) => string;
 
@@ -77,10 +68,6 @@ function resolvePackageDir(repoRoot: string, packageDir: string) {
 
 function resolvePackageJsonPath(packageDir: string) {
   return path.join(packageDir, "package.json");
-}
-
-function packageRelativePathExists(packageDir: string, relativePath: string) {
-  return fs.existsSync(path.join(packageDir, relativePath));
 }
 
 function normalizePackPath(value: string) {
@@ -147,7 +134,7 @@ function assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan: PluginNpmR
 
 function assertPluginNpmRuntimeBuildExists(plan: PluginNpmRuntimeBuildPlan) {
   const missing = listPluginNpmRuntimeBuildOutputs(plan).filter(
-    (runtimePath) => !packageRelativePathExists(plan.packageDir, runtimePath.replace(/^\.\//u, "")),
+    (runtimePath) => !fs.existsSync(path.join(plan.packageDir, runtimePath.replace(/^\.\//u, ""))),
   );
   if (missing.length > 0) {
     const packageName =
@@ -232,22 +219,11 @@ function listConfiguredBundledDependencyNames(packageJson: PluginPackageJson) {
   return [];
 }
 
-/**
- * Resolve an npm command invocation for plugin package scripts.
- * @internal Directly tested script implementation detail.
- */
 export function resolvePluginNpmCommand(
   args: string[],
-  params: PluginNpmCommandParams = {},
-): PluginNpmCommand {
-  return resolveNpmRunner({
-    comSpec: params.comSpec,
-    env: params.env,
-    execPath: params.execPath,
-    existsSync: params.existsSync,
-    npmArgs: args,
-    platform: params.platform,
-  });
+  params: Omit<NpmRunnerParams, "npmArgs"> = {},
+) {
+  return resolveNpmRunner({ ...params, npmArgs: args });
 }
 
 function spawnNpmSync(args: string[], options: SpawnSyncOptions = {}) {
@@ -255,28 +231,20 @@ function spawnNpmSync(args: string[], options: SpawnSyncOptions = {}) {
   return spawnSync(invocation.command, invocation.args, {
     ...options,
     ...(invocation.env ? { env: invocation.env } : {}),
-    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    shell: invocation.shell,
     ...(invocation.windowsVerbatimArguments !== undefined
       ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
       : {}),
   });
 }
 
-function spawnCommandSync(command: string, args: string[], options: SpawnSyncOptions): SpawnResult {
-  if (command === "npm") {
-    return spawnNpmSync(args, options);
-  }
-  return spawnSync(command, args, options);
-}
-
-/** @internal Directly tested release-script implementation detail. */
 export function runPluginNpmCiWithRetry(
   args: string[],
-  options: PluginSpawnOptions,
+  options: SpawnSyncOptions,
   params: {
     attempts?: number;
     timeoutMs?: number;
-    spawn?: (args: string[], options: PluginSpawnOptions) => SpawnResult | undefined;
+    spawn?: (args: string[], options: SpawnSyncOptions) => SpawnResult | undefined;
     cleanupAttempt?: () => void;
     pluginDir?: string;
   } = {},
@@ -312,7 +280,6 @@ export function runPluginNpmCiWithRetry(
   throw new Error(`npm ci retry loop exhausted for ${pluginDir}`);
 }
 
-/** @internal Directly tested release-script implementation detail. */
 export function generatePluginNpmPackageLockWithRetry(
   packageDir: string,
   options: PackageLockOptions = {},
@@ -437,10 +404,7 @@ function collectMissingOptionalBundledDependencySpecs(
       continue;
     }
     visited.add(installed.packageDir);
-    const dependencyNames = [
-      ...Object.keys(installed.packageJson.dependencies ?? {}),
-      ...Object.keys(installed.packageJson.optionalDependencies ?? {}),
-    ].toSorted((left, right) => left.localeCompare(right));
+    const dependencyNames = listPackageRuntimeDependencyNames(installed.packageJson);
     queue.push(...dependencyNames.map((name) => ({ name, fromDir: installed.packageDir })));
 
     for (const [optionalName, optionalSpec] of Object.entries(
@@ -751,16 +715,12 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
   }
 }
 
-function packageOptsOutOfBundledRuntimeDependencies(packageJson: PluginPackageJson | undefined) {
-  return packageJson?.openclaw?.release?.bundleRuntimeDependencies === false;
-}
-
 function shouldBundleDependencies(
   value: unknown,
   packageJson: PluginPackageJson | undefined,
   patchedDependencies: WorkspacePatchedDependency[] = [],
 ) {
-  if (packageOptsOutOfBundledRuntimeDependencies(packageJson)) {
+  if (packageJson?.openclaw?.release?.bundleRuntimeDependencies === false) {
     if (patchedDependencies.length > 0) {
       throw new Error("patched runtime dependencies conflict with bundleRuntimeDependencies=false");
     }
@@ -867,10 +827,6 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
   }
 }
 
-/**
- * Build the package.json that should be used while packaging a plugin for npm.
- * @internal Directly tested script implementation detail.
- */
 export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -886,7 +842,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     };
   }
 
-  const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir });
+  const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile });
   if (!plan) {
     return {
       packageJsonPath,
@@ -912,6 +868,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     openclaw: {
       ...plan.packageJson.openclaw,
       ...(packagedChannel ? { channel: packagedChannel } : {}),
+      ...(plan.profile === "qa-gateway-fixture" ? { extensions: plan.runtimeExtensions } : {}),
       runtimeExtensions: plan.runtimeExtensions,
       ...(plan.runtimeSetupEntry
         ? {
@@ -921,13 +878,12 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
         : {}),
     },
   };
-  if (
-    shouldBundleDependencies(
-      params.bundleDependencies,
-      plan.packageJson,
-      params.patchedDependencies,
-    )
-  ) {
+  const bundleDependencies = shouldBundleDependencies(
+    params.bundleDependencies,
+    plan.packageJson,
+    params.patchedDependencies,
+  );
+  if (bundleDependencies) {
     packageJson.bundledDependencies = [
       ...new Set([
         ...listConfiguredBundledDependencyNames(packageJson),
@@ -939,7 +895,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     delete packageJson.bundleDependencies;
     delete packageJson.devDependencies;
   }
-  const changed = JSON.stringify(packageJson) !== JSON.stringify(plan.packageJson);
+  const changed = JSON.stringify(packageJson) !== JSON.stringify(readJsonFile(packageJsonPath));
   return {
     packageJsonPath,
     packageDir,
@@ -947,11 +903,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     changed,
     packageJson,
     pluginDir: plan.pluginDir,
-    bundleDependencies: shouldBundleDependencies(
-      params.bundleDependencies,
-      plan.packageJson,
-      params.patchedDependencies,
-    ),
+    bundleDependencies,
     reason: changed ? "package-local-runtime" : "unchanged",
   };
 }
@@ -1055,10 +1007,6 @@ export function mergeGeneratedChannelConfigs(
   };
 }
 
-/**
- * Build the plugin manifest that should be used while packaging a plugin for npm.
- * @internal Directly tested script implementation detail.
- */
 export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -1077,7 +1025,14 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   }
 
   const manifest = readJsonFile(manifestPath);
-  let publicationManifest = manifest;
+  const fixturePlan =
+    params.profile === "qa-gateway-fixture"
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
+      : undefined;
+  let publicationManifest = fixturePlan?.manifest ?? manifest;
+  if (fixturePlan && params.clawhubMetadataDir) {
+    throw new Error("Private QA Gateway fixtures cannot use publication metadata.");
+  }
   if (params.clawhubMetadataDir) {
     const metadataDir = path.resolve(params.clawhubMetadataDir);
     const metadata = readJsonFile(path.join(metadataDir, "openclaw.plugin.json"));
@@ -1112,11 +1067,18 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
+  if (
+    params.profile === "qa-gateway-fixture" &&
+    pluginId === "qa-channel" &&
+    !generatedChannelConfigs?.["qa-channel"]
+  ) {
+    throw new Error("QA Channel fixtures require the canonical generated channel config metadata.");
+  }
   // Manifest-only overlays have no package runtime to rewrite.
   const runtimePlan =
     (manifest.providerCatalogEntry || manifest.capabilityCatalogEntry) &&
     fs.existsSync(resolvePackageJsonPath(packageDir))
-      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir })
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
       : null;
   const augmentedManifest = mergeGeneratedChannelConfigs(
     runtimePlan
@@ -1154,7 +1116,13 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = resolvePackageJsonPath(packageDir);
-  const packageJson = fs.existsSync(packageJsonPath) ? readJsonFile(packageJsonPath) : undefined;
+  const packageJson =
+    params.profile === "qa-gateway-fixture"
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
+          ?.packageJson
+      : fs.existsSync(packageJsonPath)
+        ? readJsonFile(packageJsonPath)
+        : undefined;
   const patchedDependencies = packageJson
     ? collectWorkspacePatchedDependencies(repoRoot, packageDir, packageJson)
     : [];
@@ -1202,9 +1170,13 @@ function withPluginNpmManifestOverlay<T>(
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = resolvePackageJsonPath(packageDir);
-  const packageJsonForBundlePolicy = fs.existsSync(packageJsonPath)
-    ? readJsonFile(packageJsonPath)
-    : undefined;
+  const packageJsonForBundlePolicy =
+    params.profile === "qa-gateway-fixture"
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
+          ?.packageJson
+      : fs.existsSync(packageJsonPath)
+        ? readJsonFile(packageJsonPath)
+        : undefined;
   const bundleDependencies = shouldBundleDependencies(
     params.bundleDependencies,
     packageJsonForBundlePolicy,
@@ -1214,12 +1186,14 @@ function withPluginNpmManifestOverlay<T>(
     repoRoot,
     packageDir,
     clawhubMetadataDir: params.clawhubMetadataDir,
+    profile: params.profile,
   });
   const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
     packageDir,
     bundleDependencies: params.bundleDependencies,
     patchedDependencies: params.patchedDependencies,
+    profile: params.profile,
   });
 
   const originalManifest =
@@ -1269,17 +1243,8 @@ function withPluginNpmManifestOverlay<T>(
 }
 
 const RUN_USAGE =
-  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir>] -- <command> [args...]";
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir> | --qa-gateway-fixture] -- <command> [args...]";
 
-function readRunPackageDir(argv: string[]) {
-  const packageDir = argv[1];
-  if (!packageDir || packageDir.startsWith("--")) {
-    throw new Error(RUN_USAGE);
-  }
-  return packageDir;
-}
-
-/** @internal Directly tested script implementation detail. */
 export function parseRunArgs(argv: string[]):
   | { help: true; packageDir: string; command: string; args: string[] }
   | {
@@ -1287,6 +1252,7 @@ export function parseRunArgs(argv: string[]):
       command: string;
       args: string[];
       clawhubMetadataDir?: string;
+      profile?: "qa-gateway-fixture";
       help?: undefined;
     } {
   if (argv[0] === "--help" || argv[0] === "-h") {
@@ -1295,14 +1261,19 @@ export function parseRunArgs(argv: string[]):
   if (argv[0] !== "--run") {
     throw new Error(RUN_USAGE);
   }
-  const packageDir = readRunPackageDir(argv);
-  const separatorIndex = argv.indexOf("--", 2);
-  if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
+  const packageDir = argv[1];
+  if (!packageDir || packageDir.startsWith("--")) {
     throw new Error(RUN_USAGE);
   }
+  const separatorIndex = argv.indexOf("--", 2);
+  if (separatorIndex === -1 || separatorIndex === argv.length - 1) {
+    throw new Error(RUN_USAGE);
+  }
+  const fixture = argv[2] === "--qa-gateway-fixture";
   const clawhubMetadataDir = argv[2] === "--clawhub-metadata" ? argv[3] : undefined;
   if (
     separatorIndex !== 2 &&
+    !(fixture && separatorIndex === 3) &&
     (separatorIndex !== 4 || !clawhubMetadataDir || clawhubMetadataDir.startsWith("--"))
   ) {
     throw new Error(`unexpected plugin npm package manifest run argument: ${argv[2]}`);
@@ -1314,6 +1285,7 @@ export function parseRunArgs(argv: string[]):
   return {
     packageDir,
     ...(clawhubMetadataDir ? { clawhubMetadataDir: path.resolve(clawhubMetadataDir) } : {}),
+    ...(fixture ? { profile: "qa-gateway-fixture" as const } : {}),
     command,
     args: argv.slice(separatorIndex + 2),
   };
@@ -1331,6 +1303,7 @@ function main(argv: string[] = process.argv.slice(2)) {
       packageDir,
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
       clawhubMetadataDir: parsedArgs.clawhubMetadataDir,
+      profile: parsedArgs.profile,
     },
     ({ packageDir: cwd }) => {
       const commandArgs = [...args];
@@ -1355,11 +1328,15 @@ function main(argv: string[] = process.argv.slice(2)) {
           )}`;
         }
       }
-      const result = spawnCommandSync(command, commandArgs, {
+      const options: SpawnSyncOptions = {
         cwd,
         env: process.env,
         stdio: "inherit",
-      });
+      };
+      const result =
+        command === "npm"
+          ? spawnNpmSync(commandArgs, options)
+          : spawnSync(command, commandArgs, options);
       if (result.error) {
         throw result.error;
       }

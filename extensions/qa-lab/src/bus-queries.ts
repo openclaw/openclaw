@@ -37,9 +37,9 @@ export function cloneMessage(message: QaBusMessage): QaBusMessage {
   return {
     ...message,
     conversation: { ...message.conversation },
-    attachments: (message.attachments ?? []).map((attachment) => cloneAttachment(attachment)),
+    attachments: (message.attachments ?? []).map(cloneAttachment),
     ...(message.nativeCommand ? { nativeCommand: { ...message.nativeCommand } } : {}),
-    toolCalls: message.toolCalls?.map((toolCall) => cloneToolCall(toolCall)),
+    toolCalls: message.toolCalls?.map(cloneToolCall),
     reactions: message.reactions.map((reaction) => ({ ...reaction })),
   };
 }
@@ -82,8 +82,8 @@ export function buildQaBusSnapshot(params: {
       Object.assign({}, conversation),
     ),
     threads: Array.from(params.threads.values()).map((thread) => Object.assign({}, thread)),
-    messages: Array.from(params.messages.values()).map((message) => cloneMessage(message)),
-    events: params.events.map((event) => cloneEvent(event)),
+    messages: Array.from(params.messages.values()).map(cloneMessage),
+    events: params.events.map(cloneEvent),
   };
 }
 
@@ -166,7 +166,7 @@ export function searchQaBusMessages(params: {
       return `${messageText} ${searchableAttachmentText} ${searchableToolText}`.includes(query);
     })
     .slice(-limit)
-    .map((message) => cloneMessage(message));
+    .map(cloneMessage);
 }
 
 export function resolveQaBusPollStartCursor(params: {
@@ -197,6 +197,6 @@ export function pollQaBusEvents(params: {
   const nextCursor = matchingEvents.length > page.length ? page.at(-1)?.cursor : params.cursor;
   return {
     cursor: nextCursor ?? params.cursor,
-    events: page.map((event) => cloneEvent(event)),
+    events: page.map(cloneEvent),
   };
 }

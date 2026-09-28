@@ -29,34 +29,6 @@ afterEach(async () => {
 });
 
 describe("browser proxy upload transport", () => {
-  it("reads Gateway-owned files into a versioned envelope and omits node-facing paths", async () => {
-    const root = await createTempRoot("openclaw-browser-proxy-gateway-");
-    const uploadDir = path.join(root, "uploads");
-    const inboundMediaDir = path.join(root, "media", "inbound");
-    await fs.mkdir(uploadDir, { recursive: true });
-    const sourcePath = path.join(uploadDir, "report.txt");
-    await fs.writeFile(sourcePath, "gateway bytes", "utf8");
-
-    const prepared = await prepareBrowserProxyUploadRequest({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: { paths: [sourcePath], ref: "e12" },
-      uploadDir,
-      inboundMediaDir,
-    });
-
-    expect(prepared.body).toEqual({ ref: "e12" });
-    expect(prepared.upload).toEqual({
-      envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-      files: [
-        {
-          name: "report.txt",
-          contentBase64: Buffer.from("gateway bytes").toString("base64"),
-        },
-      ],
-    });
-  });
-
   it("preserves zero-byte files", async () => {
     const root = await createTempRoot("openclaw-browser-proxy-empty-");
     const uploadDir = path.join(root, "uploads");
@@ -114,6 +86,13 @@ describe("browser proxy upload transport", () => {
       body: { paths: [sourcePath], ref: "e12" },
       uploadDir: gatewayUploadDir,
       inboundMediaDir: path.join(gatewayRoot, "inbound"),
+    });
+    expect(prepared.body).toEqual({ ref: "e12" });
+    expect(prepared.upload).toEqual({
+      envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
+      files: [
+        { name: "report.txt", contentBase64: Buffer.from("cross-host bytes").toString("base64") },
+      ],
     });
     if (!prepared.upload) {
       throw new Error("expected browser proxy upload envelope");

@@ -18,7 +18,15 @@ import {
 } from "node:fs";
 import type { PathLike } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import {
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join as joinPath,
+  relative,
+  resolve,
+} from "node:path";
 import { addAbortSignal } from "node:stream";
 import { buffer as consumeStream } from "node:stream/consumers";
 import { StringDecoder } from "node:string_decoder";
@@ -1174,7 +1182,18 @@ function userDisplayPath(path: string) {
 }
 
 function blacksmithTestboxPrivateKeyPath(id: string) {
-  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+  const stateRoot = process.env.XDG_STATE_HOME;
+  if (
+    stateRoot &&
+    !(process.platform === "win32"
+      ? /^(?:[a-z]:[\\/]|[\\/]{2}|[\\/]\?\?[\\/][^\\/]+[\\/])/iu.test(stateRoot)
+      : isAbsolute(stateRoot))
+  ) {
+    console.error("[crabbox] XDG_STATE_HOME must be absolute for generated lease SSH material");
+    process.exit(2);
+  }
+  const root = stateRoot ? joinPath(stateRoot, "crabbox") : crabboxConfigDir();
+  return joinPath(root, "testboxes", id, "id_ed25519");
 }
 
 // Crabbox claims bind raw Testbox ids to one repo before remote execution.
@@ -1184,7 +1203,7 @@ function blacksmithTestboxClaimPath(id: string) {
 }
 
 function blacksmithTestboxClaimsDir() {
-  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+  const configuredStateRoot = process.env.XDG_STATE_HOME;
   const stateDir = configuredStateRoot
     ? resolve(configuredStateRoot, "crabbox")
     : resolve(crabboxConfigDir(), "state");
@@ -1314,7 +1333,7 @@ function observeBlacksmithTimingJSONLine(line: string) {
     if (
       canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
       typeof report.leaseId === "string" &&
-      report.leaseId.startsWith("tbx_")
+      /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId)
     ) {
       capturedBlacksmithLeaseId = report.leaseId;
     }
@@ -3838,11 +3857,36 @@ if (canonicalProvider === "blacksmith-testbox") {
 let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    args: normalizedArgs,
+    // Reuse the native-help parser's boundary; payload flags are never lease
+    // options. Equals form preserves option-looking values and Go's last value.
+    args: [
+      normalizedArgs[0] ?? "",
+      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) =>
+          normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
+            ? `--${name}=${value}`
+            : `--${name}`,
+      ),
+    ],
+    command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,
     repoRoot,
   });
+  if (testboxLeaseFreshness) {
+    // Native timing carries the allocated id for warmup as well as run. Capture
+    // it so reuse can require an allocation receipt instead of adopting a lease.
+    // Go flags use the last value. An earlier explicit false must not disable
+    // the allocation receipt after a retained lease has already been created.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--timing-json");
+    console.error(
+      JSON.stringify({
+        event: "testbox-admission",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: testboxLeaseFreshness.id || undefined,
+      }),
+    );
+  }
 } catch (error) {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
@@ -3977,6 +4021,7 @@ try {
       sourceCapsule = prepareCrabboxSourceCapsule({
         repoRoot,
         syncRoot,
+        reuseMirror: canonicalProvider === "blacksmith-testbox",
         syncPlan: spawnInvocation(
           binary,
           ["sync-plan", "--json", "--limit", "2147483647"],
@@ -4210,6 +4255,14 @@ const childStartedAtMs = Date.now();
 const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
+try {
+  // Preparation can yield while a receipt or source changes. Keep the original
+  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  testboxLeaseFreshness?.assertCurrent();
+} catch (error) {
+  cleanupOnce();
+  throw error;
+}
 // Persist admission before the child can observe or mutate the staged source.
 if (sourceStaging?.recorded) {
   let namespace;
@@ -4290,9 +4343,9 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
   let exitCode = code;
   const fullCheckoutAvailable =
     !fullCheckout || assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
-  if (settled && !signal && code === 0) {
+  if (settled && !signal && (code === 0 || capturedBlacksmithLeaseId)) {
     try {
-      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+      recordTestboxLeaseFreshness(testboxLeaseFreshness, capturedBlacksmithLeaseId, code ?? 1);
     } catch (error) {
       console.error(
         `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
@@ -4301,10 +4354,27 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
     }
   }
   const cleaned = cleanupOnce();
+  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
+  if (testboxLeaseFreshness) {
+    console.error(
+      JSON.stringify({
+        event: "testbox-completion",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: capturedBlacksmithLeaseId || testboxLeaseFreshness.id || undefined,
+        sourceTree: sourceCapsule?.tree,
+        elapsedMs: Date.now() - childStartedAtMs,
+        exitCode:
+          cancellationSignal || signal
+            ? (signalExitCodes.get(cancellationSignal ?? signal!) ?? 1)
+            : finalExitCode,
+        signal: cancellationSignal || signal,
+        settled,
+      }),
+    );
+  }
   if (cancellationSignal || signal) {
     process.exit(signalExitCodes.get(cancellationSignal ?? signal!) ?? 1);
   }
-  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
   if (finalExitCode === 0 && discoveredStaging && !cancellationSignal && !signal) {
     try {
       const recovered = await recoverDiscoveredStaging(

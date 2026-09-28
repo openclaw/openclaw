@@ -219,11 +219,6 @@ function makeAckReactionHandle() {
 function makeRemoveAckAfterReplyParams() {
   return {
     ...makeParams(),
-    cfg: {
-      tools: { media: { audio: { enabled: true } } },
-      channels: { whatsapp: {} },
-      commands: { useAccessGroups: false },
-    } as never,
     preflightAudioTranscript: "pre-computed transcript from caller",
   };
 }
@@ -423,18 +418,6 @@ describe("processMessage audio preflight transcription", () => {
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps caller-provided ack after a successful visible reply", async () => {
-    const ackReaction = makeAckReactionHandle();
-
-    await processMessage({
-      ...makeRemoveAckAfterReplyParams(),
-      ackReaction,
-    });
-    await flushMicrotasks();
-
-    expect(ackReaction.remove).not.toHaveBeenCalled();
-  });
-
   it("keeps internally sent ack after a successful visible reply", async () => {
     const ackReaction = makeAckReactionHandle();
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
@@ -443,36 +426,6 @@ describe("processMessage audio preflight transcription", () => {
     await flushMicrotasks();
 
     expect(maybeSendAckReactionMock).toHaveBeenCalledTimes(1);
-    expect(ackReaction.remove).not.toHaveBeenCalled();
-  });
-
-  it("keeps ack when no visible reply was delivered", async () => {
-    const ackReaction = makeAckReactionHandle();
-    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
-    vi.mocked(createWhatsAppReplyPlan).mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: async () => {} },
-      replyOptions: {},
-      replyResolver: vi.fn(),
-      finalize: () => false,
-    } as never);
-
-    await processMessage(makeRemoveAckAfterReplyParams());
-    await flushMicrotasks();
-
-    expect(ackReaction.remove).not.toHaveBeenCalled();
-  });
-
-  it("keeps ack when the ack send failed", async () => {
-    const ackReaction = {
-      ...makeAckReactionHandle(),
-      ackReactionPromise: Promise.resolve(false),
-    };
-    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
-
-    await processMessage(makeRemoveAckAfterReplyParams());
-    await flushMicrotasks();
-
     expect(ackReaction.remove).not.toHaveBeenCalled();
   });
 

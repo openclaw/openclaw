@@ -56,6 +56,17 @@ function projectMetadata(ir: MarkdownIR) {
   };
 }
 
+function expectSlicedMetadata(chunks: MarkdownIR[], reference: MarkdownIR) {
+  let cursor = 0;
+  const expected = chunks.map((chunk) => {
+    const start = reference.text.indexOf(chunk.text, cursor);
+    expect(start).toBeGreaterThanOrEqual(cursor);
+    cursor = start + chunk.text.length;
+    return sliceMarkdownIR(reference, start, cursor);
+  });
+  expect(chunks.map(projectMetadata)).toEqual(expected.map(projectMetadata));
+}
+
 it.each(["plain", "rendered"] as const)(
   "partitions a long parsed document without rescanning unrelated metadata (%s)",
   (mode) => {
@@ -87,61 +98,36 @@ it.each(["plain", "rendered"] as const)(
     } else {
       expect(chunks.map((chunk) => chunk.text).join("")).toBe(reference.text);
     }
-    let cursor = 0;
-    const expected = chunks.map((chunk) => {
-      const start = reference.text.indexOf(chunk.text, cursor);
-      expect(start).toBeGreaterThanOrEqual(cursor);
-      cursor = start + chunk.text.length;
-      return sliceMarkdownIR(reference, start, cursor);
-    });
-    expect(chunks.map(projectMetadata)).toEqual(expected.map(projectMetadata));
+    expectSlicedMetadata(chunks, reference);
     expect(projectMetadata(input)).toEqual(projectMetadata(reference));
     expect(metadataReads).toBeLessThanOrEqual(count.entries * 4 + chunks.length * 12);
   },
 );
 
-it.each(["plain", "rendered"] as const)(
-  "keeps unsorted and duplicated metadata independent across chunks (%s)",
-  (mode) => {
-    const input = longDocument();
-    for (const key of metadataKeys) {
-      const descriptor = Object.getOwnPropertyDescriptor(input, key);
-      const value: unknown = descriptor?.value;
-      if (Array.isArray(value)) {
-        const reversed = value.toReversed();
-        Object.defineProperty(input, key, {
-          ...descriptor,
-          value: [...reversed, ...reversed.slice(0, 1)],
-        });
-      }
+it("keeps unsorted and duplicated metadata independent across chunks", () => {
+  const input = longDocument();
+  for (const key of metadataKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    const value: unknown = descriptor?.value;
+    if (Array.isArray(value)) {
+      const reversed = value.toReversed();
+      Object.defineProperty(input, key, {
+        ...descriptor,
+        value: [...reversed, ...reversed.slice(0, 1)],
+      });
     }
-    const before = structuredClone(projectMetadata(input));
-    const chunks =
-      mode === "plain"
-        ? chunkMarkdownIR(input, 96)
-        : renderMarkdownIRChunksWithinLimit({
-            ir: input,
-            limit: 96,
-            renderChunk: (chunk) => chunk.text,
-            measureRendered: (rendered) => rendered.length,
-          }).map((chunk) => chunk.source);
-    let cursor = 0;
-    const expected = chunks.map((chunk) => {
-      const start = input.text.indexOf(chunk.text, cursor);
-      expect(start).toBeGreaterThanOrEqual(cursor);
-      cursor = start + chunk.text.length;
-      return sliceMarkdownIR(input, start, cursor);
-    });
-    expect(chunks.length).toBeGreaterThan(128);
-    expect(chunks.map(projectMetadata)).toEqual(expected.map(projectMetadata));
-    const links = chunks.flatMap((chunk) => chunk.links);
-    expect(new Set(links).size).toBe(links.length);
-    expect(links.every((link) => !input.links.includes(link))).toBe(true);
-    const first = links[0];
-    expect(first).toBeDefined();
-    if (first) {
-      first.href = "https://example.org/changed";
-    }
-    expect(projectMetadata(input)).toEqual(before);
-  },
-);
+  }
+  const before = structuredClone(projectMetadata(input));
+  const chunks = chunkMarkdownIR(input, 96);
+  expect(chunks.length).toBeGreaterThan(128);
+  expectSlicedMetadata(chunks, input);
+  const links = chunks.flatMap((chunk) => chunk.links);
+  expect(new Set(links).size).toBe(links.length);
+  expect(links.every((link) => !input.links.includes(link))).toBe(true);
+  const first = links[0];
+  expect(first).toBeDefined();
+  if (first) {
+    first.href = "https://example.org/changed";
+  }
+  expect(projectMetadata(input)).toEqual(before);
+});

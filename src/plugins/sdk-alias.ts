@@ -330,13 +330,9 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
     const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
     starts.push(path.join(nodeModulesDir, binName));
   }
-  try {
-    const resolved = pluginCacheRealpathSync(normalized);
-    if (resolved && resolved !== normalized) {
-      starts.push(path.dirname(resolved));
-    }
-  } catch {
-    // Keep the unresolved argv path; startup shims may not exist in tests.
+  const resolved = pluginCacheRealpathSync(normalized);
+  if (resolved && resolved !== normalized) {
+    starts.push(path.dirname(resolved));
   }
   starts.push(path.dirname(normalized));
   return dedupeResolvedPaths(starts);

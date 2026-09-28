@@ -197,23 +197,6 @@ describe("discord native /status", () => {
     setDefaultRouteState();
   });
 
-  it("returns a direct status reply without falling through the generic dispatcher", async () => {
-    const cfg = createConfig();
-    const command = await createStatusCommand(cfg);
-    const interaction = createInteraction();
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
-    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
-    expect(interaction.followUp).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
-      content: "status reply",
-      ephemeral: true,
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
   it("delivers an embed-only direct status reply without reporting it unavailable", async () => {
     const embeds = [{ title: "Status", description: "All systems operational" }];
     runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
@@ -243,6 +226,8 @@ describe("discord native /status", () => {
 
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
     expect(executePluginCommand).not.toHaveBeenCalled();
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
     expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
       content: "status reply",

@@ -1,5 +1,3 @@
-// Shared media-understanding types for attachments, provider hooks, request
-// auth, decisions, and structured extraction inputs.
 import type { Result } from "@openclaw/normalization-core/result";
 import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -156,25 +154,8 @@ export type VideoDescriptionResult = {
   model?: string;
 };
 
-export type ImageDescriptionRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-  prompt?: string;
-  maxTokens?: number;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  profile?: string;
-  preferredProfile?: string;
-  authStore?: AuthProfileStore;
-  agentId?: string;
-  agentDir: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: MediaPreparedModelRuntime;
-  cfg: OpenClawConfig;
-  model: string;
-  provider: string;
-};
+export type ImageDescriptionRequest = ImagesDescriptionInput &
+  Omit<ImagesDescriptionRequest, "images">;
 
 export type ImagesDescriptionInput = {
   buffer: Buffer;
@@ -205,10 +186,7 @@ export type ImageDescriptionResult = {
   model?: string;
 };
 
-export type ImagesDescriptionResult = {
-  text: string;
-  model?: string;
-};
+export type ImagesDescriptionResult = ImageDescriptionResult;
 
 export type StructuredExtractionTextInput = {
   type: "text";

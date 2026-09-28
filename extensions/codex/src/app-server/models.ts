@@ -1,7 +1,3 @@
-/**
- * Lists and normalizes models exposed by the Codex app-server `model/list`
- * endpoint, including pagination and shared-client lease handling.
- */
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -13,7 +9,10 @@ import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
 
-/** Normalized model metadata returned by the Codex app-server model listing helper. */
+// Allow Codex's five-second remote catalog refresh to finish or fall back,
+// with headroom for client acquisition, response transit, and account/read.
+export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+
 export type CodexAppServerModel = {
   id: string;
   model: string;
@@ -23,18 +22,17 @@ export type CodexAppServerModel = {
   isDefault?: boolean;
   inputModalities: string[];
   supportedReasoningEfforts: string[];
+  serviceTiers?: string[];
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
-/** One page of Codex app-server model metadata plus optional pagination state. */
 export type CodexAppServerModelListResult = {
   models: CodexAppServerModel[];
   nextCursor?: string;
   truncated?: boolean;
 };
 
-/** Options for querying Codex app-server models through a shared or isolated client. */
 type CodexAppServerListModelsOptions = {
   /** Caller-owned request scope for related catalog/account reads. */
   request?: CodexAppServerScopedRequest;
@@ -50,7 +48,6 @@ type CodexAppServerListModelsOptions = {
   sharedClient?: boolean;
 };
 
-/** Lists one Codex app-server model page using the configured auth/client options. */
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -59,7 +56,6 @@ export async function listCodexAppServerModels(
   );
 }
 
-/** Walks Codex app-server model pages until exhaustion or the max-page guard. */
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -91,7 +87,7 @@ async function withCodexAppServerModelRequest<T>(
   if (options.request) {
     return await run(options.request);
   }
-  const timeoutMs = options.timeoutMs ?? 2500;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
   const useSharedClient = options.sharedClient !== false;
   const {
     createIsolatedCodexAppServerClient,
@@ -140,7 +136,6 @@ async function requestModelListPage(
   return readModelListResult(response);
 }
 
-/** Parses a raw Codex app-server model/list response into OpenClaw's normalized shape. */
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
   const models = response.data.map((entry) => readCodexModel(entry));
@@ -168,6 +163,9 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
+    serviceTiers: normalizeUniqueTrimmedStringList(
+      (value.serviceTiers ?? []).map((tier) => tier.id),
+    ),
     supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
       value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
     ),

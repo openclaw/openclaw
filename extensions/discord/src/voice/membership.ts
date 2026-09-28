@@ -1,4 +1,3 @@
-// Discord plugin module owns voice-session participant membership events.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";

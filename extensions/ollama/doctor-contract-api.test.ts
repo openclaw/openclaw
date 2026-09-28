@@ -2,25 +2,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { createModel } from "./model.test-support.js";
 
-type ModelDefinition = NonNullable<
-  NonNullable<OpenClawConfig["models"]>["providers"]
->[string]["models"][number];
-
-const cloudModel: ModelDefinition = {
-  id: "kimi-k2.5:cloud",
-  name: "Kimi K2.5 Cloud",
-  reasoning: false,
-  input: ["text"],
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-  },
-  contextWindow: 131072,
-  maxTokens: 8192,
-};
+const cloudModel = createModel("kimi-k2.5:cloud", "Kimi K2.5 Cloud", { contextWindow: 131072 });
 
 function readOllamaCloudProvider(config: OpenClawConfig): Record<string, unknown> | undefined {
   return config.models?.providers?.["ollama-cloud"] as Record<string, unknown> | undefined;
@@ -142,13 +126,6 @@ describe("ollama doctor contract", () => {
   });
 
   it.each([
-    {
-      name: "removes retired Ollama Cloud provider baseURL aliases when canonical baseUrl is present",
-      inputBaseUrl: "https://ollama.com",
-      expectedBaseUrl: "https://ollama.com",
-      expectedChange:
-        "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
-    },
     {
       name: "migrates retired Ollama Cloud provider baseURL aliases when canonical baseUrl is blank",
       inputBaseUrl: " ",

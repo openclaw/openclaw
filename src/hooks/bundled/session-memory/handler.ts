@@ -1,10 +1,3 @@
-/**
- * Session memory hook handler
- *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with a timestamp slug by default
- */
-
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -195,7 +188,6 @@ async function saveSessionMemoryNow(
 
       if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
         slug = await generateSlugViaLLM({
           sessionContent: transcript.content,
@@ -207,13 +199,11 @@ async function saveSessionMemoryNow(
       }
     }
 
-    // If no slug, use timestamp
     if (!slug) {
       slug = localTimestamp.timeSlug;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
     const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
@@ -223,14 +213,12 @@ async function saveSessionMemoryNow(
 
     const timeStr = localTimestamp.time;
 
-    // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const boundaryDetail =
       event.type === "session"
         ? `- **Reason**: ${(context.reason as string) || "unknown"}`
         : `- **Source**: ${(context.commandSource as string) || "unknown"}`;
 
-    // Build Markdown entry
     const entryParts = [
       `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
@@ -240,7 +228,6 @@ async function saveSessionMemoryNow(
       "",
     ];
 
-    // Include conversation content if available
     if (transcript.status === "available" && transcript.content) {
       entryParts.push("## Conversation Summary", "", transcript.content, "");
     } else if (transcript.status === "unavailable") {

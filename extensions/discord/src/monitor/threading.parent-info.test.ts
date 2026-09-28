@@ -1,9 +1,27 @@
 // Discord tests cover threading.parent info plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, type Client } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
+
+function createClient() {
+  const fetchChannel = vi.fn(async (channelId: string) => {
+    if (channelId === "thread-1") {
+      return {
+        id: "thread-1",
+        type: ChannelType.PublicThread,
+        name: "thread-name",
+        parentId: "parent-1",
+      };
+    }
+    if (channelId === "parent-1") {
+      return { id: "parent-1", type: ChannelType.GuildText, name: "parent-name" };
+    }
+    return null;
+  });
+  return { fetchChannel, client: { fetchChannel } as unknown as Client };
+}
 
 describe("resolveDiscordThreadParentInfo", () => {
   beforeEach(() => {
@@ -11,28 +29,7 @@ describe("resolveDiscordThreadParentInfo", () => {
   });
 
   it("falls back to fetched thread parentId when parentId is missing in payload", async () => {
-    const fetchChannel = vi.fn(async (channelId: string) => {
-      if (channelId === "thread-1") {
-        return {
-          id: "thread-1",
-          type: ChannelType.PublicThread,
-          name: "thread-name",
-          parentId: "parent-1",
-        };
-      }
-      if (channelId === "parent-1") {
-        return {
-          id: "parent-1",
-          type: ChannelType.GuildText,
-          name: "parent-name",
-        };
-      }
-      return null;
-    });
-
-    const client = {
-      fetchChannel,
-    } as unknown as import("../internal/discord.js").Client;
+    const { client, fetchChannel } = createClient();
 
     const result = await resolveDiscordThreadParentInfo({
       client,
@@ -53,26 +50,7 @@ describe("resolveDiscordThreadParentInfo", () => {
   });
 
   it("falls back to fetched thread parentId when partial channel getters throw", async () => {
-    const fetchChannel = vi.fn(async (channelId: string) => {
-      if (channelId === "thread-1") {
-        return {
-          id: "thread-1",
-          type: ChannelType.PublicThread,
-          name: "thread-name",
-          parentId: "parent-1",
-        };
-      }
-      if (channelId === "parent-1") {
-        return {
-          id: "parent-1",
-          type: ChannelType.GuildText,
-          name: "parent-name",
-        };
-      }
-      return null;
-    });
-
-    const client = { fetchChannel } as unknown as import("../internal/discord.js").Client;
+    const { client, fetchChannel } = createClient();
     const threadChannel = createPartialDiscordChannelWithThrowingGetters(
       {
         id: "thread-1",

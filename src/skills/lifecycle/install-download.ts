@@ -1,4 +1,3 @@
-// Install download helpers fetch remote skill artifacts into temporary storage.
 import fs from "node:fs";
 import path from "node:path";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
@@ -22,10 +21,6 @@ const extractModuleLoader = createLazyImportLoader(() => import("./install-extra
 // Skill downloads share ClawHub and marketplace's 256 MiB artifact ceiling;
 // changing this limit is a supported-artifact compatibility decision.
 const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
-
-async function loadExtractModule() {
-  return await extractModuleLoader.load();
-}
 
 function resolveDownloadTargetDir(skillKey: string, spec: SkillInstallSpec): string {
   const root = resolveSkillToolsRootDir(skillKey);
@@ -293,7 +288,7 @@ export async function installDownloadSpec(params: {
     const stagingDir = path.join(path.dirname(tempArchivePath), "extracted");
     try {
       await fs.promises.mkdir(stagingDir, { mode: 0o700 });
-      const { extractSkillDownloadArchive } = await loadExtractModule();
+      const { extractSkillDownloadArchive } = await extractModuleLoader.load();
       const extractResult = await extractSkillDownloadArchive({
         archivePath: tempArchivePath,
         archiveType,

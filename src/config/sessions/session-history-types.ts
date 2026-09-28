@@ -1,3 +1,14 @@
+import type {
+  SessionArtifactReadQuery,
+  SessionArtifactReadResult,
+} from "../../gateway/session-artifact-read.js";
+import type {
+  ReadRecentSessionMessagesResult,
+  ReadSessionMessageByIdResult,
+  ReadSessionMessagesAroundIdResult,
+  ReadSessionMessagesResult,
+  SessionTranscriptReader,
+} from "../../gateway/session-transcript-read-kernel.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type {
   SessionTranscriptDisplayDeltaResult,
@@ -10,7 +21,21 @@ import type {
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
+export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
+  messages: Messages;
+  activity?: AgentHistoryActivity[];
+  messagesBytes: number;
+  responseHistoryBytes: number;
+  omission?: { omittedCount: number; normalizedBytes: number };
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+  completeSnapshot?: true;
+};
+
 export type ChatHistoryPage = {
+  encodedResponse?: ChatHistoryResponsePage<Uint8Array>;
+  windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
@@ -29,6 +54,7 @@ export type ChatHistoryPage = {
 };
 
 export type ChatHistoryPageParams = {
+  encodeResponse?: boolean;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
   sessionId: string | undefined;
@@ -54,6 +80,7 @@ export type SessionHistoryMessage = Record<string, unknown> & {
 };
 
 export type PaginatedSessionHistory = {
+  windowReset?: boolean;
   items: SessionHistoryMessage[];
   messages: SessionHistoryMessage[];
   nextCursor?: string;
@@ -98,20 +125,46 @@ export type SessionHistoryDelta = {
   subagentCoordination: SessionHistorySubagentFacts;
 };
 
-export type ReadSessionMessageByIdResult = {
-  message?: unknown;
-  seq?: number;
-  oversized: boolean;
-  found: boolean;
-  serializedBytes?: number;
-};
-
 export type SessionHistoryTranscriptBinding = { sessionKey: string; sessionId: string };
 
 export type SessionHistoryWorkerRequest =
   | {
+      kind: "artifacts";
+      params: { target: SessionTranscriptReadScope; query: SessionArtifactReadQuery };
+    }
+  | {
+      kind: "message-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<SessionTranscriptReader["readSessionMessagesPageWithStatsAsync"]>[1];
+      };
+    }
+  | {
+      kind: "around-id";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<
+          SessionTranscriptReader["readSessionMessagesAroundIdWithStatsAsync"]
+        >[1];
+      };
+    }
+  | {
+      kind: "source-messages";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1];
+      };
+    }
+  | {
+      kind: "recent-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<SessionTranscriptReader["readRecentSessionMessagesWithStatsAsync"]>[1];
+      };
+    }
+  | {
       kind: "transcript-binding";
-      params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
+      params: { target: SessionTranscriptReadScope };
     }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
@@ -140,6 +193,10 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "artifacts"; result: SessionArtifactReadResult }
+  | { kind: "message-page" | "recent-page"; result: ReadRecentSessionMessagesResult }
+  | { kind: "around-id"; result: ReadSessionMessagesAroundIdResult }
+  | { kind: "source-messages"; result: ReadSessionMessagesResult }
   | { kind: "transcript-binding"; binding: SessionHistoryTranscriptBinding | undefined }
   | { kind: "rpc"; page: ChatHistoryPage }
   | { kind: "message-lookup"; messages: unknown[] }

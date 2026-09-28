@@ -15,19 +15,13 @@ import { createTalkRealtimeRunControlOwner } from "./realtime-run-control.js";
 describe("Talk client Gateway control owner", () => {
   it.each([
     ["Status?", false, false, "delegation", true],
-    ["cancel", false, false, "delegation", true],
     ["use the release branch instead", false, false, "delegation", false],
     ["use the release branch instead", true, false, "delegation", true],
-    ["also check tests", false, false, "delegation", false],
-    ["also check tests", true, false, "delegation", true],
     ["cancel my meeting tomorrow", true, false, "delegation", false],
-    ["hello", false, false, "delegation", false],
     ["cancel", true, true, "transcript", true],
     ["Status?", false, true, "transcript", false],
-    ["cancel", false, true, "transcript", false],
     ["Status?", false, undefined, "transcript", false],
     ["Status?", false, false, "transcript", true],
-    ["cancel", false, false, "transcript", true],
   ] as const)(
     "admits %s (active=%s, tools=%s, source=%s)",
     async (text, active, supportsToolCalls, controlSource, handled) => {

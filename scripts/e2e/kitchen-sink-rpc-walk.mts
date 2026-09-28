@@ -1975,7 +1975,6 @@ const READ_ONLY_RPC_PROBES = [
   { method: "sessions.list", params: {} },
   { method: "cron.status", params: {} },
   { method: "cron.list", params: { includeDisabled: true } },
-  { method: "tasks.list", params: {} },
   { method: "usage.status", params: {} },
   { method: "usage.cost", params: {} },
   { method: "voicewake.get", params: {} },
@@ -1993,14 +1992,6 @@ const READ_ONLY_RPC_PROBES = [
 ];
 
 const AUTHORIZATION_RPC_PROBES = [{ method: "skills.bins", params: {} }];
-
-export function listKitchenSinkToolInvokeNames() {
-  return KITCHEN_SINK_TOOL_INVOKES.map((entry) => entry.name);
-}
-
-export function listKitchenSinkReadOnlyRpcProbeNames() {
-  return READ_ONLY_RPC_PROBES.map((entry) => entry.method);
-}
 
 export function listKitchenSinkAuthorizationRpcProbeNames() {
   return AUTHORIZATION_RPC_PROBES.map((entry) => entry.method);
@@ -2141,8 +2132,6 @@ export function assertGatewayStatusPayload(payload: unknown) {
     ],
     [Array.isArray(status.channelSummary), "channelSummary array"],
     [Array.isArray(status.queuedSystemEvents), "queuedSystemEvents array"],
-    [isRecord(status.tasks), "tasks summary"],
-    [isRecord(status.taskAudit), "taskAudit summary"],
     [
       isRecord(sessions) &&
         Array.isArray(sessions.paths) &&
@@ -2878,8 +2867,40 @@ type ResourceGatewayWorkload = ResourceGatewayPreparation & {
     name: string,
     count: number,
     run: (index: number) => Promise<void>,
+    options?: { splitFirst?: boolean },
   ) => Promise<KitchenSinkResourcePhase>;
 };
+
+export async function runKitchenSinkResourceToolWorkload(
+  { rpc, measure }: Pick<ResourceGatewayWorkload, "rpc" | "measure">,
+  count: number,
+) {
+  await measure("session-create", 1, async () => {
+    assertCreatedKitchenSinkSession(
+      await rpc("sessions.create", {
+        key: SESSION_KEY,
+        agentId: "main",
+        label: "kitchen-sink-resources",
+      }),
+    );
+  });
+  await measure(
+    "plugin-tool",
+    count,
+    async (index) => {
+      assertKitchenSinkTextInvokeResult(
+        await rpc("tools.invoke", {
+          name: "kitchen_sink_text",
+          args: { prompt: "explain kitchen sink resource profiling" },
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          idempotencyKey: `kitchen-sink-resources-${index}`,
+        }),
+      );
+    },
+    { splitFirst: true },
+  );
+}
 
 /** One frozen host package root as cwd per process; callers own outer deadlines and mock cleanup. */
 export async function runResourceGatewayCase(options: {
@@ -2976,8 +2997,14 @@ export async function runResourceGatewayCase(options: {
       ...context,
       rpc: (method, params) => rpcCall(method, params, { runner, env, port }),
       sample,
-      measure: async (name, count, run) => {
-        const measured = await measureResourceOperations({ name, count, sample, run });
+      measure: async (name, count, run, measurement) => {
+        const measured = await measureResourceOperations({
+          name,
+          count,
+          sample,
+          run,
+          ...measurement,
+        });
         result.phases.push(measured);
         if (measured.status !== "exercised") {
           throw new Error(`${name}: ${measured.error}`);
@@ -3150,24 +3177,10 @@ async function profileKitchenSinkResources(reportPath: string) {
           });
           await idle("post-neutral");
           if (enabled) {
-            const session = assertCreatedKitchenSinkSession(
-              await rpc("sessions.create", {
-                key: SESSION_KEY,
-                agentId: "main",
-                label: "kitchen-sink-resources",
-              }),
+            await runKitchenSinkResourceToolWorkload(
+              { rpc, measure },
+              report.measurement.pluginToolOperations,
             );
-            await measure("plugin-tool", report.measurement.pluginToolOperations, async (index) => {
-              assertKitchenSinkTextInvokeResult(
-                await rpc("tools.invoke", {
-                  name: "kitchen_sink_text",
-                  args: { prompt: "explain kitchen sink resource profiling" },
-                  sessionKey: String(session.key),
-                  agentId: "main",
-                  idempotencyKey: `kitchen-sink-resources-${index}`,
-                }),
-              );
-            });
             await idle("post-tool");
             result.calibration = await calibrateKitchenSinkResources({
               pluginId: PLUGIN_ID,

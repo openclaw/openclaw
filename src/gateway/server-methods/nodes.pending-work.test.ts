@@ -5,6 +5,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nodePendingWorkHandlers } from "./nodes.pending-work.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   captureNodePairingGeneration: vi.fn(),
@@ -70,6 +71,27 @@ function makeContext(overrides?: Partial<Record<string, unknown>>) {
   };
 }
 
+async function callPending(
+  method: "node.pending.drain" | "node.pending.enqueue",
+  params: Record<string, unknown>,
+  context: ReturnType<typeof makeContext>,
+  client: GatewayClient | null,
+) {
+  const respond = vi.fn();
+  await expectDefined(
+    nodePendingWorkHandlers[method],
+    method,
+  )({
+    params,
+    respond,
+    client,
+    context: context as never,
+    req: { type: "req", id: method, method },
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined {
   return respond.mock.calls[0] as RespondCall | undefined;
 }
@@ -100,7 +122,6 @@ describe("node.pending handlers", () => {
       items: [{ id: "baseline-status", type: "status.request", priority: "default" }],
       hasMore: false,
     });
-    const respond = vi.fn();
     const context = makeContext({
       nodeRegistry: {
         get: vi.fn(() => undefined),
@@ -108,20 +129,10 @@ describe("node.pending handlers", () => {
       },
     });
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.drain"],
-      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
-    )({
-      params: { maxItems: 3 },
-      respond: respond as never,
-      client: {
-        connId: "conn-ios-node-1",
-        connect: { device: { id: "ios-node-1" } },
-      } as never,
-      context: context as never,
-      req: { type: "req", id: "req-node-pending-drain", method: "node.pending.drain" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending("node.pending.drain", { maxItems: 3 }, context, {
+      connId: "conn-ios-node-1",
+      connect: { device: { id: "ios-node-1" } },
+    } as never);
 
     expect(mocks.drainNodePendingWork).toHaveBeenCalledWith("ios-node-1", {
       maxItems: 3,
@@ -141,19 +152,7 @@ describe("node.pending handlers", () => {
   });
 
   it("rejects node.pending.drain without a connected device identity", async () => {
-    const respond = vi.fn();
-
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.drain"],
-      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
-    )({
-      params: {},
-      respond: respond as never,
-      client: null,
-      context: makeContext() as never,
-      req: { type: "req", id: "req-node-pending-drain-missing", method: "node.pending.drain" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending("node.pending.drain", {}, makeContext(), null);
 
     const call = respondCall(respond);
     expect(call?.[0]).toBe(false);
@@ -162,7 +161,6 @@ describe("node.pending handlers", () => {
 
   it("rejects a changed pairing before draining its pending work", async () => {
     mocks.isNodePairingGenerationCurrent.mockResolvedValue(false);
-    const respond = vi.fn();
     const context = makeContext({
       nodeRegistry: {
         get: vi.fn(() => undefined),
@@ -170,20 +168,10 @@ describe("node.pending handlers", () => {
       },
     });
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.drain"],
-      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
-    )({
-      params: {},
-      respond: respond as never,
-      client: {
-        connId: "conn-stale-drain",
-        connect: { device: { id: "ios-node-stale-drain" } },
-      } as never,
-      context: context as never,
-      req: { type: "req", id: "req-node-stale-drain", method: "node.pending.drain" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending("node.pending.drain", {}, context, {
+      connId: "conn-stale-drain",
+      connect: { device: { id: "ios-node-stale-drain" } },
+    } as never);
 
     expect(respondCall(respond)).toMatchObject([
       false,
@@ -199,7 +187,6 @@ describe("node.pending handlers", () => {
       currentConnId = "conn-replacement";
       return true;
     });
-    const respond = vi.fn();
     const context = makeContext({
       nodeRegistry: {
         get: vi.fn(() => undefined),
@@ -207,20 +194,10 @@ describe("node.pending handlers", () => {
       },
     });
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.drain"],
-      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
-    )({
-      params: {},
-      respond: respond as never,
-      client: {
-        connId: "conn-original",
-        connect: { device: { id: "ios-node-reconnected" } },
-      } as never,
-      context: context as never,
-      req: { type: "req", id: "req-node-reconnected-drain", method: "node.pending.drain" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending("node.pending.drain", {}, context, {
+      connId: "conn-original",
+      connect: { device: { id: "ios-node-reconnected" } },
+    } as never);
 
     expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
     expect(respondCall(respond)).toMatchObject([
@@ -231,7 +208,6 @@ describe("node.pending handlers", () => {
   });
 
   it("rejects a prior-generation socket before it drains replacement work", async () => {
-    const respond = vi.fn();
     const context = makeContext({
       nodeRegistry: {
         get: vi.fn(() => undefined),
@@ -239,20 +215,10 @@ describe("node.pending handlers", () => {
       },
     });
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.drain"],
-      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
-    )({
-      params: {},
-      respond: respond as never,
-      client: {
-        connId: "conn-prior-generation",
-        connect: { device: { id: "ios-node-replaced" } },
-      } as never,
-      context: context as never,
-      req: { type: "req", id: "req-node-prior-drain", method: "node.pending.drain" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending("node.pending.drain", {}, context, {
+      connId: "conn-prior-generation",
+      connect: { device: { id: "ios-node-replaced" } },
+    } as never);
 
     expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
     expect(respondCall(respond)).toMatchObject([
@@ -295,23 +261,17 @@ describe("node.pending handlers", () => {
         getForPairingGeneration: vi.fn(() => (connected ? { nodeId: "ios-node-2" } : undefined)),
       },
     });
-    const respond = vi.fn();
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.enqueue"],
-      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
-    )({
-      params: {
+    const respond = await callPending(
+      "node.pending.enqueue",
+      {
         nodeId: " ios-node-2 ",
         type: "location.request",
         priority: "high",
       },
-      respond: respond as never,
-      client: null,
-      context: context as never,
-      req: { type: "req", id: "req-node-pending-enqueue", method: "node.pending.enqueue" },
-      isWebchatConnect: () => false,
-    });
+      context,
+      null,
+    );
 
     expect(mocks.enqueueNodePendingWork).toHaveBeenCalledWith({
       nodeId: "ios-node-2",
@@ -431,19 +391,13 @@ describe("node.pending handlers", () => {
         expiresAtMs: null,
       },
     });
-    const respond = vi.fn();
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.enqueue"],
-      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
-    )({
-      params: { nodeId: "node-stale-generation", type: "location.request", wake: false },
-      respond: respond as never,
-      client: null,
-      context: makeContext() as never,
-      req: { type: "req", id: "req-node-stale-generation", method: "node.pending.enqueue" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending(
+      "node.pending.enqueue",
+      { nodeId: "node-stale-generation", type: "location.request", wake: false },
+      makeContext(),
+      null,
+    );
 
     expect(mocks.enqueueNodePendingWork).not.toHaveBeenCalled();
     expect(respondCall(respond)).toMatchObject([
@@ -494,19 +448,13 @@ describe("node.pending handlers", () => {
       durationMs: 0,
     });
     const context = makeContext();
-    const respond = vi.fn();
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.enqueue"],
-      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
-    )({
-      params: { nodeId: " ios-node-invalidated ", type: "location.request" },
-      respond: respond as never,
-      client: null,
-      context: context as never,
-      req: { type: "req", id: "req-node-pending-invalidated", method: "node.pending.enqueue" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending(
+      "node.pending.enqueue",
+      { nodeId: " ios-node-invalidated ", type: "location.request" },
+      context,
+      null,
+    );
 
     expect(mocks.captureNodeWakeLifecycle).toHaveBeenCalledWith(
       "ios-node-invalidated",
@@ -557,19 +505,13 @@ describe("node.pending handlers", () => {
       },
     });
     mocks.isNodePairingGenerationCurrent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    const respond = vi.fn();
 
-    await expectDefined(
-      nodePendingWorkHandlers["node.pending.enqueue"],
-      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
-    )({
-      params: { nodeId: "node-replacement", type: "location.request", wake: false },
-      respond: respond as never,
-      client: null,
-      context: makeContext() as never,
-      req: { type: "req", id: "req-node-replacement", method: "node.pending.enqueue" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await callPending(
+      "node.pending.enqueue",
+      { nodeId: "node-replacement", type: "location.request", wake: false },
+      makeContext(),
+      null,
+    );
 
     expect(mocks.enqueueNodePendingWork).toHaveBeenCalledTimes(1);
     expect(mocks.removeNodePendingWorkItem).not.toHaveBeenCalled();

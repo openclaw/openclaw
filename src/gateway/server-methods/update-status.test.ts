@@ -3,10 +3,20 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
+import { UpdateCampaignController } from "../../infra/update-campaign.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import {
+  getUpdateSchedule,
+  resetUpdateStatusState,
+  setUpdateScheduleCache,
+} from "../../infra/update-status-state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -17,6 +27,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
@@ -27,13 +38,12 @@ import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
-vi.mock("../../infra/update-status-state.js", () => ({
-  getUpdateAvailable: () => null,
-  getUpdateSchedule: () => null,
-}));
-
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateSchedule(),
   refreshGatewayUpdateStatus: async () => {},
 }));
 
@@ -70,18 +80,187 @@ async function requestUpdateRead(method: UpdateReadMethod, params: Record<string
 }
 
 let home: TempHomeEnv;
+let lifecycle: UpdateCheckLifecycle;
+let campaignOwner: UpdateCampaignController;
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-status-");
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
+  campaignOwner = new UpdateCampaignController(lifecycle.scheduler);
+  lifecycle.campaign = campaignOwner;
 });
 afterEach(async () => {
+  await lifecycle.stop();
+  await lifecycle.scheduler.stop();
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   warn.mockClear();
+  resetUpdateStatusState();
   await home.restore();
 });
 
 describe("update history RPCs", () => {
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "settles an applying campaign when its handed-off run finishes %s",
+    async (status) => {
+      campaignOwner.announce({
+        target: { kind: "package", version: "2026.9.6" },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      expect(campaignOwner.adopt().status).toBe("adopted");
+      const campaignId = campaignOwner.getState()?.id;
+      const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
+      campaignOwner.bindRun(expectDefined(campaignId, "campaign id"), run.runId);
+      finishUpdateRun(run.runId, { status, reason: "database-schema-preflight" });
+
+      const respond = await requestUpdateRead("update.status");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          lastRun: expect.objectContaining({ runId: run.runId, status }),
+          schedule: { channel: "stable", autoEnabled: true },
+        }),
+      );
+      expect(campaignOwner.getState()).toBeUndefined();
+    },
+  );
+
+  it("reconciles the admitted campaign run even when newer history masks it", async () => {
+    campaignOwner.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    campaignOwner.adopt();
+    const campaignId = expectDefined(campaignOwner.getState(), "campaign state").id;
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
+    campaignOwner.bindRun(campaignId, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true },
+      }),
+    );
+    expect(campaignOwner.getState()).toBeUndefined();
+  });
+
+  it("preserves status and retries campaign reconciliation after an exact-run read fails", async () => {
+    campaignOwner.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    campaignOwner.adopt();
+    const campaign = expectDefined(campaignOwner.getState(), "campaign state");
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: campaign.id } });
+    campaignOwner.bindRun(campaign.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+    vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(new Error("ledger read failed"));
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true, campaign },
+      }),
+    );
+    expect(campaignOwner.getState()).toEqual(campaign);
+    expect(warn).toHaveBeenCalledWith(
+      "update.status campaign run lookup failed: ledger read failed",
+    );
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ schedule: { channel: "stable", autoEnabled: true } }),
+    );
+    expect(campaignOwner.getState()).toBeUndefined();
+  });
+
+  it.each(["running", "unrelated"] as const)(
+    "keeps an applying campaign when the latest run is %s",
+    async (kind) => {
+      campaignOwner.announce({
+        target: { kind: "package", version: "2026.9.6" },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      campaignOwner.adopt();
+      const campaign = campaignOwner.getState();
+      const run = createUpdateRun({
+        trigger: "campaign",
+        origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign?.id },
+      });
+      if (kind === "unrelated") {
+        finishUpdateRun(run.runId, { status: "failed" });
+      }
+
+      expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          schedule: { channel: "stable", autoEnabled: true, campaign },
+        }),
+      );
+      expect(campaignOwner.getState()).toEqual(campaign);
+    },
+  );
+
+  it("does not clear a replacement campaign after an awaited ledger read", async () => {
+    const announce = (version: string) => {
+      campaignOwner.announce({
+        target: { kind: "package", version },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      campaignOwner.adopt();
+      return expectDefined(campaignOwner.getState(), "campaign state");
+    };
+    const original = announce("2026.9.6");
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: original.id } });
+    campaignOwner.bindRun(original.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    const readStatus = ledger.getUpdateRunStatusAsync;
+    vi.spyOn(ledger, "getUpdateRunStatusAsync").mockImplementationOnce(async () => {
+      const status = await readStatus();
+      campaignOwner.clear();
+      announce("2026.9.7");
+      return status;
+    });
+
+    const respond = await requestUpdateRead("update.status");
+    const replacement = campaignOwner.getState();
+    expect(replacement).toMatchObject({ state: "applying" });
+    expect(replacement?.id).not.toBe(original.id);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        schedule: { channel: "stable", autoEnabled: true, campaign: replacement },
+      }),
+    );
+  });
+
   it("keeps private recovery receipts durable while status and history stay public", async () => {
     const capture = {
       manifestSha256: "a".repeat(64),
@@ -398,7 +577,7 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
   const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   clock.mockReturnValue(now);
   const broadcast = vi.fn();
-  const watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+  const watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   try {
     expect(getUpdateRun(legacy.runId)).toMatchObject({
       phase: "finished",

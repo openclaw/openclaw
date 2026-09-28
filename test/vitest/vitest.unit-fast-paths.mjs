@@ -60,7 +60,6 @@ const unitFastCandidatePatterns = prepareGlobPatterns(
     "src/sessions/**/*.test.ts",
     "src/shared/**/*.test.ts",
     "src/test-utils/**/*.test.ts",
-    "src/tasks/**/*.test.ts",
     "src/tts/**/*.test.ts",
     "src/utils/**/*.test.ts",
     "src/video-generation/**/*.test.ts",
@@ -120,7 +119,6 @@ export const forcedUnitFastTestFiles = [
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
-  "src/proxy-capture/proxy-server.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
   "src/talk/agent-consult-runtime.test.ts",
   "src/security/audit-config-basics.test.ts",
@@ -164,12 +162,24 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
 const ownerRoutedUnitTestPatterns = [
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
+  // Planner inventory proofs retain their tooling timing and worker policy
+  // when their source and fixtures are split across ownership files.
+  "test/scripts/ci-changed-node-test-plan.test.ts",
+  "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+  "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+  "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+  "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
   // Real Git process-tree fixtures stay in tooling even when their
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
   "test/scripts/plugin-release-git-lifecycle.test.ts",
   "test/scripts/release-workflow-git-lifecycle.test.ts",
+  // Release orchestration executes real CLI subprocesses through shared fixtures.
+  "test/scripts/release-stable.test.ts",
+  "test/scripts/release-stable-post.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
   // Detached handoff and service-manager fixtures retain their infra owner when shared.
@@ -230,7 +240,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",
     "test/helpers/stt-live-audio.test.ts",
-    "test/vitest-extensions-config.test.ts",
     "test/vitest-unit-paths.test.ts",
     ...boundaryTestFiles,
   ],

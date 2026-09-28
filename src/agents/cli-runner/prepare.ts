@@ -1,8 +1,5 @@
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-/**
- * Prepares CLI backend run context: backend config, prompts, bootstrap context,
- * MCP, auth epoch, and reusable session metadata.
- */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -50,13 +47,12 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
-import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -86,11 +82,7 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import {
-  buildCliSessionDriftNote,
-  hashCliSessionText,
-  resolveCliSessionReuse,
-} from "../cli-session.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -107,11 +99,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  remapSkillReferencePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "../embedded-agent-runner/sandbox-skills.js";
+import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
@@ -125,7 +113,6 @@ import {
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -159,16 +146,13 @@ import {
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
-import {
-  buildCliMcpGrantContext,
-  finalizeCliMcpGrant,
-  normalizeOptionalMcpContextValue,
-} from "./mcp-grant-context.js";
+import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
+  prependCliSessionDriftUserContext,
   prepareCliSystemPrompt,
 } from "./prompt-context.js";
 import { admitCliRunParams, prepareCliRunModelAuthority } from "./run-admission.js";
@@ -179,6 +163,7 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import { prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
@@ -239,110 +224,14 @@ const defaultPrepareDeps = {
 };
 const prepareDeps = { ...defaultPrepareDeps };
 
-function prependCliSessionDriftUserContext(
-  context: RunCliAgentParams["currentInboundContext"],
-  reusableCliSession: CliReusableSession,
-): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
-    return context;
-  }
-  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
-  if (!context) {
-    return { text: note };
-  }
-  return {
-    ...context,
-    text: [note, context.text].join("\n\n"),
-    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
-
-async function resolveCliSkillsPrompt(params: {
-  assertCurrent: () => void;
-  agentId: string;
-  config: RunCliAgentParams["config"];
-  sessionKey: string;
-  skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
-  workspaceDir: string;
-  executionWorkspaceDir: string;
-}): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
-  params.assertCurrent();
-  const skillsSnapshot =
-    params.skillsSnapshot ??
-    (
-      await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent: params.assertCurrent,
-        workspaceDir: params.workspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        config: params.config ?? {},
-        agentId: params.agentId,
-        watch: false,
-      })
-    ).snapshot;
-  params.assertCurrent();
-  const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-    skillsSnapshot,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  params.assertCurrent();
-  const {
-    skillsEligibility,
-    skillUsagePaths,
-    skillsPromptWorkspaceDir,
-    skillsSnapshot: skillsSnapshotForRun,
-    skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
-    sandbox: sandboxWorkspace ? { ...sandboxWorkspace, enabled: true } : undefined,
-    skillsAnchorWorkspace: sandboxWorkspace?.workspaceDir ?? params.workspaceDir,
-    skillsSnapshot,
-  });
-  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-    await resolveEmbeddedRunSkillEntries({
-      assertCurrent: params.assertCurrent,
-      workspaceDir: skillsWorkspaceDir,
-      ...(sandboxWorkspace ? {} : { executionWorkspaceDir: params.executionWorkspaceDir }),
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly,
-    });
-  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-    entries: shouldLoadSkillEntries ? skillEntries : undefined,
-    skillsWorkspaceDir,
-    skillsPromptWorkspaceDir,
-  });
-  return {
-    ...(sandboxWorkspace ? { usagePaths: skillUsagePaths } : {}),
-    prompt: await resolveSkillsPrompt({
-      assertCurrent: params.assertCurrent,
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      ...(sandboxWorkspace ? {} : { loadEntries: loadSkillEntries }),
-      workspaceDir: skillsPromptWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    }),
-  };
-}
-
-/** Overrides preparation dependencies for CLI runner tests. */
 function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
 }
 
-/** Restores preparation dependencies after CLI runner tests. */
 function resetCliRunnerPrepareTestDeps(): void {
   Object.assign(prepareDeps, defaultPrepareDeps);
 }
 
-/** Returns whether profile-owned prepared execution should skip local CLI epoch hashing. */
 function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
   authProfileId?: string;
@@ -382,7 +271,6 @@ function shouldResolveAuthProfileForExecution(params: {
   return params.authCredential.type === "api_key" || params.authCredential.type === "token";
 }
 
-/** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -844,8 +732,8 @@ async function prepareCliRunContextWithinReadFence(
 
   const modelId = (params.model ?? "default").trim() || "default";
   const modelProvider =
-    normalizeOptionalMcpContextValue(params.modelProvider) ??
-    normalizeOptionalMcpContextValue(params.provider) ??
+    normalizeOptionalString(params.modelProvider) ??
+    normalizeOptionalString(params.provider) ??
     params.provider;
   const normalizedCatalogModel = normalizeCliModel(modelId, backendResolved.config);
   const normalizedModel =
@@ -917,7 +805,6 @@ async function prepareCliRunContextWithinReadFence(
         messages: await loadOpenClawHistoryMessages(),
         hookCtx: promptBuildHookContext,
         hookRunner: promptBuildHookRunner,
-        bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
     } catch (error) {
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
@@ -1161,23 +1048,22 @@ async function prepareCliRunContextWithinReadFence(
   const requestedLoopbackToolsAllow =
     runtimeToolsAllowPolicy ??
     (rootedExecution ? rootedToolsAllow : params.cliToolAvailability?.openClaw);
-  const mcpProjectionContext =
-    mcpContextBase && requestedLoopbackToolsAllow !== undefined
-      ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
-      : mcpContextBase;
   const resolveProjectedTools =
     runtimeToolsAllowPolicy !== undefined || (rootedExecution && rootedToolsAllow === undefined)
       ? prepareDeps.resolveMcpLoopbackPolicyTools
       : prepareDeps.resolveMcpLoopbackScopedTools;
   params.assertCurrent?.();
   const projectedToolsBeforePromptBuild =
-    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) &&
-    mcpProjectionContext
+    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) && mcpContextBase
       ? (
           await resolveProjectedTools({
             cfg: runConfig,
             signal: params.abortSignal,
-            context: mcpProjectionContext,
+            context:
+              requestedLoopbackToolsAllow !== undefined
+                ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
+                : mcpContextBase,
+            sessionControlAuthority: readRunOperatorAuthority(params),
             rootedExecution,
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
@@ -1564,23 +1450,12 @@ async function prepareCliRunContextWithinReadFence(
       : prepareExecutionContext;
     try {
       params.assertCurrent?.();
+      // Only bundled backends receive this private credential bridge.
+      const backendPrepareContext = backendAuthPolicy
+        ? { ...privatePrepareExecutionContext, authCredential }
+        : privatePrepareExecutionContext;
       preparedExecution =
-        (await backendResolved.prepareExecution?.(
-          (backendAuthPolicy
-            ? {
-                ...privatePrepareExecutionContext,
-                // The core-internal auth policy table owns this private credential and isolated
-                // completion bridge; third-party backends cannot opt into either capability.
-                authCredential,
-              }
-            : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
-            authCredential?: AuthProfileCredential;
-            isolatedCompletionCwd?: string;
-            isolatedCompletionModelId?: string;
-            isolatedCompletionPrompt?: string;
-            isolatedCompletionSystemPrompt?: string;
-          },
-        )) ?? undefined;
+        (await backendResolved.prepareExecution?.(backendPrepareContext)) ?? undefined;
     } catch (error) {
       if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
         // Preserve the selected-profile fact across lazy plugin preparation so
@@ -1862,11 +1737,13 @@ async function prepareCliRunContextWithinReadFence(
           channel: runtimeChannel,
           accountId: params.agentAccountId,
         });
+    const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation
       ? ""
       : isSideQuestion
         ? extraSystemPrompt
         : await prepareCliSystemPrompt({
+            requesterProfileId,
             workspaceDir,
             cwd,
             config: params.config,
@@ -1953,6 +1830,7 @@ async function prepareCliRunContextWithinReadFence(
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
         const appendContext = await buildCliTurnAppendContext({
+          requesterProfileId,
           capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
           sessionKey: params.sessionKey,
           agentId: sessionAgentId,

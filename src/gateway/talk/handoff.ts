@@ -38,18 +38,11 @@ type TalkHandoffCreateParams = {
 };
 
 /** Private handoff state, including the hashed room token and event controller. */
-type TalkHandoffRecord = {
+type TalkHandoffRecord = Omit<TalkHandoffCreateParams, "ttlMs" | "mode" | "transport" | "brain"> & {
   id: string;
   roomId: string;
   roomUrl: string;
   tokenHash: string;
-  sessionKey: string;
-  sessionId?: string;
-  channel?: string;
-  target?: string;
-  provider?: string;
-  model?: string;
-  voice?: string;
   mode: TalkMode;
   transport: TalkTransport;
   brain: TalkBrain;

@@ -171,7 +171,7 @@ it.each(["activity", "work"] as const)("uses current prepared outcomes in %s sum
   expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
 });
 
-it.each(["blocked", undefined] as const)(
+it.each(["blocked", "skipped", undefined] as const)(
   "retains %s outcomes when completed work is expanded",
   (status) => {
     const message = createAssistantMessage([], {
@@ -201,7 +201,11 @@ it.each(["blocked", undefined] as const)(
       const summary = container.querySelector(".chat-activity-group__summary");
       expect(summary?.textContent).toContain("Worked for 1s");
       expect(summary?.textContent).toContain("1 tool call");
-      expect(summary?.textContent).toContain(status ? "1 blocked" : "1 unknown");
+      expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
+      if (status === "skipped") {
+        expect(summary?.textContent?.match(/1 skipped/g)).toHaveLength(1);
+        expect(summary?.textContent).not.toMatch(/blocked|failed/);
+      }
     }
   },
 );
@@ -352,7 +356,7 @@ it.each(["empty", "hidden", "suppressed"] as const)(
   },
 );
 
-it.each(["raw", "empty", "hidden", "suppressed", "completed", "blocked"] as const)(
+it.each(["raw", "empty", "hidden", "suppressed", "completed", "blocked", "skipped"] as const)(
   "keeps steering skips consistent with %s activity",
   (kind) => {
     const activity =
@@ -366,7 +370,8 @@ it.each(["raw", "empty", "hidden", "suppressed", "completed", "blocked"] as cons
               phase: "end",
               name: "exec",
               title: "Command",
-              status: kind === "completed" ? "completed" : "blocked",
+              status:
+                kind === "completed" ? "completed" : kind === "blocked" ? "blocked" : "skipped",
               ...(kind === "hidden" ? { hideFromChannelProgress: true } : {}),
               ...(kind === "suppressed" ? { suppressChannelProgress: true } : {}),
             },
@@ -376,11 +381,13 @@ it.each(["raw", "empty", "hidden", "suppressed", "completed", "blocked"] as cons
       ...(kind === "raw" ? {} : { activity }),
     });
     const expected =
-      kind === "raw" || kind === "blocked"
+      kind === "raw" || kind === "skipped"
         ? "Worked · 1 tool call · 1 skipped"
-        : kind === "completed"
-          ? "Worked · 1 tool call"
-          : "Worked";
+        : kind === "blocked"
+          ? "Worked · 1 tool call · 1 blocked"
+          : kind === "completed"
+            ? "Worked · 1 tool call"
+            : "Worked";
     expect(workSummaryText([message])).toBe(expected);
   },
 );

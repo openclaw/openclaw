@@ -7,11 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import {
-  extractToolCardsCached,
-  isToolCardSkipped,
-  resolveToolCardOutcome,
-} from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -49,6 +45,7 @@ type StreamMessageOptions = Pick<
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
+  | "getTurnVideoMessages"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "onAssistantAttachmentLoaded"
@@ -160,20 +157,25 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>
       ${
-        footerStartedAt !== null && !active
-          ? html`
-              <div class="chat-group-footer">
-                <div class="chat-group-footer__meta">
-                  <span class="chat-sender-name">${name}</span>
-                  ${renderChatTimestamp(footerStartedAt)}
+        footerStartedAt === null
+          ? nothing
+          : active
+            ? emptyGroupFooter
+            : html`
+                <div class="chat-group-footer">
+                  <div class="chat-group-footer__meta">
+                    <span class="chat-sender-name">${name}</span>
+                    ${renderChatTimestamp(footerStartedAt)}
+                  </div>
                 </div>
-              </div>
-            `
-          : nothing
+              `
       }
     </div>
   `;
 }
+
+/** A streaming answer already ends its turn: reserve its footer row before the footer content exists. */
+export const emptyGroupFooter = html`<div class="chat-group-footer" aria-hidden="true"></div>`;
 
 /** Completed work keeps elapsed time and outcomes above the expandable narration. */
 export function renderWorkGroupSummary(
@@ -211,28 +213,17 @@ export function renderWorkGroupSummary(
   const rawCards = new Set(
     entries.filter((entry) => entry.activity === undefined).flatMap((entry) => entry.cards),
   );
-  const fallback = new Set(
-    cards.filter(
-      (card) => rawCards.has(card) && (!card.callId || !preparedCallIds.has(card.callId)),
-    ),
+  const fallback = cards.filter(
+    (card) => rawCards.has(card) && (!card.callId || !preparedCallIds.has(card.callId)),
   );
-  const activity: Array<Parameters<typeof describeToolGroup>[0][number]> = [];
-  for (const entry of prepared) {
-    for (const activityItem of entry.activity) {
-      const card = cardsById.get(activityItem.toolCallId ?? activityItem.itemId);
-      // Copy only adjusted outcomes; the cached message projection stays untouched.
-      activity.push(
-        activityItem.status === "blocked" && card && isToolCardSkipped(card)
-          ? { ...activityItem, status: "skipped" }
-          : activityItem,
-      );
-    }
-  }
-  for (const [index, card] of [...fallback].entries()) {
+  const activity = prepared.flatMap((entry) => entry.activity);
+  for (const [index, card] of fallback.entries()) {
     const outcome = resolveToolCardOutcome(card, false);
     activity.push({
       itemId: `work-summary-raw:${index}`,
       toolCallId: card.callId,
+      kind: "tool",
+      phase: "end",
       title: card.name,
       name: card.name,
       status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
@@ -241,24 +232,8 @@ export function renderWorkGroupSummary(
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   const summary = describeToolGroup(activity);
   const total = summary.total;
-  const outcomes = summary.outcomes.filter(({ kind }) => kind !== "failed");
-  const currentActivity = new Map(
-    activity
-      .filter((activityItem) => !activityItem.suppressChannelProgress)
-      .map((activityItem) => [activityItem.toolCallId ?? activityItem.itemId, activityItem]),
-  );
-  const visibleCards = cards.filter((card) => {
-    const activityItem = card.callId ? currentActivity.get(card.callId) : undefined;
-    return (
-      fallback.has(card) ||
-      Boolean(
-        activityItem &&
-        !activityItem.hideFromChannelProgress &&
-        (!isToolCardSkipped(card) || activityItem.status === "skipped"),
-      )
-    );
-  });
-  const toolOutcomes = renderToolOutcomeSummary(visibleCards, true, activity);
+  const outcomes = summary.outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped");
+  const toolOutcomes = renderToolOutcomeSummary(cards, true, activity);
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
@@ -299,7 +274,10 @@ export function renderWorkGroupSummary(
   return opts.presentation === "continuation"
     ? content
     : html`
-        <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+        <div
+          class="chat-group tool chat-group--turn-block chat-group--work"
+          data-chat-row-key=${item.key}
+        >
           <div class="chat-group-messages">${content}</div>
         </div>
       `;

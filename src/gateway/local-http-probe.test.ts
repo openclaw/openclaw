@@ -10,11 +10,9 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixt
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { PROXY_FIXTURE_CERTIFICATE } from "../test-helpers/proxy-tls-fixture.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  createConfiguredGatewayLocalProbe,
-  requestGatewayLocalHttpProbe,
-} from "./local-http-probe.js";
+import { createConfiguredGatewayLocalProbe } from "./local-http-probe.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
 
@@ -54,21 +52,22 @@ test("probes configured local TLS readiness with its exact certificate pin", asy
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 200 });
       expect(paths).toEqual(expect.arrayContaining(["/healthz", "/readyz"]));
+      for (const host of ["0.0.0.0", "::", "127.0.0.1"]) {
+        await expect(
+          probe.requestHttp({ host, pathname: "/readyz", port: address.port, timeoutMs: 1_000 }),
+        ).resolves.toMatchObject({ statusCode: 200, body: JSON.stringify({ ready: true }) });
+      }
+      const mismatchedCertPath = path.join(directory, "mismatched-cert.pem");
+      await writeFile(mismatchedCertPath, PROXY_FIXTURE_CERTIFICATE);
+      const mismatchedProbe = createConfiguredGatewayLocalProbe({
+        gateway: { tls: { enabled: true, autoGenerate: false, certPath: mismatchedCertPath } },
+      });
       await expect(
-        probe.requestHttp({
+        mismatchedProbe.requestHttp({
           host: "127.0.0.1",
           pathname: "/readyz",
           port: address.port,
           timeoutMs: 1_000,
-        }),
-      ).resolves.toMatchObject({ statusCode: 200, body: JSON.stringify({ ready: true }) });
-      await expect(
-        requestGatewayLocalHttpProbe({
-          host: "127.0.0.1",
-          pathname: "/readyz",
-          port: address.port,
-          timeoutMs: 1_000,
-          tlsFingerprints: [fingerprint.replace(/[\dA-F]/g, "0")],
         }),
       ).resolves.toBeNull();
     } finally {

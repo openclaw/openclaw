@@ -137,18 +137,13 @@ export function selectEmbeddedRunHarnessForPreparedAttempts(
   const selected = selectAgentHarnessForPreparedModelProviders({
     provider: params.provider,
     modelId: params.modelId,
-    modelProviders: params.attempts.map((attempt) => {
-      const route = attempt.plan.modelRoute;
-      const model = route
-        ? { ...params.model, api: route.api, baseUrl: route.baseUrl }
-        : params.model;
-      return buildHarnessModelProvider({
+    modelProviders: params.attempts.map((attempt) =>
+      buildHarnessModelProvider({
         ...params,
-        model,
         plan: attempt.plan,
         preparedAuthAttempt: attempt,
-      });
-    }),
+      }),
+    ),
     config: params.runParams.config,
     agentId: params.runParams.agentId,
     sessionKey: params.runParams.sessionKey,

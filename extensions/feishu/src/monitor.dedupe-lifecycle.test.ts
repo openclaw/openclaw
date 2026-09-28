@@ -1,5 +1,8 @@
 import { EventDispatcher } from "@larksuiteoapi/node-sdk";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
+  createChannelIngressQueueForTests,
+  observeChannelIngressQueueWrite,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createPluginRuntimeMock, createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -93,6 +96,7 @@ describe("Feishu account replay work ownership", () => {
         const deferred = createDeferred<FeishuIngressLifecycle>();
         const commitStarted = createDeferred<void>();
         const commitGate = createDeferred<void>();
+        const evicted = createDeferred<boolean>();
         const transportClosed = createDeferred<void>();
         const claim: FeishuMessageProcessingClaim = {
           keys: ["deferred-message"],
@@ -163,12 +167,22 @@ describe("Feishu account replay work ownership", () => {
         mocks.runtime.mockReturnValue(
           createPluginRuntimeMock({
             state: {
-              openChannelIngressQueue: <T, TMetadata = unknown, TCompletedMetadata = unknown>() =>
-                createChannelIngressQueueForTests<T, TMetadata, TCompletedMetadata>({
+              openChannelIngressQueue: <T, TMetadata = unknown, TCompletedMetadata = unknown>() => {
+                const ingressQueue = createChannelIngressQueueForTests<
+                  T,
+                  TMetadata,
+                  TCompletedMetadata
+                >({
                   channelId: "feishu",
                   accountId: "test",
                   stateDir: state.stateDir,
-                }),
+                });
+                void observeChannelIngressQueueWrite(ingressQueue, "release").then(
+                  evicted.resolve,
+                  evicted.reject,
+                );
+                return ingressQueue;
+              },
             },
           }),
         );
@@ -205,6 +219,7 @@ describe("Feishu account replay work ownership", () => {
             await commitStarted.promise;
             await vi.advanceTimersByTimeAsync(5 * 60_000);
             vi.useRealTimers();
+            await expect(evicted.promise).resolves.toBe(true);
           } else {
             const lifecycle = await deferred.promise;
             adoption = Promise.resolve(lifecycle.onAdopted());

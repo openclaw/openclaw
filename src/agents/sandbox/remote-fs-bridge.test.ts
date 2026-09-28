@@ -37,8 +37,8 @@ function createStatRuntime(
       if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
         return shellResult("1\n");
       }
-      if (command.script.includes('readlink -f -- "$cursor"')) {
-        return shellResult(`${workspaceDir}/note.txt\n${workspaceDir}\n`);
+      if (command.script.includes('readlink -n -f -- "$cursor"')) {
+        return shellResult(`${workspaceDir}/note.txt\0${workspaceDir}\0`);
       }
       if (command.script.includes('stat -c "%F|%h"')) {
         return shellResult(`${outputs.hardlinks(command.script)}\n`);

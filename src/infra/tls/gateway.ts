@@ -4,14 +4,13 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { ensureDurableDirectory, publishFileExclusive } from "@openclaw/fs-safe/durability";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
 import { readFileDescriptorBounded } from "../boundary-file-read.js";
-import { ensureDurableDirectory, publishFileNoClobber } from "../directory-durability.js";
 import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 
@@ -52,15 +51,10 @@ function gatewayTlsDegradation(reason: GatewayTlsDegradation["reason"]): Gateway
   };
 }
 
-type PublishedGeneratedTlsOutput = {
-  degradationReasons: GatewayTlsDegradation["reason"][];
-  identity: Stats;
-};
-
 async function publishGeneratedTlsOutput(
   stagedPath: string,
   finalPath: string,
-): Promise<PublishedGeneratedTlsOutput> {
+): Promise<GatewayTlsDegradation["reason"][]> {
   const degradationReasons: GatewayTlsDegradation["reason"][] = [];
   const stagedHandle = await fs.open(stagedPath, "r+");
   let stagedIdentity: Stats;
@@ -70,32 +64,19 @@ async function publishGeneratedTlsOutput(
   } finally {
     await stagedHandle.close();
   }
-  const publication = await publishFileNoClobber(stagedPath, finalPath, {
+  const publication = await publishFileExclusive({
+    sourcePath: stagedPath,
+    targetPath: finalPath,
+    expectedSourceIdentity: stagedIdentity,
     strategy: "link-or-copy",
-    durability: "degrade",
   });
   if (publication.method === "exclusive-copy") {
     degradationReasons.push("atomic hard-link publication unavailable");
   }
-  if (publication.durability === "degraded") {
+  if (publication.directorySync.status === "unsupported") {
     degradationReasons.push("directory durability unavailable");
   }
-  const [currentStagedIdentity, currentPublishedIdentity] = await Promise.all([
-    fs.lstat(stagedPath),
-    fs.lstat(finalPath),
-  ]);
-  const hardlinkChanged =
-    publication.method === "hardlink" && !sameFileIdentity(stagedIdentity, publication.identity);
-  if (
-    !currentStagedIdentity.isFile() ||
-    !currentPublishedIdentity.isFile() ||
-    !sameFileIdentity(stagedIdentity, currentStagedIdentity) ||
-    !sameFileIdentity(publication.identity, currentPublishedIdentity) ||
-    hardlinkChanged
-  ) {
-    throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
-  }
-  return { degradationReasons, identity: publication.identity };
+  return degradationReasons;
 }
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
@@ -172,17 +153,17 @@ async function generateSelfSignedCert(params: {
     ) {
       degradationReasons.add("directory durability unavailable");
     }
-    const certPublication = await publishGeneratedTlsOutput(
+    const certDegradationReasons = await publishGeneratedTlsOutput(
       stagedCertPath,
       path.join(certDirectory.path, path.basename(params.certPath)),
     );
-    certPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    certDegradationReasons.forEach((reason) => degradationReasons.add(reason));
     // Preserve the published certificate on key failure: conditional pathname removal is not atomic.
-    const keyPublication = await publishGeneratedTlsOutput(
+    const keyDegradationReasons = await publishGeneratedTlsOutput(
       stagedKeyPath,
       path.join(keyDirectory.path, path.basename(params.keyPath)),
     );
-    keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    keyDegradationReasons.forEach((reason) => degradationReasons.add(reason));
     for (const reason of degradationReasons) {
       const degradation = gatewayTlsDegradation(reason);
       params.log?.warn?.(

@@ -177,6 +177,7 @@ const APPLE_VIEW_FUNCTION =
 const APPLE_ALERT_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^{]*\{[^{}]{0,600}\bNSAlert\s*\(/gu;
 const APPLE_BUILTIN_UI_CALLS = new Set([
   "Alert",
+  "AuthProblemDefaults",
   "Button",
   "ControlGroup",
   "DatePicker",
@@ -447,98 +448,6 @@ function findClosingDelimiter(
   return null;
 }
 
-function readSwiftStringLiteral(
-  source: string,
-  openingQuote: number,
-): { end: number; value: string } | null {
-  if (source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
-    return null;
-  }
-  let raw = "";
-  for (let index = openingQuote + 1; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "\\") {
-      const next = source[index + 1];
-      if (next === undefined) {
-        return null;
-      }
-      if (next === "(") {
-        const end = findClosingDelimiter(source, index + 1, "(", ")");
-        if (end === null) {
-          return null;
-        }
-        raw += source.slice(index, end + 1);
-        index = end;
-        continue;
-      }
-      if (next === "n") {
-        raw += "\n";
-      } else if (next === "r") {
-        raw += "\r";
-      } else if (next === "t") {
-        raw += "\t";
-      } else if (next === '"' || next === "\\") {
-        raw += next;
-      } else {
-        raw += character + next;
-      }
-      index += 1;
-      continue;
-    }
-    if (character === '"') {
-      return { end: index + 1, value: raw };
-    }
-    raw += character;
-  }
-  return null;
-}
-
-function readKotlinStringLiteral(
-  source: string,
-  openingQuote: number,
-): { end: number; value: string } | null {
-  if (source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
-    return null;
-  }
-  let raw = "";
-  for (let index = openingQuote + 1; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "$" && source[index + 1] === "{") {
-      const end = findClosingDelimiter(source, index + 1, "{", "}");
-      if (end === null) {
-        return null;
-      }
-      raw += source.slice(index, end + 1);
-      index = end;
-      continue;
-    }
-    if (character === "\\") {
-      const next = source[index + 1];
-      if (next === undefined) {
-        return null;
-      }
-      if (next === "n") {
-        raw += "\n";
-      } else if (next === "r") {
-        raw += "\r";
-      } else if (next === "t") {
-        raw += "\t";
-      } else if (next === '"' || next === "\\" || next === "$") {
-        raw += next;
-      } else {
-        raw += character + next;
-      }
-      index += 1;
-      continue;
-    }
-    if (character === '"') {
-      return { end: index + 1, value: raw };
-    }
-    raw += character;
-  }
-  return null;
-}
-
 function readMultilineStringLiteral(
   source: string,
   openingQuote: number,
@@ -561,12 +470,54 @@ function readNativeStringLiteral(
   source: string,
   openingQuote: number,
 ): { end: number; value: string } | null {
-  return (
-    readMultilineStringLiteral(source, openingQuote) ??
-    (surface === "apple"
-      ? readSwiftStringLiteral(source, openingQuote)
-      : readKotlinStringLiteral(source, openingQuote))
-  );
+  const multiline = readMultilineStringLiteral(source, openingQuote);
+  if (multiline || source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
+    return multiline;
+  }
+  const interpolationStart = surface === "apple" ? "\\(" : "${";
+  const interpolationEnd = surface === "apple" ? ")" : "}";
+  let raw = "";
+  for (let index = openingQuote + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (source.startsWith(interpolationStart, index)) {
+      const end = findClosingDelimiter(
+        source,
+        index + 1,
+        surface === "apple" ? "(" : "{",
+        interpolationEnd,
+      );
+      if (end === null) {
+        return null;
+      }
+      raw += source.slice(index, end + 1);
+      index = end;
+      continue;
+    }
+    if (character === "\\") {
+      const next = source[index + 1];
+      if (next === undefined) {
+        return null;
+      }
+      if (next === "n") {
+        raw += "\n";
+      } else if (next === "r") {
+        raw += "\r";
+      } else if (next === "t") {
+        raw += "\t";
+      } else if (next === '"' || next === "\\" || (surface === "android" && next === "$")) {
+        raw += next;
+      } else {
+        raw += character + next;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === '"') {
+      return { end: index + 1, value: raw };
+    }
+    raw += character;
+  }
+  return null;
 }
 
 function readAdjacentStringLiterals(
@@ -654,10 +605,6 @@ function decodeLiteral(raw: string, kind: string): string {
   }
 }
 
-function normalizeSource(source: string): string {
-  return source;
-}
-
 function identifierBefore(source: string, offset: number): string | null {
   let cursor = offset - 1;
   while (cursor >= 0 && source.charCodeAt(cursor) <= 32) {
@@ -737,7 +684,7 @@ function addCandidate(
   kind: string,
   line: number,
 ) {
-  const normalized = normalizeSource(decodeLiteral(source, kind));
+  const normalized = decodeLiteral(source, kind);
   if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
@@ -1359,8 +1306,9 @@ async function syncNativeI18n(options: {
     await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
     await writeFile(OUTPUT_PATH, expected, "utf8");
   }
-  const count = JSON.parse(expected).entries.length as number;
-  process.stdout.write(`native-app-i18n: entries=${count} changed=${current !== expected}\n`);
+  process.stdout.write(
+    `native-app-i18n: entries=${entries.length} changed=${current !== expected}\n`,
+  );
   return entries;
 }
 
@@ -1824,7 +1772,7 @@ async function main() {
       await apple.verifyAppleAppI18n();
     } else {
       await android.checkAndroidAppI18n({ reportObsolete });
-      await apple.checkAppleAppI18n();
+      await apple.checkAppleAppI18n({ reportObsolete });
     }
   }
   if (parsed.command === "sync" && parsed.write && !parsed.locale) {

@@ -108,13 +108,6 @@ export function retainSqliteWriteAdmissionService(
   };
 }
 
-/** Native coordinator waits must keep the same worker's current-authority grants serviceable. */
-export function sqliteWriteAdmissionServicesForLocation(
-  location: string,
-): ReadonlySet<() => void> | undefined {
-  return writeAdmissionServices.get(normalizeWriteAdmissionLocation(location));
-}
-
 type SqliteBeginAdmissionDiagnostics = {
   nativeAttempts: number;
   nativeMs: number;
@@ -251,37 +244,6 @@ function logSlowTransactionHold(params: {
     threadId,
     thresholdMs: slowTransactionHoldThresholdMs(params.options),
   });
-}
-
-/** The lifecycle lock precedes BEGIN, so transaction hold diagnostics cannot see this wait. */
-export function logSlowSqliteCoordinatorWait(
-  elapsedMs: number,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel">,
-): void {
-  if (!isMainThread || elapsedMs <= 100) {
-    return;
-  }
-  try {
-    // Capture only slow waits, while the synchronous owner's call chain is still on the stack.
-    const trace = new Error();
-    Error.captureStackTrace(trace, logSlowSqliteCoordinatorWait);
-    transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
-      async: false,
-      caller: trace.stack
-        ?.split("\n")
-        .slice(1, 9)
-        .map((frame) => frame.trim())
-        .join(" <- "),
-      ...transactionDiagnosticLabels(undefined, options),
-      elapsedMs,
-      isMainThread,
-      pid: process.pid,
-      threadId,
-      thresholdMs: 100,
-    });
-  } catch {
-    // Diagnostics cannot abandon an acquired coordinator or replace its admission error.
-  }
 }
 
 function logSlowTransactionStep(params: {

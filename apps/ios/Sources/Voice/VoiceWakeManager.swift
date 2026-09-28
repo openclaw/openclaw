@@ -451,7 +451,9 @@ final class VoiceWakeManager: NSObject {
         }
 
         guard let transcript else { return }
-        guard let cmd = self.extractCommand(from: transcript, segments: segments) else { return }
+        guard let cmd = Self.extractCommand(
+            from: transcript, segments: segments, triggers: self.activeTriggerWords)
+        else { return }
 
         if cmd == self.lastDispatched { return }
         self.lastDispatched = cmd
@@ -507,10 +509,6 @@ final class VoiceWakeManager: NSObject {
         self.commandTask = nil
     }
 
-    private func extractCommand(from transcript: String, segments: [WakeWordSegment]) -> String? {
-        Self.extractCommand(from: transcript, segments: segments, triggers: self.activeTriggerWords)
-    }
-
     nonisolated static func extractCommand(
         from transcript: String,
         segments: [WakeWordSegment],
@@ -521,7 +519,7 @@ final class VoiceWakeManager: NSObject {
         return WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command
     }
 
-    private static func configureAudioSession() throws {
+    private func configureOwnedAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [
             .duckOthers,
@@ -531,10 +529,6 @@ final class VoiceWakeManager: NSObject {
         ])
         try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try session.setActive(true, options: [])
-    }
-
-    private func configureOwnedAudioSession() throws {
-        try Self.configureAudioSession()
         self.audioSessionIsActive = true
     }
 
@@ -555,13 +549,7 @@ final class VoiceWakeManager: NSObject {
 
     private nonisolated static func microphonePermissionMessage(kind: String) -> String {
         let status = AVAudioApplication.shared.recordPermission
-        return self.deniedByDefaultPermissionMessage(
-            kind: kind,
-            isUndetermined: status == .undetermined)
-    }
-
-    private nonisolated static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {
-        if isUndetermined {
+        if status == .undetermined {
             return String(
                 format: String(localized: "%@ permission not granted"),
                 kind)

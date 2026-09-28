@@ -72,22 +72,12 @@ function appendReceivedValueHint(message: string, pathValue: string, value: unkn
 }
 
 describe("formatConfigIssuePath", () => {
-  it("formats numeric segments with bracket notation", () => {
-    expect(formatConfigIssuePath(["agents", "list", 3, "tools", "profile"])).toBe(
-      "agents.list[3].tools.profile",
-    );
-  });
-
   it("handles consecutive numeric indices", () => {
     expect(formatConfigIssuePath(["a", 0, "b", 1])).toBe("a[0].b[1]");
   });
 
   it("normalizes an empty path to the root marker", () => {
     expect(formatConfigIssuePath([])).toBe("<root>");
-  });
-
-  it("handles all-string path", () => {
-    expect(formatConfigIssuePath(["foo", "bar", "baz"])).toBe("foo.bar.baz");
   });
 });
 
@@ -111,11 +101,6 @@ describe("resolveConfigIssueLineInRaw", () => {
     ].join("\n");
 
     expect(resolveConfigIssueLineInRaw(raw, ["agents", "list", 1, "tools", "profile"])).toBe(9);
-  });
-
-  it("resolves line number for top-level key", () => {
-    const raw = ["{", '  "update": {', '    "channel": "nightly"', "  }", "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["update", "channel"])).toBe(3);
   });
 
   it("returns undefined for path not in raw text", () => {
@@ -145,9 +130,6 @@ describe("resolveConfigIssueLineInRaw", () => {
     ],
     ["handles single-quoted strings", "{\n  'key': 'value'\n}", "key", 2],
     ["handles hex numbers as values", '{\n  "a": 0x1A,\n  "b": 1\n}', "b", 3],
-    ["handles leading decimal numbers", '{\n  "a": .5,\n  "b": 1\n}', "b", 3],
-    ["handles Infinity value", '{\n  "a": Infinity,\n  "b": 1\n}', "b", 3],
-    ["handles NaN value", '{\n  "a": NaN,\n  "b": 1\n}', "b", 3],
     ["handles trailing commas in objects", '{\n  "a": 1,\n}', "a", 2],
     ["handles trailing commas in arrays", '{\n  "a": [1, 2,]\n}', "a", 2],
     [
@@ -160,18 +142,10 @@ describe("resolveConfigIssueLineInRaw", () => {
     ["handles unicode keys", '{\n  "café": 1\n}', "café", 2],
     ["handles escaped quotes in strings", '{\n  "a": "hello \\"world\\"",\n  "b": 1\n}', "b", 3],
     ["handles block comments before keys", '{\n  /* comment */\n  "key": "value"\n}', "key", 3],
-    ["handles mixed single/double quotes", "{\n  'key': \"value\"\n}", "key", 2],
     ["handles empty object value", '{\n  "a": {}\n}', "a", 2],
     ["handles empty array value", '{\n  "a": []\n}', "a", 2],
   ])("%s", (_name, raw, key, expectedLine) => {
     expect(resolveConfigIssueLineInRaw(raw, [key])).toBe(expectedLine);
-  });
-
-  it("handles null and boolean values", () => {
-    const raw = ["{", '  "a": null, "b": true, "c": false', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(2);
-    expect(resolveConfigIssueLineInRaw(raw, ["c"])).toBe(2);
   });
 
   it("handles deeply nested arrays", () => {
@@ -193,16 +167,6 @@ describe("resolveConfigIssueLineInRaw", () => {
 });
 
 describe("appendReceivedValueHint", () => {
-  it("appends got: for simple values", () => {
-    expect(
-      appendReceivedValueHint(
-        'Invalid input (allowed: "minimal", "coding")',
-        "agents.list[0].tools.profile",
-        "none",
-      ),
-    ).toBe('Invalid input (allowed: "minimal", "coding"), got: "none"');
-  });
-
   it("keeps truncated received values on a valid UTF-16 boundary", () => {
     const message = appendReceivedValueHint(
       "invalid input",

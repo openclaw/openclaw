@@ -20,6 +20,7 @@ type Observation = {
   parent: number;
   group: string;
   inputDigest: string;
+  includeFile: string;
 };
 const generationDirectory = (generation: string) => fileURLToPath(new URL("../../", generation));
 
@@ -65,6 +66,7 @@ function createCiProbe(
       }
       fs.appendFileSync(${JSON.stringify(observationsFile)}, JSON.stringify({
         generation: generation.href, pid: process.pid, parent: process.ppid, group,
+        includeFile: process.env.OPENCLAW_VITEST_INCLUDE_FILE,
         inputDigest: createHash('sha256').update(JSON.stringify(manifest.inputs)).digest('hex'),
       })+'\\n');
       if (${retain}) {
@@ -113,6 +115,9 @@ function createCiProbe(
 function ciEnv(probe: string, parallelism: number, repeatSpec = false): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    // Nested groups own their cache slots; a parent cache leaf forces serial admission.
+    OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "",
     OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(parallelism),
     OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
     OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
@@ -145,9 +150,7 @@ it.runIf(process.platform !== "win32").for([
       const directory = workerArtifacts.fixtureDirectory();
       const fixture = createCiProbe(directory);
       const temp = path.join(directory, "tmp");
-      if (!shared) {
-        fs.mkdirSync(temp);
-      }
+      fs.mkdirSync(temp);
       const groupOwner = pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href;
       const capability = shared
         ? undefined
@@ -165,8 +168,9 @@ it.runIf(process.platform !== "win32").for([
           );
       const env = {
         ...ciEnv(fixture.probe, parallelism, parallelism === 1),
-        // An intentionally unavailable join capability retains claims inside this fixture.
-        ...(!shared ? { TMPDIR: temp, TMP: temp, TEMP: temp } : {}),
+        TMPDIR: temp,
+        TMP: temp,
+        TEMP: temp,
       };
       const controlled =
         shared && parallelism === 2 ? undefined : createControlledWorkerCompiler(directory, env);
@@ -208,6 +212,12 @@ it.runIf(process.platform !== "win32").for([
         for (const generation of generations) {
           expect(fs.existsSync(generationDirectory(generation))).toBe(false);
         }
+        for (const { includeFile } of observations) {
+          expect(fs.existsSync(path.dirname(includeFile))).toBe(!shared);
+          if (!shared) {
+            expect(result.stderr).toContain(`[shard:cache] retained ${path.dirname(includeFile)}`);
+          }
+        }
       } finally {
         const observations = fs.existsSync(fixture.observationsFile) ? fixture.read() : [];
         await Promise.all(
@@ -218,6 +228,11 @@ it.runIf(process.platform !== "win32").for([
         );
         for (const run of new Set(observations.map(({ generation }) => generation))) {
           fs.rmSync(generationDirectory(run), { recursive: true, force: true });
+        }
+        for (const scratch of new Set(
+          observations.map(({ includeFile }) => path.dirname(includeFile)),
+        )) {
+          fs.rmSync(scratch, { recursive: true, force: true });
         }
       }
     }),
@@ -250,12 +265,10 @@ it
     const directory = workerArtifacts.fixtureDirectory();
     const fixture = createCiProbe(directory, true, claim === "temporary" ? undefined : claim);
     const env = ciEnv(fixture.probe, 2);
-    if (claim === "temporary") {
-      // Deliberate TMP claims stay inside this fixture, never the enclosing test's owner.
-      const temp = path.join(directory, "tmp");
-      fs.mkdirSync(temp);
-      Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp });
-    }
+    // Deliberate TMP claims stay inside this fixture, never the enclosing test's owner.
+    const temp = path.join(directory, "tmp");
+    fs.mkdirSync(temp);
+    Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp });
     const controlled = createControlledWorkerCompiler(directory, env);
     const running = node(command, root, controlled.env);
     try {
@@ -271,6 +284,7 @@ it
       await Promise.all([waitForDead(first.pid, 5_000), waitForDead(first.parent, 5_000)]);
       expect(isProcessAlive(second.pid)).toBe(true);
       expect(fs.existsSync(generationDirectory(first.generation))).toBe(true);
+      expect(fs.existsSync(first.includeFile)).toBe(true);
       fs.writeFileSync(fixture.release, "finish");
       const result = await running;
       const receipts = controlled.read();
@@ -299,6 +313,7 @@ it
       }
       expect(fs.readFileSync(fixture.ready + ".read", "utf8")).toBe("read after sibling exit");
       expect(fs.existsSync(generationDirectory(first.generation))).toBe(claim !== "released");
+      expect(fs.existsSync(path.dirname(first.includeFile))).toBe(claim !== "released");
     } finally {
       fs.writeFileSync(fixture.release, "finish");
       await running;
@@ -311,6 +326,11 @@ it
       );
       for (const run of new Set(observations.map(({ generation }) => generation))) {
         fs.rmSync(generationDirectory(run), { recursive: true, force: true });
+      }
+      for (const scratch of new Set(
+        observations.map(({ includeFile }) => path.dirname(includeFile)),
+      )) {
+        fs.rmSync(scratch, { recursive: true, force: true });
       }
     }
   }),

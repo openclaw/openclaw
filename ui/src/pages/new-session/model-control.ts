@@ -18,6 +18,7 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
 import { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
+import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import {
@@ -711,6 +712,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.notify();
       },
       onModelSetup: () => options.context?.navigate("model-setup"),
+      onProviderSettings: (provider) =>
+        navigateToModelProvider(options.context, options.agentId, provider),
       onModelPickerOpen: () => this.retryPickerCatalogs(),
       onRequestUpdate: this.notify,
     });

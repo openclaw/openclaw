@@ -1,4 +1,3 @@
-// Workspace audit helpers inspect local skill folders for security and trust issues.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
@@ -141,21 +140,13 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       seenSkillPaths.add(canonicalSkillPath);
 
       const skillRealPath = await realpathWithTimeout(canonicalSkillPath);
-      if (!skillRealPath) {
-        escapedSkillFiles.push({
-          workspaceDir: workspacePath,
-          skillFilePath: canonicalSkillPath,
-          skillRealPath: "(realpath timed out - symlink target unverifiable)",
-        });
-        continue;
-      }
-      if (isPathInside(workspaceRealPath, skillRealPath)) {
+      if (skillRealPath && isPathInside(workspaceRealPath, skillRealPath)) {
         continue;
       }
       escapedSkillFiles.push({
         workspaceDir: workspacePath,
         skillFilePath: canonicalSkillPath,
-        skillRealPath,
+        skillRealPath: skillRealPath || "(realpath timed out - symlink target unverifiable)",
       });
     }
   }

@@ -7,7 +7,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -96,7 +96,7 @@ export function registerGatewayUpdateHistoryTests(
             for (const cache of ["closed", "warm"] as const) {
               openOpenClawStateDatabase();
               if (cache === "closed") {
-                expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+                expect(await closeOpenClawStateDatabaseByPathAsync(databasePath)).toBe(true);
               }
               expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
               const before = readonlyPreparation.prepared.length;

@@ -1,9 +1,4 @@
-/**
- * Browser agent tool action executors.
- *
- * Converts model-facing parameters into browser control client calls and wraps
- * browser-originated text as untrusted content before returning it to agents.
- */
+/** Browser actions wrap page-controlled text as untrusted content before returning it to agents. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -84,24 +79,11 @@ function withLocalActTimeout(
   }
 }
 
-type BrowserTabLike = {
-  suggestedTargetId?: unknown;
-  tabId?: unknown;
-  webExtensionTabId?: unknown;
-  label?: unknown;
-  title?: unknown;
-  url?: unknown;
-  urlUnavailableReason?: unknown;
-  type?: unknown;
-  targetId?: unknown;
-  wsUrl?: unknown;
-};
-
 function formatAgentTab(tab: unknown): Record<string, unknown> {
   if (!tab || typeof tab !== "object") {
     return { value: tab };
   }
-  const source = tab as BrowserTabLike;
+  const source = tab as Record<string, unknown>;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
   const webExtensionTabId =
@@ -269,7 +251,6 @@ function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
   return { reason, afterAction, url, skipped };
 }
 
-/** True when an /act response reports a cross-document navigation. */
 function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
   if (aborted?.reason === "navigation") {
     return true;
@@ -283,7 +264,6 @@ function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | nul
   );
 }
 
-/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -417,7 +397,7 @@ export async function executeDownloadAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
@@ -434,7 +414,9 @@ export async function executeDownloadAction(params: {
           ...options,
           path: readStringParam(input, "path"),
         });
-  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
@@ -446,8 +428,8 @@ export async function executeActAction(params: {
   usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-  onTabClose?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  onTabClose?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   if ("timeoutMs" in request && request.timeoutMs !== undefined) {
@@ -464,7 +446,7 @@ export async function executeActAction(params: {
       effectiveRequest.kind === "close" || aborted?.reason === "closed"
         ? params.onTabClose
         : params.onTabActivity;
-    onTabResult?.(resolvedTargetId);
+    await onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -480,19 +462,21 @@ export async function executeActAction(params: {
       signal: params.signal,
     });
   };
-  const dispatchAndFinishAct = async (actionRequest: BrowserActRequest) => {
+  const dispatchAct = async (actionRequest: BrowserActRequest) => {
     const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
       profile,
       signal: params.signal,
     });
-    return await finishActResult(
+    return {
       result,
-      readStringValue((result as { targetId?: unknown }).targetId) ??
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(actionRequest.targetId),
-    );
+    };
   };
+  let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
   try {
-    return await dispatchAndFinishAct(effectiveRequest);
+    dispatched = await dispatchAct(effectiveRequest);
   } catch (err) {
     const proxyRoute = proxyRequest?.route();
     const usesChromeMcp = proxyRequest
@@ -526,7 +510,8 @@ export async function executeActAction(params: {
         canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
         tabs.length === 1
       ) {
-        return await dispatchAndFinishAct(retryRequest);
+        const retried = await dispatchAct(retryRequest);
+        return await finishActResult(retried.result, retried.targetId);
       }
       if (tabRefreshError) {
         throw new Error(
@@ -553,6 +538,7 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+  return await finishActResult(dispatched.result, dispatched.targetId);
 }
 
 function formatActToolResult(

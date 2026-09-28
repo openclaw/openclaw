@@ -11,8 +11,8 @@ import type {
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
-  currentCodexCatalogListDiagnostics,
   createCodexCatalogListScope,
+  startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
@@ -226,8 +226,7 @@ function catalogHostMapper(
   localHomes: readonly CodexCatalogHome[],
 ) {
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
+    const finishTiming = startCodexCatalogListTiming("mappingMs");
     try {
       const localSourceAvailable =
         localTerminalAvailable &&
@@ -242,10 +241,7 @@ function catalogHostMapper(
             : host.canStartTerminal === true,
       };
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.mappingMs =
-          (diagnostics.fields.mappingMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
   };
 }

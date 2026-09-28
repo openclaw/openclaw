@@ -9,6 +9,21 @@ import {
   resolveSubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
 
+function stageCreate(
+  pending: PendingSessionPlacementRecoveryState,
+  overrides: Partial<Parameters<PendingSessionPlacementRecoveryState["stageCreate"]>[0]> = {},
+) {
+  return pending.stageCreate({
+    agentId: "cloud",
+    target: { kind: "profile", profileId: "aws" },
+    message: "run remotely",
+    gatewayUrl: "ws://gateway.example",
+    recoveryScope: "principal-a",
+    createParams: { agentId: "cloud", message: "", worktree: true },
+    ...overrides,
+  });
+}
+
 describe("pending session placement recovery state", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
@@ -66,12 +81,8 @@ describe("pending session placement recovery state", () => {
     "stages an idempotent create with Fast Mode %s before the Gateway request",
     (fastMode) => {
       const pending = new PendingSessionPlacementRecoveryState();
-      const createParams = pending.stageCreate({
-        agentId: "cloud",
+      const createParams = stageCreate(pending, {
         target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-        message: "run remotely",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
         createParams: {
           agentId: "cloud",
           message: "",
@@ -103,12 +114,8 @@ describe("pending session placement recovery state", () => {
 
   it("preserves the requested permission mode in placement recovery", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = pending.stageCreate({
-      agentId: "cloud",
-      target: { kind: "profile", profileId: "aws" },
+    const createParams = stageCreate(pending, {
       message: "run remotely with guarded permissions",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
       createParams: {
         agentId: "cloud",
         message: "",
@@ -128,13 +135,9 @@ describe("pending session placement recovery state", () => {
     (changesKey) => {
       const pending = new PendingSessionPlacementRecoveryState();
       expect(
-        pending.stageCreate({
-          agentId: "cloud",
+        stageCreate(pending, {
           target: { kind: "device", deviceId: "device-1" },
           message: "old input",
-          gatewayUrl: "ws://gateway.example",
-          recoveryScope: "principal-a",
-          createParams: { agentId: "cloud", message: "", worktree: true },
         }),
       ).not.toBeNull();
       const previous = pending.capture();
@@ -174,16 +177,7 @@ describe("pending session placement recovery state", () => {
 
   it("promotes the acknowledged server key before dispatch", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "run remotely",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
-      }),
-    ).not.toBeNull();
+    expect(stageCreate(pending)).not.toBeNull();
     const provisionalSessionKey = pending.sessionKey;
     const storage = sessionStorage;
     const provisionalKey = sessionPlacementRecoveryExactStorageKey(
@@ -230,16 +224,7 @@ describe("pending session placement recovery state", () => {
 
   it("restores the provisional row when canonical promotion cannot be written", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "run remotely",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
-      }),
-    ).not.toBeNull();
+    expect(stageCreate(pending)).not.toBeNull();
     const storage = sessionStorage;
     const provisionalSessionKey = pending.sessionKey;
     const provisionalKey = sessionPlacementRecoveryExactStorageKey(
@@ -277,12 +262,8 @@ describe("pending session placement recovery state", () => {
 
   it("keeps incognito placement drafts in memory without writing recovery storage", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = pending.stageCreate({
-      agentId: "cloud",
-      target: { kind: "profile", profileId: "aws" },
+    const createParams = stageCreate(pending, {
       message: "private remote task",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
       createParams: {
         agentId: "cloud",
         incognito: true,
@@ -349,13 +330,8 @@ describe("pending session placement recovery state", () => {
   it("captures named creating recovery without sharing mutable payloads", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "run remotely",
+      stageCreate(pending, {
         attachments: [{ type: "image" }],
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
         createParams: {
           agentId: "cloud",
           message: "",
@@ -423,16 +399,7 @@ describe("pending session placement recovery state", () => {
 
   it("neutralizes a stale local owner without clearing newer durable recovery", () => {
     const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      pending.stageCreate({
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
-        message: "stale task",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
-      }),
-    ).not.toBeNull();
+    expect(stageCreate(pending, { message: "stale task" })).not.toBeNull();
     const newerRecovery = {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",

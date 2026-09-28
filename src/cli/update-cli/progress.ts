@@ -25,7 +25,13 @@ import type { UpdateCommandOptions } from "./shared.js";
 
 // One command owns each observer. The final report flushes it before printing so
 // a fast final transition cannot appear after the report or leave a spinner active.
-const activeUpdateProgress = new Map<string, (record: UpdateRunRecord | undefined) => void>();
+const activeUpdateProgress = new Map<
+  string,
+  {
+    finish: (record: UpdateRunRecord | undefined) => void;
+    pause: () => void;
+  }
+>();
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
 
@@ -123,7 +129,7 @@ export function createUpdateProgress(
       if (terminal) {
         observation = "disposed";
         clearTimer();
-        if (run && activeUpdateProgress.get(run.runId) === finalize) {
+        if (run && activeUpdateProgress.get(run.runId)?.finish === finalize) {
           activeUpdateProgress.delete(run.runId);
         }
       }
@@ -144,7 +150,13 @@ export function createUpdateProgress(
   if (run) {
     // Register only after initial observation so failed setup leaves no callback.
     poll();
-    activeUpdateProgress.set(run.runId, finalize);
+    activeUpdateProgress.set(run.runId, {
+      finish: finalize,
+      pause: () => {
+        clearTimer();
+        stop();
+      },
+    });
   }
   const progress: UpdateDisplayProgress = {
     onStepStart: (step, record) => {
@@ -249,27 +261,37 @@ export async function printResult(
     readHistory?: boolean;
   } = {},
 ): Promise<void> {
-  const run =
-    reportHints.record ??
-    (result.runId && reportHints.readHistory !== false
-      ? readDisplayRecord(result.runId, opts.run?.env)
-      : undefined);
-  if (result.runId) {
-    activeUpdateProgress.get(result.runId)?.(run);
-  }
-  const report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
-    ...reportHints,
-    mode: result.mode === "unknown" ? run?.target.kind : result.mode,
-  });
+  const finalizeProgress = result.runId ? activeUpdateProgress.get(result.runId) : undefined;
+  // Retire polling before waiting for report IO, including detached recovery.
+  finalizeProgress?.pause();
+  let run: UpdateRunRecord | undefined;
+  let report: ReturnType<typeof renderUpdateRunReport> | undefined;
+  const readRun =
+    result.runId && !reportHints.record && reportHints.readHistory !== false
+      ? () => readDisplayRecord(result.runId!, opts.run?.env)
+      : undefined;
+  // The artifact owner reads under its lock and reconciles after publication.
+  // Captured and detached reports never reopen retained history.
+  const renderReport = (current?: UpdateRunRecord) => {
+    run = reportHints.record ?? current;
+    finalizeProgress?.finish(run);
+    report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
+      ...reportHints,
+      mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+    });
+    return report;
+  };
   const reportPath = await writeUpdateRunReportArtifact({
     result,
-    report,
+    report: renderReport,
+    readRun,
     env: opts.run?.env,
     detached: reportHints.readHistory === false,
   }).catch((error: unknown) => {
     defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
     return undefined;
   });
+  report ??= renderReport(readRun?.());
   if (opts.json) {
     defaultRuntime.writeJson({
       ...result,

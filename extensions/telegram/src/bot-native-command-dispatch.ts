@@ -5,7 +5,6 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -41,9 +40,10 @@ import {
   buildTelegramNativeCommandOwnerContext,
   resolveTelegramCommandIngressAuthorization,
 } from "./ingress.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.delivery.runtime.js"),
+  () => import("./bot/delivery.js"),
 );
 const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
   () => import("./bot-native-commands.runtime.js"),
@@ -94,11 +94,7 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     telegramDeps: TelegramNativeCommandDeps;
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
-    turnSettings: ReturnType<typeof resolveTelegramMessageTurnSettings>;
     threadParams: ReturnType<typeof buildTelegramThreadParams>;
-    route: ReturnType<typeof inspectTelegramConversationRoute>["route"];
-    mediaLocalRoots: readonly string[] | undefined;
-    targetSessionKey: string;
     nativeCommandRuntime: TelegramNativeCommandRuntime;
     buildDeliveryBaseOptions: (params?: {
       sessionKeyForInternalHooks?: string;
@@ -235,15 +231,18 @@ async function resolveTelegramCommandAuth(params: {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
-  const sendAuthMessage = async (text: string) => {
+  const rejectNotAuthorized = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, text, threadParams ?? {}),
+      fn: () =>
+        bot.api.sendMessage(
+          chatId,
+          "You are not authorized to use this command.",
+          threadParams ?? {},
+        ),
     });
     return null;
   };
-  const rejectNotAuthorized = async () =>
-    await sendAuthMessage("You are not authorized to use this command.");
 
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,
@@ -388,10 +387,11 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const { route, bindingMode, targetSessionKey } = auth;
+  const { route, bindingMode } = auth;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
-  touchTelegramConversationRoute(auth.inspectedRoute);
+  await touchTelegramConversationRoute(auth.inspectedRoute);
+  auth.assertOwnerCurrent?.();
   if (bindingMode.kind === "configured") {
     auth.assertOwnerCurrent?.();
     const ensured = await nativeCommandRuntime.ensureConfiguredBindingRouteReady({
@@ -420,12 +420,13 @@ export async function prepareTelegramCommandDispatch(
     runtimeCfg,
     route.agentId,
   );
-  const tableMode = resolveMarkdownTableMode({
+  const richMessagesParams = {
     cfg: runtimeCfg,
-    channel: "telegram",
     accountId: route.accountId,
-    supportsBlockTables: true,
-  });
+    accountConfig: runtimeTelegramCfg,
+  };
+  const richMessages = resolveTelegramRichMessages(richMessagesParams);
+  const tableMode = resolveTelegramTableMode(richMessagesParams);
   const chunkMode = nativeCommandRuntime.resolveChunkMode(runtimeCfg, "telegram", route.accountId);
   const buildDeliveryBaseOptions: TelegramCommandDispatch["buildDeliveryBaseOptions"] = (keys) => ({
     cfg: runtimeCfg,
@@ -447,19 +448,15 @@ export async function prepareTelegramCommandDispatch(
     tableMode,
     chunkMode,
     linkPreview: runtimeTelegramCfg.linkPreview,
-    richMessages: runtimeTelegramCfg.richMessages,
+    richMessages,
   });
   return {
     ...params,
     telegramDeps,
     runtimeCfg,
     runtimeTelegramCfg,
-    turnSettings,
     ...auth,
     threadParams: buildTelegramThreadParams(auth.threadSpec),
-    route,
-    mediaLocalRoots,
-    targetSessionKey,
     nativeCommandRuntime,
     buildDeliveryBaseOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,

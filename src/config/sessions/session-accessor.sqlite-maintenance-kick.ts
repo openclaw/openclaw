@@ -15,6 +15,7 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import {
   createSessionMaintenancePlanningOperation,
   runSqliteSessionReclamation,
@@ -210,7 +211,13 @@ async function runPendingMaintenance(
         throw new Error("SQLite automatic maintenance owner retired");
       }
       if (
-        owner.generation !== generation ||
+        [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key)) ||
+        !isDeepStrictEqual(
+          maintenance,
+          owner.maintenanceConfig
+            ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
+            : resolveMaintenanceConfig(),
+        ) ||
         (operation.input.preservation !== null &&
           !isDeepStrictEqual(
             operation.input.preservation,
@@ -218,20 +225,19 @@ async function runPendingMaintenance(
           ))
       ) {
         planningChanged = true;
-        throw new Error("SQLite automatic maintenance inputs changed before commit");
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance inputs changed before commit",
+        );
       }
     };
-    const assertCurrent = () => {
-      assertInputsCurrent();
+    const runPlanning = () => {
       if (!isSessionEntryMaintenanceAgeCaptureCurrent(owner.database.db, ageCapture)) {
-        planningChanged = true;
-        throw new Error("SQLite automatic maintenance age fact changed before commit");
+        ageCapture = captureSessionEntryMaintenanceAgeFact(owner.database.db, maintenance);
+        operation.input.ageFact = ageCapture.fact;
       }
-    };
-    const runPlanning = () =>
-      runSqliteSessionReclamation({
+      return runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
-        assertCommitAllowed: assertCurrent,
+        assertCommitAllowed: assertInputsCurrent,
         onWorkerResult: (result) => {
           if (result.kind === "maintenance-plan" && isCurrent()) {
             adoptSessionEntryMaintenanceAgeFact(owner.database.db, ageCapture, result.ageFact);
@@ -240,6 +246,7 @@ async function runPendingMaintenance(
         forceInProcess: false,
         plan: operation,
       });
+    };
     let result = await runPlanning();
     if (result.kind === "maintenance-preservation-required") {
       await runExclusiveSqliteSessionWrite(
@@ -261,6 +268,12 @@ async function runPendingMaintenance(
       );
       result = await runPlanning();
     }
+    if (result.kind === "maintenance-plan-stale") {
+      planningChanged = true;
+      throw new SqliteReclamationInputsChangedError(
+        "SQLite maintenance snapshot changed before commit",
+      );
+    }
     if (result.kind !== "maintenance-plan") {
       throw new Error("SQLite automatic maintenance returned another operation's result");
     }
@@ -269,15 +282,19 @@ async function runPendingMaintenance(
       assertInputsCurrent();
       if (!isOpenClawAgentDatabasePathCurrent(owner.database)) {
         planningChanged = true;
-        throw new Error("SQLite automatic maintenance database path changed after no-op planning");
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance database path changed after no-op planning",
+        );
       }
-      // A synchronous writer can change pressure after the Worker acknowledges its fact.
+      // A no-op cannot publish an age hint that a concurrent writer invalidated.
       if (
         captureSessionEntryMaintenanceAgeFact(owner.database.db, maintenance).fact !==
         result.ageFact
       ) {
         planningChanged = true;
-        throw new Error("SQLite automatic maintenance age fact changed after no-op planning");
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite automatic maintenance age fact changed after no-op planning",
+        );
       }
     }
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
@@ -299,7 +316,9 @@ async function runPendingMaintenance(
           { error, path: databasePath, rejections: owner.rejections },
         );
       } else {
-        scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
+        owner.running = true;
+        owner.retryDelayMs = undefined;
+        await runPendingMaintenance(databasePath, owner);
       }
       return;
     }

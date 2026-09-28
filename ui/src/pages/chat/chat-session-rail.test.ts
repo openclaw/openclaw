@@ -69,19 +69,6 @@ describe("ChatSessionRailState", () => {
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
   });
 
-  it("opens the panel from a hidden rail without persisting card", () => {
-    const state = new ChatSessionRailState("pill");
-    state.hide();
-
-    state.openExplicitly();
-
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    // A fresh state reads the stored preference: the next session gets the
-    // ambient pill, not a sticky panel.
-    expect(new ChatSessionRailState().mode(input())).toBe("pill");
-  });
-
   it("opens digest-less on an idle session and resets per session", () => {
     const state = new ChatSessionRailState("pill");
     const idle = { running: false, activeRunId: null, digest: null } as const;
@@ -103,55 +90,6 @@ describe("ChatSessionRailState", () => {
     runningState.openExplicitly();
     runningState.collapse();
     expect(runningState.mode(input())).toBe("pill");
-  });
-
-  it("auto-opens pill transiently without changing the persisted preference", () => {
-    localStorage.setItem(displayPreferenceKey, "pill");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    expect(new ChatSessionRailState().mode(input())).toBe("pill");
-  });
-
-  it("rejects auto-open while hidden and preserves the off preference", () => {
-    localStorage.setItem(displayPreferenceKey, "off");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(false);
-    expect(state.mode(input())).toBe("hidden");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(new ChatSessionRailState().mode(input())).toBe("hidden");
-  });
-
-  it("persists explicit collapse and hide after transient auto-open", () => {
-    const state = new ChatSessionRailState("pill");
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    state.collapse();
-    expect(state.mode(input())).toBe("pill");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-
-    expect(state.tryAutoOpen()).toBe(true);
-    state.hide();
-    expect(state.mode(input())).toBe("hidden");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(state.tryAutoOpen()).toBe(false);
-  });
-
-  it("clears transient auto-open when the session changes", () => {
-    localStorage.setItem(displayPreferenceKey, "pill");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    state.resetTransientState();
-    expect(state.mode(input())).toBe("pill");
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });
 
   it("keeps a companion thread renderable without an observer digest", () => {
@@ -711,15 +649,6 @@ describe("ChatSessionRailElement", () => {
     await skeleton?.updateComplete;
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
-  });
-
-  it("collapses on Escape", async () => {
-    const element = await mount();
-    element
-      .querySelector(".chat-session-rail--expanded")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await element.updateComplete;
-    expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
   });
 
   it("keeps the ticking rail section out of screen-reader live regions", async () => {

@@ -229,10 +229,7 @@ export function collectDiscordStatusIssues(
 
 /** Build Discord component payloads without sending them. */
 export const buildDiscordComponentMessage: DiscordApiFacadeModule["buildDiscordComponentMessage"] =
-  ((...args) =>
-    loadDiscordApiFacadeModule().buildDiscordComponentMessage(
-      ...args,
-    )) as DiscordApiFacadeModule["buildDiscordComponentMessage"];
+  (...args) => loadDiscordApiFacadeModule().buildDiscordComponentMessage(...args);
 
 /** Inspect one configured Discord account for setup/status output. */
 export function inspectDiscordAccount(params: {
@@ -311,17 +308,11 @@ export function collectDiscordAuditChannelIds(params: {
 
 /** Edit an already-sent Discord component message. */
 export const editDiscordComponentMessage: DiscordRuntimeFacadeModule["editDiscordComponentMessage"] =
-  ((...args) =>
-    loadDiscordRuntimeFacadeModule().editDiscordComponentMessage(
-      ...args,
-    )) as DiscordRuntimeFacadeModule["editDiscordComponentMessage"];
+  (...args) => loadDiscordRuntimeFacadeModule().editDiscordComponentMessage(...args);
 
 /** Await callback registration after Discord assigns the built component message its id. */
 export const registerBuiltDiscordComponentMessage: DiscordRuntimeFacadeModule["registerBuiltDiscordComponentMessage"] =
-  ((...args) =>
-    loadDiscordRuntimeFacadeModule().registerBuiltDiscordComponentMessage(
-      ...args,
-    )) as DiscordRuntimeFacadeModule["registerBuiltDiscordComponentMessage"];
+  (...args) => loadDiscordRuntimeFacadeModule().registerBuiltDiscordComponentMessage(...args);
 
 /** Bind a spawned subagent session to the current Discord thread when possible. */
 export async function autoBindSpawnedDiscordSubagent(params: {

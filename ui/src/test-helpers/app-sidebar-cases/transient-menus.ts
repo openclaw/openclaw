@@ -1,29 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar transient menus", () => {
-  it("lets the session sort dropdown own its popover without another top-layer host", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main", "agent:main:task"]),
-    );
-
-    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
-    if (!trigger) {
-      throw new Error("expected sort menu trigger");
-    }
-    trigger.click();
-    await sidebar.updateComplete;
-
-    const menu = sidebar.querySelector(".sidebar-session-sort-menu");
-    expect(menu).not.toBeNull();
-    expect(menu?.closest("openclaw-menu-surface")).toBeNull();
-  });
-
-  it("ignores a stale sort-menu hide after opening its replacement", async () => {
+  it("keeps the session filters open after a choice and closes from the trigger", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -38,22 +20,11 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu");
     expect(firstMenu).not.toBeNull();
-    firstMenu?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "sort:created" } },
-      }),
-    );
-    await sidebar.updateComplete;
-
+    await activateSessionMenuValue(sidebar, "sort:updated");
+    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(firstMenu);
     trigger.click();
     await sidebar.updateComplete;
-    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu");
-    expect(replacement).not.toBe(firstMenu);
-
-    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(replacement);
+    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
   });
 
   it("ignores a stale agent-menu hide after opening its replacement", async () => {

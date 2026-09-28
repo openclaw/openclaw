@@ -1,26 +1,23 @@
-// Slack plugin module handles Agent View lifecycle events.
 import type { AllMiddlewareArgs } from "@slack/bolt";
+import type { AgentSessionStoppedEvent, AgentSessionTitleChangedEvent } from "@slack/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackAccount } from "../../accounts.js";
 import { getSlackRuntime } from "../../runtime.js";
 import { markSlackStreamsStopped } from "../../streaming.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
-import { resolveStorePath } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackSenderAuthentication } from "../ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "../message-handler/prepare-routing.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import { createSlackCommandHandler, deliverSlackSlashResponseWithWebApi } from "../slash.js";
-import type {
-  SlackAgentSessionStoppedEvent,
-  SlackAgentSessionTitleChangedEvent,
-  SlackAppContextChangedEvent,
-} from "../types.js";
+import type { SlackAppContextChangedEvent } from "../types.js";
 import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 type SlackAgentEvent =
   | SlackAppContextChangedEvent
-  | SlackAgentSessionStoppedEvent
-  | SlackAgentSessionTitleChangedEvent;
+  | AgentSessionStoppedEvent
+  | AgentSessionTitleChangedEvent;
 
 type SlackAgentEventHandler<Event extends SlackAgentEvent> = (args: {
   event: Event;
@@ -83,6 +80,7 @@ export function registerSlackAgentEvents(params: {
           responseTransport: "web-api",
           body,
           eventScope,
+          senderAuthentication: resolveSlackSenderAuthentication(context),
           prompt: "/stop",
           builtInCommand: "stop",
           sessionTarget: target?.route,

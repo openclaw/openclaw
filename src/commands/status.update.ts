@@ -1,6 +1,3 @@
-// Update status helpers for `openclaw status`.
-// Wraps registry/git update checks and formats compact update rows/hints.
-
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,7 +30,6 @@ export function resolveStatusRegistryUpdateChannel(
   }).channel;
 }
 
-/** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
@@ -95,7 +91,6 @@ type UpdateAvailability = {
   gitBehind: number | null;
 };
 
-/** Determines whether git and/or registry data indicate an available update. */
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
@@ -115,7 +110,6 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
-/** Formats the actionable update hint shown in status footers. */
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
@@ -135,7 +129,6 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 
-/** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   if (update.error) {
     return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
@@ -171,23 +164,13 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
       return;
     }
     if (update.registry?.error) {
-      if (update.registry.reason === "unsupported_git_channel") {
-        parts.push("extended-stable requires a package install");
-        return;
-      }
-      if (update.registry.reason === "selector_missing") {
-        parts.push("npm extended-stable selector missing");
-        return;
-      }
-      if (update.registry.reason === "selector_query_failed") {
-        parts.push("npm extended-stable query failed");
-        return;
-      }
-      if (update.registry.reason === "exact_package_mismatch") {
-        parts.push("npm extended-stable exact package verification failed");
-        return;
-      }
-      parts.push(`${registryLabel} unknown`);
+      const errors = new Map([
+        ["unsupported_git_channel", "extended-stable requires a package install"],
+        ["selector_missing", "npm extended-stable selector missing"],
+        ["selector_query_failed", "npm extended-stable query failed"],
+        ["exact_package_mismatch", "npm extended-stable exact package verification failed"],
+      ]);
+      parts.push(errors.get(update.registry.reason ?? "") ?? `${registryLabel} unknown`);
     }
   };
 

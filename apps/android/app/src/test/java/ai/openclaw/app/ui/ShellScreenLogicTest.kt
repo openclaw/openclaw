@@ -18,8 +18,6 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -246,7 +244,6 @@ class ShellScreenLogicTest {
 
     assertEquals(listOf("Approvals", "Channels", "Nodes & Devices", "Providers"), rows.map { it.title })
     val providersRow = rows.single { it.title == "Providers" }
-    assertEquals(Tab.Settings, providersRow.tab)
     assertEquals(SettingsRoute.ProvidersModels, providersRow.settingsRoute)
   }
 
@@ -277,32 +274,6 @@ class ShellScreenLogicTest {
       )
 
     assertEquals(emptyList<String>(), rows.map { it.title })
-  }
-
-  @Test
-  fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
-    assertEquals(
-      "2 pending",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(
-          proposals =
-            listOf(
-              skillWorkshopProposal("one", "pending"),
-              skillWorkshopProposal("two", "pending"),
-              skillWorkshopProposal("three", "applied"),
-            ),
-        ),
-      ),
-    )
-    assertEquals(
-      "1 held",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("held", "quarantined"))),
-      ),
-    )
-    assertEquals(null, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = emptyList())))
-    assertEquals(false, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("pending", "pending")))))
-    assertEquals(true, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("applied", "applied")))))
   }
 
   @Test
@@ -453,8 +424,8 @@ class ShellScreenLogicTest {
       SettingsRoute.Approvals,
       overviewHeaderRoute(
         listOf(
-          HomeAttentionRow("Approvals", "2 pending", Icons.Default.Settings, Tab.Settings, SettingsRoute.Approvals),
-          HomeAttentionRow("Nodes & Devices", "Review node access", Icons.Default.Settings, Tab.Settings, SettingsRoute.NodesDevices),
+          HomeAttentionRow("Approvals", "2 pending", SettingsRoute.Approvals),
+          HomeAttentionRow("Nodes & Devices", "Review node access", SettingsRoute.NodesDevices),
         ),
       ),
     )
@@ -509,7 +480,7 @@ class ShellScreenLogicTest {
         ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
       }
 
-    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals(50, overviewRecentSessions(sessions).size)
     assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
   }
 
@@ -800,7 +771,7 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionsPreserveMeaningfulOrder() {
+  fun settingsSectionsSeparatePersonalConfigurationFromWorkspaceAndFeaturedRoutes() {
     val sections =
       settingsSections(
         listOf(
@@ -820,11 +791,11 @@ class ShellScreenLogicTest {
 
     assertEquals(
       listOf(
-        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
-        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
-        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
-        "Profile & device" to listOf(SettingsRoute.Appearance),
-        "Diagnostics" to listOf(SettingsRoute.Health),
+        "Profile & appearance" to listOf(SettingsRoute.Appearance),
+        "This phone" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Connections" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Configuration" to listOf(SettingsRoute.ProvidersModels, SettingsRoute.Approvals),
+        "System" to listOf(SettingsRoute.Health),
       ),
       sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )

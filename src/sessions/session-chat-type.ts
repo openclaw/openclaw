@@ -1,22 +1,11 @@
-// Session chat type helpers classify chat surfaces from session metadata.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "./session-chat-type-shared.js";
-import { parseAgentSessionKey } from "./session-key-utils.js";
 
 // Session chat-type derivation first uses generic key parsing, then falls back
 // to bootstrap channel plugins for legacy platform-specific session keys.
-function resolveScopedSessionKey(sessionKey: string | undefined | null): string {
-  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
-    return "";
-  }
-  return parseAgentSessionKey(raw)?.rest ?? raw;
-}
-
 function collectLegacyChatTypeCandidatePluginIds(scopedSessionKey: string): string[] {
   const ids = new Set<string>();
   const firstToken = scopedSessionKey.split(":").find(Boolean);
@@ -31,19 +20,17 @@ function collectLegacyChatTypeCandidatePluginIds(scopedSessionKey: string): stri
 }
 
 export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
-  const builtInType = deriveSessionChatTypeFromKey(sessionKey);
-  if (builtInType !== "unknown") {
-    return builtInType;
-  }
-
-  const scopedSessionKey = resolveScopedSessionKey(sessionKey);
-  for (const pluginId of collectLegacyChatTypeCandidatePluginIds(scopedSessionKey)) {
-    const deriveLegacySessionChatType =
-      getBootstrapChannelPlugin(pluginId)?.messaging?.deriveLegacySessionChatType;
-    const derived = deriveLegacySessionChatType?.(scopedSessionKey);
-    if (derived) {
-      return derived;
-    }
-  }
-  return "unknown";
+  return deriveSessionChatTypeFromKey(sessionKey, [
+    (scopedSessionKey) => {
+      for (const pluginId of collectLegacyChatTypeCandidatePluginIds(scopedSessionKey)) {
+        const deriveLegacySessionChatType =
+          getBootstrapChannelPlugin(pluginId)?.messaging?.deriveLegacySessionChatType;
+        const derived = deriveLegacySessionChatType?.(scopedSessionKey);
+        if (derived) {
+          return derived;
+        }
+      }
+      return undefined;
+    },
+  ]);
 }

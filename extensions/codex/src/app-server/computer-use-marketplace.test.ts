@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  ensureCodexManagedBundledMarketplace,
-  resolveCodexManagedBundledMarketplacePath,
-} from "./computer-use-marketplace.js";
+import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
 import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
@@ -29,7 +26,7 @@ describe("managed Codex bundled marketplace", () => {
       candidates: [candidate],
     });
 
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     expect(result).toBe(target);
     expect((await fs.lstat(target)).isDirectory()).toBe(true);
     expect(await fs.realpath(target)).toBe(target);
@@ -61,7 +58,7 @@ describe("managed Codex bundled marketplace", () => {
       ),
     );
 
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     expect(results).toEqual([target, target, target]);
     expect(await fs.readlink(path.join(target, "plugins"))).toBe(
       path.join(candidate.bundledMarketplacePath, "plugins"),
@@ -79,7 +76,7 @@ describe("managed Codex bundled marketplace", () => {
     const secondCandidate = await writeCandidate(path.join(root, "second"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     const firstPublishStarted = createDeferred<void>();
     const releaseFirstPublish = createDeferred<void>();
     const rename = fs.rename.bind(fs);
@@ -127,7 +124,7 @@ describe("managed Codex bundled marketplace", () => {
     const secondCandidate = await writeCandidate(path.join(root, "second"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     const ownershipCandidates = [firstCandidate, secondCandidate];
     await ensureCodexManagedBundledMarketplace({
       codexHome,
@@ -191,7 +188,7 @@ describe("managed Codex bundled marketplace", () => {
     const secondCandidate = await writeCandidate(path.join(root, "second"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     const ownershipCandidates = [firstCandidate, secondCandidate];
 
     await ensureCodexManagedBundledMarketplace({
@@ -220,7 +217,7 @@ describe("managed Codex bundled marketplace", () => {
     const secondCandidate = await writeCandidate(path.join(root, "second"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     const ownershipCandidates = [firstCandidate, secondCandidate];
     await ensureCodexManagedBundledMarketplace({
       codexHome,
@@ -261,7 +258,7 @@ describe("managed Codex bundled marketplace", () => {
     const candidate = await writeCandidate(root);
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     await fs.mkdir(target, { recursive: true });
     await fs.writeFile(path.join(target, "sentinel"), "operator-owned");
 
@@ -283,7 +280,7 @@ describe("managed Codex bundled marketplace", () => {
     const secondCandidate = await writeCandidate(path.join(root, "second"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
-    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const target = reservedMarketplacePath(codexHome);
     await ensureCodexManagedBundledMarketplace({
       codexHome,
       ownershipRoot: agentDir,
@@ -351,7 +348,7 @@ describe("managed Codex bundled marketplace", () => {
       const candidate = await writeCandidate(root);
       const agentDir = path.join(root, "agent");
       const codexHome = path.join(agentDir, "codex-home");
-      const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+      const target = reservedMarketplacePath(codexHome);
       const parent = path.dirname(target);
       const movedParent = `${parent}.moved`;
       const external = path.join(root, "external");
@@ -399,4 +396,9 @@ async function writeCandidate(root: string): Promise<MacOSDesktopCodexAppPathCan
     bundledMarketplacePath,
     computerUseServiceAppPaths: [],
   };
+}
+
+/** Codex reserves this documented location; fixtures prepare and observe that public contract. */
+function reservedMarketplacePath(codexHome: string): string {
+  return path.join(codexHome, ".tmp", "bundled-marketplaces", "openai-bundled");
 }

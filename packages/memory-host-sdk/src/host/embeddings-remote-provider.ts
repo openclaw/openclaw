@@ -87,12 +87,14 @@ export function createRemoteEmbeddingProvider(params: {
 /** Resolve a normalized remote embedding client from provider config and model options. */
 export async function resolveRemoteEmbeddingClient(params: {
   provider: RemoteEmbeddingProviderId;
+  capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
   const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
+    capability: params.capability,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
   });

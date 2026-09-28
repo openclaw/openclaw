@@ -4,13 +4,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -124,7 +123,7 @@ type OpenClawPluginSessionWorkflowApi = {
   ) => Promise<PluginSessionAttachmentResult>;
   /**
    * Schedule a future agent turn in a session through Cron.
-   * Cron owns timing and creates the task ledger entry when the turn runs.
+   * Cron owns timing and records the run history when the turn runs.
    */
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
@@ -298,19 +297,19 @@ export type OpenClawPluginApi = {
   registerSpeechProvider: (
     provider:
       | SpeechProviderPlugin
-      | ((context: PluginCapabilityCatalogContext) => SpeechProviderPlugin),
+      | ((context: PluginCapabilityCatalogHostContext) => SpeechProviderPlugin),
   ) => void;
   /** Register a transcription descriptor or synchronous factory bound to native host operations. */
   registerRealtimeTranscriptionProvider: (
     provider:
       | RealtimeTranscriptionProviderPlugin
-      | ((context: PluginCapabilityCatalogContext) => RealtimeTranscriptionProviderPlugin),
+      | ((context: PluginCapabilityCatalogHostContext) => RealtimeTranscriptionProviderPlugin),
   ) => void;
   /** Register a voice descriptor or synchronous factory bound to native host operations. */
   registerRealtimeVoiceProvider: (
     provider:
       | RealtimeVoiceProviderPlugin
-      | ((context: PluginCapabilityCatalogContext) => RealtimeVoiceProviderPlugin),
+      | ((context: PluginCapabilityCatalogHostContext) => RealtimeVoiceProviderPlugin),
   ) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
@@ -442,7 +441,7 @@ export type OpenClawPluginApi = {
   sendSessionAttachment: OpenClawPluginSessionWorkflowApi["sendSessionAttachment"];
   /**
    * Schedule a future agent turn in a session through Cron.
-   * Cron owns timing and creates the task ledger entry when the turn runs.
+   * Cron owns timing and records the run history when the turn runs.
    * Bundled plugins only; workspace plugins receive undefined.
    *
    * @deprecated Use `api.session.workflow.scheduleSessionTurn(...)`.
@@ -455,8 +454,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.unscheduleSessionTurnsByTag(...)`.
    */
   unscheduleSessionTurnsByTag: OpenClawPluginSessionWorkflowApi["unscheduleSessionTurnsByTag"];
-  /** Register the active detached task runtime for this plugin (exclusive slot). */
-  registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */

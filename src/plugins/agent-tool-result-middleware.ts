@@ -17,6 +17,7 @@ import {
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
+  "agentsapi",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
 
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
@@ -34,12 +35,9 @@ function normalizeAgentToolResultMiddlewareRuntime(
 
 export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
+  declaredRuntimes?: readonly string[],
 ): AgentToolResultMiddlewareRuntime[] {
-  const requested = options?.runtimes;
-  if (!requested) {
-    return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
-  }
-  return normalizeAgentToolResultMiddlewareRuntimeIds(requested);
+  return normalizeAgentToolResultMiddlewareRuntimeIds(options?.runtimes ?? declaredRuntimes);
 }
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,

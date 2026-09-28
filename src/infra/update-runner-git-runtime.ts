@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
@@ -10,6 +9,7 @@ import {
   relocateRuntimeTree,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
+import { gitRuntimeStagingPath } from "./update-runtime-staging.js";
 
 async function collectRuntimeDirectories(
   root: string,
@@ -247,7 +247,7 @@ export async function prepareGitRuntimePromotion(
     for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
       // guarantees rename-only activation, including nested workspace outputs.
-      const temporary = `${destination}.openclaw-update-${randomUUID()}.tmp`;
+      const temporary = gitRuntimeStagingPath(destination);
       const entry = { destination, temporary, previous: false };
       staged.push(entry);
       await fs.mkdir(temporary, { recursive: true });
@@ -296,12 +296,13 @@ export async function prepareGitRuntimePromotion(
       for (const entry of promoted.toReversed()) {
         assertCurrent();
         await fs.rm(entry.destination, { recursive: true, force: true });
-        assertCurrent();
         if (entry.previous) {
-          await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
           assertCurrent();
+          await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
         }
+        // Completed filesystem effects must not be replayed if the post-check revokes authority.
         promoted.pop();
+        assertCurrent();
       }
     },
     cleanup,

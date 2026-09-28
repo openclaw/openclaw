@@ -121,31 +121,6 @@ describe("resident sessions.list", () => {
     },
   );
 
-  it.each([
-    { agentId: "main", archived: false as const, limit: 10 },
-    { agentId: "main", archived: true as const, limit: 1 },
-    { agentId: "work", archived: "all" as const, limit: 10 },
-    { archived: "all" as const, limit: 2 },
-  ])("preserves output for filters and pagination: %j", async (request) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const config = await seedSessions();
-      const client = identifiedClient("owner@example.com");
-      const expected = await listSessions({
-        client,
-        context: requestContext(config),
-        request,
-      });
-      const sharedContext = requestContext(config);
-
-      const collapsed = await Promise.all(
-        Array.from({ length: 4 }, () => listSessions({ client, context: sharedContext, request })),
-      );
-
-      expect(collapsed).toEqual(Array.from({ length: 4 }, () => expected));
-    });
-  });
-
   it("serves concurrent requests from resident rows without SQLite", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();

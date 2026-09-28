@@ -4,18 +4,26 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import { reapWorktreeRunLeasesInDatabase } from "./run-lease-owner.js";
-import { releaseWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
+import {
+  admitWorktreeRunLeaseInDatabase,
+  releaseWorktreeRunLeaseInDatabase,
+} from "./run-lease-store.kernel.js";
 
 export function executeWorktreeRunLeaseCommand(
   command: SqliteWorkerCommand<
-    Pick<OpenClawStateWorkerOperations, "worktrees.releaseRunLease" | "worktrees.reapRunLeases">
+    Pick<
+      OpenClawStateWorkerOperations,
+      "worktrees.admitRunLease" | "worktrees.releaseRunLease" | "worktrees.reapRunLeases"
+    >
   >,
   options: OpenClawStateDatabaseOptions,
 ): void {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      if (command.type === "worktrees.reapRunLeases") {
+      if (command.type === "worktrees.admitRunLease") {
+        admitWorktreeRunLeaseInDatabase(db, command.input);
+      } else if (command.type === "worktrees.reapRunLeases") {
         reapWorktreeRunLeasesInDatabase(db, command.input.scopes);
       } else {
         releaseWorktreeRunLeaseInDatabase(db, command.input.worktreeId, command.input.token);

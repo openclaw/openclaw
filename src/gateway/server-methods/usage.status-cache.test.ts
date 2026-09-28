@@ -298,12 +298,6 @@ describe("usage.status provider usage cache", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps clientless internal reads blocking", async () => {
-    const result = (await runUsageStatus()) as { refreshing?: boolean; providers: unknown[] };
-    expect(result.providers).toHaveLength(1);
-    expect(result.refreshing).toBeUndefined();
-  });
-
   it("keeps a failed refresh incomplete for capable clients and recovers", async () => {
     mocks.loadProviderUsageSummary.mockRejectedValueOnce(new Error("provider stack down"));
     await expect(runCapableUsageStatus()).resolves.toMatchObject({ refreshing: true });

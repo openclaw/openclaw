@@ -3,6 +3,11 @@ name: Docker Release
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       tag:
         description: Immutable stable, extended-stable, or beta release tag
         required: true
@@ -80,7 +85,7 @@ env:
 
 jobs:
   validate_release_identity:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}

@@ -1,4 +1,3 @@
-// Signal plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -259,10 +258,7 @@ export function resolveSignalAccount(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
-  const baseEnabled = params.cfg.channels?.signal?.enabled !== false;
   const merged = resolveSignalAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
   const transport = resolveSignalTransport(
     merged.transport,
     resolveSignalManagedNativePort({
@@ -272,15 +268,13 @@ export function resolveSignalAccount(params: {
       transport: merged.transport,
     }),
   );
-  const baseUrl = transport.baseUrl;
-  const configured = isSignalAccountConfigured(merged);
   return {
     accountId,
-    enabled,
+    enabled: isSignalAccountEnabled(params.cfg, merged),
     name: normalizeOptionalString(merged.name),
-    baseUrl,
+    baseUrl: transport.baseUrl,
     transport,
-    configured,
+    configured: isSignalAccountConfigured(merged),
     config: merged,
   };
 }
@@ -312,26 +306,10 @@ export function resolveSignalReplyToMode(params: {
   );
   const chatType =
     params.chatType === "direct" || params.chatType === "group" ? params.chatType : undefined;
-  if (chatType) {
-    const accountScoped = normalizeSignalReplyToMode(
-      accountConfig?.replyToModeByChatType?.[chatType],
-    );
-    if (accountScoped) {
-      return accountScoped;
-    }
-    const accountDefault = normalizeSignalReplyToMode(accountConfig?.replyToMode);
-    if (accountDefault) {
-      return accountDefault;
-    }
-    const channelScoped = normalizeSignalReplyToMode(
-      signalConfig?.replyToModeByChatType?.[chatType],
-    );
-    if (channelScoped) {
-      return channelScoped;
-    }
-  }
   return (
+    normalizeSignalReplyToMode(chatType && accountConfig?.replyToModeByChatType?.[chatType]) ??
     normalizeSignalReplyToMode(accountConfig?.replyToMode) ??
+    normalizeSignalReplyToMode(chatType && signalConfig?.replyToModeByChatType?.[chatType]) ??
     normalizeSignalReplyToMode(signalConfig?.replyToMode) ??
     "all"
   );

@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { BUNDLE_HASH, MANIFEST_REF } from "./placement-dispatch-test-fixtures.js";
 import { createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -38,7 +39,7 @@ async function seedActiveNode(
     to: "attached",
     patch: support.attachedPatch(environmentId, sessionId),
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
     agentId: "main",
@@ -97,7 +98,10 @@ describe("worker placement startup concurrency", () => {
         support.createProvider({ inspect, supportedExecutionModes: ["worker-turn"] }),
       );
       const adopt = vi.spyOn(placements, "adoptActive");
-      const recovery = createRecoveryService(placements, environments);
+      const recovery = coordinateWorkerPlacementDispatch(
+        createRecoveryService(placements, environments),
+        (_request, run) => run(),
+      );
       const uninstall = installWorkerPlacementReconcileGuard({
         placements,
         environments,
@@ -122,7 +126,7 @@ describe("worker placement startup concurrency", () => {
         expect(adopt).not.toHaveBeenCalled();
 
         if (conflictingOwner) {
-          const duplicate = placements.startDispatch({
+          const duplicate = await placements.startDispatch({
             sessionId: "session-duplicate",
             sessionKey: "agent:main:session-duplicate",
             agentId: "main",

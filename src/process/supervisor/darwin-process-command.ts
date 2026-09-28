@@ -1,22 +1,16 @@
 import { createRequire } from "node:module";
-import path from "node:path";
-import { isBunRuntime, isNodeRuntime } from "../../daemon/runtime-binary.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import type { ProcessCommand } from "./service-child-group-ownership.js";
 
 let native: ReturnType<typeof loadNative> | undefined;
+let reportedForeignArguments = false;
 
 function loadNative() {
   const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
   const system = koffi.load("/usr/lib/libSystem.B.dylib");
   const sysctl = system.func(
     "int sysctl(const int *name, unsigned int namelen, void *oldp, size_t *oldlenp, const void *newp, size_t newlen)",
-  );
-  const pidPath = koffi
-    .load("/usr/lib/libproc.dylib")
-    .func("int proc_pidpath(int pid, void *buffer, uint32_t buffersize)");
-  const csops = system.func(
-    "int csops(int pid, unsigned int ops, void *useraddr, size_t usersize)",
   );
   const size = Buffer.alloc(8);
   const argMax = Buffer.alloc(4);
@@ -37,22 +31,6 @@ function loadNative() {
         throw new Error(`Incomplete Darwin process arguments for PID ${pid}`);
       }
       return { bytes: buffer.subarray(0, length) };
-    },
-    executable(pid: number): string | undefined {
-      const executableBuffer = Buffer.alloc(4096); // PROC_PIDPATHINFO_MAXSIZE
-      const length: number = pidPath(pid, executableBuffer, executableBuffer.length);
-      const end = executableBuffer.indexOf(0);
-      return length > 0 && length <= executableBuffer.length && end > 0
-        ? executableBuffer.toString("utf8", 0, end)
-        : undefined;
-    },
-    isPlatformBinary(pid: number): boolean {
-      const flags = Buffer.alloc(4);
-      // CS_OPS_STATUS must prove both CS_VALID and CS_PLATFORM_BINARY now.
-      return (
-        csops(pid, 0, flags, flags.length) === 0 &&
-        (flags.readUInt32LE() & 0x0400_0001) === 0x0400_0001
-      );
     },
   };
 }
@@ -86,20 +64,7 @@ function parseArguments(bytes: Buffer, pid: number): ProcessCommand {
   };
 }
 
-function isForeignNativeExecutable(executable: string, uid: number): boolean {
-  return !(
-    uid === process.getuid?.() ||
-    isNodeRuntime(executable) ||
-    isBunRuntime(executable) ||
-    /^openclaw(?:-|$)/i.test(path.basename(executable)) ||
-    /\.app(?:\/|$)/i.test(executable) ||
-    /\/(?:Python|Ruby|Perl|Tcl|Tk|JavaVM|JavaScriptCore)\.framework\//i.test(executable) ||
-    executable.includes("/bin/") ||
-    executable.includes("/openclaw-plugin-build-")
-  );
-}
-
-/** Exact argv, or explicit kernel-executable evidence for a foreign system service. */
+/** Exact argv, or observed foreign ownership when Darwin denies argument inspection. */
 export function readDarwinProcessCommand(pid: number, uid?: number): ProcessCommand | undefined {
   native ??= loadNative();
   const result = native.readArguments(pid);
@@ -109,14 +74,16 @@ export function readDarwinProcessCommand(pid: number, uid?: number): ProcessComm
   if (isPidDefinitelyDead(pid)) {
     return undefined;
   }
-  const executable = native.executable(pid);
-  if (
-    uid !== undefined &&
-    executable &&
-    isForeignNativeExecutable(executable, uid) &&
-    native.isPlatformBinary(pid)
-  ) {
-    return { argvUnavailable: true, executable, uid };
+  const currentUid = process.getuid?.();
+  if (uid !== undefined && currentUid !== undefined && uid !== currentUid) {
+    if (!reportedForeignArguments) {
+      reportedForeignArguments = true;
+      createSubsystemLogger("process/census").debug(
+        "Unreadable Darwin arguments for another UID do not establish capture custody.",
+        { pid, uid, errno: result.errno },
+      );
+    }
+    return { argvUnavailable: true, uid };
   }
   throw new Error(
     `Could not classify PID ${pid}: cannot inspect Darwin arguments (errno ${result.errno}).`,

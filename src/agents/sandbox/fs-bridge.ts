@@ -1,8 +1,3 @@
-/**
- * Sandbox filesystem bridge implementation.
- *
- * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +6,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
+  SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
@@ -32,18 +28,10 @@ import {
 import { normalizeContainerPathCore } from "./path-utils.js";
 import { resolveSandboxTmpfsMounts } from "./workspace-mounts.js";
 
-type RunCommandOptions = {
-  args?: string[];
-  stdin?: Buffer | string;
-  allowFailure?: boolean;
-  signal?: AbortSignal;
-};
-
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 
 const readFileAsync = promisify(fs.readFile);
 
-/** Create the filesystem bridge for local Docker-style mounted sandboxes. */
 export function createSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
   containerOnlyMounts?: readonly string[];
@@ -210,12 +198,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     return { result, containerPath: target.containerPath };
   }
 
-  async mkdirp(params: {
-    filePath: string;
-    cwd?: string;
-    pinnedPath?: string;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async mkdirp(params: Parameters<SandboxFsBridge["mkdirp"]>[0]): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
     const mkdirCheck = {
@@ -337,16 +320,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   private async runCommand(
     script: string,
-    options: RunCommandOptions = {},
+    options: Omit<SandboxBackendCommandParams, "script"> = {},
   ): Promise<SandboxBackendCommandResult> {
     const backend = this.sandbox.backend;
-    const command = {
-      script,
-      args: options.args,
-      stdin: options.stdin,
-      allowFailure: options.allowFailure,
-      signal: options.signal,
-    };
+    const command = { script, ...options };
     if (backend) {
       return await backend.runShellCommand(command);
     }

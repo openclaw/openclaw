@@ -744,6 +744,49 @@ describe("setup activation credentials and configuration", () => {
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
   });
 
+  it("activates a saved account for an agent whose selected account was removed, preserving its model", async () => {
+    const setup = await fixture({ authMethod: "api_key", primaryModel: "stable/global-model" });
+    const configured: OpenClawConfig = {
+      ...setup.config,
+      agents: {
+        ...setup.config.agents,
+        entries: {
+          main: { default: true, model: `${modelRef}@openai:removed` },
+          other: { model: `${modelRef}@openai:other` },
+        },
+      },
+    };
+    await fs.writeFile(setup.configPath, JSON.stringify(configured));
+    clearConfigCache();
+    await persistProviderAuthProfilesAfterLogin({
+      config: configured,
+      agentDir: setup.agentDir,
+      profiles: [{ profileId: "openai:replacement", credential }],
+    });
+    const method = setup.deps.resolvePluginProviders?.({ config: configured })[0]?.auth[0];
+    assert.ok(method);
+    method.starterModel = "openai/provider-default";
+
+    const result = await setup.activate("saved-auth:openai%3Areplacement", true, {
+      agentId: "main",
+      modelRef,
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef });
+    expect(setup.login).not.toHaveBeenCalled();
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+      authProfileId: "openai:replacement",
+      model: "gpt-5.4-mini",
+      allowAuthProfileFallback: false,
+    });
+    expect(setup.readProfile()).toEqual(["openai:replacement", credential]);
+    const saved = (await readConfigFileSnapshot()).sourceConfig;
+    expect(saved.agents?.entries?.main?.model).toBe(`${modelRef}@openai:replacement`);
+    expect(saved.agents?.defaults?.model).toEqual(configured.agents?.defaults?.model);
+    expect(saved.agents?.entries?.other).toEqual(configured.agents?.entries?.other);
+  });
+
   it("rejects a concurrent provider change without overwriting it or removing the sign-in", async () => {
     const setup = await fixture();
     const edited = structuredClone(setup.config);
