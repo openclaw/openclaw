@@ -22,9 +22,13 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
-import { logSessionStateChange, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import {
+  logSessionStateChange,
+  startGatewayDiagnosticHeartbeat,
+} from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import type { CliBackendParseJsonlLifecycleEvent } from "../../plugins/cli-backend.types.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { type CliWatchdogClock, defaultCliWatchdogClock } from "./execute-plugin-watchdog.js";
 import { executePreparedCliRun } from "./execute.js";
@@ -80,7 +84,11 @@ it("holds the diagnostics recovery deadline open across a streamed compaction", 
   });
   vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
   const recoverStuckSession = vi.fn();
-  startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler("fake-timers"),
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession },
+  );
   const context = buildPreparedCliRunContext({
     runId: "compaction-owner-run",
     sessionId: "compaction-owner-session",
@@ -162,7 +170,11 @@ it("hands the diagnostics allowance back when a streamed compaction fails", asyn
   });
   vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
   const recoverStuckSession = vi.fn();
-  startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler("fake-timers"),
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession },
+  );
   const context = buildPreparedCliRunContext({
     runId: "compaction-owner-failed-run",
     sessionId: "compaction-owner-failed-session",
@@ -222,7 +234,11 @@ it("requests recovery for a compaction that never ends once the stuck-session fl
   });
   vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
   const recoverStuckSession = vi.fn();
-  startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler("fake-timers"),
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession },
+  );
   // The watchdog would kill this run at the grace floor first. Muting its
   // clock is the only double here: the compaction still streams as a backend record
   // and reaches diagnostics through the real wiring, so this is the outcome the
@@ -298,7 +314,11 @@ it("keeps a parsed tool in flight during compaction on the tool clock", async ()
   });
   vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
   // The heartbeat is what subscribes run-activity tracking to tool.execution.started.
-  startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession: vi.fn() });
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler("fake-timers"),
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession: vi.fn() },
+  );
   const context = buildPreparedCliRunContext({
     runId: "compaction-owner-tool-run",
     sessionId: "compaction-owner-tool-session",
