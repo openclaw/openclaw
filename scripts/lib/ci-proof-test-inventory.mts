@@ -3952,7 +3952,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/install-smoke-no-push-workflow.test.ts",
   "test/scripts/ios-lifecycle-workflow.test.ts",
   "test/scripts/ios-release-fastlane-gates.test.ts",
-  "test/scripts/ios-release-reconcile.test.ts",
   "test/scripts/kitchen-sink-rpc-walk.test.ts",
   "test/scripts/labeler-extension-coverage.test.ts",
   "test/scripts/lint-status.test.ts",
