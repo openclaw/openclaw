@@ -203,7 +203,7 @@ SCHEDULE:
 - {kind:"cron",expr,tz?:"IANA"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:"0 18 * * *",tz:"Asia/Shanghai"}.${streamScheduleLine}
 
 TARGET+PAYLOAD:
-- "current" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Self-wakeup/"continue later"/loop = at|every + agentTurn + current.
+- "current" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace, not the conversation worktree. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.
 - "isolated" = fresh detached session; standalone background work recorded in cron run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
@@ -227,17 +227,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
+  const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: managementAuthority?.managementOnly
-      ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
-      : buildCronToolDescription({ triggersEnabled }),
+    description: selfRemoveOnly
+      ? managementAuthority?.managementOnly
+        ? "Inspect or remove only the current automation. Actions: list [includeDisabled], get jobId, remove jobId. Use the current job ID; other jobs and management actions are unavailable."
+        : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
+      : managementAuthority?.managementOnly
+        ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
+        : buildCronToolDescription({ triggersEnabled }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
+      selfRemoveOnly,
       management: managementAuthority
         ? managementAuthority.managementOnly
           ? "only"
