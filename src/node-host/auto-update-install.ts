@@ -5,8 +5,6 @@ import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-exec
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  downloadRegistryPackageArchive,
-  fetchRegistryPackageManifest,
   packNpmSpecToArchive,
   resolveNpmSpecMetadata,
   withInstallWorkspace,
@@ -15,6 +13,10 @@ import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integri
 import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
+import {
+  downloadRegistryPackageArchive,
+  fetchRegistryPackageManifest,
+} from "../infra/registry-package-archive.js";
 import { resolveUpdateRegistryTarget } from "../infra/update-check.js";
 import {
   collectInstalledGlobalPackageErrors,
