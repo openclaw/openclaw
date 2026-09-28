@@ -17,6 +17,8 @@ export type GatewayCronCreatorAuthorityAdmission = Readonly<{
   callerScopedCreation?: true;
   isCurrent?: () => boolean;
   bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
+  /** Retires accepted continuation custody even when dispatch never starts. */
+  release?: () => void;
 }>;
 
 type DirectOperatorAuthorityParams = {

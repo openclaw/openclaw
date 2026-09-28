@@ -543,37 +543,55 @@ describe("OpenClaw rescue message", () => {
     expect(searchRuntime).toBeTypeOf("object");
   });
 
-  it("queues and applies persistent writes through conversational approval", async () => {
-    await withRescueStateDir("models-", async () => {
-      const cfg: OpenClawConfig = {};
-      const deps = {
-        verifyInferenceConfig: vi.fn(async () => ({
-          ok: true as const,
-          modelRef: "openai/gpt-5.2",
-          latencyMs: 17,
-        })),
-      };
-      await expect(
-        runRescue("/openclaw set default model openai/gpt-5.2", cfg, commandContext(), deps),
-      ).resolves.toContain("Reply /openclaw yes to apply");
-      await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
-        "Default model: openai/gpt-5.2",
-      );
+  it.each([undefined, "work"])(
+    "queues and applies model selection for agent %s through conversational approval",
+    async (agentId) => {
+      await withRescueStateDir("models-", async () => {
+        const cfg: OpenClawConfig = {};
+        if (agentId) {
+          await mockConfig.mutateConfigFile({
+            mutate: (draft) => {
+              draft.agents = { entries: { [agentId]: {} } };
+            },
+          });
+        }
+        const deps = {
+          verifyInferenceConfig: vi.fn(async () => ({
+            ok: true as const,
+            modelRef: "openai/gpt-5.2",
+            latencyMs: 17,
+          })),
+        };
+        await expect(
+          runRescue(
+            `/openclaw set default model openai/gpt-5.2${agentId ? ` for agent ${agentId}` : ""}`,
+            cfg,
+            commandContext(),
+            deps,
+          ),
+        ).resolves.toContain("Reply /openclaw yes to apply");
+        await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
+          agentId ? `Agent ${agentId} model: openai/gpt-5.2` : "Default model: openai/gpt-5.2",
+        );
 
-      const currentConfig = mockConfig.currentConfig() as {
-        agents?: { defaults?: { model?: string | { primary?: string } } };
-      };
-      const model = currentConfig.agents?.defaults?.model;
-      expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
-      const audit = readLastAuditEntry() as {
-        details?: { rescue?: boolean; channel?: string; accountId?: string; senderId?: string };
-      };
-      expect(audit.details?.rescue).toBe(true);
-      expect(audit.details?.channel).toBe("whatsapp");
-      expect(audit.details?.accountId).toBe("default");
-      expect(audit.details?.senderId).toBe("user:owner");
-    });
-  });
+        const currentConfig = mockConfig.currentConfig() as OpenClawConfig;
+        const model = agentId
+          ? currentConfig.agents?.entries?.[agentId]?.model
+          : currentConfig.agents?.defaults?.model;
+        expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
+        if (agentId) {
+          expect(currentConfig.agents?.defaults?.model).toBeUndefined();
+        }
+        const audit = readLastAuditEntry() as {
+          details?: { rescue?: boolean; channel?: string; accountId?: string; senderId?: string };
+        };
+        expect(audit.details?.rescue).toBe(true);
+        expect(audit.details?.channel).toBe("whatsapp");
+        expect(audit.details?.accountId).toBe("default");
+        expect(audit.details?.senderId).toBe("user:owner");
+      });
+    },
+  );
 
   it("queues and applies gateway restart through conversational approval", async () => {
     await withRescueStateDir("gateway-", async () => {
@@ -666,9 +684,10 @@ describe("OpenClaw rescue message", () => {
     { role: "writer", name: undefined },
     { role: undefined, name: "QA Writer" },
     { role: "writer", name: "QA Writer" },
+    { role: "writer", name: "QA Writer", purpose: "Write release notes" },
   ])(
-    "queues and applies agent creation with role $role and name $name through conversational approval",
-    async ({ role, name }) => {
+    "queues and applies agent creation with role $role, name $name and purpose $purpose through conversational approval",
+    async ({ role, name, purpose }) => {
       await withRescueStateDir("agent-", async () => {
         const cfg: OpenClawConfig = {};
         const deps = {
@@ -686,13 +705,13 @@ describe("OpenClaw rescue message", () => {
 
         await expect(
           runRescue(
-            `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""} workspace /tmp/work`,
+            `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""}${purpose ? ` purpose ${JSON.stringify(purpose)}` : ""} workspace /tmp/work`,
             cfg,
             commandContext(),
             deps,
           ),
         ).resolves.toBe(
-          `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
+          `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${purpose ? `, purpose: ${JSON.stringify(purpose)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
         );
         expect(deps.createAgent).not.toHaveBeenCalled();
         await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
@@ -706,6 +725,7 @@ describe("OpenClaw rescue message", () => {
             ...(name ? { name, identity: { name } } : {}),
           },
           ...(role ? { role } : {}),
+          ...(purpose ? { purpose } : {}),
           workspace: "/tmp/work",
           provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
         });
