@@ -19,7 +19,7 @@ describe("OpenClaw shell event lifecycle", () => {
     const shell = document.createElement("openclaw-app-shell") as ShellChromeHost & ShellLifecycle;
     const navigate = vi.spyOn(shell, "navigate").mockImplementation(() => {});
     const onSlashCommand = vi.fn();
-    const target = { owner: shell, onSlashCommand };
+    const target = { owner: shell, onSlashCommand, sessionCommands: null };
     const history = { canGoBack: true, canGoForward: false };
     const dispatchActions = () => {
       shell.dispatchEvent(new CustomEvent(COMMAND_PALETTE_TARGET_EVENT, { detail: target }));
@@ -49,6 +49,37 @@ describe("OpenClaw shell event lifecycle", () => {
     } finally {
       shell.disconnectedCallback();
       navigate.mockRestore();
+    }
+  });
+
+  it("offers session commands only from the connected palette target", () => {
+    const shell = document.createElement("openclaw-app-shell") as ShellChromeHost &
+      ShellLifecycle & { commandPaletteSessionCommands(): unknown };
+    const owner = document.createElement("div");
+    const sessionCommands = { list: () => [], run: vi.fn() };
+    const announce = (active: boolean) =>
+      shell.dispatchEvent(
+        new CustomEvent(COMMAND_PALETTE_TARGET_EVENT, {
+          detail: {
+            owner,
+            onSlashCommand: active ? vi.fn() : null,
+            sessionCommands: active ? sessionCommands : null,
+          },
+        }),
+      );
+    document.body.append(owner);
+    shell.connectedCallback();
+    try {
+      announce(true);
+      expect(shell.commandPaletteSessionCommands()).toBe(sessionCommands);
+      owner.remove();
+      expect(shell.commandPaletteSessionCommands()).toBeNull();
+      document.body.append(owner);
+      announce(false);
+      expect(shell.commandPaletteSessionCommands()).toBeNull();
+    } finally {
+      shell.disconnectedCallback();
+      owner.remove();
     }
   });
 });

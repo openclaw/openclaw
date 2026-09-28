@@ -27,6 +27,7 @@ import {
 } from "../pages/plugins/plugin-icon-controller.ts";
 import {
   getCommandPaletteModelItems,
+  getCommandPaletteSessionCommandItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
   type CommandPaletteItem,
@@ -35,6 +36,7 @@ import {
   isCommandPaletteShortcut,
   type CommandPaletteOpenInput,
   type CommandPaletteInputHandoff,
+  type CommandPaletteSessionCommands,
 } from "./command-palette-contract.ts";
 import {
   buildCommandPaletteSessionItems,
@@ -61,6 +63,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
+  @property({ attribute: false }) sessionCommands: CommandPaletteSessionCommands | null = null;
   @property({ attribute: false }) desktopAvailable = false;
   @property({ attribute: false }) custodianAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
@@ -630,6 +633,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
+      // Read on every render: the pane's session state decides labels and availability.
+      sessionCommandItems: getCommandPaletteSessionCommandItems(
+        (this.open && this.sessionCommands?.list()) || [],
+      ),
       modelSearchError: this.modelReader.failed
         ? t("palette.modelSearchFailed")
         : models.hasSnapshot
@@ -671,6 +678,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onNavigate: this.onNavigate,
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
+      onSessionCommand: (kind) => {
+        const commands = this.sessionCommands;
+        // The requested close renders before this settles, removing the modal
+        // and restoring focus; the pane then rechecks the command it runs.
+        void this.updateComplete.then(() => commands?.run(kind));
+      },
       pluginIconUrls: this.pluginIconUrls,
       onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
       onInputRef: this.handleInputRef,

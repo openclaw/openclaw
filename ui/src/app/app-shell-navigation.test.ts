@@ -86,6 +86,7 @@ describe("Settings return navigation", () => {
             query: "Settings",
             includeSlashCommands: false,
             sessionItems: [],
+            sessionCommandItems: [],
             catalogItems: [],
             desktopAvailable: false,
             custodianAvailable: false,

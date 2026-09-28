@@ -30,6 +30,7 @@ import {
 } from "../../app/question-prompt.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { loadSettings } from "../../app/settings.ts";
+import type { CommandPaletteSessionCommands } from "../../components/command-palette-contract.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -73,6 +74,8 @@ export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
+  compact: boolean;
+  commandPaletteSessionCommands: CommandPaletteSessionCommands;
   presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
   sessionSnapshotStore?: SessionSnapshotStore;

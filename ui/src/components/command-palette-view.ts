@@ -41,6 +41,7 @@ import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
 } from "./panel-toggle-contract.ts";
+import type { SessionCommandKind } from "./session-commands.ts";
 
 registerCommandPaletteEnglish();
 
@@ -61,6 +62,7 @@ type CommandPaletteProps = {
   agentIdentity?: AgentIdentityCapability;
   defaultAgentId: string;
   sessionItems: readonly CommandPaletteItem[];
+  sessionCommandItems: readonly CommandPaletteItem[];
   catalogItems: readonly CommandPaletteItem[];
   primaryModelSearch: boolean;
   modelSearchError: string | null;
@@ -84,6 +86,8 @@ type CommandPaletteProps = {
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  /** Called after the palette requests its close. */
+  onSessionCommand: (kind: SessionCommandKind) => void;
   pluginIconUrls: Readonly<Record<string, string>>;
   onPluginIconError: (pluginId: string) => void;
   desktopAvailable: boolean;
@@ -107,6 +111,12 @@ const paletteListboxId = "cmd-palette-listbox";
 
 function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
   if (props.draft.submitting || props.searchDebouncing) {
+    return;
+  }
+  if (item.sessionCommand) {
+    // Close first so the modal returns focus before Rename or a confirmation takes it.
+    props.onToggle();
+    props.onSessionCommand(item.sessionCommand);
     return;
   }
   if (item.action.startsWith("nav:")) {

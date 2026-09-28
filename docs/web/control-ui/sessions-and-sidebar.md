@@ -372,6 +372,17 @@ single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
 edit. Counts exclude leading and trailing whitespace. Session-creation errors and
 recovery actions remain visible in either mode.
 
+While a conversation is open, the palette also lists **Current session**
+commands for it: **Pin** or **Unpin**, **Rename**, **Mark as read** or
+**Mark as unread**, **Archive** or **Restore**, **Fork**, and **Delete**. They
+act on the active chat pane only and follow the chat header menu's permissions,
+protected-session rules, and outcomes, including archive **Undo** and delete
+confirmation; unavailable commands are left out. With an empty field they follow
+the navigation commands, so Enter still opens **New session**; a matching search
+lists them first. Choosing one closes the palette before the command runs, so
+**Rename** edits the title in the chat header. Compact panes without a header
+omit **Rename**.
+
 Pasted images appear as small, removable thumbnails below the text. Pasting or
 removing them leaves the input, **New session** action, and settings control in
 place; the palette grows downward. Images can start a session on their own or

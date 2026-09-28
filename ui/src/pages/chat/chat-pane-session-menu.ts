@@ -10,6 +10,8 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
+import type { CommandPaletteSessionCommands } from "../../components/command-palette-contract.ts";
+import { availableSessionCommands } from "../../components/session-commands.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
@@ -26,10 +28,13 @@ import {
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
+  canDeleteSessionRows,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiConversationIdentity,
@@ -94,6 +99,57 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     event.preventDefault();
     void this.handleHeaderSessionAction({ kind: "toggle-archived" }, row);
     return true;
+  };
+
+  /** Header menu availability for this pane's session; the command palette shares it. */
+  protected headerSessionActionState(row: GatewaySessionRow) {
+    const pinnable = isPinnableUiSessionRow(row);
+    const configuredMainKey = resolveUiConfiguredMainKey({
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
+    });
+    return {
+      session: this.headerSessionMenuData(row, pinnable),
+      selectionCount: 1,
+      actionDisabledReasons: sessionMenuReasons({
+        snapshot: this.context.gateway.snapshot,
+        session: { ...row, pinnable },
+      }),
+      forkDisabled: this.state?.sessionsLoading === true || row.modelSelectionLocked === true,
+      archiveAllowed: this.canArchiveHeaderSession(row),
+      deleteAllowed: canDeleteSessionRows([row], configuredMainKey),
+    };
+  }
+
+  private currentPaletteSessionCommands() {
+    const state = this.state;
+    // Like the archive shortcut, act only on the presented pane's own Gateway row.
+    const row =
+      state?.connected &&
+      this.active &&
+      this.presented &&
+      !this.onboarding &&
+      !parseCatalogSessionKey(state.sessionKey)
+        ? selectedChatSessionRow(state)
+        : undefined;
+    if (!row) {
+      return null;
+    }
+    const commands = availableSessionCommands(this.headerSessionActionState(row)).filter(
+      // Compact panes render no header title to edit.
+      ({ kind }) => kind !== "rename" || !this.compact,
+    );
+    return { row, commands };
+  }
+
+  protected readonly commandPaletteSessionCommands: CommandPaletteSessionCommands = {
+    list: () => this.currentPaletteSessionCommands()?.commands ?? [],
+    run: (kind) => {
+      const current = this.currentPaletteSessionCommands();
+      if (current?.commands.some((command) => command.kind === kind)) {
+        void this.handleHeaderSessionAction({ kind }, current.row);
+      }
+    },
   };
 
   protected headerSessionMenuData(row: GatewaySessionRow, pinnable: boolean): SessionMenuData {

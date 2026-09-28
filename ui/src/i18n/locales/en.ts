@@ -1205,6 +1205,7 @@ export const en: TranslationMap & {
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
+    deleteSession: "Delete session…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm:
       'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',

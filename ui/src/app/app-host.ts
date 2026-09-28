@@ -648,6 +648,7 @@ class OpenClawShell
   };
   readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
+  readonly commandPaletteSessionCommands = this.shellChrome.commandPaletteSessionCommands;
   readonly restorePendingLazyAction = this.shellChrome.restorePendingLazyAction;
   readonly nativeNavCollapsed = this.shellChrome.nativeNavCollapsed;
   /** Session publications update the title directly; renders capture route and

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { RouteId } from "../app-routes.ts";
+import type { CommandPaletteSessionCommands } from "../components/command-palette-contract.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import {
   debugOverlayTemplate,
@@ -27,6 +28,7 @@ export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSes
   closePendingPalette(): void;
   readonly lazyCustomElements: LazyCustomElementRequestController;
   handleCommandPaletteSlashCommand(command: string): void;
+  commandPaletteSessionCommands(): CommandPaletteSessionCommands | null;
   navigate(routeId: string, options?: ApplicationNavigationOptions): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
 }
@@ -60,6 +62,7 @@ export function renderShellLazyOverlays(
               host.navigate(routeId, options)}
             .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
             .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
+            .sessionCommands=${host.commandPaletteSessionCommands()}
           ></openclaw-command-palette>`
         : nothing
     }

@@ -21,6 +21,7 @@ import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
+import type { SessionCommand, SessionCommandKind } from "./session-commands.ts";
 
 registerCommandPaletteEnglish();
 
@@ -41,9 +42,12 @@ export type CommandPaletteItem = {
     | "search"
     | "navigation"
     | "chats"
-    | "messages";
+    | "messages"
+    | "currentSession";
   action: string;
   session?: GatewaySessionRow;
+  /** Runs against the target chat pane's session after the palette closes. */
+  sessionCommand?: SessionCommandKind;
   search?: string;
   hash?: string;
   agentId?: string;
@@ -68,6 +72,7 @@ const CATEGORY_LABEL_KEYS = new Map([
   ["settings", "palette.items.settings"],
   ["chats", "sessionsView.title"],
   ["messages", "palette.categories.messages"],
+  ["currentSession", "palette.categories.currentSession"],
 ]);
 
 export function commandPaletteCategoryLabel(category: string): string {
@@ -142,10 +147,24 @@ function getCommandPaletteBaseItems(
   ];
 }
 
+export function getCommandPaletteSessionCommandItems(
+  commands: readonly SessionCommand[],
+): CommandPaletteItem[] {
+  return commands.map(({ kind, label, icon }) => ({
+    id: `session-command-${kind}`,
+    label,
+    icon,
+    category: "currentSession",
+    action: `session-command:${kind}`,
+    sessionCommand: kind,
+  }));
+}
+
 export function filterCommandPaletteItems(params: {
   query: string;
   includeSlashCommands: boolean;
   sessionItems: readonly CommandPaletteItem[];
+  sessionCommandItems: readonly CommandPaletteItem[];
   catalogItems: readonly CommandPaletteItem[];
   desktopAvailable: boolean;
   custodianAvailable: boolean;
@@ -156,7 +175,8 @@ export function filterCommandPaletteItems(params: {
     params.custodianAvailable,
   ).filter((item) => params.includeSlashCommands || item.category !== "search");
   if (!params.query) {
-    return baseItems;
+    // Enter on the empty palette keeps selecting New Session.
+    return [...baseItems, ...params.sessionCommandItems];
   }
   const query = normalizeLowercaseStringOrEmpty(params.query);
   const matchRank = (item: CommandPaletteItem) => {
@@ -176,6 +196,7 @@ export function filterCommandPaletteItems(params: {
       : 0;
   };
   const baseMatches = baseItems.filter((item) => matchRank(item) > 0);
+  const sessionCommandMatches = params.sessionCommandItems.filter((item) => matchRank(item) > 0);
   const catalogMatches = params.catalogItems
     .map((item) => ({ item, rank: matchRank(item) }))
     .filter(({ rank }) => rank > 0)
@@ -184,7 +205,8 @@ export function filterCommandPaletteItems(params: {
     )
     .slice(0, CATALOG_SEARCH_LIMIT)
     .map(({ item }) => item);
-  return [...params.sessionItems, ...baseMatches, ...catalogMatches];
+  // A typed verb names the action; message matches for the same word follow it.
+  return [...sessionCommandMatches, ...params.sessionItems, ...baseMatches, ...catalogMatches];
 }
 
 const APP_CARDS = [

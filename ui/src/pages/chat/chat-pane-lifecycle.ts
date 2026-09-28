@@ -133,10 +133,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     if (!this.state || !this.active || !this.presented) {
       // Returning to this pane must not revive a command's deferred focus intent.
       this.sessionCompanionFocusGeneration += 1;
-      this.announceCommandPaletteTarget(null);
+      this.announceCommandPaletteTarget(false);
       return;
     }
-    this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
+    this.announceCommandPaletteTarget(true);
     this.nativeDraftCleanup = this.context.nativeChatDrafts.subscribe((draft) => {
       const state = this.state;
       if (!state || !this.active || !this.presented) {
@@ -678,7 +678,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.presencePayload = undefined;
-    this.announceCommandPaletteTarget(null);
+    this.announceCommandPaletteTarget(false);
     dismissConfirmedActionPopovers(this);
     resetChatViewState(this.presentationId);
     this.state = undefined;

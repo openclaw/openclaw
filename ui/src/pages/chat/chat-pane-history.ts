@@ -5,6 +5,7 @@ import {
 import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
+  type CommandPaletteSessionCommands,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
@@ -742,16 +743,18 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     state.requestUpdate?.();
   };
 
-  protected announceCommandPaletteTarget(
-    onSlashCommand: CommandPaletteTargetDetail["onSlashCommand"],
-  ) {
+  /** The session menu owns the header actions the palette can run for this pane. */
+  protected abstract readonly commandPaletteSessionCommands: CommandPaletteSessionCommands;
+
+  protected announceCommandPaletteTarget(active: boolean) {
     this.dispatchEvent(
       new CustomEvent<CommandPaletteTargetDetail>(COMMAND_PALETTE_TARGET_EVENT, {
         bubbles: true,
         composed: true,
         detail: {
           owner: this,
-          onSlashCommand,
+          onSlashCommand: active ? this.handleCommandPaletteSlashCommand : null,
+          sessionCommands: active ? this.commandPaletteSessionCommands : null,
         },
       }),
     );

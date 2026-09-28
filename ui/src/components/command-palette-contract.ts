@@ -2,6 +2,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import type { SessionCommand, SessionCommandKind } from "./session-commands.ts";
 
 export const COMMAND_PALETTE_DIALOG_STYLE =
   "--openclaw-modal-width: min(740px, calc(100vw - 32px));";
@@ -42,10 +43,28 @@ export function isCommandPaletteShortcut(event: KeyboardEvent): boolean {
   return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette, event);
 }
 
+/** The target pane's session actions; the pane revalidates each command when it runs. */
+export type CommandPaletteSessionCommands = {
+  list: () => readonly SessionCommand[];
+  run: (kind: SessionCommandKind) => void;
+};
+
 export type CommandPaletteTargetDetail = {
   owner: Element;
   onSlashCommand: ((command: string) => void) | null;
+  sessionCommands: CommandPaletteSessionCommands | null;
 };
+
+function isCommandPaletteSessionCommands(value: unknown): value is CommandPaletteSessionCommands {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "list" in value &&
+    typeof value.list === "function" &&
+    "run" in value &&
+    typeof value.run === "function"
+  );
+}
 
 function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTargetDetail {
   return (
@@ -54,7 +73,9 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
     "owner" in value &&
     value.owner instanceof Element &&
     "onSlashCommand" in value &&
-    (value.onSlashCommand === null || typeof value.onSlashCommand === "function")
+    (value.onSlashCommand === null || typeof value.onSlashCommand === "function") &&
+    "sessionCommands" in value &&
+    (value.sessionCommands === null || isCommandPaletteSessionCommands(value.sessionCommands))
   );
 }
 

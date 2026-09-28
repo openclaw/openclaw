@@ -32,6 +32,7 @@ const enCommandPalette = {
       navigation: en.palette.categories.navigation,
       skills: "Skills",
       messages: "In messages",
+      currentSession: "Current session",
     },
     items: {
       apps: "Apps",

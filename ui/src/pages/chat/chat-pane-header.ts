@@ -10,7 +10,6 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
-import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -21,11 +20,6 @@ import {
 } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
-import {
-  canDeleteSessionRows,
-  isPinnableUiSessionRow,
-  resolveUiConfiguredMainKey,
-} from "../../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
   canSplitSessionView,
@@ -289,19 +283,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         : renameAccess.allowed
           ? undefined
           : renameAccess.reason;
-    const configuredMainKey = resolveUiConfiguredMainKey({
-      agentsList: this.context.agents.state.agentsList,
-      hello: this.context.gateway.snapshot.hello,
-    });
-    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
-    const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
-    const pinnable = row != null && isPinnableUiSessionRow(row);
-    const sessionActionDisabledReasons = row
-      ? sessionMenuReasons({
-          snapshot: this.context.gateway.snapshot,
-          session: { ...row, pinnable },
-        })
-      : {};
+    const sessionActions = row ? this.headerSessionActionState(row) : null;
     const assignmentAccess = row
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.assignOwner",
@@ -316,7 +298,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ? this.continueInTerminalDisabledReason(row)
       : undefined;
     const actionDisabledReasons: Partial<Record<HeaderMenuActionKind, string>> = {
-      ...sessionActionDisabledReasons,
+      ...sessionActions?.actionDisabledReasons,
       ...(assignmentAccess && !assignmentAccess.allowed
         ? { "assign-owner": assignmentAccess.reason }
         : {}),
@@ -586,9 +568,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onPlacementRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
       }),
       sessionMenuAction:
-        row && this.state
+        row && sessionActions && this.state
           ? html`<openclaw-chat-header-session-menu
-              .session=${this.headerSessionMenuData(row, pinnable)}
+              .session=${sessionActions.session}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${
@@ -607,11 +589,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
-              .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
+              .forkDisabled=${sessionActions.forkDisabled}
               .forkFromLastCompleted=${row.hasActiveRun === true}
-              .archiveAllowed=${archiveAllowed}
+              .archiveAllowed=${sessionActions.archiveAllowed}
               .archiveShortcut=${this.active && this.presented && !this.onboarding}
-              .deleteAllowed=${deleteAllowed}
+              .deleteAllowed=${sessionActions.deleteAllowed}
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
               }}

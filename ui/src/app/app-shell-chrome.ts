@@ -8,6 +8,7 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   shellNavDrawerTriggerFromEvent,
   type CommandPaletteElement,
+  type CommandPaletteSessionCommands,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
 import {
@@ -726,6 +727,9 @@ export class ShellChromeOwner {
 
   readonly handleCommandPaletteSlashCommand = (command: string): void =>
     this.palette.handleSlashCommand(command);
+
+  readonly commandPaletteSessionCommands = (): CommandPaletteSessionCommands | null =>
+    this.palette.sessionCommands();
 
   readonly handleCommandPaletteTarget = (event: Event): void =>
     applyCommandPaletteTargetEvent(this.host, event);

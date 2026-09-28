@@ -4,6 +4,7 @@ import {
   COMMAND_PALETTE_OPEN_EVENT,
   isCommandPaletteShortcut,
   type CommandPaletteElement,
+  type CommandPaletteSessionCommands,
   type CommandPaletteTargetDetail,
   type CommandPaletteInputSnapshot,
   type CommandPaletteInputHandoff,
@@ -110,6 +111,11 @@ export class ShellCommandPaletteOwner {
     } else {
       this.open();
     }
+  }
+
+  sessionCommands(): CommandPaletteSessionCommands | null {
+    const target = this.#host.commandPaletteTarget;
+    return target?.owner.isConnected ? target.sessionCommands : null;
   }
 
   handleSlashCommand(command: string): void {

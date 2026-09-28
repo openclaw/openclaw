@@ -7,6 +7,7 @@ import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
+import { sessionCommandUnavailable } from "./session-commands.ts";
 import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
@@ -159,8 +160,6 @@ export class SessionMenuActions {
         return batch || this.actionDisabled("set-icon") || this.actionDisabled("set-color");
       case "copy-session-id":
         return batch || !session.sessionId;
-      case "toggle-pin":
-        return batch || session.pinnable === false || session.isChild === true || session.archived;
       case "toggle-involving-me":
         return (
           !this.involvementAvailable ||
@@ -168,22 +167,20 @@ export class SessionMenuActions {
           session.hiddenFromInvolvingMe === undefined ||
           !session.sessionId
         );
-      case "rename":
       case "set-icon":
       case "set-color":
       case "assign-owner":
         return batch;
-      case "fork":
-        return batch || state.forkDisabled;
       case "move-to-group":
       case "new-group":
         return session.isChild === true;
+      case "toggle-pin":
+      case "rename":
+      case "fork":
       case "toggle-archived":
-        return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":
-        return !state.deleteAllowed;
       case "toggle-unread":
-        return false;
+        return sessionCommandUnavailable(kind, state);
       default:
         return kind satisfies never;
     }

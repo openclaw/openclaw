@@ -12,6 +12,7 @@ describe("command palette catalog search", () => {
       query: "meeting",
       includeSlashCommands: false,
       sessionItems: [],
+      sessionCommandItems: [],
       catalogItems: [],
       desktopAvailable: false,
       custodianAvailable: false,
