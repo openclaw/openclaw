@@ -135,6 +135,7 @@ function resolvePermittedPluginApprovalResolution(
 function buildPluginApprovalFailureReason(params: {
   fallbackReason: string;
   ctx?: HookContext;
+  noRoute?: boolean;
 }): string {
   const turnSourceChannel = params.ctx?.turnSourceChannel;
   if (!turnSourceChannel?.trim()) {
@@ -153,6 +154,9 @@ function buildPluginApprovalFailureReason(params: {
   });
   if (!setupText) {
     return params.fallbackReason;
+  }
+  if (params.noRoute) {
+    return `${params.fallbackReason}\n\n${setupText}`;
   }
   const nativeDeliverySurface =
     nativePluginSurface.kind === "disabled"
@@ -357,6 +361,7 @@ async function requestPluginToolApproval(params: {
           reason: buildPluginApprovalFailureReason({
             fallbackReason: "Plugin approval unavailable (no approval route)",
             ctx: params.ctx,
+            noRoute: true,
           }),
           params: params.baseParams,
         };

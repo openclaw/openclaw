@@ -3135,6 +3135,54 @@ describe("before_tool_call requireApproval handling", () => {
     ]);
   });
 
+  it("includes channel plugin setup guidance when a Slack request has no approval route", async () => {
+    const describePluginApprovalSetup = vi.fn(
+      () => "Check `approvals.plugin.slack` and the connected bot workspace.",
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+            approvalCapability: {
+              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
+              getExecInitiatingSurfaceState: () => ({ kind: "enabled" as const }),
+              describePluginApprovalSetup,
+            },
+          },
+        },
+      ]),
+    );
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: { title: "Review diff", description: "Render diff" },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:no-route", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "diffs",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "default",
+      },
+    });
+
+    expect(result).toHaveProperty(
+      "reason",
+      "Plugin approval unavailable (no approval route)\n\nCheck `approvals.plugin.slack` and the connected bot workspace.",
+    );
+    expect(describePluginApprovalSetup).toHaveBeenCalledWith({
+      channel: "slack",
+      channelLabel: "Slack",
+      accountId: "default",
+    });
+    expect(mockCallGateway).toHaveBeenCalledTimes(1);
+  });
+
   it("unblocks immediately when abort signal fires during waitDecision", async () => {
     const result = await runAbortDuringApprovalWait();
 
