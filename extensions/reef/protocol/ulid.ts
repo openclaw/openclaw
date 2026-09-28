@@ -27,7 +27,7 @@ export function createMonotonicUlidFactory(options: UlidFactoryOptions = {}): ()
     } else {
       increment(randomness);
     }
-    return encodeTime(lastTime) + encodeRandom(randomness);
+    return encodeCrockford(BigInt(lastTime), 10) + encodeRandom(randomness);
   };
 }
 
@@ -41,10 +41,10 @@ function increment(value: Uint8Array): void {
   throw new Error("ULID monotonic overflow");
 }
 
-function encodeTime(time: number): string {
-  let value = BigInt(time);
+function encodeCrockford(input: bigint, length: number): string {
+  let value = input;
   let output = "";
-  for (let index = 0; index < 10; index++) {
+  for (let index = 0; index < length; index++) {
     output = CROCKFORD[Number(value & 31n)]! + output;
     value >>= 5n;
   }
@@ -56,10 +56,5 @@ function encodeRandom(bytes: Uint8Array): string {
   for (const byte of bytes) {
     value = (value << 8n) | BigInt(byte);
   }
-  let output = "";
-  for (let index = 0; index < 16; index++) {
-    output = CROCKFORD[Number(value & 31n)]! + output;
-    value >>= 5n;
-  }
-  return output;
+  return encodeCrockford(value, 16);
 }

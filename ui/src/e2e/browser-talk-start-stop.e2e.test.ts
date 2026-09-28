@@ -499,6 +499,8 @@ suite.define(() => {
   it("starts Gemini Live Talk, enables a fake camera, and handles describe_view", async () => {
     await suite.withPage({ permissions: ["camera", "microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        heldMethods: ["chat.startup", "talk.catalog"],
+        historyMessages: [{ role: "assistant", content: "Ready for Video Talk." }],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("google"),
           "talk.client.create": {
@@ -548,6 +550,14 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("talk.catalog");
+      const capability = page.locator('[data-chat-talk-capability="realtime"]');
+      await capability.waitFor({ state: "attached" });
+      await gateway.resolveDeferred("chat.startup");
+      await page.getByText("Ready for Video Talk.", { exact: true }).waitFor();
+      await gateway.resolveDeferred("talk.catalog");
+      await capability.waitFor({ state: "detached" });
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
@@ -624,6 +634,8 @@ suite.define(() => {
   it("shows actionable guidance when Video Talk camera permission is blocked", async () => {
     await suite.withPage(undefined, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        heldMethods: ["chat.startup", "talk.catalog"],
+        historyMessages: [{ role: "assistant", content: "Ready for Video Talk." }],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("google"),
           "talk.client.create": {
@@ -658,6 +670,14 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("talk.catalog");
+      const capability = page.locator('[data-chat-talk-capability="realtime"]');
+      await capability.waitFor({ state: "attached" });
+      await gateway.resolveDeferred("chat.startup");
+      await page.getByText("Ready for Video Talk.", { exact: true }).waitFor();
+      await gateway.resolveDeferred("talk.catalog");
+      await capability.waitFor({ state: "detached" });
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
       const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
@@ -688,6 +708,7 @@ suite.define(() => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-transcript";
       const gateway = await installMockGateway(page, {
+        deferredMethods: ["talk.client.create"],
         methodResponses: {
           "talk.client.create": {
             provider: "openai",
@@ -710,20 +731,33 @@ suite.define(() => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
-      // The request is recorded before its mock response is delivered. Wait for
-      // microphone setup before probing relay readiness below.
+      // Microphone acquisition precedes relay admission and cannot prove readiness.
+      expect(
+        await page.evaluate(() => {
+          const state = (
+            window as Window & {
+              openclawTalkE2eState?: { constraints: unknown[]; inputProcessor: unknown };
+            }
+          ).openclawTalkE2eState;
+          return {
+            microphoneRequests: state?.constraints.length,
+            inputReady: state?.inputProcessor != null,
+          };
+        }),
+      ).toEqual({ microphoneRequests: 1, inputReady: false });
+      await gateway.resolveDeferred("talk.client.create");
       await expect
         .poll(() =>
           page.evaluate(
             () =>
               (
                 window as Window & {
-                  openclawTalkE2eState?: { constraints: unknown[] };
+                  openclawTalkE2eState?: { inputProcessor: unknown };
                 }
-              ).openclawTalkE2eState?.constraints.length,
+              ).openclawTalkE2eState?.inputProcessor != null,
           ),
         )
-        .toBe(1);
+        .toBe(true);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())

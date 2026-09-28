@@ -34,7 +34,7 @@ extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	3
 extensions/baseten/models.ts	3
-extensions/beam/src/mirror.ts	3
+extensions/beam/src/mirror.ts	2
 extensions/beam/src/types.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
@@ -430,8 +430,7 @@ extensions/google-meet/src/cli-runtime-commands.ts	4
 extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/plugin-registration.ts	1
-extensions/google-meet/src/transports/chrome-create.ts	4
-extensions/google-meet/src/transports/google-meet-platform-adapter.ts	1
+extensions/google-meet/src/transports/chrome-create.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
 extensions/google/cli-backend-isolated-auth.runtime.ts	5
 extensions/google/cli-backend.ts	1
@@ -660,7 +659,6 @@ extensions/memory-wiki/src/gateway.ts	3
 extensions/memory-wiki/src/ingest.ts	2
 extensions/memory-wiki/src/log.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
-extensions/memory-wiki/src/source-sync-state.ts	1
 extensions/memory-wiki/src/tool.ts	2
 extensions/microsoft-foundry/cli.ts	7
 extensions/microsoft-foundry/onboard.ts	2
@@ -1109,8 +1107,7 @@ extensions/voice-call/src/providers/twilio/api.ts	3
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/tts-provider-voice.ts	1
-extensions/voice-call/src/webhook.ts	10
-extensions/voice-call/src/webhook/realtime-handler.ts	1
+extensions/voice-call/src/webhook.ts	7
 extensions/volcengine/tts.ts	2
 extensions/voyage/embedding-batch.ts	1
 extensions/web-readability/web-content-extractor.ts	2
@@ -1149,14 +1146,13 @@ extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
 extensions/workboard/doctor-contract-api.ts	4
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
-extensions/workboard/src/gateway-helpers.ts	1
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	2
-extensions/workboard/src/store-normalizers.ts	11
+extensions/workboard/src/store-normalizers.ts	10
 extensions/workboard/src/store-workflow.ts	2
 extensions/workboard/src/store.ts	1
-extensions/workboard/src/tools.ts	11
+extensions/workboard/src/tools.ts	8
 extensions/workboard/src/workspace-access.ts	1
 extensions/xai/code-execution.ts	2
 extensions/xai/image-generation-provider.ts	1

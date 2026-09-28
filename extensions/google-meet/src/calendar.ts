@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
@@ -151,18 +152,11 @@ export function buildGoogleMeetCalendarDayWindow(now = new Date()): {
   return { timeMin: start.toISOString(), timeMax: end.toISOString() };
 }
 
-function parseCalendarEventTime(value: GoogleCalendarEventDate | undefined): number | undefined {
-  const raw = value?.dateTime ?? value?.date;
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): number {
-  const startMs = parseCalendarEventTime(event.start) ?? Number.POSITIVE_INFINITY;
-  const endMs = parseCalendarEventTime(event.end) ?? startMs;
+  const startMs =
+    parseDateStringTimestampMs(event.start?.dateTime ?? event.start?.date) ??
+    Number.POSITIVE_INFINITY;
+  const endMs = parseDateStringTimestampMs(event.end?.dateTime ?? event.end?.date) ?? startMs;
   if (startMs <= nowMs && endMs >= nowMs) {
     return 0;
   }

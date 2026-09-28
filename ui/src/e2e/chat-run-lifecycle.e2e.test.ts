@@ -660,6 +660,12 @@ suite.define(() => {
       const stop = currentPage.getByRole("button", { name: "Stop generating" });
       const composer = currentPage.locator(".agent-chat__input textarea");
       await stop.waitFor({ state: "visible" });
+      const historyCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.deferNext("sessions.abort");
+      await stop.click();
+      const abort = await gateway.waitForRequest("sessions.abort");
+      expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       const completedSession = {
         key: sessionKey,
         sessionId: `session:${sessionKey}`,
@@ -676,12 +682,6 @@ suite.define(() => {
         sessionId: `session:${sessionKey}`,
         sessionInfo: completedSession,
       });
-      const historyCount = (await gateway.getRequests("chat.history")).length;
-      await gateway.deferNext("sessions.abort");
-      await stop.click();
-      const abort = await gateway.waitForRequest("sessions.abort");
-      expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
-      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       await composer.fill("keep this draft");
       await gateway.resolveDeferred("sessions.abort", {
         ok: true,
