@@ -530,6 +530,8 @@ export async function swapStagedPackageInstall(
             hadPackage,
             previousRoot,
             backupRoot,
+            // Rollback snapshots remain recovery evidence even after successful restoration.
+            databaseBackupRoot: rollbackResult ? undefined : databaseBackupRoot,
             launchers,
             packageBackedUp,
             globalRoot: targetLayout.globalRoot,

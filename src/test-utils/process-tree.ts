@@ -10,7 +10,7 @@ export async function writeForkingNoOutputScript(dir: string): Promise<string> {
     scriptPath,
     [
       "#!/bin/sh",
-      '"$NODE_BINARY" -e \'setInterval(() => {}, 1000); require("node:fs").writeFileSync(process.env.PID_FILE, String(process.pid)); process.stderr.write("ready\\n");\' &',
+      '"$NODE_BINARY" -e \'setInterval(() => {}, 1000); require("node:fs").writeFileSync(process.env.PID_FILE, String(process.pid));\' &',
       "wait",
     ].join("\n"),
     "utf8",

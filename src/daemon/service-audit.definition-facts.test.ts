@@ -3,8 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { VERSION } from "../version.js";
-import "./test-helpers/service-audit-mocks.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
+import "./test-helpers/service-audit-mocks.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
   buildLaunchAgentEnvironmentWrapper,
@@ -13,12 +13,12 @@ import {
 } from "./launchd-service-files.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
-  buildScheduledTaskXml,
   buildTaskScript,
   buildHiddenLauncherScript,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 import { buildSystemdUnit } from "./systemd-unit.js";

@@ -9,7 +9,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
@@ -30,45 +30,58 @@ export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDataba
 export async function advancePlacementFixtureToActive(
   store: WorkerSessionPlacementStore,
   database: OpenClawStateDatabase,
-  identity: WorkerSessionPlacementIdentity,
-  executionMode: "worker-turn" | "remote-exec" = "worker-turn",
+  identity: WorkerSessionPlacementDispatchIdentity,
+  {
+    environmentId = "environment-placement-claim-close",
+    ownerEpoch = 7,
+    workerBundleHash = "a".repeat(64),
+    remoteWorkspaceDir = "/workspace/placement-claim-close",
+    workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`,
+    seedEnvironment = "before-activation",
+  }: {
+    environmentId?: string;
+    ownerEpoch?: number;
+    workerBundleHash?: string;
+    remoteWorkspaceDir?: string;
+    workspaceBaseManifestRef?: string;
+    seedEnvironment?: "before-dispatch" | "before-activation" | false;
+  } = {},
 ) {
-  let placement = await store.startDispatch({ ...identity, executionMode });
+  const environment = { environmentId, sessionId: identity.sessionId, ownerEpoch };
+  if (seedEnvironment === "before-dispatch") {
+    seedAttachedPlacementEnvironment(database, environment);
+  }
+  let placement = await store.startDispatch(identity);
   placement = store.transition({
     sessionId: identity.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
-    patch: { environmentId: "environment-placement-claim-close" },
+    patch: { environmentId },
   });
   placement = store.transition({
     sessionId: identity.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
-    patch: { workerBundleHash: "a".repeat(64) },
+    patch: { workerBundleHash },
   });
   placement = store.transition({
     sessionId: identity.sessionId,
     from: "syncing",
     to: "starting",
     expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-      remoteWorkspaceDir: "/workspace/placement-claim-close",
-    },
+    patch: { workspaceBaseManifestRef, remoteWorkspaceDir },
   });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: "environment-placement-claim-close",
-    sessionId: identity.sessionId,
-    ownerEpoch: 7,
-  });
+  if (seedEnvironment === "before-activation") {
+    seedAttachedPlacementEnvironment(database, environment);
+  }
   const active = store.transition({
     sessionId: identity.sessionId,
     from: "starting",
     to: "active",
     expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: 7 },
+    patch: { activeOwnerEpoch: ownerEpoch },
   });
   if (active.state !== "active") {
     throw new Error("expected active worker placement");

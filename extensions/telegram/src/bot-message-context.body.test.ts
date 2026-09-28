@@ -1,5 +1,5 @@
 import path from "node:path";
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { ChatFullInfo, Message, Update } from "grammy/types";
 import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
@@ -71,16 +71,13 @@ function textMessage(text: string, group = true) {
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ update_id: ++updateId, message }),
-    }),
-  );
+  // Preserve Telegram's JSON shape without imposing a webhook deadline on admission.
+  const request = new Request("http://localhost/telegram", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ update_id: ++updateId, message }),
+  });
+  await bot.handleUpdate(await request.json());
 }
 
 describe("Telegram admitted model input", () => {

@@ -304,9 +304,16 @@ suite.define(() => {
   it("keeps target liveness when the selected agent scope changes", async () => {
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const mainSessions = sessionListResponse(sessionKey, "Main progress dashboard", {
+        hasActiveRun: true,
+        startedAt: now - 30_000,
+        updatedAt: now,
+      });
       const gateway = await installMockGateway(page, {
         sessionKey,
-        sessions: [{ key: sessionKey }],
+        heldMethods: ["sessions.describe"],
+        // Describe and startup publish full snapshots of the same running session.
+        sessions: mainSessions.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -326,11 +333,7 @@ suite.define(() => {
             cases: [
               {
                 match: { agentId: "main" },
-                response: sessionListResponse(sessionKey, "Main progress dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
+                response: mainSessions,
               },
               {
                 match: { agentId: "writer" },
@@ -376,6 +379,9 @@ suite.define(() => {
         };
         app.runtime?.context?.agentSelection?.setScope?.("writer");
       });
+      await gateway.waitForRequest("sessions.describe");
+      // Reconcile the descriptor after the running roster and scope transition.
+      await gateway.resolveDeferred("sessions.describe");
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some((request) => {
@@ -410,8 +416,8 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
+      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await page.screenshot({
         animations: "disabled",
         fullPage: true,

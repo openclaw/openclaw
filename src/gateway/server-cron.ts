@@ -1182,7 +1182,7 @@ export function buildGatewayCronService(params: {
       }, "cron:watcher-state"),
     logger: cronServiceLogger,
   } satisfies CronExitWatcherHandlers;
-  exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers);
+  exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers, params.scheduler);
   streamWatchersRef.current = createCronStreamWatchers({
     scheduler: params.scheduler,
     getProcessSupervisor,

@@ -657,6 +657,12 @@
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
           - "docs/plugins/reference/copilot.md"
+"extensions: kie":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kie/**"
+          - "docs/providers/kie.md"
+          - "docs/plugins/reference/kie.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

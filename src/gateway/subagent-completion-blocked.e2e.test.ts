@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -31,11 +32,16 @@ describe("subagent completion blocked Gateway E2E", () => {
   it("suspends native completion delivery after ordinary delivery exhaustion", async () => {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required for Gateway E2E fixtures");
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!stateDir || !configPath) {
+      throw new Error(
+        "OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH are required for Gateway E2E fixtures",
+      );
     }
     testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
     try {
+      // Keep unrelated reload roots out of the completion settlement barrier.
+      await fs.writeFile(configPath, JSON.stringify({ gateway: { reload: { mode: "off" } } }));
       await withGatewayServer(async () => {
         const now = Date.now();
         const endedAt = now - 31 * 60_000;

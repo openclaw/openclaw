@@ -12,6 +12,7 @@ import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import * as gatewayService from "../../src/daemon/service.js";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../../src/test-utils/vitest-spies.js";
+import { createDeferred } from "../helpers/promise.js";
 
 function baseState(overrides: Partial<GatewayServiceState> = {}): GatewayServiceState {
   return {
@@ -56,6 +57,9 @@ async function inspectFixtureGateway(
           profile: env.OPENCLAW_PROFILE ?? "default",
           env,
           ...(target ? { scope: target.scope, systemdReadTarget: target } : {}),
+          ...(input.windowsStartupEntry !== undefined
+            ? { windowsStartupEntry: input.windowsStartupEntry }
+            : {}),
         },
         input,
       );
@@ -534,6 +538,207 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
           ]) {
             mock.mockRestore();
           }
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["literal", "Environment=OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
+    ["spaced", "Environment = OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
+    [
+      "last assignment",
+      "Environment=OPENCLAW_PROFILE=stale\nEnvironment=OPENCLAW_PROFILE=fenceproof",
+      "custom-rescue.service",
+    ],
+    [
+      "spaced reset",
+      "Environment=OPENCLAW_PROFILE=stale\nEnvironment =\nEnvironment=OPENCLAW_SERVICE_MARKER=openclaw\nEnvironment=OPENCLAW_SERVICE_KIND=gateway",
+      "openclaw-gateway-fenceproof.service",
+    ],
+    [
+      "section and case",
+      "Environment=OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
+      "custom-rescue.service",
+    ],
+  ] as const)(
+    "refuses through modeled Linux real-FS sibling bindings with %s inline profile metadata",
+    async (_name, metadata, siblingUnit) =>
+      withMockedPlatform("linux", async () => {
+        await withTestDir({ prefix: "openclaw-live-dist-unit-fixture-" }, async (tmp) => {
+          const home = path.join(tmp, "home");
+          const checkout = path.join(tmp, "checkout");
+          const other = path.join(tmp, "other");
+          const systemdDir = path.join(home, ".config", "systemd", "user");
+          isolateSystemdInventory(home);
+          await writeOpenClawPackage(checkout);
+          await writeOpenClawPackage(other);
+          await fs.mkdir(systemdDir, { recursive: true });
+          const unitBody = [
+            "[Service]",
+            "ExecStart=/usr/bin/node /srv/worker/dist/index.js gateway",
+            "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+            "Environment=OPENCLAW_SERVICE_KIND=gateway",
+            "",
+          ].join("\n");
+          await fs.writeFile(path.join(systemdDir, "openclaw-gateway.service"), unitBody);
+          await fs.writeFile(path.join(systemdDir, siblingUnit), `${unitBody}${metadata}\n`);
+
+          const { discoverManagedGatewayBindings } =
+            await import("../../src/daemon/managed-gateway-bindings.ts");
+          const hostConnection = {
+            XDG_RUNTIME_DIR: path.join(tmp, "caller-runtime"),
+            DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(tmp, "caller-bus")}`,
+            USER: "fixture-caller",
+            LOGNAME: "fixture-caller",
+            SUDO_USER: "fixture-origin",
+          };
+          const callerEnv = { HOME: home, ...hostConnection, OPENCLAW_PROFILE: "selected" };
+          const bindings = await discoverManagedGatewayBindings(callerEnv);
+          expect(bindings.map((binding) => binding.profile).toSorted()).toEqual([
+            "default",
+            "fenceproof",
+          ]);
+          expect(bindings.every((binding) => binding.scope === "user")).toBe(true);
+          for (const binding of bindings) {
+            expect(binding.env).toMatchObject(hostConnection);
+            expect(binding.env.OPENCLAW_PROFILE).not.toBe("selected");
+          }
+
+          const result = await inspectFixtureGateway(checkout, {
+            env: callerEnv,
+            listBindings: async () => bindings,
+            readState: async (binding) => {
+              if (binding?.profile === "fenceproof") {
+                return baseState({
+                  running: true,
+                  command: {
+                    programArguments: [
+                      process.execPath,
+                      path.join(checkout, "dist", "index.js"),
+                      "gateway",
+                    ],
+                  },
+                  runtime: {
+                    status: "running",
+                    pid: 77,
+                    systemd: { unit: siblingUnit },
+                  },
+                });
+              }
+              return baseState({
+                running: true,
+                command: {
+                  programArguments: [
+                    process.execPath,
+                    path.join(other, "dist", "index.js"),
+                    "gateway",
+                  ],
+                },
+                runtime: {
+                  status: "running",
+                  pid: 76,
+                  systemd: { unit: "openclaw-gateway.service" },
+                },
+              });
+            },
+          });
+          expect(result.refuse).toBe(true);
+          if (result.refuse) {
+            expect(result.message).toContain("fenceproof");
+            expect(result.message).toContain("openclaw update");
+            expect(result.message).not.toContain("profiles default, fenceproof");
+          }
+        });
+      }),
+  );
+
+  it("continues to a live sibling after a Startup file read exhausts its inspection budget", async () => {
+    await withTestDir({ prefix: "openclaw-live-dist-startup-stalled-" }, async (tmp) => {
+      await writeOpenClawPackage(tmp);
+      const startupPath = "C:\\Startup\\stalled.cmd";
+      const pending = createDeferred<Awaited<ReturnType<typeof fs.readFile>>>();
+      const entered = createDeferred();
+      const readState = gatewayService.readGatewayServiceState;
+      const readFile = fs.readFile.bind(fs);
+      let signal: AbortSignal | undefined;
+      const files = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+        if (args[0] !== startupPath) {
+          return readFile(...args);
+        }
+        const options = args[1];
+        signal = typeof options === "object" && options !== null ? options.signal : undefined;
+        entered.resolve();
+        return pending.promise;
+      });
+      try {
+        await withMockedPlatform("win32", async () => {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+          let result: Awaited<ReturnType<typeof resolveLiveManagedGatewayDistFence>> | undefined;
+          const inspection = inspectFixtureGateway(tmp, {
+            listBindings: async () => [
+              { profile: "stalled", env: {}, windowsStartupEntry: startupPath },
+              { profile: "live", env: { OPENCLAW_PROFILE: "live" } },
+            ],
+            readState: async (binding, input) =>
+              input?.windowsStartupEntry
+                ? readState(gatewayService.resolveGatewayService(), input)
+                : stateForPackage(tmp, { running: binding.profile === "live" }),
+          }).then((value) => {
+            result = value;
+          });
+          try {
+            await entered.promise;
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(signal?.aborted).toBe(true);
+            await inspection;
+            expect(result).toMatchObject({
+              refuse: true,
+              message: expect.stringContaining("profile live"),
+            });
+          } finally {
+            pending.reject(new Error("Fixture file read released"));
+            try {
+              await inspection;
+            } finally {
+              vi.useRealTimers();
+            }
+          }
+        });
+      } finally {
+        files.mockRestore();
+      }
+    });
+  });
+
+  it.each([true, false])(
+    "keeps distinct Startup file bindings when only the second holds dist (running=%s)",
+    async (running) => {
+      await withTestDir({ prefix: "openclaw-live-dist-startup-" }, async (tmp) => {
+        await writeOpenClawPackage(tmp);
+        const first = "C:\\Startup\\same-label.cmd";
+        const second = "C:\\Startup\\same-label.vbs";
+        const result = await inspectFixtureGateway(tmp, {
+          listBindings: async () =>
+            [first, second].map((windowsStartupEntry) => ({
+              profile: "rescue",
+              scope: "user",
+              env: { OPENCLAW_PROFILE: "rescue" },
+              windowsStartupEntry,
+            })),
+          readState: async (binding) =>
+            stateForPackage(tmp, {
+              running: running && binding.windowsStartupEntry === second,
+              runtime: { status: "unknown" },
+            }),
+        });
+        expect(result.refuse).toBe(running);
+        if (result.refuse) {
+          expect(result.message).toContain("profile rescue");
+          expect(result.message).toContain(`Startup entry ${JSON.stringify(second)}`);
+          expect(result.message).not.toContain("openclaw gateway stop --profile rescue");
+          expect(result.message).not.toContain("openclaw update");
+          expect(result.message).not.toContain("matching service stop");
         }
       });
     },
