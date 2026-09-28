@@ -74,7 +74,13 @@ export function projectResetBoundaryNavigationSql(event: Expression<string>): Ra
 }
 
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
-export function projectModelContextNavigationSql(event: Expression<string>): RawBuilder<string> {
+export function projectModelContextNavigationSql(source: Expression<string>): RawBuilder<string> {
+  const binary = supportsNodeSqliteJsonb();
+  // Parse each durable row once. Repeated field projections otherwise reparse
+  // large image/tool payloads even though navigation never returns those bytes.
+  const event = binary
+    ? /* kysely-allow-raw: local single-row CTE alias, never caller input. */ sql<string>`context_event.payload`
+    : source;
   const entry = pickJsonObject(event, [
     ...TRANSCRIPT_NAVIGATION_KEYS,
     "timestamp",
@@ -122,7 +128,7 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
     AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${DEFAULT_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
+  const projected = /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),
@@ -131,4 +137,8 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
     ELSE ${entry} END`;
+  return binary
+    ? /* kysely-allow-raw: a correlated materialized row keeps JSONB transient and bounds memory to one event. */ sql<string>`(WITH context_event AS MATERIALIZED (SELECT jsonb(${source}) AS payload)
+        SELECT ${projected} FROM context_event)`
+    : projected;
 }
