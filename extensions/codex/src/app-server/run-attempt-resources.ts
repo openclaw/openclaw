@@ -80,13 +80,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     : undefined;
   let nativeModelAdmission: CodexStartOrResumeThreadParams["nativeModelAdmission"];
   try {
-    nativeModelAdmission = modelAdmissionSource
-      ? modelAdmissionSource.modelPolicyRequired !== false
-        ? "required"
-        : options.nativeHookRelay?.enabled === false
-          ? "disabled"
-          : "optional"
-      : undefined;
+    nativeModelAdmission = params.hostCapabilities.assertNativeSubagentSpawnAllowed
+      ? "required"
+      : modelAdmissionSource
+        ? modelAdmissionSource.modelPolicyRequired !== false
+          ? "required"
+          : options.nativeHookRelay?.enabled === false
+            ? "disabled"
+            : "optional"
+        : undefined;
   } finally {
     modelAdmissionSource?.release();
   }
