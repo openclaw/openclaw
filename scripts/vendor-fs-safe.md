@@ -52,9 +52,10 @@ build-script approval, inspect its scripts and use an exact artifact rule rather
 than disabling strict approval globally. Other dependencies still need their
 registry or cache; this is not an offline OpenClaw installer.
 
-Workspace overrides do not automatically carry into published packages. Use the
-existing [package-staging workflow](package-openclaw-for-docker.mjs) for a custom distribution, preserve its required
-native targets, and test the installed artifact outside the source checkout.
+This recipe applies only to the source checkout. Workspace overrides do not
+carry into published packages, and the existing package-staging workflow does
+not bundle the local fs-safe copies. Custom distributions need separate,
+verified packaging work; this recipe does not provide it.
 
 ## Return to registry dependencies
 
