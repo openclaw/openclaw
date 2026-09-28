@@ -25,6 +25,33 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { ensureMemoryFlushTargetFile, prepareMemoryFlushSession } from "./memory-flush-session.js";
 
+it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+  "rejects a %s daily target before memory-flush initialization",
+  async (alias) => {
+    await withOpenClawTestState({ label: "memory-target-alias" }, async (state) => {
+      const relativePath = "memory/2026-08-09.md";
+      const targetPath = path.join(state.workspaceDir, relativePath);
+      const originalPath = path.join(state.workspaceDir, "original.md");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(originalPath, "original memory", "utf8");
+      if (alias === "symlink") {
+        await fs.symlink(originalPath, targetPath);
+      } else {
+        await fs.link(originalPath, targetPath);
+      }
+
+      await expect(
+        ensureMemoryFlushTargetFile({
+          workspaceDir: state.workspaceDir,
+          relativePath,
+          assertCurrent: () => {},
+        }),
+      ).rejects.toThrow(/symlink|hardlink|not-file|directory component/i);
+      await expect(fs.readFile(originalPath, "utf8")).resolves.toBe("original memory");
+    });
+  },
+);
+
 it.each([
   { boundary: "mkdir", owner: "operator" },
   { boundary: "mkdir", owner: "run" },

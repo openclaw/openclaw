@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { isDailyMemoryPath } from "../../agents/memory-flush-append.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
@@ -11,6 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import { root as fsRoot } from "../../infra/fs-safe.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 
 /** Memory inference owns a detached view; an admission excludes its waiting user. */
@@ -82,6 +84,15 @@ export async function ensureMemoryFlushTargetFile(params: {
     throw new Error("Memory flush target path must stay inside the workspace");
   }
   params.assertCurrent();
+  if (isDailyMemoryPath(relativePath)) {
+    const root = await fsRoot(workspaceRoot);
+    await root.append(targetRelativePath, "", {
+      mkdir: true,
+      assertBeforeMutation: params.assertCurrent,
+    });
+    params.assertCurrent();
+    return;
+  }
   await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
   params.assertCurrent();
   const handle = await fs.promises.open(targetPath, "a");

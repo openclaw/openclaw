@@ -398,6 +398,8 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                       provider,
                       model,
                       ...readChannelDeliveryEvidence?.(),
+                      allowGuardedDailyMemoryFallback:
+                        params.behavior.kind === "memory-flush-maintenance",
                     });
               const effectiveClassification =
                 params.behavior.kind === "followup-delivery"

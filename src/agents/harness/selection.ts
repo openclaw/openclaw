@@ -576,13 +576,17 @@ function withoutInternalHarnessAuthority(
 }
 
 function prepareHarnessFinalizationParams(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  params: EmbeddedRunAttemptParams & {
+    systemAgentTool?: SystemAgentToolOptions;
+    memoryFlushAppendBudget?: unknown;
+  },
   builtIn: boolean,
 ): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
   import("./types.js").AgentHarnessAttemptParamsV2
 > {
   const {
     hostCapabilities: _hostCapabilities,
+    memoryFlushAppendBudget: _memoryFlushAppendBudget,
     systemAgentTool: _systemAgentTool,
     ...withoutCapabilities
   } = params;
@@ -618,9 +622,11 @@ function withoutPluginHarnessPrivateState(
     trajectoryRecorder: _trajectoryRecorder,
     inputAttachmentMedia: _inputAttachmentMedia,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
+    memoryFlushAppendBudget: _memoryFlushAppendBudget,
     ...pluginParams
   } = params as EmbeddedRunAttemptInternalParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
+    memoryFlushAppendBudget?: unknown;
   };
   return pluginParams;
 }

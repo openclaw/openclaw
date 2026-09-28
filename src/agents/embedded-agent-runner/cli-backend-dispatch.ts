@@ -22,6 +22,7 @@ import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
+import { initializeMemoryFlushAppendBudget } from "./run/memory-flush-budget.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
@@ -109,6 +110,9 @@ async function runEmbeddedAgentViaCliBackend(
     admittedRunContext: params.admittedRunContext,
     preparedRunAdmission: params.preparedRunAdmission,
   });
+  if (params.trigger === "memory") {
+    initializeMemoryFlushAppendBudget(admittedRunContext.operationalRunInstance);
+  }
   // The dispatch gate guarantees a non-empty named allowlist; translate it to
   // the selectable-backend surface: no native tools, only the listed loopback
   // MCP tools. The MCP list also bounds the loopback grant server-side (tools

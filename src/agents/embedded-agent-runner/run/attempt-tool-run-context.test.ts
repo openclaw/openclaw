@@ -54,9 +54,15 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
 
   it("forwards memory trigger metadata into tool creation so append-only guards activate", () => {
     const memoryFlushWritePath = "memory/2026-03-24.md";
-    const context = buildEmbeddedAttemptToolRunContext({ trigger: "memory", memoryFlushWritePath });
+    const attempt = {
+      trigger: "memory" as const,
+      memoryFlushWritePath,
+      memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
+    };
+    const context = buildEmbeddedAttemptToolRunContext(attempt);
     expect(context.trigger).toBe("memory");
     expect(context.memoryFlushWritePath).toBe(memoryFlushWritePath);
+    expect(context).not.toHaveProperty("memoryFlushAppendBudget");
   });
 
   it("forwards cron job id into tool creation so self-removal can be scoped", () => {

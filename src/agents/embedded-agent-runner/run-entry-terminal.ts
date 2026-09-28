@@ -28,7 +28,8 @@ export type RunEntryTerminalBehavior =
       kind: "command-rpc";
       hasCommittedSideEffect: () => boolean;
     }
-  | { kind: "maintenance" };
+  | { kind: "maintenance" }
+  | { kind: "memory-flush-maintenance" };
 
 export type EmbeddedAgentRunEntryTerminal = {
   outcome: ReturnType<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>;

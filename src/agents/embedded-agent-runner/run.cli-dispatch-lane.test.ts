@@ -103,4 +103,34 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       expectedLifecycleRevision: sessionEntry.lifecycleRevision,
     });
   });
+
+  it("does not project caller-supplied memory flush budget state through the public clone", async () => {
+    const paramsWithInjectedBudget = {
+      ...laneRunParams(),
+      trigger: "memory" as const,
+      memoryFlushWritePath: "memory/2026-03-24.md",
+    };
+    Object.assign(paramsWithInjectedBudget, {
+      memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
+    });
+    const operationalRunInstance =
+      paramsWithInjectedBudget.admittedRunContext.operationalRunInstance;
+    runEmbeddedAgentViaCliBackendIfEligible.mockResolvedValue(dispatchResult);
+
+    await upsertSessionEntryCore(paramsWithInjectedBudget.sessionTarget, {
+      sessionId: paramsWithInjectedBudget.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "cli-dispatch-budget-lifecycle",
+    });
+    await runEmbeddedAgent(paramsWithInjectedBudget);
+
+    expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0]).not.toHaveProperty(
+      "memoryFlushAppendBudget",
+    );
+    expect(
+      runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0].admittedRunContext
+        ?.operationalRunInstance,
+    ).toBe(operationalRunInstance);
+  });
 });

@@ -1405,6 +1405,7 @@ describe("Codex app-server dynamic tool build", () => {
       trigger: "memory",
       memoryFlushWritePath: "memory/2026-05-22.md",
     });
+    expect(factoryOptions[0]).not.toHaveProperty("memoryFlushAppendBudget");
     expect(tools.map((tool) => tool.name)).toEqual(["read", "write"]);
     expect(persistentWebSearchAllowed).toBe(true);
     expect(webSearchAllowed).toBe(false);
