@@ -359,7 +359,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
         return;
       }
       const voices = await listSpeechVoices({ provider, cfg });
-      respond(true, { provider, voices });
+      respond(true, {
+        provider,
+        voices,
+        ...(voices.projectListingIncomplete ? { projectListingIncomplete: true } : {}),
+      });
     });
   },
   "tts.designVoice": async (options) => {
@@ -392,6 +396,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         languageCode: normalizeOptionalString(params.languageCode),
         gender: normalizeOptionalString(params.gender),
         model: normalizeOptionalString(params.modelId),
+        assertCurrent: () => assertCurrentTtsWriteCaller(options),
       });
       respond(true, {
         provider,
@@ -436,6 +441,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         sourceMimeType: normalizeOptionalString(params.sourceMimeType),
         consentMimeType: normalizeOptionalString(params.consentMimeType),
         model: normalizeOptionalString(params.modelId),
+        assertCurrent: () => assertCurrentTtsWriteCaller(options),
       });
       respond(true, {
         provider,

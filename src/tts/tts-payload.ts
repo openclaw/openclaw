@@ -12,7 +12,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
-import type { SpeechDesignVoiceResult, SpeechVoiceOption } from "./provider-types.js";
+import type { SpeechDesignVoiceResult, SpeechListVoicesResult } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
@@ -48,7 +48,7 @@ export async function listSpeechVoices(params: {
   config?: ResolvedTtsConfig;
   apiKey?: string;
   baseUrl?: string;
-}): Promise<SpeechVoiceOption[]> {
+}): Promise<SpeechListVoicesResult> {
   assertSpeechRuntimeAvailable();
   const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
@@ -88,6 +88,7 @@ export async function designSpeechVoice(params: {
   languageCode?: string;
   gender?: string;
   model?: string;
+  assertCurrent?: () => void;
 }): Promise<SpeechDesignVoiceResult> {
   assertSpeechRuntimeAvailable();
   const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
@@ -116,6 +117,7 @@ export async function designSpeechVoice(params: {
     languageCode: params.languageCode,
     gender: params.gender,
     model: params.model,
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   });
 }
 
@@ -129,6 +131,7 @@ export async function replicateSpeechVoice(params: {
   sourceMimeType?: string;
   consentMimeType?: string;
   model?: string;
+  assertCurrent?: () => void;
 }): Promise<SpeechDesignVoiceResult> {
   assertSpeechRuntimeAvailable();
   const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
@@ -158,6 +161,7 @@ export async function replicateSpeechVoice(params: {
     sourceMimeType: params.sourceMimeType,
     consentMimeType: params.consentMimeType,
     model: params.model,
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   });
 }
 

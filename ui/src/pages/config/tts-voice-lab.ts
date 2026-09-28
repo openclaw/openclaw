@@ -30,8 +30,8 @@ import {
   isStoredSpeechVoice,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
+  snapshotStoredVoiceIds,
   storedVoiceCreatedSince,
-  storedVoiceIds,
   voiceLabSubmitBlock,
   type StoredSpeechVoice,
 } from "./tts-voice-lab-state.ts";
@@ -44,6 +44,7 @@ type VoicesGatewayResult =
   | StoredSpeechVoice[]
   | {
       voices?: StoredSpeechVoice[];
+      projectListingIncomplete?: boolean;
     };
 
 type ReplicateGatewayResult = {
@@ -266,10 +267,8 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     };
     let beforeIds: Set<string> | undefined;
     try {
-      beforeIds = storedVoiceIds(
-        listedVoices(
-          await client.request<VoicesGatewayResult>("tts.voices", { provider: GOOGLE_PROVIDER }),
-        ),
+      beforeIds = snapshotStoredVoiceIds(
+        await client.request<VoicesGatewayResult>("tts.voices", { provider: GOOGLE_PROVIDER }),
       );
     } catch {
       beforeIds = undefined;
@@ -292,8 +291,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
           const listed = await client.request<VoicesGatewayResult>("tts.voices", {
             provider: GOOGLE_PROVIDER,
           });
+          const afterIds = snapshotStoredVoiceIds(listed);
           const match =
-            beforeIds === undefined
+            beforeIds === undefined || afterIds === undefined
               ? undefined
               : storedVoiceCreatedSince(beforeIds, listedVoices(listed), this.displayName);
           if (match) {

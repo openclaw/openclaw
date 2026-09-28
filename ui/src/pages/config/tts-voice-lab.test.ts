@@ -4,6 +4,7 @@ import {
   isGoogleVoiceStoreInternal,
   isGoogleVoiceStoreUncertain,
   isStoredSpeechVoice,
+  snapshotStoredVoiceIds,
   storedVoiceCreatedSince,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
@@ -116,5 +117,22 @@ describe("TTS voice lab", () => {
         "Bobby",
       ),
     ).toBeUndefined();
+  });
+
+  it("does not treat a failed project listing as an empty stored catalog", () => {
+    expect(
+      snapshotStoredVoiceIds({
+        projectListingIncomplete: true,
+        voices: [
+          { id: "Kore", category: "prebuilt" },
+          { id: "voice_old", name: "Bobby", category: "replicated" },
+        ],
+      }),
+    ).toBeUndefined();
+    expect(
+      snapshotStoredVoiceIds({
+        voices: [{ id: "voice_old", name: "Bobby", category: "replicated" }],
+      }),
+    ).toEqual(new Set(["voice_old"]));
   });
 });

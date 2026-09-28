@@ -24097,13 +24097,22 @@ public struct TtsVoicesParams: Codable, Sendable {
 public struct TtsVoicesResult: Codable, Sendable {
     public let provider: String
     public let voices: [TtsVoiceOption]
+    public let projectlistingincomplete: Bool?
 
     public init(
         provider: String,
-        voices: [TtsVoiceOption])
+        voices: [TtsVoiceOption],
+        projectlistingincomplete: Bool? = nil)
     {
         self.provider = provider
         self.voices = voices
+        self.projectlistingincomplete = projectlistingincomplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case voices
+        case projectlistingincomplete = "projectListingIncomplete"
     }
 }
 

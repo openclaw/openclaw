@@ -45,6 +45,7 @@ describe("Google project voices", () => {
     });
     expect(voices?.some((voice) => voice.id === "Achernar")).toBe(true);
     expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
+    expect(voices?.projectListingIncomplete).toBe(true);
   });
 
   it("keeps the static catalog when Google is not configured", async () => {
@@ -250,6 +251,27 @@ describe("Google project voices", () => {
         timeoutMs: 5_000,
       }),
     ).rejects.toThrow(/non-empty source and consent/);
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revoked writer before posting store:true", async () => {
+    const sourceAudio = Buffer.from("source-wav");
+    const consentAudio = Buffer.from("consent-wav");
+    const provider = buildGoogleSpeechProvider();
+    await expect(
+      provider.replicateVoice?.({
+        providerConfig: { apiKey: "***" },
+        displayName: "Bobby",
+        sourceAudio,
+        consentAudio,
+        timeoutMs: 5_000,
+        assertCurrent: () => {
+          throw Object.assign(new Error("TTS voice-store caller is no longer authorized."), {
+            name: "SessionMutationAuthorizationChangedError",
+          });
+        },
+      }),
+    ).rejects.toMatchObject({ name: "SessionMutationAuthorizationChangedError" });
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 });

@@ -20,7 +20,6 @@ import { createGoogleSpeechVoiceMethods } from "./voices.js";
 
 // Implicit default stays on the generateContent path; Gemini 3.8 is an explicit opt-in.
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
-const GOOGLE_STORED_TTS_MODEL = "gemini-3.8-flash-tts";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 const GOOGLE_TTS_CHANNELS = 1;
@@ -139,11 +138,8 @@ function isStoredGoogleTtsVoice(voiceName: string): boolean {
   return voiceName.startsWith("voice_");
 }
 
-function resolveGoogleTtsSynthesisModel(model: string, voiceName: string): string {
-  if (!isStoredGoogleTtsVoice(voiceName) || model.includes("gemini-3.8")) {
-    return model;
-  }
-  return GOOGLE_STORED_TTS_MODEL;
+function isGemini38TtsModel(model: string): boolean {
+  return model.includes("gemini-3.8");
 }
 
 function googleTtsSpeechVoiceConfig(voiceName: string): Record<string, unknown> {
@@ -255,6 +251,30 @@ function composeGoogleTtsText(params: {
   ]
     .filter((part): part is string => part !== undefined)
     .join("\n\n");
+}
+
+function googleTtsContentPart(params: {
+  text: string;
+  model: string;
+  audioProfile?: string;
+  speakerName?: string;
+}): Record<string, unknown> {
+  if (!isGemini38TtsModel(params.model)) {
+    return { text: composeGoogleTtsText(params) };
+  }
+  const style = normalizeOptionalString(params.audioProfile);
+  const speaker = normalizeOptionalString(params.speakerName);
+  return {
+    text: params.text,
+    ...(style || speaker
+      ? {
+          speechMetadata: {
+            ...(style ? { style } : {}),
+            ...(speaker ? { speaker } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -614,10 +634,7 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
     baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
     request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.google?.request),
     voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-    model: resolveGoogleTtsSynthesisModel(
-      normalizeGoogleTtsModel(overrides.model ?? config.model),
-      normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-    ),
+    model: normalizeGoogleTtsModel(overrides.model ?? config.model),
     audioProfile: overrides.audioProfile ?? config.audioProfile,
     speakerName: overrides.speakerName ?? config.speakerName,
     personaPrompt: config.personaPrompt,

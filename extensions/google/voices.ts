@@ -4,6 +4,7 @@ import type {
   SpeechDesignVoiceRequest,
   SpeechDesignVoiceResult,
   SpeechListVoicesRequest,
+  SpeechListVoicesResult,
   SpeechProviderConfig,
   SpeechReplicateVoiceRequest,
   SpeechVoiceOption,
@@ -33,6 +34,7 @@ export type GoogleVoiceDesignRequest = {
   languageCode?: string;
   gender?: string;
   model?: string;
+  assertCurrent?: () => void;
 };
 
 export type GoogleVoiceDesignResult = {
@@ -146,6 +148,7 @@ async function googleVoicesFetchOnce(params: {
   url: string;
   method: "GET" | "POST";
   body?: Record<string, unknown>;
+  assertCurrent?: () => void;
 }): Promise<Record<string, unknown>> {
   const {
     assertOkOrThrowProviderError,
@@ -160,6 +163,9 @@ async function googleVoicesFetchOnce(params: {
     ...(http.dispatcherPolicy ? { dispatcherPolicy: http.dispatcherPolicy } : {}),
   };
   const posted = params.method === "POST";
+  if (posted) {
+    params.assertCurrent?.();
+  }
   const { response, release } = posted
     ? await postJsonRequest({
         url: params.url,
@@ -201,6 +207,7 @@ async function googleVoicesFetch(params: {
   url: string;
   method: "GET" | "POST";
   body?: Record<string, unknown>;
+  assertCurrent?: () => void;
 }): Promise<Record<string, unknown>> {
   if (params.method !== "GET") {
     // CreateVoice with store:true is not idempotent. A 503 after the voice is
@@ -330,8 +337,12 @@ function mergeGoogleVoiceCatalog(project: SpeechVoiceOption[]): SpeechVoiceOptio
   return merged;
 }
 
+function markProjectVoiceListingIncomplete(voices: SpeechVoiceOption[]): SpeechListVoicesResult {
+  return Object.assign(voices, { projectListingIncomplete: true as const });
+}
+
 export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
-  listVoices: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
+  listVoices: (req: SpeechListVoicesRequest) => Promise<SpeechListVoicesResult>;
   designVoice: (req: SpeechDesignVoiceRequest) => Promise<SpeechDesignVoiceResult>;
   replicateVoice: (req: SpeechReplicateVoiceRequest) => Promise<SpeechDesignVoiceResult>;
 } {
@@ -367,7 +378,7 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
           }),
         );
       } catch {
-        return staticGoogleVoices();
+        return markProjectVoiceListingIncomplete(staticGoogleVoices());
       }
     },
     designVoice: async (req) => {
@@ -385,6 +396,7 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
         languageCode: req.languageCode,
         gender: req.gender,
         model: req.model,
+        assertCurrent: req.assertCurrent,
       });
       return {
         id: designed.id,
@@ -409,6 +421,7 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
         sourceMimeType: req.sourceMimeType,
         consentMimeType: req.consentMimeType,
         model: req.model,
+        assertCurrent: req.assertCurrent,
       });
       return {
         id: replicated.id,
@@ -500,6 +513,7 @@ export type GoogleVoiceReplicateRequest = {
   sourceMimeType?: string;
   consentMimeType?: string;
   model?: string;
+  assertCurrent?: () => void;
 };
 
 export async function replicateGoogleVoice(

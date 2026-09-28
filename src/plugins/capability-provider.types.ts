@@ -35,6 +35,7 @@ import type {
   SpeechReplicateVoiceRequest,
   SpeechReplicateVoiceResult,
   SpeechListVoicesRequest,
+  SpeechListVoicesResult,
   SpeechProviderPrepareSynthesisContext,
   SpeechProviderPreparedSynthesis,
   SpeechProviderId,
@@ -44,7 +45,6 @@ import type {
   SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisRequest,
   SpeechTelephonySynthesisResult,
-  SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
@@ -459,7 +459,7 @@ export type SpeechProviderPlugin = {
   synthesizeTelephony?: (
     req: SpeechTelephonySynthesisRequest,
   ) => Promise<SpeechTelephonySynthesisResult>;
-  listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
+  listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechListVoicesResult>;
   /** Store a prompted voice. Absent when the provider cannot design voices. */
   designVoice?: (req: SpeechDesignVoiceRequest) => Promise<SpeechDesignVoiceResult>;
   /** Store a replicated voice. Absent when the provider cannot clone from recordings. */

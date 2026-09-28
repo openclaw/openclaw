@@ -183,12 +183,92 @@ describe("Google speech provider", () => {
       timeoutMs: 8_000,
     });
     expectRecordFields(requireFirstRecordArg(requestMock, "Google stored TTS request"), {
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
       body: {
         contents: [
           {
             role: "user",
             parts: [{ text: "Hello from the stored clone." }],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              voice: "voice_semeno8vont3",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps an explicit Gemini 3.1 model for a stored voice_ id", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "Hello from the stored clone.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        model: "gemini-3.1-flash-tts-preview",
+        voiceName: "voice_semeno8vont3",
+      },
+      target: "audio-file",
+      timeoutMs: 8_000,
+    });
+    expectRecordFields(requireFirstRecordArg(requestMock, "Google stored TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "Hello from the stored clone." }],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              voice: "voice_semeno8vont3",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("sends Gemini 3.8 delivery notes as speechMetadata instead of spoken text", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "Status update starts now.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        model: "gemini-3.8-flash-tts",
+        voiceName: "voice_semeno8vont3",
+        audioProfile: "Speak professionally with a calm executive tone.",
+        speakerName: "Alex",
+      },
+      target: "audio-file",
+      timeoutMs: 8_000,
+    });
+    expectRecordFields(requireFirstRecordArg(requestMock, "Google 3.8 TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: "Status update starts now.",
+                speechMetadata: {
+                  style: "Speak professionally with a calm executive tone.",
+                  speaker: "Alex",
+                },
+              },
+            ],
           },
         ],
         generationConfig: {

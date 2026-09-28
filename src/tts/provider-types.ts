@@ -135,6 +135,11 @@ export type SpeechListVoicesRequest = {
   timeoutMs?: number;
 };
 
+/** Voice listing plus an incomplete-project marker when vendor listing failed. */
+export type SpeechListVoicesResult = SpeechVoiceOption[] & {
+  projectListingIncomplete?: boolean;
+};
+
 /** Provider request to store a prompted voice and return its preview clip. */
 export type SpeechDesignVoiceRequest = {
   cfg?: OpenClawConfig;
@@ -147,6 +152,8 @@ export type SpeechDesignVoiceRequest = {
   languageCode?: string;
   gender?: string;
   model?: string;
+  /** Recheck live write authority immediately before irreversible provider I/O. */
+  assertCurrent?: () => void;
 };
 
 /** Stored voice id plus the provider's preview audio. */
@@ -170,6 +177,8 @@ export type SpeechReplicateVoiceRequest = {
   sourceMimeType?: string;
   consentMimeType?: string;
   model?: string;
+  /** Recheck live write authority immediately before irreversible provider I/O. */
+  assertCurrent?: () => void;
 };
 
 /** Stored replicated voice id plus the provider's preview audio. */

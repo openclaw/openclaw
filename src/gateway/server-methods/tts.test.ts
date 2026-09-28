@@ -450,4 +450,44 @@ describe("ttsHandlers", () => {
     });
     expect(replicateSpeechVoice).not.toHaveBeenCalled();
   });
+
+  it("rejects a writer revoked during Google voice replication", async () => {
+    const { ttsHandlers } = await import("./tts.js");
+    const { replicateSpeechVoice } = await import("../../tts/tts.js");
+    let current = true;
+    vi.mocked(replicateSpeechVoice).mockImplementation(async (params) => {
+      current = false;
+      params.assertCurrent?.();
+      return { id: "voice_x", name: "Bobby", previewAudio: Buffer.alloc(0), mimeType: "audio/wav" };
+    });
+    const respond = vi.fn();
+    await expect(
+      expectDefined(ttsHandlers["tts.replicateVoice"])({
+        params: {
+          provider: "google",
+          displayName: "Bobby",
+          sourceAudioBase64: Buffer.from("source").toString("base64"),
+          consentAudioBase64: Buffer.from("consent").toString("base64"),
+        },
+        respond,
+        context: { getRuntimeConfig: mocks.getRuntimeConfig },
+        hasCurrentClientAuthority: () => current,
+      } as never),
+    ).rejects.toMatchObject({
+      name: "SessionMutationAuthorizationChangedError",
+      error: { code: ErrorCodes.FORBIDDEN },
+    });
+  });
+
+  it("marks tts.voices incomplete when the provider listing was a fallback", async () => {
+    const { listSpeechVoices } = await import("../../tts/tts.js");
+    vi.mocked(listSpeechVoices).mockResolvedValueOnce(
+      Object.assign([{ id: "Kore", name: "Kore" }], { projectListingIncomplete: true }),
+    );
+    const respond = await callTts("tts.voices", { provider: "google" });
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      provider: "google",
+      projectListingIncomplete: true,
+    });
+  });
 });

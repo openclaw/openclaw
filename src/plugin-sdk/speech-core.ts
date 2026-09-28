@@ -10,6 +10,7 @@ export type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
   SpeechListVoicesRequest,
+  SpeechListVoicesResult,
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
   SpeechProviderConfiguredContext,

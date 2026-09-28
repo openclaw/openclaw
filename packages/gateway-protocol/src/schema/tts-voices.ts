@@ -41,6 +41,7 @@ export const TtsVoiceOptionSchema = closedObject({
 export const TtsVoicesResultSchema = closedObject({
   provider: NonEmptyString,
   voices: Type.Array(TtsVoiceOptionSchema),
+  projectListingIncomplete: Type.Optional(Type.Boolean()),
 });
 
 export const TtsDesignVoiceResultSchema = closedObject({

@@ -88,6 +88,21 @@ export function storedVoiceIds(voices: readonly StoredSpeechVoice[]): Set<string
   return new Set(voices.filter(isStoredSpeechVoice).map((voice) => voice.id));
 }
 
+export function snapshotStoredVoiceIds(
+  result:
+    | readonly StoredSpeechVoice[]
+    | {
+        voices?: readonly StoredSpeechVoice[];
+        projectListingIncomplete?: boolean;
+      },
+): Set<string> | undefined {
+  if (!Array.isArray(result) && result.projectListingIncomplete) {
+    return undefined;
+  }
+  const voices = Array.isArray(result) ? result : (result.voices ?? []);
+  return storedVoiceIds(voices);
+}
+
 export function storedVoiceCreatedSince(
   beforeIds: ReadonlySet<string>,
   after: readonly StoredSpeechVoice[],
