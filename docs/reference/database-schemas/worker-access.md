@@ -652,6 +652,13 @@ including deferred startup jobs. Remaining manual or timer finalizers retain
 their native implementation as migration debt. Schemas, retention, configuration,
 and update behavior are unchanged.
 
+Direct compaction hydrates durable transcripts through the existing read worker
+before preparing hooks or model calls. The read retains the captured transcript
+identity and cancellation signal; the caller rechecks its live writer authority
+before using the result. Caller-owned in-memory recovery keeps its existing
+buffer. Compaction persistence, stored bytes, retention, and update behavior are
+unchanged.
+
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and
 tool-result custody; the worker validates the prepared parent, appends the exact
