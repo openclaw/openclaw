@@ -116,15 +116,31 @@ Replace `youruser` with the account you created, and the IP with your VM's IP.
 
 ## 6) Install OpenClaw
 
-Inside the VM, use the following command on npm 12 or npm 11.16+. On npm 11.15
-and earlier, omit `--allow-scripts=openclaw`.
+A fresh macOS VM has no Node.js or npm. Inside the VM, run the
+[installer script](/install/installer). It installs a supported Node runtime
+when needed, installs OpenClaw, and starts onboarding:
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+```
+
+Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, etc.).
+Then make sure the Gateway runs as a background service, so it keeps running
+when the VM runs headless:
+
+```bash
+openclaw gateway status
+openclaw gateway install   # only if status reports no installed service
+```
+
+If the VM already has [Node 24.16+ or 26.1+](/install/node), you can install the
+package directly instead. Use the following command on npm 12 or npm 11.16+. On
+npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw
 openclaw onboard --install-daemon
 ```
-
-Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, etc.).
 
 ## 7) Configure channels
 
