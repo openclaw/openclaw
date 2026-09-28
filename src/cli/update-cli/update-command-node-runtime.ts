@@ -166,7 +166,8 @@ export async function preparePackageUpdateRuntime(params: {
       params.managedServiceRoot && canRefreshManagedServiceNode
         ? params.packageUpdateNodeRunner
         : (managedServiceNodeRunner ?? params.packageUpdateNodeRunner),
-    fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
+    fallbackNodeRunner:
+      canRefreshManagedServiceNode && !process.versions.bun ? resolveNodeRunner() : undefined,
     runtimeRecovery:
       !managedServiceNodeRunner || canRefreshManagedServiceNode
         ? createPackageRuntimeRecovery({

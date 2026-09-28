@@ -15,7 +15,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -42,44 +42,18 @@ describe("worker session placement gate", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-    let placement = await store.startDispatch({ ...SESSION, executionMode });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: ENVIRONMENT_ID },
-    });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
+  function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
+    return advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...SESSION, executionMode },
+      {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
         workspaceBaseManifestRef: "manifest-worker-gate",
         remoteWorkspaceDir: "/workspace/worker-gate",
       },
-    });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: ENVIRONMENT_ID,
-      sessionId: SESSION.sessionId,
-      ownerEpoch: OWNER_EPOCH,
-    });
-    return store.transition({
-      sessionId: SESSION.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: OWNER_EPOCH },
-    });
+    );
   }
 
   async function preclaim(runId: string) {

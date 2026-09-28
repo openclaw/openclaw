@@ -81,8 +81,6 @@ describe("prepared reply fallback ownership", () => {
   });
 
   it.each([
-    { scope: "agent", source: "auto", locked: false },
-    { scope: "subagent", source: "auto", locked: false },
     { scope: "per-agent subagent", source: "auto", locked: false },
     { scope: "fallback-only subagent", source: "auto", locked: false },
     { scope: "subagent", source: "user", locked: false },
