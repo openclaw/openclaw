@@ -70,11 +70,12 @@ terminates the matching process tree. Existing request/response commands are unc
 
 ## Codex sessions on a node
 
-A session host using the Codex runtime also needs the bundled `codex` plugin enabled
-in the **node host's** OpenClaw configuration. `--session-host` alone does not enable
-this plugin. On the node, run:
+A session host using the Codex runtime also needs the `codex` plugin installed and
+enabled in the **node host's** OpenClaw configuration. `--session-host` alone does not
+install or enable this plugin. On the node, install it if missing, then enable it:
 
 ```bash
+openclaw plugins install @openclaw/codex
 openclaw plugins enable codex
 openclaw node restart
 ```
@@ -88,7 +89,8 @@ the plugin does not grant that approval.
 `environments.list` with `runtimeId: "codex"` reports a `requiredNodeCommand` state and
 an actionable `message` when the node does not advertise the command, awaits pairing
 approval, or is blocked by Gateway policy. A missing node advertisement requires
-enabling the plugin on the node; changing the Gateway allowlist alone cannot add it.
+installing and enabling the plugin on the node; changing the Gateway allowlist alone
+cannot add it. See [Install plugins](/cli/plugins/install) for installation sources.
 
 See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device).
 

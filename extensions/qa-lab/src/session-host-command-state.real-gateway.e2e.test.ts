@@ -103,7 +103,7 @@ suite.define(() => {
         const undeclaredIdentity = createDeviceIdentity();
         const pendingIdentity = createDeviceIdentity();
         const unauthorizedIdentity = createDeviceIdentity();
-        const undeclaredMessage = `paired-device command ${COMMAND} is not advertised by node ${undeclaredIdentity.deviceId}; enable the codex plugin on that node (openclaw plugins enable codex), then restart the node (openclaw node restart) and approve its updated command surface`;
+        const undeclaredMessage = `paired-device command ${COMMAND} is not advertised by node ${undeclaredIdentity.deviceId}; install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then enable the codex plugin on that node (openclaw plugins enable codex), then restart the node (openclaw node restart) and approve its updated command surface`;
         const pendingMessage = `paired-device command ${COMMAND} is awaiting pairing approval for node ${pendingIdentity.deviceId}; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>`;
         const unauthorizedMessage = `paired-device command ${COMMAND} is blocked by Gateway policy for node ${unauthorizedIdentity.deviceId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
 

@@ -131,7 +131,7 @@ describe("device placement projection", () => {
     const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
     const environments = [
       node({
-        status: "unavailable",
+        status: "available",
         sessionHost: false,
         workerSlots: undefined,
         issues: [{ code: "worker-host-unavailable", message }],
@@ -143,6 +143,7 @@ describe("device placement projection", () => {
       selectable: false,
       disabledReason: message,
       hideDetails: false,
+      remediation: undefined,
       facts: [message, "macOS", "Camera"],
     });
     expect(resolveAutomaticDevicePlacementDisabledReason(environments, devices)).toBe(message);

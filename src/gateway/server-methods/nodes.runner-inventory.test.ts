@@ -1,12 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import {
   collectNodeCatalogRuntimeState,
   createNodeRegistryRuntime,
@@ -14,6 +17,13 @@ import {
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
+import {
+  bindDeviceWorkerAvailability,
+  createDeviceWorkerRuntime,
+} from "../worker-environments/device-provider.js";
+import { environmentsHandlers } from "./environments.js";
+import { pairedNodeDevice } from "./environments.test-support.js";
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -29,6 +39,11 @@ const updatePairedNodeSessionHostMock = vi.hoisted(() =>
 vi.mock("../../infra/device-pairing-node-facts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-pairing-node-facts.js")>()),
   updatePairedNodeSessionHost: updatePairedNodeSessionHostMock,
+}));
+
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
+  listDevicePairing: vi.fn(),
 }));
 
 const RETIRED_WORKER_RUNS = { retired: true } as const;
@@ -445,11 +460,28 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("projects current disabled-host diagnostics without admitting a worker", async () => {
-    const { runtime, client } = createCurrentRunner();
+  it("keeps a failed session host available for desktop while refusing session placement", async () => {
+    const config = { gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } } };
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry({ getConfig: () => config }));
+    const client = createWorkerSupervisorNodeClient();
+    client.connect.commands = [NODE_DESKTOP_STREAM_COMMAND];
+    const paired = pairedNodeDevice("node-1", { commands: [NODE_DESKTOP_STREAM_COMMAND] });
+    const binding = expectDefined(
+      projectPairedDeviceNodeBindings([paired]).get("node-1"),
+      "paired node binding",
+    );
+    const node = runtime.nodeRegistry.register(client, {
+      pairingIdentity: binding.identity,
+      pairingGeneration: binding.generation,
+    });
+    vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [paired] });
+    const device = createDeviceWorkerRuntime({ getPairedDevice: async () => paired });
+    device.bindNodeTransport(runtime.nodeWorkerSupervisorTransport);
+    const service = {};
+    bindDeviceWorkerAvailability(service, device.resolveAvailability);
     const inventoryChanged = vi.fn();
     setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
-    const connected = [{ nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-1" }];
+    const connected = [node];
     try {
       for (const reason of [
         "state directory /srv/node is group-writable; run chmod go-w /srv/node",
@@ -478,6 +510,39 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         expect(catalog.sessionHostNodeIds.size).toBe(0);
         expect(catalog.workerSlotsByNodeId.size).toBe(0);
         await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+        for (const method of ["environments.list", "environments.status"] as const) {
+          const respond = vi.fn();
+          await environmentsHandlers[method]?.({
+            params: method === "environments.list" ? {} : { environmentId: "node:node-1" },
+            respond,
+            context: { nodeRegistry: runtime.nodeRegistry, getRuntimeConfig: () => config },
+          } as never);
+          const expected = {
+            id: "node:node-1",
+            status: "available",
+            desktop: true,
+            sessionHost: false,
+            issues: [issue],
+          };
+          expect(respond.mock.calls[0]?.[0]).toBe(true);
+          expect(respond.mock.calls[0]?.[1]).toMatchObject(
+            method === "environments.list"
+              ? { environments: expect.arrayContaining([expect.objectContaining(expected)]) }
+              : expected,
+          );
+        }
+        await expect(
+          resolveDevicePlacementEligibility({
+            environmentService: service,
+            deviceId: "node-1",
+            executionMode: "worker-turn",
+            requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+            config,
+          }),
+        ).resolves.toEqual({
+          ok: false,
+          error: `device worker node node-1 cannot host sessions: ${reason}`,
+        });
       }
       expect(
         updatePairedNodeSessionHostMock.mock.calls.map(([params]) => params.sessionHost),

@@ -118,7 +118,9 @@ export function projectDevicePlacements(
             ? undefined
             : environment.issues?.some((issue) => issue.code === "update-required")
               ? "update-device"
-              : environment.status === "available" && environment.sessionHost !== true
+              : environment.status === "available" &&
+                  environment.sessionHost !== true &&
+                  !environment.issues?.length
                 ? "enable-session-hosting"
                 : undefined,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,

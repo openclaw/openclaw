@@ -483,7 +483,7 @@ export function formatRequiredNodeCommandUnavailable(
         (entry) => entry.command.command === command,
       )?.pluginId;
       const enable = pluginId
-        ? `enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
+        ? `${pluginId === "codex" ? "install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then " : ""}enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
         : "enable the plugin or node capability that provides this command on that node";
       return `${prefix} is not advertised by node ${nodeId}; ${enable}, then restart the node (openclaw node restart) and approve its updated command surface`;
     }

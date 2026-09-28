@@ -164,6 +164,11 @@ move node state under a private directory. OpenClaw does not change ancestor
 permissions or bypass staging checks. A trusted sticky system temporary directory
 remains supported.
 
+A session-host failure does not disconnect the node or disable its desktop and
+other available commands. `environments.list` keeps a connected node available,
+reports `sessionHost: false` and the hosting diagnostic, and refuses session
+placement until the hosting problem is repaired.
+
 Disabled-host reasons are published only when the Gateway advertises
 `node-worker-host-diagnostics-v1`. Older Gateways still receive disabled hosting;
 the node log retains the reason. Workspace transfers also report the same

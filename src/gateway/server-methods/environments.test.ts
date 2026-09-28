@@ -321,32 +321,6 @@ describe("environment gateway methods", () => {
     ).not.toHaveProperty("issues");
   });
 
-  it("reports a disabled host's actionable diagnostic through list and status", async () => {
-    const issue = {
-      code: "worker-host-unavailable",
-      message: "state directory /srv/node is group-writable; run chmod go-w /srv/node",
-    } as const;
-    runtimeState.issuesByNodeId.set("node-live", [issue]);
-
-    const [listOk, listPayload] = await callEnvironmentMethod("environments.list", {});
-    const [statusOk, statusPayload] = await callEnvironmentMethod("environments.status", {
-      environmentId: "node:node-live",
-    });
-    const expected = {
-      id: "node:node-live",
-      status: "unavailable",
-      sessionHost: false,
-      issues: [issue],
-    };
-    expect(listOk).toBe(true);
-    expect(statusOk).toBe(true);
-    expect(listPayload).toMatchObject({
-      environments: expect.arrayContaining([expect.objectContaining(expected)]),
-    });
-    expect(statusPayload).toMatchObject(expected);
-    expect(statusPayload).not.toHaveProperty("workerSlots");
-  });
-
   it("marks only connected, advertised, and explicitly allowed nodes as desktop sources", async () => {
     const context = mockContext();
     context.getRuntimeConfig = () =>

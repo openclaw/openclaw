@@ -106,10 +106,7 @@ function summarizeNodeEnvironment(
     id: `node:${node.nodeId}`,
     type: "node",
     label: node.displayName ?? node.nodeId,
-    status:
-      node.connected && !node.issues?.some((issue) => issue.code === "worker-host-unavailable")
-        ? "available"
-        : "unavailable",
+    status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.sessionHost === true,
     ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),

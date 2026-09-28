@@ -112,7 +112,7 @@ describe("node environment command authority", () => {
       state: "unauthorized",
     },
     {
-      name: "command not declared by the node",
+      name: "missing Codex plugin command on the node",
       declared: [],
       approved: [],
       allow: ["codex.exec-server.stdio.v1"],
@@ -216,6 +216,9 @@ describe("node environment command authority", () => {
             : "openclaw plugins enable codex";
       expect(listed?.requiredNodeCommand?.message).toContain(remediation);
       if (state === "undeclared") {
+        expect(listed?.requiredNodeCommand?.message).toContain(
+          "openclaw plugins install @openclaw/codex",
+        );
         expect(listed?.requiredNodeCommand?.message).toContain("on that node");
         expect(listed?.requiredNodeCommand?.message).not.toContain("gateway.nodes.commands.allow");
       }
