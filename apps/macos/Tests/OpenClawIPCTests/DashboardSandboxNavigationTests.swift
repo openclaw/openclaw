@@ -328,6 +328,75 @@ struct DashboardSandboxNavigationTests {
         #expect(controller.webView.url == dashboardURL)
     }
 
+    @Test func `dashboard WebKit blocks ungranted HTML sandbox frames before HTTP`() async throws {
+        var receiverRequests = 0
+        let receiver = try await DashboardHTTPFixture.start(requestHandler: { _ in
+            receiverRequests += 1
+            return nil
+        })
+        defer { receiver.stop() }
+        let forbiddenURL = receiver.url("/ungranted-frame")
+        let sandbox = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><body><script>
+            const inner = document.createElement('iframe');
+            inner.sandbox = 'allow-scripts';
+            inner.srcdoc = '<body><script>' +
+              "addEventListener('securitypolicyviolation', event => {" +
+              "if (event.effectiveDirective === 'frame-src') parent.postMessage('frame-blocked', '*');" +
+              "});" +
+              "const frame = document.createElement('iframe');" +
+              "frame.src = '\(forbiddenURL.absoluteString)'; document.body.append(frame);" +
+              '<' + '/script>';
+            addEventListener('message', event => {
+              if (event.source === inner.contentWindow && event.data === 'frame-blocked') {
+                parent.postMessage('frame-blocked', '*');
+              }
+            });
+            document.body.append(inner);
+            </script></body></html>
+            """,
+            // Matches the sandbox host's no-frame-grant response policy.
+            contentSecurityPolicy: "default-src 'none'; script-src 'self' 'unsafe-inline'; frame-src 'none'")
+        defer { sandbox.stop() }
+        let sandboxURL = sandbox.url("/mcp-app-sandbox")
+        let dashboard = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><body><script>
+            const frame = document.createElement('iframe');
+            addEventListener('message', event => {
+              if (event.source === frame.contentWindow && event.data === 'frame-blocked') {
+                document.body.dataset.frameBlocked = 'true';
+              }
+            });
+            frame.src = '\(sandboxURL.absoluteString)';
+            document.body.append(frame);
+            </script></body></html>
+            """,
+            contentSecurityPolicy:
+            "default-src 'none'; script-src 'unsafe-inline'; frame-src http://127.0.0.1:\(sandbox.port)")
+        defer { dashboard.stop() }
+        let dashboardURL = dashboard.url("/control/")
+        let controller = DashboardWindowController(
+            url: dashboardURL,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture-only", password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+
+        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        try await self.waitForDocument(
+            controller,
+            url: dashboardURL,
+            ready: "document.body.dataset.frameBlocked === 'true'")
+        // The CSP event precedes any possible asynchronous receiver callback.
+        // Keep the loopback listener alive long enough to observe a late request.
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(receiverRequests == 0, "WebKit must reject an ungranted sandbox iframe before HTTP")
+        #expect(controller.webView.url == dashboardURL)
+    }
+
     @Test func `dashboard WebKit loads the isolated sandbox and its inner document`() async throws {
         let sandbox = try await DashboardHTTPFixture.start(
             html: """
