@@ -67,6 +67,7 @@ it.each([
   ["taylorpinch", ".lob-microphone"],
   ["shellvis", ".lob-microphone"],
   ["leonardodepinchy", ".lob-leonardodepinchy__brush"],
+  ["alexandergrahamshell", ".lob-telephone-receiver"],
 ] as const)("keeps %s’s prop attached through claw sizes and wave poses", (id, propSelector) => {
   const palette = expectDefined(
     LOBSTER_PET_PALETTES.find((entry) => entry.id === id),

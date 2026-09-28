@@ -182,10 +182,18 @@ const LEONARDO_PAINTBRUSH = svg`
   <path class="lob-leonardodepinchy__brush" d="M111 11 Q114 16 115 18 Q111 21 108 22 Q110 16 111 11 Z" fill="#4a89b8" />
 `;
 
+const TELEPHONE_RECEIVER = svg`
+  <path class="lob-telephone-receiver" d="M105 33 L112 34 L108 56 Q105 59 102 55 Z" fill="#4b3c30" />
+  <path class="lob-telephone-receiver" d="M102 29 C104 21 113 21 117 29 L117 34 Q109 39 101 34 Z" fill="#35312f" />
+  <path class="lob-telephone-receiver" d="M103 30 Q110 34 116 30" fill="none" stroke="#bc955c" stroke-width="2" stroke-linecap="round" />
+  <path class="lob-telephone-receiver" d="M105 56 Q101 63 108 65 Q115 67 110 71 Q106 74 112 77" fill="none" stroke="#574631" stroke-width="1.8" stroke-linecap="round" />
+`;
+
 export const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
   taylorpinch: MICROPHONE,
   shellvis: MICROPHONE,
   leonardodepinchy: LEONARDO_PAINTBRUSH,
+  alexandergrahamshell: TELEPHONE_RECEIVER,
 };
 
 const TAYLOR_PINCH_SPARKLES = svg`
@@ -239,6 +247,19 @@ const SHELLVIS_JUMPSUIT = svg`
     <path d="M24 26 Q21 10 41 9 Q42 1 62 5 C76 1 96 7 96 19 L91 29 Q82 21 77 20 Q59 31 43 21 Q34 21 24 26 Z" fill="#29272d" />
     <path d="M35 17 Q50 10 61 13 Q75 8 85 15" fill="none" stroke="#4d4750" stroke-width="2" stroke-linecap="round" />
     <path d="M25 27 L32 25 L32 42 L26 38 Z M88 25 L95 27 L94 38 L88 42 Z" fill="#29272d" />
+  </g>
+`;
+
+const GRAHAM_SHELL_WAISTCOAT = svg`
+  <g class="lob-alexandergrahamshell">
+    <path d="M18 48 Q60 58 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#3d4b53" />
+    <path d="M37 47 L49 73 L60 63 L71 73 L83 47" fill="#f1ebdf" />
+    <path d="M35 61 L45 86 M85 61 L75 86" fill="none" stroke="#65747a" stroke-width="1.6" stroke-linecap="round" />
+    <path d="M28 29 Q25 18 35 15 L38 32 L32 42 Z M92 29 Q95 18 85 15 L82 32 L88 42 Z" fill="#c9ceca" />
+    <path d="M31 38 Q40 47 47 43 Q60 52 73 43 Q80 47 89 38 Q88 59 76 66 Q71 76 60 77 Q49 76 44 66 Q32 59 31 38 Z" fill="#dfe0dc" />
+    <path d="M51 52 Q60 57 69 52 M49 65 Q60 72 71 65" fill="none" stroke="#b8beba" stroke-width="1.5" stroke-linecap="round" />
+    <path d="M50 78 L60 81 L70 78 V86 L60 83 L50 86 Z" fill="#8f3347" />
+    <circle cx="60" cy="91" r="1.8" fill="#bc955c" />
   </g>
 `;
 
@@ -327,6 +348,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "clawtoodeetoo",
   "leonardodepinchy",
   "shellvis",
+  "alexandergrahamshell",
   "clawtron",
   "selene",
   "pixel",
@@ -447,6 +469,7 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   clawtoodeetoo: CLAWTOO_DEETOO_PANELS,
   leonardodepinchy: LEONARDO_SMOCK,
   shellvis: SHELLVIS_JUMPSUIT,
+  alexandergrahamshell: GRAHAM_SHELL_WAISTCOAT,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,
