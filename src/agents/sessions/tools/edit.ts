@@ -16,29 +16,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
-import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
-import {
-  applyEditsPreservingLineEndings,
-  computeEditsDiff,
-  EditNoChangeError,
-  type Edit,
-  type EditDiffError,
-  type EditDiffResult,
-  generateDiffString,
-  generateUnifiedPatch,
-  splitNoOpEdits,
-  stripBom,
-  validateNoOpEditTargets,
-} from "./edit-diff.js";
+import type { Edit, EditDiffError, EditDiffResult } from "./edit-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { computeEditsDiff, planFileEdit } from "./file-tool-planning.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
@@ -203,16 +191,9 @@ function getEditCallRenderComponent(
   lastComponent: unknown,
 ): EditCallRenderComponent {
   if (lastComponent instanceof Box) {
-    const component = lastComponent as EditCallRenderComponent;
-    state.callComponent = component;
-    return component;
+    state.callComponent = lastComponent as EditCallRenderComponent;
   }
-  if (state.callComponent) {
-    return state.callComponent;
-  }
-  const component = createEditCallRenderComponent();
-  state.callComponent = component;
-  return component;
+  return (state.callComponent ??= createEditCallRenderComponent());
 }
 
 function getRenderablePreviewInput(
@@ -293,16 +274,14 @@ function getEditHeaderBg(
   settledError: boolean | undefined,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): (text: string) => string {
-  if (preview) {
-    if ("error" in preview) {
-      return (text: string) => theme.bg("toolErrorBg", text);
-    }
-    return (text: string) => theme.bg("toolSuccessBg", text);
-  }
-  if (settledError) {
-    return (text: string) => theme.bg("toolErrorBg", text);
-  }
-  return (text: string) => theme.bg("toolPendingBg", text);
+  const color = preview
+    ? "error" in preview
+      ? "toolErrorBg"
+      : "toolSuccessBg"
+    : settledError
+      ? "toolErrorBg"
+      : "toolPendingBg";
+  return (text) => theme.bg(color, text);
 }
 
 function buildEditCallComponent(
@@ -369,10 +348,7 @@ export function createEditToolDefinition(
     outputSchema: EditToolOutputSchema,
     renderShell: "self",
     prepareArguments: prepareEditArguments,
-    async execute(toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolvePath(path, cwd);
@@ -384,7 +360,7 @@ export function createEditToolDefinition(
         }
         assertCurrent();
 
-        let realEdits: Edit[] = [];
+        let editCount = 0;
         let expectedContent: string | undefined;
 
         try {
@@ -407,26 +383,19 @@ export function createEditToolDefinition(
           }
           assertCurrent();
 
-          const { bom, text: content } = stripBom(rawContent);
-          const normalizedContent = normalizeToLF(content);
-          const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
-          const noOpEdits = editSets.noOpEdits;
-          realEdits = editSets.realEdits;
-          validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
-          // No-op: not terminal — the model may still be mid-task and needs a
-          // continuation, not an ended turn.
-          if (realEdits.length === 0) {
-            return textResult(
-              `No changes made to ${path}. The replacement text is identical to the original.`,
-              { changed: false } satisfies EditToolDetails,
-            );
-          }
-          const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
-            content,
-            realEdits,
-            path,
+          const plan = await planFileEdit(
+            { path, content: rawContent, edits: originalEdits },
+            signal,
           );
-          expectedContent = bom + finalContent;
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+          assertCurrent();
+          if (!plan.changed) {
+            return textResult(plan.message, { changed: false } satisfies EditToolDetails);
+          }
+          editCount = plan.editCount;
+          expectedContent = plan.content;
           await ops.writeFile(absolutePath, expectedContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
@@ -439,18 +408,9 @@ export function createEditToolDefinition(
           }
 
           assertCurrent();
-          const diffResult = generateDiffString(baseContent, newContent);
-          const patch = generateUnifiedPatch(path, baseContent, newContent);
           return textResult<EditToolDetails>(
-            `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
-            {
-              changed: true,
-              diff: diffResult.diff,
-              patch,
-              ...(diffResult.firstChangedLine === undefined
-                ? {}
-                : { firstChangedLine: diffResult.firstChangedLine }),
-            },
+            `Successfully replaced ${editCount} block(s) in ${path}.`,
+            { changed: true, ...plan.receipt },
           );
         } catch (error: unknown) {
           assertCurrent();
@@ -465,20 +425,12 @@ export function createEditToolDefinition(
           ) {
             assertCurrent();
             return textResult<EditToolDetails>(
-              `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+              `Successfully replaced ${editCount} block(s) in ${path}.`,
               { changed: true, diff: "", patch: "" },
             );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
-          }
-          // No-op: the edit matched but produced identical content. Not
-          // terminal — see the realEdits.length===0 case above.
-          if (normalizedError instanceof EditNoChangeError) {
-            return textResult(
-              `No changes made to ${path}. The replacement produced identical content.`,
-              { changed: false } satisfies EditToolDetails,
-            );
           }
           throw normalizedError;
         }

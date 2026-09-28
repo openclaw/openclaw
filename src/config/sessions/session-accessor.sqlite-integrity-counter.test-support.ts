@@ -10,7 +10,8 @@ const integrityCounterPreload = `
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = prepare.call(this, sql);
     if (this.location() === databasePath &&
-        /^PRAGMA integrity_check;?$/i.test(sql.trim())) {
+        (/^PRAGMA integrity_check;?$/i.test(sql.trim()) ||
+         sql.trim() === "PRAGMA integrity_check('sqlite_schema');")) {
       for (const method of ["all", "get", "iterate", "run"]) {
         const execute = statement[method].bind(statement);
         statement[method] = (...args) => {
@@ -31,7 +32,7 @@ const integrityCounterPreload = `
   };
 `;
 
-/** Count real full-file checks on the reclamation Worker's native SQLite connection. */
+/** Count native admission gates once, through the full check or the schema table. */
 export function withWorkerSqliteIntegrityCounter(
   options: WorkerOptions | undefined,
   counts: SharedArrayBuffer | undefined,

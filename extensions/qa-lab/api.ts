@@ -1,4 +1,3 @@
-// Qa Lab API module exposes the plugin public contract.
 export {
   buildQaBusSnapshot,
   cloneEvent,

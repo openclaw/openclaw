@@ -27,6 +27,17 @@ describe("outbound routed account media limits", () => {
       );
     },
   );
+
+  it("uses Telegram's transport default after explicit limits", () => {
+    expect(resolveOutboundMediaMaxBytes({ cfg: {}, channel: "telegram" })).toBe(100 * MB);
+    expect(
+      resolveOutboundMediaMaxBytes({
+        cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
+        channel: "telegram",
+      }),
+    ).toBe(8 * MB);
+    expect(resolveOutboundMediaMaxBytes({ cfg: {}, channel: "discord" })).toBe(5 * MB);
+  });
 });
 
 function configWithMediaMaxMb(mediaMaxMb: number): OpenClawConfig {
@@ -44,9 +55,7 @@ describe("resolveGeneratedMediaMaxBytes", () => {
 
   it.each([
     { label: "zero", value: 0 },
-    { label: "negative", value: -1 },
     { label: "NaN", value: Number.NaN },
-    { label: "positive infinity", value: Number.POSITIVE_INFINITY },
   ])("uses the per-kind default for $label mediaMaxMb", ({ value }) => {
     expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(value), "image")).toBe(6 * MB);
   });

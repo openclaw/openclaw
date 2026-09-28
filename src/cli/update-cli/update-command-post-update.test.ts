@@ -309,10 +309,15 @@ describe("successful update finalization ordering", () => {
         events.push("start");
         return "ok";
       });
-      const finishing = finishSuccessfulPackageSwitch({
-        restartEnvironment: process.env,
-        windowsTaskAutoStartRecovery: recovery,
-      });
+      const onGatewayStartAttempted = vi.fn(() => events.push("activation-attempt"));
+      const finishing = finishSuccessfulPackageSwitch(
+        {
+          restartEnvironment: process.env,
+          windowsTaskAutoStartRecovery: recovery,
+        },
+        {},
+        { onGatewayStartAttempted },
+      );
       try {
         try {
           await Promise.race([
@@ -323,6 +328,7 @@ describe("successful update finalization ordering", () => {
           ]);
           expect.soft(mocks.restartService).not.toHaveBeenCalled();
           expect.soft(recovery.restore).not.toHaveBeenCalled();
+          expect.soft(onGatewayStartAttempted).not.toHaveBeenCalled();
         } finally {
           release.resolve();
         }
@@ -332,6 +338,9 @@ describe("successful update finalization ordering", () => {
       }
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("start"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
+      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
     },
@@ -796,7 +805,10 @@ describe("successful update finalization ordering", () => {
           ...(restartFailed ? ["rollback"] : []),
         ]);
         expect(mocks.stopService).not.toHaveBeenCalled();
-        expect(oldRecovery.restore).toHaveBeenCalledWith(true, expect.any(Function), undefined);
+        expect(oldRecovery.restore.mock.lastCall?.slice(0, 2)).toEqual([
+          true,
+          expect.any(Function),
+        ]);
         expect(oldRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
         expect(windowsEvents.at(-1)).toBe("old-complete");
         expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({

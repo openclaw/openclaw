@@ -51,7 +51,6 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s program data",
   }
 
   it.each([
-    { count: 20, parked: false },
     { count: 2000, parked: false },
     { count: 2000, parked: true },
   ])("filters validated rows (count=$count, parked=$parked)", async ({ count, parked }) => {

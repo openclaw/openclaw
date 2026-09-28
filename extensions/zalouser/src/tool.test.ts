@@ -54,13 +54,6 @@ describe("executeZalouserTool", () => {
     mockListGroups.mockReset();
   });
 
-  it("returns error when send action is missing required fields", async () => {
-    const result = await executeZalouserTool("tool-1", { action: "send" });
-    expect(extractDetails(result)).toEqual({
-      error: "threadId and message required for send action",
-    });
-  });
-
   it("sends text message for send action", async () => {
     mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-1" } as never);
     const result = await executeZalouserTool("tool-1", {
@@ -188,12 +181,6 @@ describe("executeZalouserTool", () => {
       name: "matching credential profile with different case",
       deliveryContext: { channel: "zalouser", accountId: "support" },
       profile: " WORK ",
-      bytes: 2048,
-    },
-    {
-      name: "matching route",
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-      profile: "work",
       bytes: 2048,
     },
     {

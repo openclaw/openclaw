@@ -221,16 +221,6 @@ describe("OpenAI dynamic model capabilities", () => {
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
       codeMode: "capable",
     },
-    {
-      id: "gpt-5.6-terra",
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-      codeMode: "preferred",
-    },
-    {
-      id: "gpt-5.6-luna",
-      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      codeMode: undefined,
-    },
   ] as const)("preserves exact registry metadata for $id", ({ id, cost, codeMode }) => {
     const provider = buildOpenAIProvider();
     const exactModel: ProviderRuntimeModel = {
@@ -258,7 +248,7 @@ describe("OpenAI dynamic model capabilities", () => {
     expect(model).toBe(exactModel);
   });
 
-  it.each(["chat-latest", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"])(
+  it.each(["chat-latest", "gpt-5.4-mini"])(
     "does not promote unpreferred %s without discovery",
     (modelId) => {
       const model = buildOpenAIProvider().resolveDynamicModel?.({

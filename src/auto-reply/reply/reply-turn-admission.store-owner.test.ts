@@ -5,21 +5,22 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createSessionMaintenanceOwner } from "../../agents/session-maintenance/coordinator.js";
 import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import * as registry from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    testing.resetReplyRunRegistry();
+    await closeOpenClawAgentDatabasesAsync();
+    vi.restoreAllMocks();
+    cleanup();
+  }),
+);
 const sessionKey = "global";
 const sessionId = "copied-session-id";
 const successorId = "compacted-session-id";
-
-afterEach(() => {
-  testing.resetReplyRunRegistry();
-  closeOpenClawAgentDatabasesForTest();
-  vi.restoreAllMocks();
-});
 
 function seed(storePath: string, id = sessionId) {
   replaceSessionEntrySync({ storePath, sessionKey }, { sessionId: id, updatedAt: 1 });
@@ -56,15 +57,30 @@ it.each(
     }
     const owner = await admitOwner(ownerStore);
     const released = createDeferred();
+    const entered = createDeferred();
+    const waitForIdle = registry.replyRunRegistry.waitForIdle.bind(registry.replyRunRegistry);
+    const waitForSuccessor = registry.waitForReplyRunSuccessorAdmission;
+    const waitForFollowup = registry.waitForReplyRunFollowupAdmission;
     const waited =
       barrier === "active"
-        ? vi.spyOn(registry.replyRunRegistry, "waitForIdle")
-        : vi.spyOn(
-            registry,
-            barrier === "successor"
-              ? "waitForReplyRunSuccessorAdmission"
-              : "waitForReplyRunFollowupAdmission",
-          );
+        ? vi.spyOn(registry.replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
+            const pending = waitForIdle(...args);
+            entered.resolve();
+            return pending;
+          })
+        : barrier === "successor"
+          ? vi
+              .spyOn(registry, "waitForReplyRunSuccessorAdmission")
+              .mockImplementation((...args) => {
+                const pending = waitForSuccessor(...args);
+                entered.resolve();
+                return pending;
+              })
+          : vi.spyOn(registry, "waitForReplyRunFollowupAdmission").mockImplementation((...args) => {
+              const pending = waitForFollowup(...args);
+              entered.resolve();
+              return pending;
+            });
     const rotate = (operation: registry.ReplyOperation) => {
       operation.updateSessionId(successorId);
       seed(ownerStore, successorId);
@@ -90,7 +106,8 @@ it.each(
       resetTriggered: false,
     });
     try {
-      await vi.waitFor(() => expect(waited).toHaveBeenCalled());
+      await entered.promise;
+      expect(waited).toHaveBeenCalled();
       if (barrier === "active") {
         rotate(owner);
         owner.complete();
@@ -610,6 +627,7 @@ it.each(
     return result;
   });
   let second: registry.ReplyOperation | undefined;
+  let handoffCompletion: Promise<void> | undefined;
   try {
     await vi.waitFor(() =>
       expect(handoff === "active-successor" ? activeWait : deliveryWait).toHaveBeenCalledTimes(1),
@@ -646,7 +664,7 @@ it.each(
     }
     second = admitted.operation;
     const next = second;
-    registry.runAfterReplyOperationClear(first, () => {
+    const continueHandoff = () => {
       next.updateSessionKey(sessionKey);
       next.updateSessionId("second-compaction");
       seed(secondStore, "second-compaction");
@@ -663,9 +681,22 @@ it.each(
         next.complete();
         delivery.resolve();
       }
+    };
+    registry.runAfterReplyOperationClear(first, () => {
+      if (handoff === "active-successor") {
+        handoffCompletion = registry
+          .waitForReplyRunSuccessorAdmission(sessionKey, null, { signal: controller.signal })
+          .then((settlement) => {
+            expect(settlement.settled).toBe(true);
+            continueHandoff();
+          });
+      } else {
+        continueHandoff();
+      }
     });
     if (handoff === "active-successor") {
       first.complete();
+      await handoffCompletion;
     } else {
       delivery.resolve();
       await vi.waitFor(() => expect(finished || activeWait.mock.calls.length > 0).toBe(true));
@@ -686,6 +717,7 @@ it.each(
     second?.complete();
     delivery.resolve();
     controller.abort();
+    await handoffCompletion?.catch(() => {});
     const result = await pending;
     if (result.status === "owned") {
       result.operation.complete();

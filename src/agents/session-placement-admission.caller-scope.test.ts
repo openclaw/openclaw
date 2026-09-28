@@ -104,7 +104,7 @@ describe("independent placement caller scope", () => {
   it.each(["live parent", "closed parent", "reused run id"])(
     "registers a worker proxy without consuming authority from a %s",
     async (scenario) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn(scenario === "reused run id" ? "parent-run" : "child-worker-run");
       const reachedWorkerExecution = new Error("test worker execution reached");
       const get = vi.fn(() => {

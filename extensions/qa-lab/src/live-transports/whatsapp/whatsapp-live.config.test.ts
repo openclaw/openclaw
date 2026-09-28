@@ -6,7 +6,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildQaGatewayConfig } from "../../qa-gateway-config.js";
 import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
-import { whatsappQaBroadcastGroupFanoutScenario } from "./whatsapp-live.scenario-implementations.conversation.js";
+import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 
 describe("WhatsApp QA broadcast config", () => {
   it.each(["generated", "explicit", "legacy-default"] as const)(
@@ -48,7 +48,8 @@ describe("WhatsApp QA broadcast config", () => {
             dmPolicy: "open",
             groupJid,
             ownerAllowFrom: ["+15550000001"],
-            overrides: whatsappQaBroadcastGroupFanoutScenario.configOverrides,
+            overrides:
+              whatsappConversationScenarios.whatsappQaBroadcastGroupFanoutScenario.configOverrides,
             sutAccountId: "sut",
           });
 

@@ -127,34 +127,6 @@ export function resolveMemoryProviderState(
   };
 }
 
-export function applyMemoryFallbackProviderState(params: {
-  current: MemoryResolvedProviderState;
-  fallbackFrom: string;
-  reason: string;
-  result: Pick<EmbeddingProviderResult, "provider" | "runtime">;
-}): MemoryResolvedProviderState {
-  return {
-    ...params.current,
-    fallbackFrom: params.fallbackFrom,
-    fallbackReason: params.reason,
-    providerUnavailableReason: undefined,
-    provider: params.result.provider,
-    providerRuntime: params.result.runtime,
-    lifecycle: params.result.provider
-      ? {
-          mode: "fallback-active",
-          providerId: params.result.provider.id,
-          fallbackFrom: params.fallbackFrom,
-          reason: params.reason,
-        }
-      : {
-          mode: "fts-only",
-          reason: params.reason,
-          attemptedProviderId: params.fallbackFrom,
-        },
-  };
-}
-
 export function resolveMemoryFallbackProviderRequest(params: {
   cfg: OpenClawConfig;
   settings: ResolvedMemorySearchConfig;

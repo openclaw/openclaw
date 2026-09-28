@@ -1,4 +1,3 @@
-// Plugins CLI list tests cover plugin listing output and installed-state formatting.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   ConfigFileSnapshot,
@@ -27,6 +26,13 @@ const cleanDoctorMessage =
   "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
   'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
 const originalExitCode = process.exitCode;
+
+function configuredCodexRuntime(plugins?: OpenClawConfig["plugins"]): OpenClawConfig {
+  return {
+    agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+    ...(plugins ? { plugins } : {}),
+  };
+}
 
 function mockDoctorReport(report: Pick<PluginStatusReport, "plugins" | "diagnostics">) {
   withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
@@ -195,67 +201,40 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
-    const [reportOptions] = buildPluginRegistrySnapshotReportMock.mock.calls[0] as [
-      {
-        config?: unknown;
-        logger?: { info?: unknown; warn?: unknown; error?: unknown };
-      },
-    ];
-    expect(reportOptions?.config).toEqual({});
-    expect(reportOptions?.logger?.info).toBeTypeOf("function");
-    expect(reportOptions?.logger?.warn).toBeTypeOf("function");
-    expect(reportOptions?.logger?.error).toBeTypeOf("function");
-
-    const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null") as {
-      workspaceDir?: string;
-      registry?: { source?: string; diagnostics?: unknown[] };
-      plugins?: Array<{
-        id?: string;
-        imported?: boolean;
-        activated?: boolean;
-        explicitlyEnabled?: boolean;
-      }>;
-      diagnostics?: unknown[];
-    };
-    expect(output.workspaceDir).toBe("/workspace");
-    expect(output.registry?.source).toBe("persisted");
-    expect(output.registry?.diagnostics).toEqual(registryDiagnostics);
-    expect(output.plugins).toHaveLength(1);
-    expect(output.plugins?.[0]?.id).toBe("demo");
-    expect(output.plugins?.[0]?.imported).toBe(true);
-    expect(output.plugins?.[0]?.activated).toBe(true);
-    expect(output.plugins?.[0]?.explicitlyEnabled).toBe(true);
+    const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null");
+    expect(output).toMatchObject({
+      workspaceDir: "/workspace",
+      registry: { source: "persisted" },
+      plugins: [{ id: "demo", imported: true, activated: true, explicitlyEnabled: true }],
+    });
+    expect(output.registry.diagnostics).toEqual(registryDiagnostics);
     expect(output.diagnostics).toEqual(diagnostics);
   });
 
-  it.each([false, true])(
-    "publishes Doctor output and exit status only after cleanup (json: %s)",
-    async (json) => {
-      const entered = createDeferredCore();
-      const finish = createDeferredCore();
-      process.exitCode = 7;
-      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
-        async (_params, formatReport) => {
-          const text = formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" });
-          entered.resolve();
-          await finish.promise;
-          return text;
-        },
-      );
-      const command = runPluginsCommand(["plugins", "doctor", ...(json ? ["--json"] : [])]);
-      try {
-        await entered.promise;
-        expect(pluginsCliRuntimeLogs).toEqual([]);
-        expect(process.exitCode).toBe(7);
-      } finally {
-        finish.resolve();
-        await command;
-      }
-      expect(process.exitCode).toBe(0);
-      expect(pluginsCliRuntimeLogs).toHaveLength(1);
-    },
-  );
+  it("publishes Doctor output and exit status only after cleanup", async () => {
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    process.exitCode = 7;
+    withPluginDiagnosticsReportForInspectionMock.mockImplementation(
+      async (_params, formatReport) => {
+        const text = formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" });
+        entered.resolve();
+        await finish.promise;
+        return text;
+      },
+    );
+    const command = runPluginsCommand(["plugins", "doctor", "--json"]);
+    try {
+      await entered.promise;
+      expect(pluginsCliRuntimeLogs).toEqual([]);
+      expect(process.exitCode).toBe(7);
+    } finally {
+      finish.resolve();
+      await command;
+    }
+    expect(process.exitCode).toBe(0);
+    expect(pluginsCliRuntimeLogs).toHaveLength(1);
+  });
 
   it.each(["format", "dispose"])("does not publish success when Doctor %s fails", async (phase) => {
     process.exitCode = 7;
@@ -303,12 +282,6 @@ describe("plugins cli list", () => {
       code: "removed-session-transcript-file-api",
       healthy: false,
       args: [],
-    },
-    {
-      severity: "warn",
-      code: "removed-session-transcript-file-api",
-      healthy: false,
-      args: ["--json"],
     },
   ] as const)(
     "keeps $severity compatibility notices visible while reporting healthy=$healthy ($args)",
@@ -364,39 +337,6 @@ describe("plugins cli list", () => {
       expect(process.exitCode).toBe(exitCode);
     }
   });
-
-  it.each([
-    { format: "human", args: [] },
-    { format: "JSON", args: ["--json"] },
-  ])(
-    "reports validated disabled-plugin configuration warnings in $format output",
-    async ({ args }) => {
-      await mockPluginDoctorValidationWarnings([
-        {
-          path: "plugins.entries.google",
-          message: "plugin disabled (not in allowlist) but config is present",
-        },
-      ]);
-
-      await runPluginsCommand(["plugins", "doctor", ...args]);
-
-      expect(process.exitCode).toBe(1);
-
-      const warning =
-        "- plugins.entries.google: plugin disabled (not in allowlist) but config is present";
-      if (args.includes("--json")) {
-        const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null") as {
-          ok: boolean;
-          configurationWarnings: string[];
-        };
-        expect(output.ok).toBe(false);
-        expect(output.configurationWarnings).toEqual([warning]);
-        return;
-      }
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(warning);
-      expect(pluginsCliRuntimeLogs).not.toContain(cleanDoctorMessage);
-    },
-  );
 
   it("deduplicates plugin validation warnings while ignoring other config owners", async () => {
     const googleWarning = {
@@ -573,17 +513,7 @@ describe("plugins cli list", () => {
   });
 
   it("reports missing configured Codex runtime plugin in doctor output", async () => {
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              agentRuntime: { id: "codex" },
-            },
-          },
-        },
-      },
-    };
+    const sourceConfig = configuredCodexRuntime();
     pluginCliConfigMock.mockReturnValue(sourceConfig);
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       path: "/tmp/openclaw-config.json5",
@@ -713,17 +643,7 @@ describe("plugins cli list", () => {
   });
 
   it("does not report configured Codex runtime when the plugin is enabled", async () => {
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              agentRuntime: { id: "codex" },
-            },
-          },
-        },
-      },
-    };
+    const sourceConfig = configuredCodexRuntime();
     pluginCliConfigMock.mockReturnValue(sourceConfig);
     mockDoctorReport({
       plugins: [createPluginRecord({ id: "codex" })],
@@ -736,17 +656,7 @@ describe("plugins cli list", () => {
   });
 
   it("reports configured Codex runtime when the plugin record is disabled", async () => {
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              agentRuntime: { id: "codex" },
-            },
-          },
-        },
-      },
-    };
+    const sourceConfig = configuredCodexRuntime();
     pluginCliConfigMock.mockReturnValue(sourceConfig);
     mockDoctorReport({
       plugins: [createPluginRecord({ id: "codex", enabled: false, status: "disabled" })],
@@ -764,20 +674,7 @@ describe("plugins cli list", () => {
   });
 
   it("reports blocked configured Codex runtime without install advice", async () => {
-    const sourceConfig = {
-      plugins: {
-        deny: ["codex"],
-      },
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              agentRuntime: { id: "codex" },
-            },
-          },
-        },
-      },
-    };
+    const sourceConfig = configuredCodexRuntime({ deny: ["codex"] });
     pluginCliConfigMock.mockReturnValue(sourceConfig);
     mockDoctorReport({
       plugins: [],
@@ -796,22 +693,7 @@ describe("plugins cli list", () => {
   });
 
   it("reports disabled configured Codex runtime entry without install advice", async () => {
-    const sourceConfig = {
-      plugins: {
-        entries: {
-          codex: { enabled: false },
-        },
-      },
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              agentRuntime: { id: "codex" },
-            },
-          },
-        },
-      },
-    };
+    const sourceConfig = configuredCodexRuntime({ entries: { codex: { enabled: false } } });
     pluginCliConfigMock.mockReturnValue(sourceConfig);
     mockDoctorReport({
       plugins: [],

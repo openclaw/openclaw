@@ -10,20 +10,20 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
-import {
-  resolveAgentComponentRoute,
-  resolveComponentCommandAuthorized,
-  resolvePinnedMainDmOwnerFromAllowlist,
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
-} from "./agent-components-helpers.js";
-import { readSessionUpdatedAt, resolveStorePath } from "./agent-components.deps.runtime.js";
+import { resolveAgentComponentRoute } from "./agent-components-context.js";
+import { resolveComponentCommandAuthorized } from "./agent-components-guild-auth.js";
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
+} from "./agent-components.types.js";
 import {
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -38,9 +38,7 @@ import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { buildDiscordConversationRouteContext } from "./route-resolution.js";
 
-const loadConversationRuntime = createLazyRuntimeModule(
-  () => import("./agent-components.runtime.js"),
-);
+const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/reply-runtime"));
 
 const loadTypingRuntime = createLazyRuntimeModule(() => import("./typing.js"));
 
@@ -84,7 +82,6 @@ export async function dispatchDiscordComponentEvent(params: {
   routeOverrides?: { sessionKey?: string; agentId?: string; accountId?: string };
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
-  const runtime = ctx.runtime ?? createNonExitingRuntime();
   const route = resolveAgentComponentRoute({
     ctx,
     rawGuildId: interactionCtx.rawGuildId,
@@ -177,7 +174,7 @@ export async function dispatchDiscordComponentEvent(params: {
     finalizeInboundContext,
     resolveChunkMode,
     resolveTextChunkLimit,
-  } = await loadConversationRuntime();
+  } = await loadReplyRuntime();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -306,7 +303,6 @@ export async function dispatchDiscordComponentEvent(params: {
               token,
               accountId,
               rest: interaction.client.rest,
-              runtime,
               replyToId,
               replyToMode,
               textLimit,

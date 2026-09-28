@@ -24,8 +24,8 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { CronExecutionRootRuntimeError } from "../execution-root-runtime.js";
+import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import {

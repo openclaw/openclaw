@@ -1,4 +1,5 @@
 /** Completes video reference loading, generation, and ordered media persistence. */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
@@ -7,7 +8,6 @@ import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { SaveMediaSourceError } from "../../media/store.shared.js";
 import { generateVideo } from "../../video-generation/runtime.js";
 import type {
-  GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
@@ -16,12 +16,11 @@ import {
   formatGeneratedAttachmentLines,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
-import {
-  videoGenerationTaskLifecycle,
-  type VideoGenerationTaskHandle,
-} from "./media-generate-background.js";
+import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
+import { videoGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
   buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
@@ -35,7 +34,6 @@ import {
   resolveMediaToolSandboxConfig,
   type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
-import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const GENERATED_VIDEO_MEDIA_SUBDIR = "tool-video-generation";
 const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
@@ -121,16 +119,8 @@ export async function loadReferenceAssets(params: {
 type LoadedReferenceAsset = Awaited<ReturnType<typeof loadReferenceAssets>>[number];
 
 type ExecutedVideoGeneration = MediaGenerateToolExecutionResult & {
-  /** URLs of url-only assets that were not saved locally. */
-  urlOnlyUrls: string[];
   mediaUrls: string[];
 };
-
-function hasVideoBuffer(
-  video: GeneratedVideoAsset,
-): video is GeneratedVideoAsset & { buffer: Buffer } {
-  return Boolean(video.buffer);
-}
 
 export async function executeVideoGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
@@ -147,7 +137,7 @@ export async function executeVideoGenerationJob(params: {
   loadedReferenceImages: LoadedReferenceAsset[];
   loadedReferenceVideos: LoadedReferenceAsset[];
   loadedReferenceAudios: LoadedReferenceAsset[];
-  taskHandle?: VideoGenerationTaskHandle | null;
+  taskHandle?: MediaGenerationTaskHandle | null;
   providerOptions?: Record<string, unknown>;
   autoProviderFallback?: boolean;
   timeoutMs?: number;
@@ -191,34 +181,25 @@ export async function executeVideoGenerationJob(params: {
   type PersistedVideo =
     | { kind: "saved"; media: Awaited<ReturnType<typeof saveMediaBuffer>> }
     | { kind: "url"; media: UrlVideo };
-  const videoOrder: Array<PersistedVideo | number> = [];
-  const bufferVideos: Array<GeneratedVideoAsset & { buffer: Buffer }> = [];
-  for (const video of result.videos) {
-    if (hasVideoBuffer(video)) {
-      videoOrder.push(bufferVideos.length);
-      bufferVideos.push(video);
-      continue;
-    }
-    if (video.url) {
-      videoOrder.push({
+  // Validate the entire batch before any save starts, retaining provider order.
+  const saves = Array.from(result.videos, (video) => {
+    const buffer = video.buffer;
+    if (!buffer) {
+      if (!video.url) {
+        throw new Error(
+          `Provider ${result.provider} returned a video asset with neither buffer nor url — cannot deliver.`,
+        );
+      }
+      const value: PersistedVideo = {
         kind: "url",
         media: { url: video.url, mimeType: video.mimeType, fileName: video.fileName },
-      });
-      continue;
+      };
+      return async () => ({ value });
     }
-    throw new Error(
-      `Provider ${result.provider} returned a video asset with neither buffer nor url — cannot deliver.`,
-    );
-  }
-
-  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "video");
-  const persistedVideos = await persistGeneratedMediaBatch<PersistedVideo>({
-    subdir: GENERATED_VIDEO_MEDIA_SUBDIR,
-    mode: "sequential",
-    saves: bufferVideos.map((video) => async () => {
+    return async () => {
       try {
         const savedMedia = await saveMediaBuffer(
-          video.buffer,
+          buffer,
           video.mimeType,
           GENERATED_VIDEO_MEDIA_SUBDIR,
           mediaMaxBytes,
@@ -243,27 +224,25 @@ export async function executeVideoGenerationJob(params: {
         }
         throw error;
       }
-    }),
+    };
   });
-  // Preserve provider ordinals while replacing only buffer-backed slots with persistence results.
-  const deliveredVideos = videoOrder.map((video) =>
-    typeof video === "number" ? persistedVideos[video]! : video,
-  );
+  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "video");
+  const deliveredVideos = await persistGeneratedMediaBatch<PersistedVideo>({
+    subdir: GENERATED_VIDEO_MEDIA_SUBDIR,
+    mode: "sequential",
+    saves,
+  });
   const requestedDurationSeconds =
     result.normalization?.durationSeconds?.requested ??
-    (typeof result.metadata?.requestedDurationSeconds === "number" &&
-    Number.isFinite(result.metadata.requestedDurationSeconds)
-      ? result.metadata.requestedDurationSeconds
-      : params.durationSeconds);
+    asFiniteNumber(result.metadata?.requestedDurationSeconds) ??
+    params.durationSeconds;
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
   const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
   const normalizedDurationSeconds =
     result.normalization?.durationSeconds?.applied ??
-    (typeof result.metadata?.normalizedDurationSeconds === "number" &&
-    Number.isFinite(result.metadata.normalizedDurationSeconds)
-      ? result.metadata.normalizedDurationSeconds
-      : requestedDurationSeconds);
+    asFiniteNumber(result.metadata?.normalizedDurationSeconds) ??
+    requestedDurationSeconds;
   const supportedDurationSeconds =
     result.normalization?.durationSeconds?.supportedValues ??
     (Array.isArray(result.metadata?.supportedDurationSeconds)
@@ -381,16 +360,7 @@ export async function executeVideoGenerationJob(params: {
     },
   });
   return {
-    provider: executionResult.provider,
-    model: executionResult.model,
-    urlOnlyUrls: deliveredVideos.flatMap((video) =>
-      video.kind === "url" ? [video.media.url] : [],
-    ),
-    count: executionResult.count,
+    ...executionResult,
     mediaUrls: allMediaUrls,
-    attachments,
-    contentText: executionResult.contentText,
-    wakeResult: executionResult.wakeResult,
-    details: executionResult.details,
   };
 }

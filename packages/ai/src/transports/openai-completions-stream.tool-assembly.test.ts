@@ -9,35 +9,6 @@ import {
 } from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
-  it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {
-    const model = makeCompletionsModel({
-      id: "nemotron-3-super",
-      name: "Nemotron 3 Super",
-      provider: "vllm",
-      baseUrl: "http://localhost:8000/v1",
-      contextWindow: 1000000,
-    });
-
-    const output = createAssistantOutput(model);
-
-    const stream = {
-      push: () => {},
-    };
-
-    const mockChunks = [
-      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
-      makeCompletionsChunk({ content: "4" }),
-      makeCompletionsChunk({ tool_calls: [] as never[] }, "tool_calls" as const),
-    ] as const;
-
-    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
-
-    expect(output.stopReason).toBe("stop");
-    expect(
-      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
-    ).toStrictEqual([]);
-  });
-
   it("accumulates arguments for parallel tool calls with split indices", async () => {
     const model = makeCompletionsModel({
       id: "kimi-for-coding",

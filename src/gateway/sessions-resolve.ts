@@ -160,8 +160,16 @@ export function resolveSessionKeyFromResolveParams(params: {
       ) {
         continue;
       }
-      const source = getTarget(candidateKey)?.materialized?.source;
-      if (entry.acp || source?.entry === entry) {
+      const target = getTarget(candidateKey);
+      const current =
+        target &&
+        projection.capture({
+          agentId: target.agentId,
+          key: target.key,
+          storePath: target.storeTarget.storePath,
+        });
+      const source = current?.materialized?.source;
+      if (entry.acp || (source && source.entry === current?.entry)) {
         facts.set(entry, entry.acp ?? source?.thinkingProjection.acpMeta);
       } else {
         unresolved.push({ sessionKey: candidateKey, agentId, entry });

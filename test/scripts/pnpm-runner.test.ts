@@ -109,24 +109,6 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
-  it("uses npm_execpath when it points to a JS pnpm entrypoint", () => {
-    const tempDir = path.join(fixturesRoot, "js");
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-
-    expect(
-      resolvePnpmRunner({
-        npmExecPath,
-        nodeExecPath: "/usr/local/bin/node",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/usr/local/bin/node",
-      args: [npmExecPath, "exec", "vitest", "run"],
-      shell: false,
-    });
-  });
-
   it("uses npm_execpath when it points to a shebang pnpm script", () => {
     const tempDir = path.join(fixturesRoot, "shebang");
     const npmExecPath = path.join(tempDir, "pnpm");

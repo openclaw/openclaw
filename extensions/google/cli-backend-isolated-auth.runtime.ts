@@ -258,19 +258,13 @@ export async function resolveGeminiCliAmbientAuth(
     const value = normalizeOptionalString(ctx.baseEnv?.[name]);
     return value !== undefined && value !== "false" && value !== "0";
   });
-  const systemSelectedType = normalizeOptionalString(
-    typeof systemAuth?.selectedType === "string" ? systemAuth.selectedType : undefined,
-  );
-  const userSelectedType = normalizeOptionalString(
-    typeof userAuth?.selectedType === "string" ? userAuth.selectedType : undefined,
-  );
+  const systemSelectedType = normalizeOptionalString(systemAuth?.selectedType);
+  const userSelectedType = normalizeOptionalString(userAuth?.selectedType);
   // A request-prepared selector is the credential owner for this turn. It may
   // override ambient user preference, but never system-enforced selection.
   const selectedType =
     systemSelectedType ?? (preparedSelectorOwnsAuth ? undefined : userSelectedType);
-  const enforcedType = normalizeOptionalString(
-    typeof systemAuth?.enforcedType === "string" ? systemAuth.enforcedType : undefined,
-  );
+  const enforcedType = normalizeOptionalString(systemAuth?.enforcedType);
   if (enforcedType && enforcedType !== "gemini-api-key" && enforcedType !== "vertex-ai") {
     throw unsupportedExactToolAuthError(
       ctx,

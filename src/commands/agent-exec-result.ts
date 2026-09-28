@@ -72,10 +72,6 @@ function finalTextFromResult(
   );
 }
 
-function firstErrorPayload(result: AgentExecRunResult): AgentExecPayload | undefined {
-  return result.payloads?.find((payload) => payload.isError === true);
-}
-
 /** Classify an embedded result into the strict `agent exec` process contract. */
 export function classifyAgentExecResult(
   result: AgentExecRunResult,
@@ -83,7 +79,7 @@ export function classifyAgentExecResult(
   projectedErrorPayload?: string | true,
 ): AgentExecEnvelope {
   const meta = result.meta;
-  const errorPayload = firstErrorPayload(result);
+  const errorPayload = result.payloads?.find((payload) => payload.isError === true);
   const errorPayloadMessage =
     typeof projectedErrorPayload === "string"
       ? projectedErrorPayload

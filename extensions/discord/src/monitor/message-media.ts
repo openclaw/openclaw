@@ -2,7 +2,6 @@ import { StickerFormatType, type APIAttachment, type APIStickerItem } from "disc
 import {
   formatMediaPlaceholderText,
   type ChannelInboundMediaInput,
-  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
@@ -233,19 +232,14 @@ export async function resolveReferencedReplyMediaList(
     : [];
 }
 
-async function fetchDiscordMedia(params: {
-  url: string;
-  filePathHint: string;
-  maxBytes: number;
-  fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
-  readIdleTimeoutMs?: number;
-  totalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  endpointRuntime: DiscordEndpointRuntime | null;
-  fallbackContentType?: string;
-  originalFilename?: string;
-}) {
+async function fetchDiscordMedia(
+  params: Omit<DiscordMediaOperation, "out"> & {
+    url: string;
+    filePathHint: string;
+    fallbackContentType?: string;
+    originalFilename?: string;
+  },
+) {
   const endpointGuard = resolveDiscordEndpointMediaGuard(params.url, params.endpointRuntime);
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal =
@@ -471,23 +465,15 @@ function isImageAttachment(attachment: APIAttachment): boolean {
   return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(name);
 }
 
-function resolveDiscordTextMediaFacts(params: {
-  attachments?: APIAttachment[];
-  stickers?: APIStickerItem[];
-}): MediaPlaceholderTextFact[] {
-  return [
-    ...(params.attachments ?? []).map((attachment) => {
-      const classification = resolveDiscordMediaClassification({ attachment });
-      return classification;
-    }),
-    ...(params.stickers ?? []).map(() => ({ kind: "sticker" as const })),
-  ];
-}
-
 /** Renders native Discord media only for transcript surfaces that cannot carry facts. */
 export function formatDiscordMediaText(params: {
   attachments?: APIAttachment[];
   stickers?: APIStickerItem[];
 }): string {
-  return formatMediaPlaceholderText(resolveDiscordTextMediaFacts(params));
+  return formatMediaPlaceholderText([
+    ...(params.attachments ?? []).map((attachment) =>
+      resolveDiscordMediaClassification({ attachment }),
+    ),
+    ...(params.stickers ?? []).map(() => ({ kind: "sticker" as const })),
+  ]);
 }

@@ -1,5 +1,5 @@
-// Gateway broadcast types are shared by websocket fanout helpers and request
-// contexts so event delivery can carry optional state-version hints.
+import type { GatewayClientCap } from "../../packages/gateway-protocol/src/client-info.js";
+import type { LiveTextProjectionText } from "./live-text-continuity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
 type GatewayBroadcastStateVersion = {
@@ -12,6 +12,8 @@ export type GatewayBroadcastOpts = {
   /** Agent scope for agent-relative keys such as `global`. */
   agentId?: string;
   dropIfSlow?: boolean;
+  /** Omit a redundant projection for clients that advertise this capability. */
+  excludeClientCapability?: GatewayClientCap;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];
   /** Target recipients were selected from subscriptions at ingress. */
@@ -22,8 +24,23 @@ export type GatewayBroadcastOpts = {
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {
     group: AbortSignal;
+    /** Source continuity changes without revoking already queued publications. */
+    sourceEpoch?: object;
+    /** Accepted terminal barrier; drain current queued text before retiring its group. */
+    settle?: true;
     isCurrent?: () => boolean;
     coalesce?: { key: string; merge: (previous: unknown, next: unknown) => unknown };
+    /** Full internal payloads become append-only only after this socket has a baseline. */
+    projection?: {
+      key: string;
+      delta: (payload: unknown) => unknown;
+      /** Upper bound for encoded full payload bytes, without encoding cumulative text. */
+      snapshotBytes?: (payload: unknown, deltaPayloadBytes: number) => number;
+      version?: unknown;
+      snapshot?: boolean;
+      /** Verify transformed snapshots against the prior publication before omitting them. */
+      text?: LiveTextProjectionText;
+    };
   };
 };
 

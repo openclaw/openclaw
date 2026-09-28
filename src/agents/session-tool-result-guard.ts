@@ -1,8 +1,3 @@
-/**
- * Session transcript guard for tool-call/result consistency.
- *
- * Caps large tool results, repairs missing results, applies redaction, and emits transcript update events.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
@@ -49,7 +44,6 @@ import {
 } from "./transcript-code-mode-source.js";
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
-type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
 type UserMessagePersistedCallback = (
   message: UserAgentMessage,
@@ -69,16 +63,12 @@ type AppendRequest = {
   sourceAppend?: CodeModeSourceAppend;
 };
 
-function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
-  return message.role === "user";
-}
-
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const provider = normalizeOptionalString((message as { provider?: unknown }).provider) ?? "";
-  const model = normalizeOptionalString((message as { model?: unknown }).model) ?? "";
+  const provider = normalizeOptionalString(message.provider) ?? "";
+  const model = normalizeOptionalString(message.model) ?? "";
   return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
@@ -131,20 +121,11 @@ function clearsPendingToolCalls(
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
-    /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
-    /** Optional agent id for selected-global transcript update broadcasts. */
     agentId?: string;
     /** Exact run that owns terminal assistant transcript updates. */
     runId?: string;
-    /**
-     * Optional transform applied to any message before persistence.
-     */
     transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
-    /**
-     * Optional, synchronous transform applied to toolResult messages *before* they are
-     * persisted to the session transcript.
-     */
     transformToolResultForPersistence?: (
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
@@ -453,10 +434,6 @@ export function installSessionToolResultGuard(
   }
   const flushPendingToolResults = () => runSync(flushPendingToolResultsOperation());
 
-  const clearPendingToolResults = () => {
-    pending.clear();
-  };
-
   function* guardedAppend(
     message: AgentMessage,
     callerOptions?: AppendMessageOptions,
@@ -464,8 +441,7 @@ export function installSessionToolResultGuard(
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     let nextMessage = message;
-    const role = (message as { role?: unknown }).role;
-    if (role === "assistant") {
+    if (message.role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
       });
@@ -475,17 +451,11 @@ export function installSessionToolResultGuard(
         }
         return undefined;
       }
-      const sanitizedMessage = sanitized.at(0);
-      if (!sanitizedMessage) {
-        return undefined;
-      }
-      nextMessage = sanitizedMessage;
+      nextMessage = sanitized[0]!;
       copyCodeModeSourceAppend(message, nextMessage, sourceAppend);
     }
-    const nextRole = (nextMessage as { role?: unknown }).role;
-
-    if (nextRole === "toolResult") {
-      const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
+    if (nextMessage.role === "toolResult") {
+      const id = extractToolResultId(nextMessage);
       const toolName = id ? pending.get(id) : undefined;
       const normalizedToolResult = normalizePersistedToolResultName(
         nextMessage,
@@ -553,32 +523,27 @@ export function installSessionToolResultGuard(
     const transformedMessage = persistMessage(nextMessage, sourceAppend);
     const finalWrite = applyBeforeWriteHook(transformedMessage, sourceAppend);
     if (!finalWrite) {
-      if (isUserAgentMessage(transformedMessage)) {
+      if (transformedMessage.role === "user") {
         opts?.onUserMessageBlocked?.(transformedMessage);
       }
       return undefined;
     }
     let finalMessage = finalWrite.message;
-    const finalRole = (finalMessage as { role?: unknown }).role;
     if (
-      finalRole === "assistant" &&
+      finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
       opts?.suppressTranscriptOnlyAssistantPersistence === true
     ) {
       return undefined;
     }
     if (
-      finalRole === "assistant" &&
+      finalMessage.role === "assistant" &&
       assistantErrorTranscript &&
-      (finalMessage as { stopReason?: string }).stopReason === "error"
+      finalMessage.stopReason === "error"
     ) {
       const target = sessionManager.getSessionTarget();
       if (target) {
-        const replayMessage = assistantErrorTranscript.record(
-          finalMessage as AssistantAgentMessage,
-          target,
-          message,
-        );
+        const replayMessage = assistantErrorTranscript.record(finalMessage, target, message);
         if (!replayMessage) {
           return undefined;
         }
@@ -586,7 +551,7 @@ export function installSessionToolResultGuard(
         finalMessage = replayMessage;
       }
     }
-    if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
+    if (finalMessage.role === "user" && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
       void opts?.onUserMessagePersistenceSuppressed?.(finalMessage);
       return undefined;
@@ -622,7 +587,7 @@ export function installSessionToolResultGuard(
       });
     }
 
-    if (isUserAgentMessage(finalMessage) && isUserAgentMessage(persistedMessage)) {
+    if (finalMessage.role === "user" && persistedMessage.role === "user") {
       void opts?.onUserMessagePersisted?.(finalMessage, {
         ...(anchor ? { anchor } : {}),
         appended,
@@ -635,7 +600,6 @@ export function installSessionToolResultGuard(
     return result;
   }
 
-  // Monkey-patch appendMessage with our guarded version.
   sessionManager.appendMessage = ((message, options) =>
     withCodeModeSourceAppend(message, options, (sourceAppend) =>
       runSync(guardedAppend(message, options, sourceAppend)),
@@ -651,7 +615,7 @@ export function installSessionToolResultGuard(
   return {
     hasPendingToolResults: () => pending.size > 0,
     flushPendingToolResults,
-    clearPendingToolResults,
+    clearPendingToolResults: () => pending.clear(),
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;
     },

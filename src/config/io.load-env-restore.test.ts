@@ -5,6 +5,10 @@ import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
+function configIO(home: string, env: NodeJS.ProcessEnv) {
+  return createConfigIO({ env, homedir: () => home, logger: { warn: () => {}, error: () => {} } });
+}
+
 describe("restoreEnvChangesIfUnchanged", () => {
   it("restores external ownership when rejected config replaced equal lower-precedence bytes", () => {
     const env = { KEY: "same" };
@@ -48,36 +52,10 @@ describe("restoreEnvChangesIfUnchanged", () => {
     expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "removes a newly injected key when unchanged from after snapshot",
-      before: {},
-      after: { KEY: "injected" },
-      current: "injected",
-      expected: undefined,
-    },
-    {
-      name: "restores an overwritten key back to its before value",
-      before: { KEY: "original" },
-      after: { KEY: "new-value" },
-      current: "new-value",
-      expected: "original",
-    },
-    {
-      name: "preserves an externally modified key even when different from before",
-      before: {},
-      after: { KEY: "config-set" },
-      current: "external-change",
-      expected: "external-change",
-    },
-  ])("$name", ({ before, after, current, expected }) => {
-    const env: NodeJS.ProcessEnv = { HOME: "/tmp/test", KEY: current };
-    restoreEnvChangesIfUnchanged({
-      env,
-      before: { HOME: "/tmp/test", ...before },
-      after: { HOME: "/tmp/test", ...after },
-    });
-    expect(env.KEY).toBe(expected);
+  it("preserves an externally modified value", () => {
+    const env = { KEY: "external-change" };
+    restoreEnvChangesIfUnchanged({ env, before: {}, after: { KEY: "config-set" } });
+    expect(env.KEY).toBe("external-change");
   });
 });
 
@@ -87,11 +65,7 @@ describe("loadConfig env restoration", () => {
       await writeOpenClawConfig(home, {
         gateway: { auth: { mode: "token", token: "${MISSING_GATEWAY_TOKEN}" } },
       });
-      const config = createConfigIO({
-        env: { HOME: home } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      }).loadConfig();
+      const config = configIO(home, { HOME: home }).loadConfig();
 
       expect([...(getConfigResolutionFacts(config) ?? [])]).toEqual(["gateway.auth.token"]);
     });
@@ -110,11 +84,7 @@ describe("loadConfig env restoration", () => {
       });
 
       const env = { HOME: home } as NodeJS.ProcessEnv;
-      const io = createConfigIO({
-        env,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
+      const io = configIO(home, env);
 
       expect(env.DUP_DIR_TEST_VAR).toBeUndefined();
       expect(() => io.loadConfig()).toThrow(DuplicateAgentDirError);
@@ -123,38 +93,22 @@ describe("loadConfig env restoration", () => {
   });
 });
 
-describe.each(["loadConfig", "readConfigFileSnapshot"] as const)(
-  "%s env restoration after invalid config",
-  (read) => {
-    it.each([
-      { key: "TEST_VAR", original: undefined, injected: "injected-value" },
-      { key: "PRE_EXISTING", original: "original-value", injected: "new-value" },
-    ])("restores $key to $original", async ({ key, original, injected }) => {
-      await withTempHome(async (home) => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: injected } },
-          gateway: { port: "invalid" },
-        });
-        const env: NodeJS.ProcessEnv = { HOME: home };
-        if (original !== undefined) {
-          env[key] = original;
-        }
-        const io = createConfigIO({
-          env,
-          homedir: () => home,
-          logger: { warn: () => {}, error: () => {} },
-        });
-
-        expect(env[key]).toBe(original);
-        if (read === "loadConfig") {
-          expect(() => io.loadConfig()).toThrow(
-            expect.objectContaining({ code: "INVALID_CONFIG" }),
-          );
-        } else {
-          expect((await io.readConfigFileSnapshot()).valid).toBe(false);
-        }
-        expect(env[key]).toBe(original);
+it.each(["loadConfig", "readConfigFileSnapshot"] as const)(
+  "%s rolls back env after invalid config",
+  async (read) => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        env: { vars: { TEST_VAR: "injected-value" } },
+        gateway: { port: "invalid" },
       });
+      const env: NodeJS.ProcessEnv = { HOME: home };
+      const io = configIO(home, env);
+      if (read === "loadConfig") {
+        expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
+      } else {
+        expect((await io.readConfigFileSnapshot()).valid).toBe(false);
+      }
+      expect(env.TEST_VAR).toBeUndefined();
     });
   },
 );

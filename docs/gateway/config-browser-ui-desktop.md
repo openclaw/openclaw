@@ -286,8 +286,9 @@ Install `pulseaudio` and `pulseaudio-utils` alongside the managed desktop depend
 then restart the managed desktop and reconnect. Each managed desktop owns a private PulseAudio server
 and virtual output device; it does not capture the host microphone or another
 desktop's output. Missing audio dependencies leave the screen usable with audio
-unavailable. The viewer shows a setup notice asking the operator to check those
-packages and restart the managed desktop; native error details and host paths are
+unavailable. Hover, focus, or tap **Audio unavailable** to see setup guidance
+asking the operator to check those packages and restart the managed desktop;
+native error details and host paths are
 not sent to the viewer. If private audio cannot start, desktop applications retain their
 previous audio routing; that fallback route is never captured for the viewer.
 
@@ -306,6 +307,9 @@ Audio starts muted. Select **Unmute audio** in the desktop toolbar to listen, an
 that click. Hiding, disconnecting, or replacing the desktop stops playback; a new
 connection starts muted. Audio authorization is tied to the authenticated screen
 connection and is revoked with it.
+
+The standalone Desktop view also exposes Unmute/Mute in its touch toolbar,
+with the same playback lifecycle and muted-start rules as the embedded panel.
 
 This first path uses uncompressed 48 kHz stereo PCM over a separate authenticated
 WebSocket (about 1.5 Mbit/s while listening). Buffering is bounded; a connection

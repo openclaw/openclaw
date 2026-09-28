@@ -32,20 +32,24 @@ const config: OpenClawConfig = {
 const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "codex", providers: ["codex"], syntheticAuthRefs: ["codex"] }],
 });
-function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
+function harnessRegistry(id: string) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
-    pluginId: "codex",
+    pluginId: id,
     source: "fixture",
     harness: {
-      id: "codex",
-      label: "Codex",
+      id,
+      label: id,
       supports: () => ({ supported: true }),
       async runAttempt() {
         throw new Error("Catalog reads must not execute a model");
       },
     },
   });
+  return registry;
+}
+
+function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
   return createModelCatalogDecisions({
     cfg,
     agentId: "main",
@@ -56,7 +60,7 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
     preparedAuthStore: { version: 1, profiles: {} },
     preparedRuntimeAuthModes: loggedIn ? { codex: { source: "native", mode: "api_key" } } : {},
     preparedSyntheticAuthComplete: complete,
-    pluginRegistry: registry,
+    pluginRegistry: harnessRegistry("codex"),
     isCurrent,
     routeResolverFactory: routeResolverFactory(dualRoutes),
   });
@@ -69,19 +73,6 @@ describe("captured model decisions", () => {
     "preserves provider auth for a non-CLI harness (authenticated=%s)",
     async (authenticated) => {
       const model = { provider: "github-copilot", id: "fixture-model", name: "Fixture model" };
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "copilot",
-        source: "fixture",
-        harness: {
-          id: "copilot",
-          label: "Copilot",
-          supports: () => ({ supported: true }),
-          async runAttempt() {
-            throw new Error("Catalog reads must not execute a model");
-          },
-        },
-      });
       const owner = createModelCatalogDecisions({
         cfg: {
           plugins: { entries: { copilot: { enabled: true } } },
@@ -111,7 +102,7 @@ describe("captured model decisions", () => {
             : {},
         },
         preparedSyntheticAuthComplete: true,
-        pluginRegistry: registry,
+        pluginRegistry: harnessRegistry("copilot"),
         isCurrent: () => true,
       });
       const choices = await owner.runtimeChoices(model);
@@ -216,10 +207,6 @@ describe("captured model decisions", () => {
         pluginRegistry: owner.pluginRegistry,
       }),
     ).toEqual({ id: "codex", source: "implicit" });
-  });
-
-  it("offers only the native runtime when no host credential exists", async () => {
-    expect(await nativeOwner(true, true).runtimeChoices(entry)).toEqual(["codex"]);
   });
 
   it("rechecks physical route evidence after resolving an uncatalogued reference", async () => {

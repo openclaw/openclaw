@@ -39,6 +39,7 @@ use uuid::Uuid;
 const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
+const SEND_PREPARED_EVENT: &str = "quickchat:send-prepared";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
 const AGENTS_CACHE_TTL: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1699,6 +1700,24 @@ async fn perform_request_while_dispatching(
     deadline: Instant,
     config_changed: &AtomicBool,
 ) -> Result<GatewayResponse, RequestFailure> {
+    if let GatewayRequest::ChatSend { params, generation } = &request {
+        // Queue this WebView event before polling the request that can produce chat events.
+        client
+            .with_generation(*generation, || {
+                app.emit_to(
+                    QUICKCHAT_LABEL,
+                    SEND_PREPARED_EVENT,
+                    json!({
+                        "sessionKey": params.session_key,
+                        "agentId": params.agent_id,
+                        "runId": params.idempotency_key,
+                        "gatewayGeneration": generation,
+                    }),
+                )
+                .map_err(|error| format!("Could not prepare the Quick Chat reply: {error}"))
+            })
+            .map_err(|error| RequestFailure::method_with_details(error, None))?;
+    }
     await_session_result_while_dispatching(
         session,
         perform_session_request(client, connection_generation, session, request, deadline),

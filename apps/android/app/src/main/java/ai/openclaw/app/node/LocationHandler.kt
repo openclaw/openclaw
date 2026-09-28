@@ -60,14 +60,14 @@ private class DefaultLocationDataSource(
     )
 }
 
-class LocationHandler private constructor(
+class LocationHandler internal constructor(
   private val appContext: Context,
   private val dataSource: LocationDataSource,
-  private val json: Json,
-  private val isForeground: () -> Boolean,
-  private val locationMode: () -> LocationMode,
-  private val backgroundLocationEnabled: () -> Boolean,
-  private val locationPreciseEnabled: () -> Boolean,
+  private val json: Json = Json { ignoreUnknownKeys = true },
+  private val isForeground: () -> Boolean = { true },
+  private val locationMode: () -> LocationMode = { LocationMode.WhileUsing },
+  private val backgroundLocationEnabled: () -> Boolean = { false },
+  private val locationPreciseEnabled: () -> Boolean = { true },
 ) {
   private val disclosure =
     LocationDisclosure(
@@ -99,28 +99,6 @@ class LocationHandler private constructor(
 
   /** Reports whether network/coarse location can be requested from Android. */
   fun hasCoarseLocationPermission(): Boolean = dataSource.hasCoarsePermission(appContext)
-
-  companion object {
-    /** Creates a handler with injected location state for permission and payload tests. */
-    internal fun forTesting(
-      appContext: Context,
-      dataSource: LocationDataSource,
-      json: Json = Json { ignoreUnknownKeys = true },
-      isForeground: () -> Boolean = { true },
-      locationMode: () -> LocationMode = { LocationMode.WhileUsing },
-      backgroundLocationEnabled: () -> Boolean = { false },
-      locationPreciseEnabled: () -> Boolean = { true },
-    ): LocationHandler =
-      LocationHandler(
-        appContext = appContext,
-        dataSource = dataSource,
-        json = json,
-        isForeground = isForeground,
-        locationMode = locationMode,
-        backgroundLocationEnabled = backgroundLocationEnabled,
-        locationPreciseEnabled = locationPreciseEnabled,
-      )
-  }
 
   /** Handles location.get with foreground, permission, and user precision gates applied. */
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {

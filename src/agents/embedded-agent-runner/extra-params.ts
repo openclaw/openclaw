@@ -8,9 +8,6 @@ import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
-/**
- * Resolves model extra parameters and transport overrides for embedded agents.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
@@ -38,11 +35,12 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import type { ProviderPrepareExtraParamsContext } from "../../plugins/provider-runtime.types.js";
-import { resolveModelExtraParamSources } from "../model-extra-params.js";
 import {
-  getModelProviderRequestRouteFacts,
-  resolveProviderRequestPolicyConfig,
-} from "../provider-request-config.js";
+  resolveAliasedParamValue,
+  resolveModelExtraParamSources,
+  sanitizeExtraParamsRecord,
+} from "../model-extra-params.js";
+import { createOpenAICompletionsPayloadPolicyWrapper } from "../openai-completions-payload-policy.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
@@ -64,11 +62,6 @@ const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
   "openai-chatgpt-responses",
   "azure-openai-responses",
 ]);
-
-/** True when a provider API accepts GPT parallel-tool-call payload settings. */
-function supportsGptParallelToolCallsPayload(api: unknown): boolean {
-  return typeof api === "string" && GPT_PARALLEL_TOOL_CALLS_APIS.has(api);
-}
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -121,19 +114,13 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   seed?: number;
   stop?: string[];
 };
-type SupportedTransport = AgentRuntimeTransport;
-
-function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
+function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | undefined {
   return value === "sse" ||
     value === "websocket" ||
     value === "websocket-cached" ||
     value === "auto"
     ? value
     : undefined;
-}
-
-function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
-  return Object.hasOwn(settings, "transport");
 }
 
 export function resolvePreparedExtraParams(params: {
@@ -147,7 +134,7 @@ export function resolvePreparedExtraParams(params: {
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
-  resolvedTransport?: SupportedTransport;
+  resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
@@ -213,19 +200,6 @@ export function resolvePreparedExtraParams(params: {
   return result;
 }
 
-function sanitizeExtraParamsRecord(
-  value: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
-    ),
-  );
-}
-
 function sanitizeExtraParamsOverride(value: Record<string, unknown> | undefined) {
   return value && Object.keys(value).length > 0
     ? sanitizeExtraParamsRecord(
@@ -253,21 +227,11 @@ function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined)
   return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
 }
 
-function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
-  provider: string;
-  modelId: string;
-}): boolean {
-  if (params.provider !== "openai") {
-    return false;
-  }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId);
-}
-
 function applyDefaultOpenAIGptRuntimeParams(
   params: { provider: string; modelId: string },
   merged: Record<string, unknown>,
 ): void {
-  if (!shouldApplyDefaultOpenAIGptRuntimeParams(params)) {
+  if (params.provider !== "openai" || !/^gpt-5(?:[.-]|$)/i.test(params.modelId)) {
     return;
   }
   if (
@@ -284,10 +248,10 @@ function applyDefaultOpenAIGptRuntimeParams(
 export function resolveAgentTransportOverride(params: {
   settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
-}): SupportedTransport | undefined {
+}): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
   const projectSettings = params.settingsManager.getProjectSettings();
-  if (hasExplicitTransportSetting(globalSettings) || hasExplicitTransportSetting(projectSettings)) {
+  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
@@ -296,13 +260,10 @@ export function resolveAgentTransportOverride(params: {
 export function resolveExplicitSettingsTransport(params: {
   settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
   sessionTransport: unknown;
-}): SupportedTransport | undefined {
+}): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
   const projectSettings = params.settingsManager.getProjectSettings();
-  if (
-    !hasExplicitTransportSetting(globalSettings) &&
-    !hasExplicitTransportSetting(projectSettings)
-  ) {
+  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -380,27 +341,19 @@ function createStreamFnWithExtraParams(
     streamParams.cachedContent = cachedContent.trim();
   }
 
-  // Resolve sampling / repetition params and add to streamParams
-  // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
-  // Resolve aliased params: camelCase (runtime/request) checked first so
-  // per-request gateway overrides take priority over configured snake_case values.
-  const resolvedFrequencyPenalty = resolveAliasedParamValue(
-    [extraParams],
+  // Camel-case request overrides win over configured snake-case penalties.
+  // Transports still decide which API accepts each sampling parameter.
+  for (const keys of [
     ["frequencyPenalty", "frequency_penalty"],
-  );
-  const resolvedPresencePenalty = resolveAliasedParamValue(
-    [extraParams],
     ["presencePenalty", "presence_penalty"],
-  );
-  const resolvedSeed = extraParams.seed;
-  if (typeof resolvedFrequencyPenalty === "number") {
-    streamParams.frequencyPenalty = resolvedFrequencyPenalty;
+  ] as const) {
+    const value = resolveAliasedParamValue([extraParams], keys);
+    if (typeof value === "number") {
+      streamParams[keys[0]] = value;
+    }
   }
-  if (typeof resolvedPresencePenalty === "number") {
-    streamParams.presencePenalty = resolvedPresencePenalty;
-  }
-  if (typeof resolvedSeed === "number") {
-    streamParams.seed = resolvedSeed;
+  if (typeof extraParams.seed === "number") {
+    streamParams.seed = extraParams.seed;
   }
   const resolvedStop = normalizeStopSequences(extraParams.stop);
   if (resolvedStop) {
@@ -426,7 +379,7 @@ function createStreamFnWithExtraParams(
   }
 
   const underlying = requireBaseStreamFn(baseStreamFn);
-  const wrappedStreamFn: StreamFn = (callModel, context, options) => {
+  return (callModel, context, options) => {
     const cacheRetention = resolveCacheRetention(
       extraParams,
       provider,
@@ -446,30 +399,6 @@ function createStreamFnWithExtraParams(
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
     });
   };
-
-  return wrappedStreamFn;
-}
-
-function resolveAliasedParamValue(
-  sources: Array<Record<string, unknown> | undefined>,
-  keys: readonly string[],
-): unknown {
-  let resolved: unknown = undefined;
-  let seen = false;
-  for (const source of sources) {
-    if (!source) {
-      continue;
-    }
-    for (const key of keys) {
-      if (!Object.hasOwn(source, key)) {
-        continue;
-      }
-      resolved = source[key];
-      seen = true;
-      break;
-    }
-  }
-  return seen ? resolved : undefined;
 }
 
 function canonicalizeExtraParamAlias(
@@ -518,7 +447,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
-    if (!supportsGptParallelToolCallsPayload(model.api)) {
+    if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -530,123 +459,13 @@ function createParallelToolCallsWrapper(
   };
 }
 
-function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean {
-  if (model.api !== "openai-completions") {
-    return false;
-  }
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>)
-      : undefined;
-  const capabilities =
-    getModelProviderRequestRouteFacts(model)?.capabilities ??
-    resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: model.api,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      compat,
-      capability: "llm",
-      transport: "stream",
-    }).capabilities;
-  return !capabilities.usesKnownNativeOpenAIRoute;
-}
-
-function createOpenAICompletionsStoreCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = requireBaseStreamFn(baseStreamFn);
-  return (model, context, options) => {
-    if (!shouldStripOpenAICompletionsStore(model as ProviderRuntimeModel)) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      delete payloadObj.store;
-    });
-  };
-}
-
-function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(sanitizeExtraParamsRecord(value) ?? {}).filter(
-      ([, entry]) => entry !== undefined,
-    ),
-  );
-}
-
-function resolveExtraBodyRecord(
-  value: unknown,
-  param: "extra_body" | "chat_template_kwargs",
-): Record<string, unknown> | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    log.warn(
-      `ignoring invalid ${param} param: ${typeof value === "string" ? value : typeof value}`,
-    );
-    return undefined;
-  }
-  const record = sanitizeExtraBodyRecord(value as Record<string, unknown>);
-  return Object.keys(record).length > 0 ? record : undefined;
-}
-
-function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
-  baseStreamFn: StreamFn | undefined;
-  configured: Record<string, unknown>;
-}): StreamFn {
-  const underlying = requireBaseStreamFn(params.baseStreamFn);
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const existing = payloadObj.chat_template_kwargs;
-      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-        payloadObj.chat_template_kwargs = {
-          ...(existing as Record<string, unknown>),
-          ...params.configured,
-        };
-        return;
-      }
-      payloadObj.chat_template_kwargs = params.configured;
-    });
-  };
-}
-
-const FRAMEWORK_MANAGED_EXTRA_BODY_KEYS = new Set(["messages", "model", "stream"]);
-
-function createOpenAICompletionsExtraBodyWrapper(
-  baseStreamFn: StreamFn | undefined,
-  extraBody: Record<string, unknown>,
-): StreamFn {
-  const underlying = requireBaseStreamFn(baseStreamFn);
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const clobberedManagedKeys = Object.keys(extraBody).filter(
-        (key) => Object.hasOwn(payloadObj, key) && FRAMEWORK_MANAGED_EXTRA_BODY_KEYS.has(key),
-      );
-      if (clobberedManagedKeys.length > 0) {
-        log.warn(
-          `extra_body overrides framework-managed request keys: ${clobberedManagedKeys.join(", ")}`,
-        );
-      }
-      Object.assign(payloadObj, extraBody);
-    });
-  };
-}
-
 type ApplyExtraParamsContext = {
   agent: { streamFn?: StreamFn };
-  cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
-  agentDir?: string;
-  workspaceDir?: string;
   thinkingLevel?: ProviderThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
-  resolvedExtraParams?: Record<string, unknown>;
   override?: Record<string, unknown>;
 };
 
@@ -737,30 +556,10 @@ function applyPostPluginStreamWrappers(
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
-  const rawChatTemplateKwargs = resolveAliasedParamValue(
+  ctx.agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
+    requireBaseStreamFn(ctx.agent.streamFn),
     [ctx.effectiveExtraParams, ctx.override],
-    ["chat_template_kwargs", "chatTemplateKwargs"],
   );
-  const configuredChatTemplateKwargs = resolveExtraBodyRecord(
-    rawChatTemplateKwargs,
-    "chat_template_kwargs",
-  );
-  if (configuredChatTemplateKwargs) {
-    ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      configured: configuredChatTemplateKwargs,
-    });
-  }
-
-  const rawExtraBody = resolveAliasedParamValue(
-    [ctx.effectiveExtraParams, ctx.override],
-    ["extra_body", "extraBody"],
-  );
-  const extraBody = resolveExtraBodyRecord(rawExtraBody, "extra_body");
-  if (extraBody) {
-    ctx.agent.streamFn = createOpenAICompletionsExtraBodyWrapper(ctx.agent.streamFn, extraBody);
-  }
-  ctx.agent.streamFn = createOpenAICompletionsStoreCompatWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
@@ -928,7 +727,7 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
-  resolvedTransport?: SupportedTransport,
+  resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
     auth?: ProviderPrepareExtraParamsContext["auth"];
@@ -968,15 +767,11 @@ export function applyExtraParamsToAgent(
     });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
-    cfg,
     provider,
     modelId,
-    agentDir,
-    workspaceDir,
     thinkingLevel,
     model,
     effectiveExtraParams,
-    resolvedExtraParams,
     override,
   };
 

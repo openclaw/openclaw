@@ -1,4 +1,3 @@
-// Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html-entity-runtime";
 import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
@@ -75,19 +74,11 @@ function decodeDuckDuckGoUrl(rawUrl: string): string {
   return rawUrl;
 }
 
-function readHrefAttribute(tagAttributes: string): string {
-  return /\bhref="([^"]*)"/i.exec(tagAttributes)?.[1] ?? "";
-}
-
 function isBotChallenge(html: string): boolean {
   if (/class="[^"]*\bresult__a\b[^"]*"/i.test(html)) {
     return false;
   }
   return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
-}
-
-async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
-  return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
 function parseDuckDuckGoHtml(html: string, count: number): DuckDuckGoResult[] {
@@ -99,7 +90,7 @@ function parseDuckDuckGoHtml(html: string, count: number): DuckDuckGoResult[] {
   for (const match of html.matchAll(resultRegex)) {
     const rawAttributes = match[1] ?? "";
     const rawTitle = match[2] ?? "";
-    const rawUrl = readHrefAttribute(rawAttributes);
+    const rawUrl = /\bhref="([^"]*)"/i.exec(rawAttributes)?.[1] ?? "";
     const matchEnd = (match.index ?? 0) + match[0].length;
     const trailingHtml = html.slice(matchEnd);
     const nextResultIndex = trailingHtml.search(nextResultRegex);
@@ -188,7 +179,7 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
-      const html = await readDuckDuckGoHtmlResponse(response);
+      const html = await readProviderTextResponse(response, "DuckDuckGo search");
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }

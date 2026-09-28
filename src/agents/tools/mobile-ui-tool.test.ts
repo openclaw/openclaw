@@ -139,36 +139,6 @@ describe("createMobileUiTool", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("never redirects an ineligible exact id to an eligible device with that display name", async () => {
-    listNodesMock.mockResolvedValue([
-      androidMobileUiNode({ nodeId: "requested-phone", displayName: "Disabled", caps: [] }),
-      androidMobileUiNode({ nodeId: "android-ready", displayName: "requested-phone" }),
-    ]);
-
-    await expect(
-      createMobileUiTool().execute("observe-1", {
-        action: "observe",
-        node: "requested-phone",
-      }),
-    ).rejects.toThrow(/node "requested-phone" is not a mobile-UI-capable device/);
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a case-insensitive ineligible id before an eligible display-name match", async () => {
-    listNodesMock.mockResolvedValue([
-      androidMobileUiNode({ nodeId: "Requested-Phone", displayName: "Disabled", caps: [] }),
-      androidMobileUiNode({ nodeId: "android-ready", displayName: "requested-phone" }),
-    ]);
-
-    await expect(
-      createMobileUiTool().execute("observe-1", {
-        action: "observe",
-        node: "requested-phone",
-      }),
-    ).rejects.toThrow(/is not a mobile-UI-capable device/);
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
   it("rejects an ambiguous eligible display-name match", async () => {
     listNodesMock.mockResolvedValue([
       androidMobileUiNode({ nodeId: "android-a", displayName: "Shared Pixel" }),

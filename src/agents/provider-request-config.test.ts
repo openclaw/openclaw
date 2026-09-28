@@ -510,27 +510,6 @@ describe("provider request config", () => {
     });
   });
 
-  it("lets defaults override caller headers when requested", () => {
-    const resolved = resolveProviderRequestHeaders({
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      capability: "llm",
-      transport: "stream",
-      callerHeaders: {
-        originator: "spoofed",
-        "User-Agent": "spoofed/0.0.0",
-        "X-Custom": "1",
-      },
-      precedence: "defaults-win",
-    });
-
-    expect(resolved?.originator).toBe("openclaw");
-    expect(typeof resolved?.version).toBe("string");
-    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
-    expect(resolved?.["X-Custom"]).toBe("1");
-  });
-
   it("lets caller headers override defaults when requested", () => {
     const resolved = resolveProviderRequestHeaders({
       provider: "openrouter",

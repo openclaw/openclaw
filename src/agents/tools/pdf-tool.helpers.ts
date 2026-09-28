@@ -1,8 +1,4 @@
-/**
- * PDF tool parsing and response helpers.
- *
- * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
- */
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   filterStringEntries,
   normalizeUniqueTrimmedStringList,
@@ -98,21 +94,18 @@ export function coercePdfAssistantText(params: {
 }): string {
   const label = `${params.provider}/${params.model}`;
   const errorMessage = params.message.errorMessage?.trim();
-  const fail = (message?: string) => {
+  if (
+    params.message.stopReason === "error" ||
+    params.message.stopReason === "aborted" ||
+    errorMessage
+  ) {
     throw new Error(
-      message ? `PDF model failed (${label}): ${message}` : `PDF model failed (${label})`,
+      errorMessage ? `PDF model failed (${label}): ${errorMessage}` : `PDF model failed (${label})`,
     );
-  };
-  if (params.message.stopReason === "error" || params.message.stopReason === "aborted") {
-    fail(errorMessage);
   }
-  if (errorMessage) {
-    fail(errorMessage);
-  }
-  const text = extractEmbeddedAssistantText(params.message);
-  const trimmed = text.trim();
-  if (trimmed) {
-    return trimmed;
+  const text = extractEmbeddedAssistantText(params.message).trim();
+  if (text) {
+    return text;
   }
   throw new Error(`PDF model returned no text (${label}).`);
 }
@@ -136,14 +129,8 @@ export function resolvePdfToolMaxTokens(
   modelMaxTokens: number | undefined,
   requestedMaxTokens = 4096,
 ) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
+  const modelLimit = asPositiveFiniteNumber(modelMaxTokens);
+  return modelLimit === undefined ? requestedMaxTokens : Math.min(requestedMaxTokens, modelLimit);
 }
 
 const CODEX_PDF_INSTRUCTIONS =
@@ -159,7 +146,6 @@ export function buildPdfExtractionContext(
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
 
-  // Add extracted text and images
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
     if (extraction.text.trim() || notice) {
@@ -177,7 +163,6 @@ export function buildPdfExtractionContext(
     }
   }
 
-  // Add the user prompt
   content.push({ type: "text", text: prompt });
 
   const systemPrompt =

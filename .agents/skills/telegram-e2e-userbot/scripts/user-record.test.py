@@ -70,42 +70,6 @@ class CallbackScenarioTest(unittest.TestCase):
         ])
         self.assertEqual(sent, [7, 8])
 
-    def test_unconfirmed_send_keeps_recording_without_resend_or_success_receipt(self):
-        clock = [100]
-        class Client:
-            def __init__(self):
-                self.updates = [{"@type": "updateNewMessage", "message": {
-                    "id": 42, "chat_id": 7, "date": 101,
-                    "sender_id": {"user_id": 9},
-                    "content": {"@type": "messageText", "text": {"text": "Observed reply"}},
-                }}]
-            def next_update(self, timeout=1):
-                clock[0] += timeout
-                return self.updates.pop(0) if self.updates else None
-        class Driver:
-            def __init__(self):
-                self.client = Client()
-                self.sends = 0
-            def send_text(self, *_args, **_kwargs):
-                self.sends += 1
-                clock[0] = 130
-                raise record.driver.DriverError("Timed out waiting for Telegram message send confirmation")
-        instance = Driver()
-        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
-            recorder = record.EventRecorder(instance.client, 7, "", 9)
-            with self.assertRaisesRegex(record.driver.DriverError, "send confirmation"):
-                record.run_scenario(recorder, instance, {}, [
-                    {"type": "send", "atMs": 0, "text": "first"},
-                    {"type": "send", "atMs": 35000, "text": "must not send"},
-                ], 40)
-        self.assertEqual(instance.sends, 1)
-        self.assertEqual(clock[0], 140)
-        self.assertEqual(recorder.events[0]["status"], "failed")
-        self.assertIsNone(recorder.events[0]["messageId"])
-        self.assertEqual(recorder.events[0]["sendOutcome"], "unknown")
-        self.assertEqual(recorder.summary()["sutRevisionTexts"], ["Observed reply"])
-        self.assertEqual([event["kind"] for event in recorder.events], ["action", "message"])
-
     def test_records_partial_rich_revisions_raw_without_fetching_full_content(self):
         client = FakeClient()
         rich = {

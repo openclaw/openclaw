@@ -107,7 +107,7 @@ export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): 
 
 export async function runChannelIngressDeadLettersHealth(): Promise<void> {
   const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
-  noteChannelIngressDeadLetters();
+  await noteChannelIngressDeadLetters();
 }
 
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {

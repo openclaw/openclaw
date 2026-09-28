@@ -19,6 +19,12 @@ type PromptContextRecord = Parameters<
 export function createHarness(params?: {
   answerMessageId?: number;
   answerStream?: DraftLaneState["stream"] | null;
+  resolveFinalPayloadCandidate?: Parameters<
+    typeof createLaneTextDeliverer
+  >[0]["resolveFinalPayloadCandidate"];
+  resolveFinalPresentationText?: Parameters<
+    typeof createLaneTextDeliverer
+  >[0]["resolveFinalPresentationText"];
 }) {
   const answer =
     params?.answerStream === null
@@ -68,6 +74,8 @@ export function createHarness(params?: {
     clearDraftLane,
     editStreamMessage,
     createPromptContextSequence,
+    resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
+    resolveFinalPresentationText: params?.resolveFinalPresentationText,
     log: () => {},
     markDelivered,
   });

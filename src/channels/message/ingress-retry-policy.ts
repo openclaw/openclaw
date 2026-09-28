@@ -59,11 +59,6 @@ function resolveConfig(config?: IngressRetryPolicyConfig) {
   };
 }
 
-/** Next attempt number after a failed dispatch (1-based for the attempt just finished). */
-function resolveIngressAttemptNumber(event: IngressRetryEventFacts): number {
-  return (event.attempts ?? 0) + 1;
-}
-
 /** Remaining backoff delay before a released event may be claimed again. */
 export function resolveIngressRetryDelayMs(
   event: IngressRetryEventFacts,
@@ -107,7 +102,7 @@ export function resolveIngressFailureDisposition(params: {
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
   const { maxAttempts } = resolveConfig(params.config);
-  const attempt = resolveIngressAttemptNumber(params.event);
+  const attempt = (params.event.attempts ?? 0) + 1;
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
   if (nonRetryable) {

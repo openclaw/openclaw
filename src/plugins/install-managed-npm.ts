@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
+import { clean as cleanSemver } from "semver";
 import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
 import {
   installPackageDir,
@@ -27,6 +27,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromInstalledPackageDir } from "./install-installed-package.js";
@@ -381,7 +382,10 @@ export async function installPluginFromManagedNpmRoot(
             fs.rm(packagePath, { recursive: true, force: true }),
           ),
         );
-        freshCache = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-npm-cache-" });
+        freshCache = await tempWorkspace({
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "openclaw-npm-cache-",
+        });
         install = await runCommandWithTimeout(npmInstallArgs, {
           ...npmInstallOptions,
           env: {
@@ -550,6 +554,23 @@ export async function installPluginFromManagedNpmRoot(
     });
     if (!result.ok) {
       return result;
+    }
+    if (result.manifestName !== params.packageName) {
+      return {
+        ok: false,
+        error: `npm install produced package ${result.manifestName ?? "<missing>"}, expected ${params.packageName}`,
+      };
+    }
+    const expectedVersion = params.npmResolution.version;
+    if (expectedVersion && result.version !== expectedVersion) {
+      // npm normalizes registry versions without rewriting the packed manifest.
+      const installedVersion = result.version ? cleanSemver(result.version, { loose: true }) : null;
+      if (!installedVersion || installedVersion !== cleanSemver(expectedVersion, { loose: true })) {
+        return {
+          ok: false,
+          error: `npm install produced ${params.packageName} version ${result.version ?? "<missing>"}, expected ${expectedVersion}`,
+        };
+      }
     }
     await params.onBeforePluginArtifactCommit?.({
       pluginId: result.pluginId,

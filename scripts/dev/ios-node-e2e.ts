@@ -101,14 +101,13 @@ if (!urlRaw || !token) {
 }
 
 const waitSeconds = parseWaitSeconds(getArg("--wait-seconds"));
-const { createGatewayWsClient, resolveGatewayUrl } = await import("./gateway-ws-client.ts");
+const { createGatewayWsClient, resolveGatewayUrl } = await import("../lib/gateway-ws-client.ts");
 const url = resolveGatewayUrl(urlRaw);
 
 const isoNow = () => new Date().toISOString();
 const isoMinusMs = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 type TestCase = {
-  id: string;
   command: string;
   params?: unknown;
   timeoutMs?: number;
@@ -273,47 +272,39 @@ async function main() {
   }
 
   const tests: TestCase[] = [
-    { id: "device.info", command: "device.info" },
-    { id: "device.status", command: "device.status" },
+    { command: "device.info" },
+    { command: "device.status" },
     {
-      id: "system.notify",
       command: "system.notify",
       params: { title: "OpenClaw E2E", body: `ios-node-e2e @ ${isoNow()}`, delivery: "system" },
     },
     {
-      id: "contacts.search",
       command: "contacts.search",
       params: { query: null, limit: 5 },
     },
     {
-      id: "calendar.events",
       command: "calendar.events",
       params: { startISO: isoMinusMs(6 * 60 * 60 * 1000), endISO: isoNow(), limit: 10 },
     },
     {
-      id: "reminders.list",
       command: "reminders.list",
       params: { status: "incomplete", limit: 10 },
     },
     {
-      id: "motion.pedometer",
       command: "motion.pedometer",
       params: { startISO: isoMinusMs(60 * 60 * 1000), endISO: isoNow() },
     },
     {
-      id: "photos.latest",
       command: "photos.latest",
       params: { limit: 1, maxWidth: 512, quality: 0.7 },
     },
     {
-      id: "camera.snap",
       command: "camera.snap",
       params: { facing: "back", maxWidth: 768, quality: 0.7, format: "jpeg" },
       dangerous: true,
       timeoutMs: 20_000,
     },
     {
-      id: "screen.record",
       command: "screen.record",
       params: { durationMs: 2_000, fps: 15, includeAudio: false },
       dangerous: true,
@@ -342,7 +333,7 @@ async function main() {
       },
       (t.timeoutMs ?? 12_000) + 2_000,
     ).catch((err: unknown) => {
-      results.push({ id: t.id, ok: false, error: formatErr(err) });
+      results.push({ id: t.command, ok: false, error: formatErr(err) });
       return null;
     });
 
@@ -351,18 +342,18 @@ async function main() {
     }
 
     if (!invokeRes.ok) {
-      results.push({ id: t.id, ok: false, error: invokeRes.error });
+      results.push({ id: t.command, ok: false, error: invokeRes.error });
       continue;
     }
 
     const commandPayload = commandPayloadFromInvokePayload(invokeRes.payload);
     const payloadError = payloadShapeError(t.command, commandPayload);
     if (payloadError) {
-      results.push({ id: t.id, ok: false, error: payloadError, payload: invokeRes.payload });
+      results.push({ id: t.command, ok: false, error: payloadError, payload: invokeRes.payload });
       continue;
     }
 
-    results.push({ id: t.id, ok: true, payload: invokeRes.payload });
+    results.push({ id: t.command, ok: true, payload: invokeRes.payload });
   }
 
   if (jsonOut) {
@@ -377,7 +368,6 @@ async function main() {
       results,
     });
   } else {
-    const pad = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
     const rows = results.map((r) => ({
       cmd: r.id,
       ok: r.ok ? "ok" : "fail",
@@ -388,7 +378,7 @@ async function main() {
     writeStdoutLine(`dangerous: ${dangerous ? "on" : "off"}`);
     writeStdoutLine();
     for (const r of rows) {
-      writeStdoutLine(`${pad(r.cmd, width)}  ${pad(r.ok, 4)}  ${r.note}`);
+      writeStdoutLine(`${r.cmd.padEnd(width)}  ${r.ok.padEnd(4)}  ${r.note}`);
     }
   }
 

@@ -12,7 +12,10 @@ import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { withProviderCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
+import {
+  recordProviderCatalogModels,
+  withProviderCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import {
@@ -55,15 +58,6 @@ import {
 } from "./models-config.providers.secrets.js";
 
 const log = createSubsystemLogger("agents/model-providers");
-
-const PROVIDER_IMPLICIT_MERGERS: Partial<
-  Record<
-    string,
-    (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
-  >
-> = {
-  ollama: ({ implicit }) => implicit,
-};
 
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
@@ -110,18 +104,6 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function mergeImplicitProviderSet(
-  target: Record<string, ProviderConfig>,
-  additions: Record<string, ProviderConfig> | undefined,
-): void {
-  if (!additions) {
-    return;
-  }
-  for (const [key, value] of Object.entries(additions)) {
-    target[key] = value;
-  }
-}
-
 function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
@@ -129,12 +111,8 @@ function mergeImplicitProviderConfig(params: {
   sourceModelFields?: SourceModelFields;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
-  if (!existing) {
+  if (!existing || providerId === "ollama") {
     return implicit;
-  }
-  const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
-  if (merge) {
-    return merge({ existing, implicit });
   }
   return mergeProviderModels(implicit, existing, {
     providerId,
@@ -142,49 +120,22 @@ function mergeImplicitProviderConfig(params: {
   });
 }
 
-function resolveImplicitProviderAuthMarker(params: {
-  ctx: ImplicitProviderContext;
-  providerId: string;
-  provider: ProviderConfig;
-}): ProviderConfig {
-  return resolveMissingProviderApiKey({
-    providerKey: params.providerId,
-    provider: params.provider,
-    env: params.ctx.env,
-    profileApiKey: undefined,
-  });
-}
-
-function resolveConfiguredImplicitProvider(params: {
-  configuredProviders?: Record<string, ProviderConfig> | null;
-  providerIds: readonly string[];
-}): ProviderConfig | undefined {
-  for (const providerId of params.providerIds) {
-    const configured = findNormalizedProviderValue(
-      params.configuredProviders ?? undefined,
-      providerId,
-    );
-    if (configured) {
-      return configured;
-    }
-  }
-  return undefined;
-}
-
 function resolveExistingImplicitProviderFromContext(params: {
   ctx: ImplicitProviderContext;
   providerIds: readonly string[];
 }): ProviderConfig | undefined {
-  return (
-    resolveConfiguredImplicitProvider({
-      configuredProviders: params.ctx.explicitProviders,
-      providerIds: params.providerIds,
-    }) ??
-    resolveConfiguredImplicitProvider({
-      configuredProviders: params.ctx.config?.models?.providers,
-      providerIds: params.providerIds,
-    })
-  );
+  for (const configuredProviders of [
+    params.ctx.explicitProviders,
+    params.ctx.config?.models?.providers,
+  ]) {
+    for (const providerId of params.providerIds) {
+      const configured = findNormalizedProviderValue(configuredProviders ?? undefined, providerId);
+      if (configured) {
+        return configured;
+      }
+    }
+  }
+  return undefined;
 }
 
 function hasRuntimeProviderCatalog(
@@ -295,6 +246,7 @@ async function resolvePluginImplicitProviders(
     // Static catalogs are preferred for entries-only discovery and as a fallback
     // when runtime discovery produces no usable provider config.
     const hasPreparedStaticResult = preparedStaticResults?.has(provider) === true;
+    let acceptedRuntimeCatalog = false;
     const normalizedResult = await withProviderCatalogExpiry(
       async () => {
         let result;
@@ -319,6 +271,7 @@ async function resolvePluginImplicitProviders(
             timeoutMs:
               ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
           });
+          acceptedRuntimeCatalog = Boolean(result);
         }
         if (!result && !useStaticCatalog && provider.staticCatalog) {
           result = await runProviderStaticCatalog({ provider });
@@ -337,6 +290,12 @@ async function resolvePluginImplicitProviders(
       ) {
         continue;
       }
+      if (acceptedRuntimeCatalog) {
+        recordProviderCatalogModels(
+          providerId,
+          implicitProvider.models.map(({ id }) => id),
+        );
+      }
       const mergedProvider = mergeImplicitProviderConfig({
         providerId,
         existing:
@@ -353,10 +312,11 @@ async function resolvePluginImplicitProviders(
         implicit: implicitProvider,
         sourceModelFields: ctx.sourceModelFields,
       });
-      discovered[providerId] = resolveImplicitProviderAuthMarker({
-        ctx,
-        providerId,
+      discovered[providerId] = resolveMissingProviderApiKey({
+        providerKey: providerId,
         provider: mergedProvider,
+        env: ctx.env,
+        profileApiKey: undefined,
       });
     }
   }
@@ -692,7 +652,7 @@ export async function resolveImplicitProviders(
       )
     : undefined;
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
-    mergeImplicitProviderSet(
+    Object.assign(
       providers,
       await resolvePluginImplicitProviders(
         context,

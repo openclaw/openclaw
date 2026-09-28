@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
@@ -85,26 +86,6 @@ function appendCapturedOutput(
 
 function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
-}
-
-function resolveElapsedTimeoutReason(params: {
-  nowMs: number;
-  overallTimeoutDeadlineMs: number | null;
-  noOutputTimeoutDeadlineMs: number | null;
-}): TerminationReason | null {
-  if (
-    params.overallTimeoutDeadlineMs !== null &&
-    params.nowMs >= params.overallTimeoutDeadlineMs &&
-    (params.noOutputTimeoutDeadlineMs === null ||
-      params.nowMs < params.noOutputTimeoutDeadlineMs ||
-      params.overallTimeoutDeadlineMs <= params.noOutputTimeoutDeadlineMs)
-  ) {
-    return "overall-timeout";
-  }
-  return params.noOutputTimeoutDeadlineMs !== null &&
-    params.nowMs >= params.noOutputTimeoutDeadlineMs
-    ? "no-output-timeout"
-    : null;
 }
 
 export function createProcessSupervisor(): ProcessSupervisor & {
@@ -330,11 +311,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     const createDeadline = (reason: "overall-timeout" | "no-output-timeout", value?: number) => {
       const durationMs = normalizeTimeoutDuration(value);
       let deadlineMs: number | null = null;
-      let timer: NodeJS.Timeout | undefined;
+      let timer: ReturnType<typeof setProcessTimeout> | undefined;
       // Re-arm bounded intervals: a long deadline must not overflow Node's timer cap.
       const schedule = (remainingMs: number, deadline: number) => {
         const intervalMs = resolveTimerTimeoutMs(remainingMs, 1);
-        timer = setTimeout(() => {
+        timer = setProcessTimeout(() => {
           if (resultSettled) {
             return;
           }
@@ -354,11 +335,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
           if (!durationMs || resultSettled) {
             return;
           }
-          clearTimeout(timer);
+          timer?.clear();
           deadlineMs = performance.now() + durationMs;
           schedule(durationMs, deadlineMs);
         },
-        clear: () => clearTimeout(timer),
+        clear: () => timer?.clear(),
       };
     };
     const overallDeadline = createDeadline("overall-timeout", input.timeoutMs);
@@ -601,12 +582,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const waitOutcome = Promise.allSettled([
         (async (): Promise<RunExit> => {
           const result = await adapter.wait();
-          const deadlineReason = resolveElapsedTimeoutReason({
-            nowMs: performance.now(),
-            overallTimeoutDeadlineMs: overallDeadline.deadlineMs,
-            noOutputTimeoutDeadlineMs: outputDeadline.deadlineMs,
-          });
-          const terminalReason = forcedReason ?? deadlineReason;
+          const terminalReason = forcedReason;
           settleResult(adapter);
 
           const reason: TerminationReason =

@@ -5,11 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
-import {
-  ensureRepositoryWorkspacePendingResultSchema,
-  hasRepositoryWorkspacePendingResultSchema,
-} from "./openclaw-state-db-schema-additive.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { ensureRepositoryWorkspacePendingResultSchema } from "./openclaw-state-db-schema-additive.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -82,28 +79,30 @@ it("retries rolled-back first-use pending owner DDL and preserves the committed 
   database.db.exec(
     "ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id",
   );
-  expect(hasRepositoryWorkspacePendingResultSchema(database.db)).toBe(false);
+  const hasPendingRepositoryColumn = (db = database.db) =>
+    tableHasColumn(db, "worker_workspace_pending_results", "repository_workspace_id");
+  expect(hasPendingRepositoryColumn()).toBe(false);
   expect(() =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         ensureRepositoryWorkspacePendingResultSchema(db);
-        expect(hasRepositoryWorkspacePendingResultSchema(db)).toBe(true);
+        // A later first-use writer must not cache this uncommitted column.
+        ensureRepositoryWorkspacePendingResultSchema(db);
+        expect(hasPendingRepositoryColumn(db)).toBe(true);
         throw new Error("pending result rolled back");
       },
       { database },
     ),
   ).toThrow("pending result rolled back");
-  expect(hasRepositoryWorkspacePendingResultSchema(database.db)).toBe(false);
+  expect(hasPendingRepositoryColumn()).toBe(false);
   runOpenClawStateWriteTransaction(({ db }) => ensureRepositoryWorkspacePendingResultSchema(db), {
     database,
   });
-  expect(hasRepositoryWorkspacePendingResultSchema(database.db)).toBe(true);
+  expect(hasPendingRepositoryColumn()).toBe(true);
   closeOpenClawStateDatabaseByPath(database.path);
-  expect(
-    hasRepositoryWorkspacePendingResultSchema(
-      openOpenClawStateDatabase({ path: database.path }).db,
-    ),
-  ).toBe(true);
+  expect(hasPendingRepositoryColumn(openOpenClawStateDatabase({ path: database.path }).db)).toBe(
+    true,
+  );
 });
 
 it("creates one stable logical-session owner without widening replayed setup intent", async () => {

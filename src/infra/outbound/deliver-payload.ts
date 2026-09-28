@@ -15,10 +15,7 @@ import type {
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
-import {
-  summarizeOutboundPayloadForTransport,
-  type NormalizedOutboundPayload,
-} from "./payloads.js";
+import type { NormalizedOutboundPayload } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 
@@ -203,9 +200,7 @@ export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload
     : payload;
 }
 
-export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
-  return summarizeOutboundPayloadForTransport(payload);
-}
+export { summarizeOutboundPayloadForTransport as buildPayloadSummary } from "./payloads.js";
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
   return resolveReceiptSourceId(result) !== undefined;

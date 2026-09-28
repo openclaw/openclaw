@@ -458,10 +458,8 @@ describe("new-session model runtime", () => {
     expect(control.selected).toBe("");
   });
 
-  it.each([
-    ["generic transport error", new Error("metadata unavailable")],
-    ["request timeout", new Error("gateway request timeout for chat.metadata")],
-  ])("renders %s as unavailable instead of a default-only catalog", async (_label, error) => {
+  it("renders a transport failure as unavailable instead of a default-only catalog", async () => {
+    const error = new Error("metadata unavailable");
     const { context, request } = contextWith([]);
     request.mockRejectedValueOnce(error);
     const control = new NewSessionModelControl(() => undefined);

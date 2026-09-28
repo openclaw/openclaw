@@ -1,6 +1,4 @@
-/**
- * Gemini CLI bundle MCP adapter that writes temporary system settings files.
- */
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
@@ -16,9 +14,7 @@ const GEMINI_MCP_SERVER_FIELDS = { strings: ["type"], booleans: ["trust"] } as c
 
 async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
   const raw = await tryReadJson<unknown>(filePath);
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? ({ ...raw } as Record<string, unknown>)
-    : {};
+  return isRecord(raw) ? { ...raw } : {};
 }
 
 async function readGeminiBaseSettings(
@@ -32,10 +28,7 @@ async function readGeminiBaseSettings(
 }
 
 function mergeGeminiWebSearchDisabled(base: Record<string, unknown>): Record<string, unknown> {
-  const existing =
-    isRecord(base.tools) && Array.isArray(base.tools.exclude)
-      ? base.tools.exclude.filter((name): name is string => typeof name === "string")
-      : [];
+  const existing = filterStringEntries(isRecord(base.tools) ? base.tools.exclude : undefined);
   return applyMergePatch(base, {
     tools: { exclude: [...new Set([...existing, "google_web_search"])] },
   }) as Record<string, unknown>;
@@ -91,13 +84,9 @@ function normalizeGeminiServerConfig(
     );
   }
   const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
-  const included = Array.isArray(toolFilter.include)
-    ? toolFilter.include.filter((name): name is string => typeof name === "string")
-    : [];
+  const included = filterStringEntries(toolFilter.include);
   if (included.length > 0) {
-    const existing = Array.isArray(server.includeTools)
-      ? server.includeTools.filter((name): name is string => typeof name === "string")
-      : [];
+    const existing = filterStringEntries(server.includeTools);
     const finalIncluded =
       existing.length > 0
         ? included.filter((name) => existing.includes(name)).toSorted()
@@ -107,13 +96,9 @@ function normalizeGeminiServerConfig(
     }
     next.includeTools = finalIncluded;
   }
-  const filteredDenied = Array.isArray(toolFilter.exclude)
-    ? toolFilter.exclude.filter((name): name is string => typeof name === "string")
-    : [];
+  const filteredDenied = filterStringEntries(toolFilter.exclude);
   if (deniedTools?.length || filteredDenied.length > 0) {
-    const existing = Array.isArray(server.excludeTools)
-      ? server.excludeTools.filter((name): name is string => typeof name === "string")
-      : [];
+    const existing = filterStringEntries(server.excludeTools);
     next.excludeTools = [
       ...new Set([...existing, ...filteredDenied, ...(deniedTools ?? [])]),
     ].toSorted();
@@ -121,7 +106,6 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
-/** Writes merged Gemini system settings and returns env plus cleanup hook. */
 export async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,
@@ -129,25 +113,23 @@ export async function writeGeminiSystemSettings(
   webSearchEnabled?: boolean,
 ): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
   const base = await readGeminiBaseSettings(inheritedEnv);
-  const normalizedConfig: BundleMcpConfig = {
-    mcpServers: Object.fromEntries(
-      Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
-        const normalized = normalizeGeminiServerConfig(
-          server,
-          inheritedEnv,
-          mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined,
-        );
-        return normalized ? [[name, normalized]] : [];
-      }),
-    ) as BundleMcpConfig["mcpServers"],
-  };
+  const mcpServers = Object.fromEntries(
+    Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
+      const normalized = normalizeGeminiServerConfig(
+        server,
+        inheritedEnv,
+        mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined,
+      );
+      return normalized ? [[name, normalized]] : [];
+    }),
+  );
   const settings = applyMergePatch(
     webSearchEnabled === false ? mergeGeminiWebSearchDisabled(base) : base,
     {
       mcp: {
-        allowed: Object.keys(normalizedConfig.mcpServers),
+        allowed: Object.keys(mcpServers),
       },
-      mcpServers: normalizedConfig.mcpServers,
+      mcpServers,
     },
   ) as Record<string, unknown>;
   if (!isRecord(settings.mcp) || !isRecord(settings.mcpServers)) {

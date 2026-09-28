@@ -337,18 +337,22 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun branchesListParsesAllFields() =
+  fun refreshBranchesPublishesAllFieldsIncludingOptionalTimestamps() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "sessions.branches.list",
-        """{"branches":[{"leafEntryId":"leaf-a","headline":"Earlier idea","messageCount":4,"updatedAt":"2026-07-20T12:00:00Z","active":false}]}""",
+        """{"branches":[{"leafEntryId":"leaf-a","headline":"Earlier idea","messageCount":4,"updatedAt":"2026-07-20T12:00:00Z","active":false},{"leafEntryId":"leaf-b","headline":"Current work","messageCount":1,"updatedAt":null,"active":true}]}""",
       )
       val controller = controller(this, gateway)
 
+      assertTrue(controller.refreshSessionBranches())
       assertEquals(
-        listOf(SessionBranch("leaf-a", "Earlier idea", 4, "2026-07-20T12:00:00Z", active = false)),
-        controller.listSessionBranches("main"),
+        listOf(
+          SessionBranch("leaf-a", "Earlier idea", 4, "2026-07-20T12:00:00Z", active = false),
+          SessionBranch("leaf-b", "Current work", 1, updatedAt = null, active = true),
+        ),
+        controller.sessionBranches.value,
       )
       val params = json.parseToJsonElement(gateway.calls.single().paramsJson!!).jsonObject
       assertEquals("main", params.getValue("agentId").jsonPrimitive.content)
@@ -380,18 +384,7 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun listFailureReturnsNullAndSurfacesError() =
-    runTest {
-      val gateway = ScriptedGateway(json)
-      gateway.respond("sessions.branches.list") { throw IllegalStateException("offline") }
-      val controller = controller(this, gateway)
-
-      assertNull(controller.listSessionBranches("main"))
-      assertEquals("offline", controller.errorText.value)
-    }
-
-  @Test
-  fun malformedBranchesResponseRetainsTheLastKnownBranchState() =
+  fun failedBranchesRefreshRetainsTheLastKnownBranchState() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
@@ -406,22 +399,10 @@ class ChatControllerSessionActionsTest {
 
       assertFalse(controller.refreshSessionBranches())
       assertEquals(known, controller.sessionBranches.value)
-    }
 
-  @Test
-  fun nullBranchTimestampRemainsAValidOptionalField() =
-    runTest {
-      val gateway = ScriptedGateway(json)
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[{"leafEntryId":"leaf-a","headline":"Known","messageCount":1,"updatedAt":null,"active":true}]}""",
-      )
-      val controller = controller(this, gateway)
-
-      assertEquals(
-        listOf(SessionBranch("leaf-a", "Known", 1, updatedAt = null, active = true)),
-        controller.listSessionBranches("main"),
-      )
+      gateway.respond("sessions.branches.list") { throw IllegalStateException("offline") }
+      assertFalse(controller.refreshSessionBranches())
+      assertEquals(known, controller.sessionBranches.value)
     }
 
   @Test

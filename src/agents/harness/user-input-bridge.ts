@@ -300,11 +300,7 @@ function normalizeAgentHarnessUserInputOption(
   if (indexed) {
     return indexed.label;
   }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  return undefined;
+  return options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase())?.label;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

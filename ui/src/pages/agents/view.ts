@@ -1,20 +1,23 @@
-// Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsNavRow,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { t } from "../../i18n/index.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel, AgentsState } from "../../lib/agents/index.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
@@ -32,6 +35,8 @@ import { renderAgentSkills } from "./panels-skills.ts";
 import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools } from "./panels-tools-skills.ts";
 import type { AgentSkillsState } from "./skills.ts";
+
+const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
 type AgentsProps = {
   access: {
@@ -78,6 +83,7 @@ type AgentsProps = {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
+  applicationConfig?: ApplicationConfigCapability;
   identityDraft: AgentIdentityDraft;
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
@@ -138,6 +144,19 @@ type AgentsProps = {
   onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
 };
+
+export function renderAgentsPageHeader() {
+  return html`
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
+      <div>
+        <div class="page-title">${titleForRoute("agents")}</div>
+        <div class="page-subtitle">
+          ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
+        </div>
+      </div>
+    </section>
+  `;
+}
 
 export function renderAgents(props: AgentsProps) {
   const config = currentConfigObject(props.config);
@@ -281,6 +300,7 @@ export function renderAgents(props: AgentsProps) {
                       ? keyed(
                           selectedAgent.id,
                           renderAgentOverview({
+                            applicationConfig: props.applicationConfig,
                             agent: selectedAgent,
                             basePath: props.basePath,
                             defaultId,

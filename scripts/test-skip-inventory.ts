@@ -63,10 +63,6 @@ function listCandidateFiles(repoRoot: string): string[] {
   });
 }
 
-function expressionText(sourceFile: ts.SourceFile, node: ts.Node): string {
-  return node.getText(sourceFile);
-}
-
 function targetFromExpression(expression: ts.Expression): SkipInventoryTarget {
   if (ts.isIdentifier(expression) && TEST_TARGETS.has(expression.text)) {
     return expression.text as SkipInventoryTarget;
@@ -140,7 +136,7 @@ function methodReason(params: {
     return "focused-only";
   }
 
-  const sourceText = expressionText(params.sourceFile, params.textNode).toLowerCase();
+  const sourceText = params.textNode.getText(params.sourceFile).toLowerCase();
   const text = `${params.file}\n${sourceText}`.toLowerCase();
   if (
     sourceText.includes("process.platform") ||
@@ -213,15 +209,6 @@ function createFinding(params: {
   };
 }
 
-function skipAliasInitializer(
-  initializer: ts.Expression | undefined,
-): { method: TestSkipInventoryFinding["method"]; target: SkipInventoryTarget } | null {
-  if (!initializer) {
-    return null;
-  }
-  return skipMethodFromExpression(initializer);
-}
-
 function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkipInventoryFinding[] {
   const { sourceFile } = params;
   const lines = sourceFile.text.split(/\r?\n/u);
@@ -237,20 +224,16 @@ function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkip
     findings.push(
       createFinding({
         file: params.file,
-        kind: details.kind,
         lines,
-        method: details.method,
-        node: details.node,
-        reasonNode: details.reasonNode,
         sourceFile,
-        target: details.target,
+        ...details,
       }),
     );
   }
 
   function visit(node: ts.Node): void {
     if (ts.isVariableDeclaration(node)) {
-      const alias = skipAliasInitializer(node.initializer);
+      const alias = node.initializer && skipMethodFromExpression(node.initializer);
       if (alias) {
         addFinding({
           kind: "alias",

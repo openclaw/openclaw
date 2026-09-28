@@ -8,7 +8,7 @@ export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string };
 
-export const REASONING_TAG_NAMES = [
+const REASONING_TAG_NAMES = [
   "think",
   "thinking",
   "thought",
@@ -24,7 +24,7 @@ export const REASONING_TAG_NAMES = [
   "mm:thought",
   "mm:reasoning",
 ] as const;
-export const REASONING_TAG_NAME_SET = new Set<string>(REASONING_TAG_NAMES);
+const REASONING_TAG_NAME_SET = new Set<string>(REASONING_TAG_NAMES);
 const DISABLE_HTML_MARKDOWN = {
   disable: { null: ["htmlFlow", "htmlText"] },
 };
@@ -70,11 +70,12 @@ type ParsedReasoningTag =
   | { kind: "pending" }
   | { kind: "invalid"; next: number };
 
-export function parseReasoningTagAt(
+export function parseReasoningTagName(
   text: string,
   start: number,
-  final: boolean,
-): ParsedReasoningTag {
+):
+  | { kind: "invalid" | "pending" }
+  | { kind: "name"; end: number; isClose: boolean; isPrivate: boolean } {
   let cursor = skipTagWhitespace(text, start + 1);
   let isClose = false;
   if (text.charAt(cursor) === "/") {
@@ -88,25 +89,34 @@ export function parseReasoningTagAt(
   }
   const partialName = text.slice(nameStart, cursor).toLowerCase();
   if (!partialName) {
-    return cursor === text.length && !final ? { kind: "pending" } : invalidTag(text, start);
+    return { kind: cursor === text.length ? "pending" : "invalid" };
   }
   if (!REASONING_TAG_NAME_SET.has(partialName)) {
     const canBecomeKnown = REASONING_TAG_NAMES.some((name) => name.startsWith(partialName));
-    return cursor === text.length && !final && canBecomeKnown
-      ? { kind: "pending" }
-      : invalidTag(text, start);
+    return { kind: cursor === text.length && canBecomeKnown ? "pending" : "invalid" };
   }
   if (cursor === text.length) {
-    return final ? invalidTag(text, start) : { kind: "pending" };
+    return { kind: "pending" };
   }
   const boundary = text.charAt(cursor);
   if (!isTagWhitespace(boundary) && boundary !== "/" && boundary !== ">") {
-    return invalidTag(text, start);
+    return { kind: "invalid" };
   }
+  return { kind: "name", end: cursor, isClose, isPrivate: partialName === "internal" };
+}
 
+export function parseReasoningTagAt(
+  text: string,
+  start: number,
+  final: boolean,
+): ParsedReasoningTag {
+  const name = parseReasoningTagName(text, start);
+  if (name.kind !== "name") {
+    return name.kind === "pending" && !final ? { kind: "pending" } : invalidTag(text, start);
+  }
   let quote: '"' | "'" | undefined;
   let lastSignificant = "";
-  for (; cursor < text.length; cursor += 1) {
+  for (let cursor = name.end; cursor < text.length; cursor += 1) {
     const char = text.charAt(cursor);
     if (quote) {
       if (char === quote) {
@@ -128,9 +138,9 @@ export function parseReasoningTagAt(
         tag: {
           index: start,
           text: text.slice(start, end),
-          isClose,
-          isSelfClosing: !isClose && lastSignificant === "/",
-          isPrivate: partialName === "internal",
+          isClose: name.isClose,
+          isSelfClosing: !name.isClose && lastSignificant === "/",
+          isPrivate: name.isPrivate,
         },
       };
     }
@@ -146,7 +156,7 @@ function invalidTag(text: string, start: number): ParsedReasoningTag {
   return { kind: "invalid", next: nested === -1 ? text.length : nested };
 }
 
-export function skipTagWhitespace(text: string, start: number): number {
+function skipTagWhitespace(text: string, start: number): number {
   let cursor = start;
   while (cursor < text.length && isTagWhitespace(text.charAt(cursor))) {
     cursor += 1;
@@ -154,11 +164,11 @@ export function skipTagWhitespace(text: string, start: number): number {
   return cursor;
 }
 
-export function isTagWhitespace(char: string): boolean {
+function isTagWhitespace(char: string): boolean {
   return /\s/u.test(char);
 }
 
-export function isTagNameCharacter(code: number): boolean {
+function isTagNameCharacter(code: number): boolean {
   return (
     (code >= 0x30 && code <= 0x39) ||
     (code >= 0x41 && code <= 0x5a) ||
@@ -222,6 +232,21 @@ type MarkdownOwnershipOptions = {
   syntax?: "commonmark" | "gfm";
 };
 
+function appendMarkdownSource(
+  source: Pick<MarkdownInlineSource, "value" | "offsets">,
+  start: number,
+  token: Parameters<Handle>[0],
+  value: string,
+): void {
+  // A tab partly consumed by a container contributes virtual spaces to its first source unit.
+  const extra = value.length - (token.end.offset - token.start.offset);
+  for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
+    const consumed = cursor - token.start.offset;
+    source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
+  }
+  source.value += value;
+}
+
 function captureInlineSources(text: string, sources: Map<number, MarkdownInlineSource>): Extension {
   const observe: Handle = function (token) {
     const start = this.stack.findLast((entry) => entry.type === "inlineCode")?.position?.start
@@ -263,14 +288,7 @@ function captureInlineSources(text: string, sources: Map<number, MarkdownInlineS
       };
       sources.set(start, source);
     }
-    const value = this.sliceSerialize(token);
-    // A tab partly consumed by a container can contribute virtual spaces to the first source unit.
-    const extra = value.length - (token.end.offset - token.start.offset);
-    for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
-      const consumed = cursor - token.start.offset;
-      source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
-    }
-    source.value += value;
+    appendMarkdownSource(source, start, token, this.sliceSerialize(token));
   };
   return {
     enter: {
@@ -312,13 +330,7 @@ function captureIndentedSources(
       };
       sources.set(start, source);
     }
-    const value = this.sliceSerialize(token);
-    const extra = value.length - (token.end.offset - token.start.offset);
-    for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
-      const consumed = cursor - token.start.offset;
-      source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
-    }
-    source.value += value;
+    appendMarkdownSource(source, start, token, this.sliceSerialize(token));
   };
   return {
     enter: {

@@ -27,6 +27,25 @@ import {
 const mocks = getDispatchTestMocks();
 const originalPluginRegistry = getActivePluginRegistry();
 
+function useWorktreeSession(
+  entry: Partial<NonNullable<Parameters<typeof targetWithEntry>[0]>> = {},
+  worktreePath?: string,
+): void {
+  mocks.resolveTarget.mockReturnValue(
+    targetWithEntry({
+      sessionId,
+      ...entry,
+      worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+    }),
+  );
+  mocks.findLiveByOwner.mockReturnValue({
+    id: "worktree-1",
+    ownerKind: "session",
+    ownerId: sessionKey,
+    ...(worktreePath === undefined ? {} : { path: worktreePath }),
+  });
+}
+
 function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
   return {
     ...reclaimedPlacementRecord(),
@@ -123,18 +142,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("prefers an explicit profile over the per-project default", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-      path: "/repo/worktree",
-    });
+    useWorktreeSession({}, "/repo/worktree");
     const dispatch = vi.fn().mockRejectedValue(new Error("explicit dispatch reached"));
 
     await invoke(
@@ -163,18 +171,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("uses the per-project default when profileId is absent", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-      path: "/repo/worktree",
-    });
+    useWorktreeSession({}, "/repo/worktree");
     mocks.runCommandWithTimeout.mockResolvedValue({
       code: 0,
       stdout: "git@github.com:Acme/App.git\n",
@@ -209,18 +206,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("rejects a per-project mapping to an unknown profile as invalid", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-      path: "/repo/worktree",
-    });
+    useWorktreeSession({}, "/repo/worktree");
     mocks.runCommandWithTimeout.mockResolvedValue({
       code: 0,
       stdout: "https://github.com/acme/app.git\n",
@@ -258,18 +244,7 @@ describe("sessions.dispatch", () => {
     ["has no matching mapping", { code: 0, stdout: "https://github.com/acme/other.git\n" }],
     ["has no origin remote", { code: 1, stdout: "" }],
   ])("keeps explicit-profile behavior when the worktree %s", async (_label, gitResult) => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-      path: "/repo/worktree",
-    });
+    useWorktreeSession({}, "/repo/worktree");
     mocks.runCommandWithTimeout.mockResolvedValue({ ...gitResult, stderr: "" });
     const dispatch = vi.fn();
 
@@ -381,17 +356,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("delegates a provisioning placement so the dispatcher can join an identical retry", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
+    useWorktreeSession();
     const dispatch = vi.fn().mockRejectedValue(new Error("dispatch retry is not in flight"));
     const respond = await invoke(
       makeContext({
@@ -414,19 +379,10 @@ describe("sessions.dispatch", () => {
   });
 
   it("dispatches codex sessions through SSH without requiring node command allowlisting", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        agentRuntimeOverride: "codex",
-        providerOverride: "openai",
-        modelOverride: "gpt-test",
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
+    useWorktreeSession({
+      agentRuntimeOverride: "codex",
+      providerOverride: "openai",
+      modelOverride: "gpt-test",
     });
     const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
     const respond = await invoke(
@@ -463,17 +419,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("passes a per-dispatch machine class and operating system to placement", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
+    useWorktreeSession();
     const dispatch = vi.fn().mockRejectedValue(new Error("machine dispatch reached"));
     await invoke(
       makeContext({
@@ -492,18 +438,9 @@ describe("sessions.dispatch", () => {
   });
 
   it("dispatches explicit permission modes through the worker capability gate", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        permissionMode: "workspace",
-        sessionRoot: "/repo/worktree",
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
+    useWorktreeSession({
+      permissionMode: "workspace",
+      sessionRoot: "/repo/worktree",
     });
     const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
     const respond = await invoke(
@@ -527,17 +464,7 @@ describe("sessions.dispatch", () => {
   it.each(["active", "abandoned"] as const)(
     "moves an %s session back to the Gateway with exact-source CAS",
     async (sourceState) => {
-      mocks.resolveTarget.mockReturnValue(
-        targetWithEntry({
-          sessionId,
-          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-        }),
-      );
-      mocks.findLiveByOwner.mockReturnValue({
-        id: "worktree-1",
-        ownerKind: "session",
-        ownerId: sessionKey,
-      });
+      useWorktreeSession();
       const move = vi.fn().mockResolvedValue({ state: "local", generation: 7 });
       const source = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
       const placement =
@@ -588,17 +515,7 @@ describe("sessions.dispatch", () => {
   );
 
   it("resolves a worker move through the canonical destination owner", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
+    useWorktreeSession();
     const move = vi.fn().mockResolvedValue({ state: "active", generation: 12 });
 
     await invokeSessionMove(
@@ -663,17 +580,7 @@ describe("sessions.dispatch", () => {
   it.each([undefined, 2, 3])(
     "redispatches a reclaimed session with correlated identity (environment epoch: %s)",
     async (ownerEpoch) => {
-      mocks.resolveTarget.mockReturnValue(
-        targetWithEntry({
-          sessionId,
-          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-        }),
-      );
-      mocks.findLiveByOwner.mockReturnValue({
-        id: "worktree-1",
-        ownerKind: "session",
-        ownerId: sessionKey,
-      });
+      useWorktreeSession();
       const dispatchedPlacement: WorkerSessionPlacementRecord = {
         ...activePlacementRecord(),
         environmentId: "environment-2",
@@ -741,17 +648,7 @@ describe("sessions.dispatch", () => {
   );
 
   it("allows a failed placement to redispatch after its environment is proven gone", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
+    useWorktreeSession();
     const dispatch = vi.fn().mockResolvedValue({
       ...reclaimedPlacementRecord(),
       state: "active",
@@ -837,10 +734,8 @@ describe("sessions.dispatch", () => {
     },
   );
 
-  it.each([
-    ["CLI", "claude-cli"],
-    ["plugin", "test-harness"],
-  ])("rejects sessions assigned to a configured %s runtime", async (_kind, runtimeId) => {
+  it("rejects sessions assigned to a runtime without cloud placement support", async () => {
+    const runtimeId = "test-harness";
     const modelRef = "anthropic/claude-test";
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
@@ -884,17 +779,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("classifies workspace preflight rejection as an invalid request", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
+    useWorktreeSession();
     const dispatch = vi.fn().mockRejectedValue(
       Object.assign(new Error("Cloud workspace inventory exceeds its entry limit"), {
         code: "invalid_state",
@@ -919,17 +804,7 @@ describe("sessions.dispatch", () => {
   });
 
   it("surfaces an execution-context feature mismatch as unavailable", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
+    useWorktreeSession();
     const dispatch = vi
       .fn()
       .mockRejectedValue(
@@ -953,17 +828,8 @@ describe("sessions.dispatch", () => {
   });
 
   it("dispatches an existing managed-worktree session and projects placement", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        agentRuntimeOverride: "openclaw",
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
+    useWorktreeSession({
+      agentRuntimeOverride: "openclaw",
     });
     const dispatchedPlacement: WorkerSessionPlacementRecord = {
       sessionId,

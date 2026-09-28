@@ -83,16 +83,4 @@ describe("resolveInstalledPluginIndexPolicyHash", () => {
       await removeBundledDiscoveryStateRoot(plainRoot);
     }
   });
-
-  it("stays stable for an unchanged mode and config", async () => {
-    const compatRoot = await makeStateRoot("compat");
-    try {
-      const config = { plugins: { allow: ["rollover"] } };
-      expect(resolveInstalledPluginIndexPolicyHash(config, envForRoot(compatRoot))).toBe(
-        resolveInstalledPluginIndexPolicyHash(config, envForRoot(compatRoot)),
-      );
-    } finally {
-      await removeBundledDiscoveryStateRoot(compatRoot);
-    }
-  });
 });

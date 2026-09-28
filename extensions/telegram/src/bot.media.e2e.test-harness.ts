@@ -171,7 +171,6 @@ const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     catch = vi.fn();
     constructor(public token: string) {}
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: (() => vi.fn()) as TelegramBotRuntimeForTest["sequentialize"],
   apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 
@@ -303,7 +302,8 @@ vi.mock("undici/index.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./telegram-media.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   readRemoteMediaBuffer: (...args: Parameters<typeof readRemoteMediaBufferSpy>) =>
     readRemoteMediaBufferSpy(...args),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),

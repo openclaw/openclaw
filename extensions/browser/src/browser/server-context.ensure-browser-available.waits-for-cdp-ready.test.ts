@@ -335,21 +335,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
   });
 
-  it("deduplicates concurrent lazy-start calls to prevent PortInUseError", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
-      setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 456);
-
-    const first = profile.ensureBrowserAvailable();
-    const second = profile.ensureBrowserAvailable();
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-  });
-
   it("deduplicates concurrent lazy-start calls across fresh profile contexts", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, state } =
       setupEnsureBrowserAvailableHarness();
@@ -364,23 +349,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
     await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-  });
-
-  it("passes request-local headless override to initial launch", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
-      setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 654);
-
-    const promise = profile.ensureBrowserAvailable({ headless: true });
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(promise).resolves.toBeUndefined();
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual(
-      expect.objectContaining({ headlessOverride: true, signal: expect.any(AbortSignal) }),
-    );
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import {
   clickPanelButton,
@@ -25,6 +26,46 @@ describe("desktop panel presentation lifecycle", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("does not claim fullscreen while its section is unrendered", async () => {
+    const properties = ["fullscreenElement", "exitFullscreen"] as const;
+    const original = properties.map((name) => Object.getOwnPropertyDescriptor(document, name));
+    const exitFullscreen = vi.fn(async () => {});
+    Object.defineProperties(document, {
+      fullscreenElement: { configurable: true, value: null },
+      exitFullscreen: { configurable: true, value: exitFullscreen },
+    });
+    const panel = createPanel();
+    try {
+      document.body.append(panel);
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("section.bp")).toBeNull();
+
+      document.dispatchEvent(new Event("fullscreenchange"));
+      panel.available = true;
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const button = panel.renderRoot.querySelector(".desktop-fullscreen-button");
+      expect(button).not.toBeNull();
+      expect.soft(button?.getAttribute("aria-pressed")).toBe("false");
+
+      panel.available = false;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("section.bp")).toBeNull();
+      panel.remove();
+      expect(exitFullscreen).not.toHaveBeenCalled();
+    } finally {
+      panel.remove();
+      for (const [index, name] of properties.entries()) {
+        const descriptor = original[index];
+        if (descriptor) {
+          Object.defineProperty(document, name, descriptor);
+        } else {
+          Reflect.deleteProperty(document, name);
+        }
+      }
+    }
   });
 
   it("keeps one loading indicator mounted from source lookup through RFB authentication", async () => {
@@ -81,6 +122,9 @@ describe("desktop panel presentation lifecycle", () => {
     await settleTasks();
     inventory.resolve(desktopEnvironment);
     await settleTasks();
+    expect(panel.renderRoot.querySelector(".desktop-status > div")?.textContent?.trim()).toBe(
+      "Desktop disconnected",
+    );
     expect(panel.renderRoot.querySelector("[aria-busy='true']")).toBeNull();
     expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(
       "Reconnect",

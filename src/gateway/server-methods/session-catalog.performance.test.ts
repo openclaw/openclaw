@@ -68,6 +68,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
       try {
         counters.begin();
         fixture = await createComposedCatalogFixture(state, counters);
+        const catalogNamespace = await counters.catalogPersisted;
         const first = await fixture.list();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
@@ -85,7 +86,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           version: number;
           kind: string;
         }>({
-          namespace: await counters.catalogPersisted,
+          namespace: catalogNamespace,
           maxEntries: 20_001,
           overflowPolicy: "reject-new",
         });

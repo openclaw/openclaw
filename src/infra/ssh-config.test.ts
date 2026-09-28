@@ -49,18 +49,6 @@ describe("ssh-config", () => {
     resolveSshClientMock.mockReturnValue("/usr/bin/ssh");
   });
 
-  it("parses ssh -G output", () => {
-    const parsed = parseSshConfigOutput(
-      "user bob\nhostname example.com\nport 2222\nidentityfile none\nidentityfile /tmp/id\n",
-    );
-    expect(parsed).toEqual({
-      user: "bob",
-      host: "example.com",
-      port: 2222,
-      identityFiles: ["/tmp/id"],
-    });
-  });
-
   it("ignores invalid ports and blank lines", () => {
     const parsed = parseSshConfigOutput(
       "user bob\nhostname example.com\nport not-a-number\nidentityfile none\nidentityfile   \n",

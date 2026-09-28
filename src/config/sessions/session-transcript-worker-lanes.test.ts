@@ -1,20 +1,32 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   historyLane,
   maintenanceLane,
+  projectionLane,
+  rotateDatabaseWorkers,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  isSessionHistoryWorkerCold,
+  prewarmSessionHistoryWorker,
+  retainSessionHistoryWorkerDatabase,
+  withSessionHistoryWorkerDatabase,
+} from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 const observed = vi.hoisted(() => ({
+  setTimeout: vi.spyOn(globalThis, "setTimeout"),
+  clearTimeout: vi.spyOn(globalThis, "clearTimeout"),
   run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
-  rotate: vi.fn<() => Promise<void>>(),
+  // Import-time pools are drained even when a name filter skips every test.
+  rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
 }));
@@ -35,7 +47,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     run: (prepare: () => unknown, options: WorkerTaskOptions<unknown>) =>
       observed.run(prepare(), options),
     rotate: observed.rotate,
-    closeResources: async () => {},
+    closeResources: observed.closeResources,
   }),
 }));
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
@@ -73,13 +85,74 @@ function input() {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  observed.setTimeout.mockImplementation(globalThis.setTimeout);
+  observed.clearTimeout.mockImplementation(globalThis.clearTimeout);
   observed.run.mockReset();
   observed.rotate.mockReset().mockResolvedValue(undefined);
+  observed.closeResources.mockReset().mockResolvedValue(undefined);
   observed.unregister.mockReset();
 });
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
+  observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+});
+afterAll(() => {
+  vi.useRealTimers();
+  observed.setTimeout.mockRestore();
+  observed.clearTimeout.mockRestore();
+});
+
+it("dedupes prewarm through history custody without extending idle retirement", async () => {
+  await rotateDatabaseWorkers(historyLane);
+  observed.rotate.mockClear();
+  const request = input();
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(reply.promise);
+  expect(isSessionHistoryWorkerCold()).toBe(true);
+  const first = prewarmSessionHistoryWorker(request.database);
+  const second = prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledOnce();
+  expect(historyLane.pending).toBe(1);
+  expect(isSessionHistoryWorkerCold()).toBe(false);
+  reply.resolve({ ok: true, value: { kind: "prewarm" } });
+  await Promise.all([first, second]);
+  expect(historyLane.pending).toBe(0);
+  expect(observed.unregister).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+  await prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(observed.rotate).toHaveBeenCalledOnce();
+  expect(observed.unregister).toHaveBeenCalledOnce();
+  expect(isSessionHistoryWorkerCold()).toBe(true);
+
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+  await prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledTimes(2);
+});
+
+it("settles failed and revoked prewarms without rejecting callers", async () => {
+  const request = input();
+  observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
+  await expect(prewarmSessionHistoryWorker(request.database)).resolves.toBeUndefined();
+  expect(historyLane.pending).toBe(0);
+  expect(observed.rotate).toHaveBeenCalledOnce();
+
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(reply.promise);
+  const pending = prewarmSessionHistoryWorker(request.database);
+  const resource = observed.resources.at(-1)!;
+  resource.revoke();
+  reply.resolve({ ok: true, value: { kind: "prewarm" } });
+  await expect(pending).resolves.toBeUndefined();
+  await resource.close();
+  expect(historyLane.pending).toBe(0);
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+  await prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledTimes(3);
 });
 
 it.runIf(!process.versions.bun)(
@@ -127,42 +200,82 @@ it.runIf(!process.versions.bun)(
     const retained = observed.resources.find((resource) => resource.agentId === "main");
     assert(retained);
     await retained.close();
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
+    expect(observed.rotate).not.toHaveBeenCalled();
+    expect(observed.closeResources).toHaveBeenCalledTimes(2);
     expect(observed.unregister).toHaveBeenCalledTimes(2);
   },
 );
 
-it("revokes both reader lanes and joins both retirements through one database owner", async () => {
+it.each([false, true])(
+  "revokes history, projection and maintenance readers and joins their cleanup (pending=%s)",
+  async (pending) => {
+    const request = input();
+    observed.run.mockResolvedValue({ ok: true, value: false });
+    const owners: SessionHistoryWorkerDatabase[] = [];
+    for (const lane of [historyLane, projectionLane, maintenanceLane]) {
+      await withSessionHistoryWorkerDatabase(
+        request.database,
+        async (owner) => {
+          await owner.readEntryPresence(request.scope);
+          owners.push(owner);
+        },
+        lane,
+      );
+    }
+    expect(observed.resources).toHaveLength(1);
+    const resource = observed.resources[0]!;
+    const retained = pending ? retainSessionHistoryWorkerDatabase(request.database) : undefined;
+    const foreground = createDeferredCore();
+    const projection = createDeferredCore();
+    const maintenance = createDeferredCore();
+    const cleanup = pending || process.versions.bun ? observed.rotate : observed.closeResources;
+    cleanup
+      .mockReturnValueOnce(foreground.promise)
+      .mockReturnValueOnce(projection.promise)
+      .mockReturnValueOnce(maintenance.promise);
+    resource.revoke();
+    retained?.release();
+    for (const owner of owners) {
+      expect(owner.assertCurrent).toThrow("revoked");
+    }
+    const closing = resource.close();
+    expect(cleanup).toHaveBeenCalledTimes(3);
+    foreground.resolve();
+    await foreground.promise;
+    expect(observed.unregister).not.toHaveBeenCalled();
+    projection.resolve();
+    await projection.promise;
+    expect(observed.unregister).not.toHaveBeenCalled();
+    maintenance.resolve();
+    await closing;
+    expect(observed.unregister).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("retains reads dispatched after a cleanup request", async () => {
   const request = input();
   observed.run.mockResolvedValue({ ok: true, value: false });
-  const owners: SessionHistoryWorkerDatabase[] = [];
-  for (const lane of [historyLane, maintenanceLane]) {
-    await withSessionHistoryWorkerDatabase(
-      request.database,
-      async (owner) => {
-        await owner.readEntryPresence(request.scope);
-        owners.push(owner);
-      },
-      lane,
+  const read = () =>
+    withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
     );
-  }
-  expect(observed.resources).toHaveLength(1);
-  const resource = observed.resources[0]!;
-  const foreground = createDeferredCore();
-  const maintenance = createDeferredCore();
-  observed.rotate.mockReturnValueOnce(foreground.promise).mockReturnValueOnce(maintenance.promise);
-  resource.revoke();
-  for (const owner of owners) {
-    expect(owner.assertCurrent).toThrow("revoked");
-  }
+  await read();
+  const resource = observed.resources.find((entry) => entry.agentId === "main");
+  assert(resource);
+  const receipt = createDeferredCore();
+  const cleanup = process.versions.bun ? observed.rotate : observed.closeResources;
+  cleanup.mockReturnValueOnce(receipt.promise);
   const closing = resource.close();
-  expect(observed.rotate).toHaveBeenCalledTimes(2);
-  foreground.resolve();
-  await foreground.promise;
-  expect(observed.unregister).not.toHaveBeenCalled();
-  maintenance.resolve();
+  await read();
+  receipt.resolve();
   await closing;
-  expect(observed.unregister).toHaveBeenCalledTimes(1);
+  expect(observed.unregister).not.toHaveBeenCalled();
+  if (!process.versions.bun) {
+    expect(observed.rotate).not.toHaveBeenCalled();
+  }
+  await resource.close();
+  expect(observed.unregister).toHaveBeenCalledOnce();
+  expect(cleanup).toHaveBeenCalledTimes(2);
 });
 
 it.runIf(!process.versions.bun)(

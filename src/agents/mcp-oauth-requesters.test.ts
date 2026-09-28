@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -19,11 +19,10 @@ import {
 import { requesterIdentity, withTempHome } from "./mcp-oauth.test-harness.js";
 import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
-const authMock = vi.hoisted(() => vi.fn());
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 
 vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  auth: authMock,
+  auth: vi.fn(),
 }));
 
 async function saveAccessToken(identity: McpOAuthIdentity, accessToken: string): Promise<void> {
@@ -37,17 +36,6 @@ async function saveAccessToken(identity: McpOAuthIdentity, accessToken: string):
 }
 
 describe("MCP OAuth requester credentials", () => {
-  beforeEach(async () => {
-    authMock.mockReset();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-
   it("fails closed when canonical SQLite JSON is malformed", async () => {
     await withTempHome(
       async () => {

@@ -10,7 +10,6 @@ import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
 } from "../../plugins/doctor-contract-module.js";
-import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readAcpSessionMeta, upsertAcpSessionMeta } from "./session-meta.js";
@@ -106,19 +105,22 @@ it("inspects without creating state and conditionally updates only the proven cu
 });
 
 it.each(["global", "shared-project"])(
-  "migrates %s with real Doctor inventory beside an unrelated free ACP session",
+  "migrates %s from legacy ACPX state beside an unrelated free ACP session",
   async (sessionKey) => {
     await withOpenClawTestState({ label: "acp-doctor-composition" }, async (state) => {
+      const acpxStateDir = path.join(state.workspaceDir, "state");
+      const explicit = sessionKey === "shared-project";
       const cfg = {
         agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
         session: { scope: "global" as const },
+        plugins: { entries: { acpx: { config: explicit ? { stateDir: acpxStateDir } : {} } } },
       };
       await state.writeConfig(cfg);
       const peer = state.path("peer");
       await fs.mkdir(peer);
       const runtime = new AcpxRuntime({
         cwd: state.workspaceDir,
-        sessionStore: createFileSessionStore({ stateDir: path.join(state.workspaceDir, "state") }),
+        sessionStore: createFileSessionStore({ stateDir: acpxStateDir }),
         agentRegistry: createAgentRegistry({
           overrides: {
             fixture: [
@@ -152,7 +154,13 @@ it.each(["global", "shared-project"])(
           acpxSessionId: handle.backendSessionId,
         },
       };
-      await upsertAcpSessionMeta({ cfg, agentId: "work", sessionKey, mutate: () => meta });
+      await upsertAcpSessionMeta({
+        cfg,
+        env: state.env,
+        agentId: "work",
+        sessionKey,
+        mutate: () => meta,
+      });
       const freeHandle = await runtime.ensureSession({
         sessionKey: "agent:free-harness:acp:unrelated",
         agent: "fixture",
@@ -161,6 +169,7 @@ it.each(["global", "shared-project"])(
       await runtime.close({ handle: freeHandle, reason: "offline-doctor" });
       const freeTarget = {
         cfg,
+        env: state.env,
         agentId: "free-harness",
         sessionKey: "agent:free-harness:acp:unrelated",
       };
@@ -187,12 +196,9 @@ it.each(["global", "shared-project"])(
         origin: "bundled",
         sourcePreferred: true,
       })!.modulePath;
-      const load = getCachedPluginModuleLoader({
-        modulePath,
-        importerUrl: import.meta.url,
-      });
+      // Reuse Vitest's module graph; a second Jiti graph blocks test timers during cold loading.
       const { stateMigrations } = coercePluginDoctorContractModule(
-        load(modulePath) as PluginDoctorContractModule,
+        (await import(modulePath)) as PluginDoctorContractModule,
       );
       const migration = stateMigrations.find((item) => item.id === "acpx-session-owner-resources")!;
       const context = createPluginDoctorStateMigrationContext({
@@ -209,16 +215,28 @@ it.each(["global", "shared-project"])(
       });
       expect(result.warnings).toEqual([]);
       expect(result.changes.length).toBeGreaterThan(0);
-      const migrated = readAcpSessionMeta({ cfg, agentId: "work", sessionKey });
+      const migrated = readAcpSessionMeta({ cfg, env: state.env, agentId: "work", sessionKey });
       expect(migrated?.identity?.acpxRecordId).toMatch(/^openclaw-owner-v1-/);
       expect(
         (await readOnly.inspectAcpSessionClaims!()).claims.find(
           (claim) => claim.agentId === "free-harness",
         ),
       ).toEqual(before.claims.find((claim) => claim.agentId === "free-harness"));
-      await fs.access(
-        path.join(state.workspaceDir, "state", "sessions", `${sessionKey}.json.migrated`),
-      );
+      const adoptedStateDir = explicit ? acpxStateDir : path.join(state.stateDir, "acpx");
+      await fs.access(path.join(adoptedStateDir, "sessions", `${sessionKey}.json.migrated`));
+      expect(
+        await createFileSessionStore({ stateDir: adoptedStateDir }).load(
+          migrated!.identity!.acpxRecordId!,
+        ),
+      ).toMatchObject({
+        acpSessionId: handle.backendSessionId,
+      });
+      if (!explicit) {
+        await expect(fs.stat(acpxStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result.changes).toContainEqual(
+          expect.stringContaining("Migrated ACPX session state"),
+        );
+      }
     });
   },
 );

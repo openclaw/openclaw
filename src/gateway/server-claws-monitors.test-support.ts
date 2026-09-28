@@ -24,6 +24,7 @@ import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sleep from "../utils/sleep.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
@@ -117,6 +118,8 @@ export function useClawMonitorFixture() {
     };
     const storePath = state.statePath("cron", "jobs.json");
     const cronDeps: CronServiceDeps = {
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       log: logger,

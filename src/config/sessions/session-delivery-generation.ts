@@ -3,7 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
-import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import {
+  isSessionStoreTopologyChange,
+  sessionChanges,
+  type SessionRowChange,
+} from "../../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
@@ -108,6 +112,10 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
   };
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
+      if (isSessionStoreTopologyChange(change)) {
+        invalidated = true;
+        return;
+      }
       if (typeof change.scope === "object") {
         if (change.scope.agentId && change.scope.agentId !== generation.agentId) {
           return;
@@ -124,6 +132,8 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
           "worker-placements",
           "worker-environments",
           "config",
+          "config-presentation",
+          "config-profiles",
         ].includes(change.scope)
       ) {
         return;

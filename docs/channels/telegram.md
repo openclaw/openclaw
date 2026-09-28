@@ -105,7 +105,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
-- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`
+- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookCertPath`, `legacyWebhook` (defaults to the existing listener; `false` uses only the Gateway port)
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker|createForumTopic|editForumTopic`
 - reactions: `reactionNotifications`, `reactionLevel`
 - errors: `errorPolicy`, `silentErrorReplies`

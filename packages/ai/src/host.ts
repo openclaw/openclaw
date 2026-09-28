@@ -32,6 +32,7 @@ export interface AiProviderRequestPolicyInput {
 /** Context shared by plugin-owned provider stream hooks. */
 export interface AiProviderStreamHookContext {
   config?: unknown;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   /** Selected credential facts supplied by the host; never credential material. */

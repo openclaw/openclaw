@@ -5,14 +5,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { appendRegularFile } from "../infra/fs-safe.js";
 
-/**
- * Serializes append-only writes per file path.
- *
- * Callers can enqueue log/transcript lines without awaiting each write; the
- * writer preserves order and exposes queue diagnostics for stuck-write probes.
- */
 export type QueuedFileWriterDiagnostics = {
   pendingWrites: number;
   queuedBytes: number;
@@ -36,25 +31,6 @@ type QueuedFileWriterOptions = {
   maxQueuedBytes?: number;
   yieldBeforeWrite?: boolean;
 };
-
-async function safeAppendFile(
-  filePath: string,
-  line: string,
-  options: QueuedFileWriterOptions,
-): Promise<void> {
-  await appendRegularFile({
-    filePath,
-    content: line,
-    maxFileBytes: options.maxFileBytes,
-    rejectSymlinkParents: true,
-  });
-}
-
-function waitForImmediate(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 /** Returns the cached writer for a path or creates a new ordered append queue. */
 export function getQueuedFileWriter(
@@ -102,7 +78,12 @@ export function getQueuedFileWriter(
         .then(async () => {
           activeOperation = "file-append";
           activeWriteBytes = lineBytes;
-          await safeAppendFile(filePath, line, options);
+          await appendRegularFile({
+            filePath,
+            content: line,
+            maxFileBytes: options.maxFileBytes,
+            rejectSymlinkParents: true,
+          });
         })
         .catch(() => undefined)
         .finally(() => {

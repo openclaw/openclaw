@@ -63,13 +63,6 @@ extension OpenClawChatGatewayTransport {
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
     }
 
-    public func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
-        let data = try await self.requestChatGateway(OpenClawChatGatewayRequests.tasksList(
-            sessionKey: sessionKey,
-            agentID: agentID))
-        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
-    }
-
     public func getQuestion(id: String) async throws -> QuestionRecord {
         let data = try await self.requestChatGateway(OpenClawChatGatewayRequests.questionGet(id: id))
         return try JSONDecoder().decode(QuestionGetResult.self, from: data).question

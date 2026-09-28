@@ -65,14 +65,6 @@ function readRuntimeNormalizationMetadataSnapshot(
   });
 }
 
-export function normalizeRuntimeRef(
-  provider: string,
-  model: string,
-  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-) {
-  return normalizeModelRef(provider, model, normalization);
-}
-
 export function findSelectedCatalogEntry(params: {
   catalog?: readonly ModelCatalogEntry[];
   provider: string;

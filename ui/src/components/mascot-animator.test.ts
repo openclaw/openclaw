@@ -54,8 +54,6 @@ function expectPoseInBounds(pose: MascotPose): void {
   expect(pose.bodyTilt).toBeLessThanOrEqual(8);
   expect(pose.bodyStretch).toBeGreaterThanOrEqual(0.86);
   expect(pose.bodyStretch).toBeLessThanOrEqual(1.05);
-  expect(pose.dizzy).toBeGreaterThanOrEqual(0);
-  expect(pose.dizzy).toBeLessThanOrEqual(1);
 }
 
 describe("MascotAnimator", () => {

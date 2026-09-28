@@ -1,6 +1,3 @@
-// Small value formatters for status overview rows.
-// These helpers keep terse row text consistent between compact and full status reports.
-
 import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
 
 export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
@@ -42,8 +39,8 @@ type SummarySessionsLike = {
   };
 };
 
-function countActiveStatusAgents(params: {
-  agentStatus: AgentStatusLike;
+export function countActiveStatusAgents(params: {
+  agentStatus: Pick<AgentStatusLike, "agents">;
   activeThresholdMs?: number;
 }) {
   const activeThresholdMs = params.activeThresholdMs ?? 10 * 60_000;
@@ -53,7 +50,6 @@ function countActiveStatusAgents(params: {
   ).length;
 }
 
-/** Formats the status-all agents overview cell. */
 export function buildStatusAllAgentsValue(params: {
   agentStatus: AgentStatusLike;
   activeThresholdMs?: number;
@@ -62,19 +58,16 @@ export function buildStatusAllAgentsValue(params: {
   return `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${activeAgents} active · ${params.agentStatus.totalSessions} sessions`;
 }
 
-/** Formats the secrets diagnostics count for overview output. */
 export function buildStatusSecretsValue(count: number) {
   return count > 0 ? `${count} diagnostic${count === 1 ? "" : "s"}` : "none";
 }
 
-/** Formats queued system-event count for overview output. */
 export function buildStatusEventsValue(params: { queuedSystemEvents: string[] }) {
   return params.queuedSystemEvents.length > 0
     ? `${params.queuedSystemEvents.length} queued`
     : "none";
 }
 
-/** Formats whether deep probe data was collected. */
 export function buildStatusProbesValue(params: {
   health?: unknown;
   ok: (value: string) => string;
@@ -83,7 +76,6 @@ export function buildStatusProbesValue(params: {
   return params.health ? params.ok("enabled") : params.muted("skipped (use --deep)");
 }
 
-/** Formats plugin compatibility notices as a compact count by notice and plugin. */
 export function buildStatusPluginCompatibilityValue(params: {
   notices: PluginCompatibilityNoticeLike[];
   ok: (value: string) => string;
@@ -100,7 +92,6 @@ export function buildStatusPluginCompatibilityValue(params: {
   );
 }
 
-/** Formats stored session count, default model/context, and backing store summary. */
 export function buildStatusSessionsOverviewValue(params: {
   sessions: SummarySessionsLike;
   formatKTokens: (value: number) => string;

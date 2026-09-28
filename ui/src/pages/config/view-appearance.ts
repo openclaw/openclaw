@@ -7,7 +7,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type TextScaleStop,
 } from "../../app/settings.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -259,7 +259,7 @@ export function renderAppearanceSection(
             : t("configView.appearance.customAccent"),
         });
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">
@@ -303,7 +303,7 @@ export function renderAppearanceSection(
                     }
                     title=${opt.description}
                     data-theme-id=${opt.id}
-                    @click=${(e: Event) => {
+                    @click=${() => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
                         props.onOpenCustomThemeImport?.();
                         return;
@@ -312,10 +312,7 @@ export function renderAppearanceSection(
                         opt.id !== props.theme ||
                         (opt.id === props.themeResetValue && props.themeOverridden)
                       ) {
-                        const context: ThemeTransitionContext = {
-                          element: (e.currentTarget as HTMLElement) ?? undefined,
-                        };
-                        props.setTheme(opt.id, context);
+                        props.setTheme(opt.id);
                       }
                     }}
                   >
@@ -342,10 +339,10 @@ export function renderAppearanceSection(
                 { value: "dark", label: t("common.dark") },
               ],
               ariaLabel: t("common.colorMode"),
-              onChange: (mode, element) => props.setThemeMode(mode, { element }),
-              onReselect: (mode, element) => {
+              onChange: (mode) => props.setThemeMode(mode),
+              onReselect: (mode) => {
                 if (props.themeModeOverridden && mode === props.themeModeResetValue) {
-                  props.setThemeMode(mode, { element });
+                  props.setThemeMode(mode);
                 }
               },
             }),

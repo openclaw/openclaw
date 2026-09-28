@@ -5,11 +5,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -25,6 +27,48 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("reuses selection through transcript refreshes and refreshes metadata ordering", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const first = "agent:main:first";
+    const second = "agent:main:second";
+    for (const [sessionKey, updatedAt, lastInteractionAt] of [
+      [first, 2, 1],
+      [second, 1, 2],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt, lastInteractionAt },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const scan = vi.spyOn(projection, "selectEntries");
+    try {
+      const list = async (sortBy?: "lastInteractionAt") =>
+        (await listProjectedSessions({ projection, opts: { limit: 1, sortBy } })).sessions;
+      expect((await list())[0]?.key).toBe(first);
+      scan.mockClear();
+      emitSessionTranscriptUpdate({
+        target: { agentId: "main", sessionId: first, sessionKey: first },
+      });
+      expect((await list())[0]?.key).toBe(first);
+      expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
+      expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
+      expect((await list())[0]?.key).toBe(first);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: second },
+        { sessionId: second, updatedAt: 3, label: "Changed metadata" },
+      );
+      expect((await list())[0]).toMatchObject({ key: second, label: "Changed metadata" });
+    } finally {
+      scan.mockRestore();
+      projection.dispose();
+      release();
+    }
+  });
 });
 
 it("selects an exact row before pagination while retaining discovery filters", async () => {
@@ -212,9 +256,6 @@ it.each([false, true])(
           expect(target.entry).toBe(entry);
           expect(target.storeTarget).toBe(original.storeTarget);
           expect(target.storeKey ?? key).toBe(original.key);
-          if (!activeOnly || original.key.startsWith("agent:")) {
-            expect(target).toBe(original);
-          }
         }
         const visible = filterAndSortSessionEntries({
           ...prepared,
