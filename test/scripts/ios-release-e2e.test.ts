@@ -898,6 +898,9 @@ describe("native command adapter", () => {
                           type: "input_text",
                           text:
                             "[Sun 2026-09-27 21:02 CDT] " +
+                            "Conversation info: ⟦openclaw:ctx⟧\n```json\n" +
+                            JSON.stringify({ sender: { id: "fixture-owner", name: marker } }) +
+                            "\n```\n\n" +
                             (missing
                               ? "No requested marker here."
                               : `Reply exactly with ${marker} and no other text.`),

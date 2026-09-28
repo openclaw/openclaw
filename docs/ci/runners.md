@@ -39,7 +39,7 @@ Healthy eligible main pushes and Windows-selected PRs can additionally offload f
 
 Native Swift builds/tests, iOS build phases, screenshot shards, and Periphery scans use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27 image. This toolchain change preserves hosted placement, job counts, worker caps, coverage, and deadlines; it adds no Blacksmith registrations. The Swift source-language minimum remains 6.3. Native compatibility and complete job timings require proof on the new image.
 
-The reusable iOS release qualification job uses `xcode-27-xlarge` on the same preview image to give its Simulator and isolated Gateway more CPU and memory. Stock qualification keeps the simulator unmodified. Its two fresh test fixtures, assertions, deadlines, and job count remain unchanged.
+The reusable iOS release qualification job uses `xcode-27-xlarge` on the same preview image to give its Simulator and isolated Gateway more CPU and memory. Stock qualification keeps the simulator unmodified. Each arm prepares one fresh simulator and Gateway fixture for the live pairing, chat, and relaunch case, then stops the Gateway fixture and runs the independent transcript-reader case on the same simulator. Both cases must pass within their individual deadlines.
 
 The earlier hosted-routing validation used `macos-26`: repeated first attempts left the Blacksmith macOS jobs unassigned while other CI completed. In [run 33616182173](https://github.com/openclaw/openclaw/actions/runs/33616182173), the hosted retry assigned all three waiting Mac jobs within eight seconds; the Debug/simulator job passed in 15m31s. That historical result predates Xcode 27. Complete native evidence remains required for full manual qualification.
 

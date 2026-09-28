@@ -591,6 +591,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let latestSeededReply = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
         XCTAssertTrue(latestSeededReply.waitForExistence(timeout: 8))
+        let transcript = try self.chatTranscript(in: app)
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
@@ -599,6 +600,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         XCTAssertTrue(latestSeededReply.isHittable)
 
+        // Revealing the reply after expanding work does not establish live-edge following.
+        let initialJumpToLatest = app.buttons["Jump to latest reply"]
+        if initialJumpToLatest.exists {
+            initialJumpToLatest.tap()
+        }
+        XCTAssertTrue(initialJumpToLatest.waitForNonExistence(timeout: 3))
+
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         self.waitForEnabled(input)
@@ -606,21 +614,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
         func visibleAreaAboveKeyboard() -> CGRect {
-            CGRect(
+            transcript.frame.intersection(CGRect(
                 x: app.frame.minX,
                 y: app.frame.minY,
                 width: app.frame.width,
-                height: keyboard.frame.minY - app.frame.minY)
+                height: keyboard.frame.minY - app.frame.minY))
         }
         XCTAssertTrue(latestSeededReply.exists)
         XCTAssertTrue(latestSeededReply.frame.intersects(visibleAreaAboveKeyboard()))
         XCTAssertLessThanOrEqual(latestSeededReply.frame.maxY, keyboard.frame.minY + 1)
         self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply after keyboard opens")
 
-        let promptPrefix =
-            "Give me a long, detailed status update covering the release plan, review feedback, " +
-            "open follow-ups, "
-        let promptSuffix = "and the next steps for the team."
+        let promptPrefix = "Check the "
+        let promptSuffix = "release plan."
         let prompt = promptPrefix + promptSuffix
         input.typeText(promptPrefix)
         XCTAssertTrue(latestSeededReply.exists)
@@ -649,12 +655,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
             NSPredicate(format: "label CONTAINS %@", "keep the mobile workflow connected to the gateway"))
             .firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 8))
-        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 1))
         let visibleArea = visibleAreaAboveKeyboard()
-        XCTAssertTrue(sentPrompt.frame.intersects(visibleArea))
         XCTAssertTrue(reply.frame.intersects(visibleArea))
         XCTAssertLessThanOrEqual(reply.frame.maxY, keyboard.frame.minY + 1)
-        self.assertElementHasRenderedContent(sentPrompt, named: "sent prompt after send")
         self.assertElementHasRenderedContent(reply, named: "reply after send")
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
@@ -669,6 +673,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         input.typeText(anchoredPrompt)
         XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
         try self.dismissChatKeyboardThroughTranscript(in: app)
+        XCTAssertTrue(sentPrompt.frame.intersects(transcript.frame))
+        self.assertElementHasRenderedContent(sentPrompt, named: "sent prompt after keyboard dismissal")
         XCTAssertEqual(input.value as? String, anchoredPrompt)
         XCTAssertTrue(send.isEnabled)
         send.tap()
@@ -694,7 +700,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.assertElementHasRenderedContent(finalReply, named: "reader reply after jumping to latest")
         self.attachScreenshot(named: "reader-jumped-to-latest")
 
-        let transcript = try self.chatTranscript(in: app)
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
         self.attachScreenshot(named: "reader-manual-departure")

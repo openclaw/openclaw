@@ -4,8 +4,8 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/schema/devices.js";
+import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { isGatewayTransportError } from "../../src/gateway/transport-error.js";
-import { stripEnvelope } from "../../src/shared/chat-envelope.js";
 import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { readMockUserText } from "../e2e/lib/mock-inference-facts.js";
@@ -831,7 +831,7 @@ export async function createNativeDependencies(options: {
                       ? body.input.map(readMockUserText).findLast((text) => text !== undefined)
                       : undefined;
                     const userText =
-                      latestUser === undefined ? undefined : stripEnvelope(latestUser);
+                      latestUser === undefined ? undefined : stripInboundMetadata(latestUser);
                     received.push(
                       CHAT_MARKERS.find(
                         ([, marker]) =>
