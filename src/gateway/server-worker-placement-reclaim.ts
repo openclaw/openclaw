@@ -180,8 +180,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       assertCurrent();
       return await run(assertCurrent);
     }
-    // This lease blocks ingress without a mutex: cancellation recovery must still be able
-    // to acquire lifecycle and placement fences before Stop reserves its teardown turn.
+    // This lease blocks ingress without a mutex: predecessors must still be able to
+    // settle their lifecycle work before Stop enters session cleanup.
     const release = closeSessionWorkAdmissions({
       scope: target.storePath,
       identities: lifecycleIdentities,

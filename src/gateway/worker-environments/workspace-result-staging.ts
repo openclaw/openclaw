@@ -488,7 +488,7 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: () => ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -498,10 +498,10 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   ]);
   const cleanupRefs = output.split("\n").filter(Boolean);
   if (cleanupRefs.length > 0) {
-    await updateWorkspaceResultRefs(root, () => {
+    await updateWorkspaceResultRefs(root, async () => {
       // Read fences after inventory and the shared ref queue wait. Later
       // claims cannot appear in these immutable claim refs.
-      const retainedRefs = params.retainedRefs?.();
+      const retainedRefs = await params.retainedRefs?.();
       return cleanupRefs
         .map(requireWorkerResultStorageRef)
         .filter((ref) => !retainedRefs?.has(ref))

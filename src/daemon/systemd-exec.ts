@@ -23,6 +23,14 @@ type SystemdExecResult = ExecResult & { inspectionReason?: ServiceInspectionReas
 
 export type SystemdUnitScope = "system" | "user";
 
+export function isRunningAsRoot(): boolean {
+  try {
+    return process.geteuid?.() === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function execSystemdCommand(
   command: "systemctl" | "busctl",
   args: string[],
@@ -133,8 +141,6 @@ function isSystemdUnitAlreadyMissingOrInactive(detail: string, unitName: string)
   ).test(normalizeLowercaseStringOrEmpty(detail));
 }
 
-const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
-
 export function isSystemdUserScopeUnavailable(detail: string): boolean {
   return classifySystemdUnavailableDetail(detail) !== null;
 }
@@ -162,7 +168,9 @@ export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
-  return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
+  return (
+    isSystemdUserBusUnavailableDetail(normalized) || isGenericSystemctlIsEnabledFailure(normalized)
+  );
 }
 
 async function execSystemdUserCommand(
