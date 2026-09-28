@@ -14,8 +14,8 @@ import {
   resolveOcmUpdateManager,
 } from "../../infra/ocm-update-client.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import {
   getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
@@ -49,6 +49,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    const lifecycle = currentUpdateCheckLifecycle();
     const startedAt = areDiagnosticsEnabledForProcess() ? performance.now() : undefined;
     const timing =
       startedAt === undefined ? undefined : createStageTimingTracker(() => performance.now());
@@ -106,7 +107,8 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
             lastRun: managedRun?.status !== "running" ? (managedRun ?? undefined) : undefined,
           }
         : await getUpdateRunStatusAsync();
-      const campaignRunId = gatewayUpdateCampaign.getRunId();
+      const campaign = lifecycle.campaign;
+      const campaignRunId = campaign?.getRunId();
       const campaignRun =
         !campaignRunId || lastRun?.runId === campaignRunId
           ? lastRun
@@ -118,7 +120,9 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
                 );
                 return undefined;
               });
-      gatewayUpdateCampaign.reconcileRun(campaignRun);
+      if (lifecycle.isCurrent() && !lifecycle.signal.aborted) {
+        campaign?.reconcileRun(campaignRun);
+      }
       mark("identity");
       let currentConfig = context?.getRuntimeConfig?.() ?? config;
       let effectiveChannel =
@@ -183,11 +187,12 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = resolveControlPlaneActor(client);
-    const campaignBeforeHold = gatewayUpdateCampaign.getState();
-    const ok = gatewayUpdateCampaign.hold();
+    const campaign = currentUpdateCheckLifecycle().campaign;
+    const campaignBeforeHold = campaign?.getState();
+    const ok = campaign?.hold() ?? false;
     const schedule = getUpdateSchedule();
     if (ok) {
-      const heldCampaign = gatewayUpdateCampaign.getState();
+      const heldCampaign = campaign?.getState();
       context?.logGateway?.info(
         `update.hold granted ${formatControlPlaneActor(actor)} holdUntilMs=${heldCampaign?.holdUntilMs} forceAtMs=${heldCampaign?.forceAtMs}`,
       );

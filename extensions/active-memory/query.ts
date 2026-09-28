@@ -16,7 +16,7 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-function buildQuery(params: {
+export function buildQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
   config: ResolvedActiveRecallPluginConfig;
@@ -68,46 +68,19 @@ function buildQuery(params: {
   ].join("\n");
 }
 
-function stripExternalUntrustedBlocks(text: string): string {
-  return text.replace(
-    /<<<EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g,
-    " ",
-  );
-}
-
-function stripJsonFences(text: string): string {
-  return text.replace(/```(?:json)?\s*[\s\S]*?```/gi, " ");
-}
-
-function stripActiveMemoryXmlBlocks(text: string): string {
-  return text.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/gi, " ");
-}
-
 function normalizeSearchQueryText(text: string): string {
   return text
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => {
-      if (!line) {
-        return false;
-      }
-      if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
-        return false;
-      }
-      if (/^(conversation info|sender|untrusted context)\b/i.test(line)) {
-        return false;
-      }
-      if (/^(source: external|---|untrusted discord message body)$/i.test(line)) {
-        return false;
-      }
-      if (/^⚠️?\s*Agent couldn't generate a response/i.test(line)) {
-        return false;
-      }
-      if (/^Please try again\.?$/i.test(line)) {
-        return false;
-      }
-      return true;
-    })
+    .filter(
+      (line) =>
+        line &&
+        line !== ACTIVE_MEMORY_CONTEXT_HEADER &&
+        !/^(conversation info|sender|untrusted context)\b/i.test(line) &&
+        !/^(source: external|---|untrusted discord message body)$/i.test(line) &&
+        !/^⚠️?\s*Agent couldn't generate a response/i.test(line) &&
+        !/^Please try again\.?$/i.test(line),
+    )
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -120,15 +93,19 @@ function clampSearchQuery(text: string): string {
     : normalized;
 }
 
-function buildSearchQuery(params: {
+export function buildSearchQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
 }): string {
   const latest = clampSearchQuery(
     normalizeSearchQueryText(
-      stripActiveMemoryXmlBlocks(
-        stripJsonFences(stripExternalUntrustedBlocks(params.latestUserMessage)),
-      ),
+      params.latestUserMessage
+        .replace(
+          /<<<EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g,
+          " ",
+        )
+        .replace(/```(?:json)?\s*[\s\S]*?```/gi, " ")
+        .replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/gi, " "),
     ),
   );
   if (latest.length >= 12 || !params.recentTurns?.length) {
@@ -147,7 +124,7 @@ function buildSearchQuery(params: {
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
-function extractTextContentParts(content: unknown): string[] {
+export function extractTextContentParts(content: unknown): string[] {
   if (typeof content === "string") {
     return content.trim() ? [content] : [];
   }
@@ -175,7 +152,7 @@ function extractTextContentParts(content: unknown): string[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function extractTextContent(content: unknown): string {
+export function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
@@ -220,7 +197,7 @@ function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): st
   return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
 }
 
-function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
+export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -241,14 +218,7 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   return turns;
 }
 
-function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEFAULT_PROVIDER) {
-  if (!modelRef) {
-    return undefined;
-  }
-  return parseModelRef(modelRef, defaultProvider) ?? { provider: defaultProvider, model: modelRef };
-}
-
-function getModelRef(
+export function getModelRef(
   runtimeConfig: OpenClawConfig,
   agentId: string,
   config: ResolvedActiveRecallPluginConfig,
@@ -272,19 +242,11 @@ function getModelRef(
     config.modelFallback,
   ];
   for (const candidate of candidates) {
-    const parsed = parseModelCandidate(candidate, defaultProvider);
-    if (parsed) {
-      return parsed;
+    if (candidate) {
+      return (
+        parseModelRef(candidate, defaultProvider) ?? { provider: defaultProvider, model: candidate }
+      );
     }
   }
   return undefined;
 }
-
-export {
-  buildQuery,
-  buildSearchQuery,
-  extractRecentTurns,
-  extractTextContent,
-  extractTextContentParts,
-  getModelRef,
-};

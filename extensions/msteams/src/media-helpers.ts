@@ -1,7 +1,3 @@
-/**
- * MIME type detection and filename extraction for MSTeams media attachments.
- */
-
 import path from "node:path";
 import {
   detectMime,
@@ -23,7 +19,6 @@ export async function getMimeType(url: string): Promise<string> {
     }
   }
 
-  // Use shared MIME detection (extension-based for URLs)
   const detected = await detectMime({ filePath: url });
   return detected ?? "application/octet-stream";
 }
@@ -42,7 +37,6 @@ export async function extractFilename(url: string): Promise<string> {
     return `${prefix}${ext}`;
   }
 
-  // Try to extract from URL pathname
   try {
     const pathname = new URL(url).pathname;
     let basename = path.basename(pathname);
@@ -77,40 +71,23 @@ export async function extractFilename(url: string): Promise<string> {
   }
 }
 
-/**
- * Check if a URL refers to a local file path.
- */
 export function isLocalPath(url: string): boolean {
-  if (/^file:\/\//iu.test(url) || url.startsWith("/") || url.startsWith("~")) {
-    return true;
-  }
-
-  // Windows rooted or UNC path (e.g. \tmp\file.txt or \\server\share\file.txt).
-  if (url.startsWith("\\")) {
-    return true;
-  }
-
-  // Windows drive-letter absolute path (e.g. C:\foo\bar.txt or C:/foo/bar.txt)
-  if (/^[a-zA-Z]:[\\/]/.test(url)) {
-    return true;
-  }
-
-  return false;
+  return (
+    /^file:\/\//iu.test(url) ||
+    url.startsWith("/") ||
+    url.startsWith("~") ||
+    url.startsWith("\\") ||
+    /^[a-zA-Z]:[\\/]/.test(url)
+  );
 }
 
 /**
  * Extract the message ID from a Bot Framework response.
  */
 export function extractMessageId(response: unknown): string | null {
-  if (!response || typeof response !== "object") {
+  if (!response || typeof response !== "object" || !("id" in response)) {
     return null;
   }
-  if (!("id" in response)) {
-    return null;
-  }
-  const { id } = response as { id?: unknown };
-  if (typeof id !== "string" || !id) {
-    return null;
-  }
-  return id;
+  const { id } = response;
+  return typeof id === "string" && id ? id : null;
 }

@@ -158,7 +158,7 @@ const mocks = vi.hoisted(() => ({
   getTtsProvider: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
-  resolveTtsConfig: vi.fn(() => ({})),
+  resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -376,14 +376,6 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
   randomIdempotencyKey: () => "run-1",
-}));
-
-vi.mock("../gateway/connection-details.js", () => ({
-  buildGatewayConnectionDetailsWithResolvers: vi.fn(() => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    message: "Gateway target: ws://127.0.0.1:18789",
-  })),
 }));
 
 vi.mock("../media-understanding/runtime.js", () => ({
@@ -615,7 +607,7 @@ describe("capability cli", () => {
       .mockReset()
       .mockReturnValue({ rows: [], entries: [], conflicts: [] });
     mocks.resolveAgentDir.mockClear();
-    mocks.resolveTtsConfig.mockReset().mockReturnValue({});
+    mocks.resolveTtsConfig.mockReset().mockReturnValue({ providerConfigs: {} });
     mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock
@@ -2147,107 +2139,52 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { agent: "", message: "--agent must not be blank" },
-    { agent: "retired", message: 'Unknown agent id "retired"' },
-  ])(
-    "rejects invalid image generation agent '$agent' before dispatch",
-    async ({ agent, message }) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-      });
-
-      await expect(
-        runCapability(
-          "image",
-          "generate",
-          "--agent",
-          agent,
-          "--prompt",
-          "friendly lobster",
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains(message);
-      expect(mocks.generateImage).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
+  const agentSelectionCases = [
     {
       name: "model run",
-      run: () => runCapability("model", "run", "--agent", "beta", "--prompt", "hello", "--json"),
+      run: (run: typeof runCapability) => run("model", "run", "--prompt", "hello", "--json"),
       selectedAgent: () => firstPreparedModelParams()?.agentId,
       expectedAgent: "beta",
     },
     {
       name: "image generate",
-      run: () => {
+      run: (run: typeof runCapability) => {
         primeGeneratedImage("gpt-image-1", "provider-output.png");
-        return runCapability(
-          "image",
-          "generate",
-          "--agent",
-          "beta",
-          "--prompt",
-          "portrait",
-          "--json",
-        );
+        return run("image", "generate", "--prompt", "portrait", "--json");
       },
       selectedAgent: () => firstImageGenerationCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "image edit",
-      run: async () => {
+      run: async (run: typeof runCapability) => {
         const inputDir = tempDirs.make("openclaw-image-agent-");
         const inputPath = path.join(inputDir, "input.png");
         await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
         primeGeneratedImage("gpt-image-1", "provider-output.png");
-        await runCapability(
-          "image",
-          "edit",
-          "--agent",
-          "beta",
-          "--file",
-          inputPath,
-          "--prompt",
-          "crop it",
-          "--json",
-        );
+        await run("image", "edit", "--file", inputPath, "--prompt", "crop it", "--json");
       },
       selectedAgent: () => firstImageGenerationCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "image describe",
-      run: () =>
-        runCapability("image", "describe", "--agent", "beta", "--file", "photo.png", "--json"),
+      run: (run: typeof runCapability) => run("image", "describe", "--file", "photo.png", "--json"),
       selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
       expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "image describe-many",
-      run: () =>
-        runCapability("image", "describe-many", "--agent", "beta", "--file", "photo.png", "--json"),
+      run: (run: typeof runCapability) =>
+        run("image", "describe-many", "--file", "photo.png", "--json"),
       selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
       expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "image describe with explicit model",
-      run: () =>
-        runCapability(
-          "image",
-          "describe",
-          "--agent",
-          "beta",
-          "--model",
-          "ollama/qwen2.5vl:7b",
-          "--file",
-          "photo.png",
-          "--json",
-        ),
+      leafOnly: true,
+      run: (run: typeof runCapability) =>
+        run("image", "describe", "--model", "ollama/qwen2.5vl:7b", "--file", "photo.png", "--json"),
       selectedAgent: () => [
         firstImageDescribeWithModelCall()?.agentId,
         firstImageDescribeWithModelCall()?.agentDir,
@@ -2256,8 +2193,8 @@ describe("capability cli", () => {
     },
     {
       name: "audio transcribe",
-      run: () =>
-        runCapability("audio", "transcribe", "--agent", "beta", "--file", "memo.m4a", "--json"),
+      run: (run: typeof runCapability) =>
+        run("audio", "transcribe", "--file", "memo.m4a", "--json"),
       selectedAgent: () => [
         firstAudioTranscriptionCall()?.agentId,
         firstAudioTranscriptionCall()?.agentDir,
@@ -2266,7 +2203,7 @@ describe("capability cli", () => {
     },
     {
       name: "video generate",
-      run: () => {
+      run: (run: typeof runCapability) => {
         mocks.generateVideo.mockResolvedValue({
           provider: "minimax",
           model: "MiniMax-Hailuo-2.3",
@@ -2279,15 +2216,14 @@ describe("capability cli", () => {
             },
           ],
         });
-        return runCapability("video", "generate", "--agent", "beta", "--prompt", "clip", "--json");
+        return run("video", "generate", "--prompt", "clip", "--json");
       },
       selectedAgent: () => firstVideoGenerationCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "video describe",
-      run: () =>
-        runCapability("video", "describe", "--agent", "beta", "--file", "clip.mp4", "--json"),
+      run: (run: typeof runCapability) => run("video", "describe", "--file", "clip.mp4", "--json"),
       selectedAgent: () => [
         firstVideoDescriptionCall()?.agentId,
         firstVideoDescriptionCall()?.agentDir,
@@ -2296,156 +2232,56 @@ describe("capability cli", () => {
     },
     {
       name: "embedding create",
-      run: () =>
-        runCapability("embedding", "create", "--agent", "beta", "--text", "hello", "--json"),
+      run: (run: typeof runCapability) => run("embedding", "create", "--text", "hello", "--json"),
       selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
-  ])(
-    "routes --agent through $name owner selection",
-    async ({ run, selectedAgent, expectedAgent }) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-      });
+  ];
 
-      await run();
-
-      expect(selectedAgent()).toEqual(expectedAgent);
-    },
-  );
-
-  it.each([
+  for (const { inherited, runWithAgent } of [
     {
-      name: "model run",
-      run: () =>
-        runCapabilityWithParentAgent("model", "run", "beta", "--prompt", "hello", "--json"),
-      selectedAgent: () => firstPreparedModelParams()?.agentId,
-      expectedAgent: "beta",
+      inherited: false,
+      runWithAgent: (domain: string, action: string, agent: string, ...argv: string[]) =>
+        runCapability(domain, action, "--agent", agent, ...argv),
     },
-    {
-      name: "image generate",
-      run: () => {
-        primeGeneratedImage("gpt-image-1", "provider-output.png");
-        return runCapabilityWithParentAgent(
-          "image",
-          "generate",
-          "beta",
-          "--prompt",
-          "portrait",
-          "--json",
-        );
-      },
-      selectedAgent: () => firstImageGenerationCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-    {
-      name: "image edit",
-      run: async () => {
-        const inputDir = tempDirs.make("openclaw-image-parent-agent-");
-        const inputPath = path.join(inputDir, "input.png");
-        await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
-        primeGeneratedImage("gpt-image-1", "provider-output.png");
-        await runCapabilityWithParentAgent(
-          "image",
-          "edit",
-          "beta",
-          "--file",
-          inputPath,
-          "--prompt",
-          "crop it",
-          "--json",
-        );
-      },
-      selectedAgent: () => firstImageGenerationCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-    {
-      name: "image describe",
-      run: () =>
-        runCapabilityWithParentAgent("image", "describe", "beta", "--file", "photo.png", "--json"),
-      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "image describe-many",
-      run: () =>
-        runCapabilityWithParentAgent(
-          "image",
-          "describe-many",
-          "beta",
-          "--file",
-          "photo.png",
-          "--json",
-        ),
-      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "audio transcribe",
-      run: () =>
-        runCapabilityWithParentAgent("audio", "transcribe", "beta", "--file", "memo.m4a", "--json"),
-      selectedAgent: () => [
-        firstAudioTranscriptionCall()?.agentId,
-        firstAudioTranscriptionCall()?.agentDir,
-      ],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "video generate",
-      run: () => {
-        mocks.generateVideo.mockResolvedValue({
-          provider: "minimax",
-          model: "MiniMax-Hailuo-2.3",
-          attempts: [],
-          videos: [
-            {
-              buffer: Buffer.from("video-bytes"),
-              mimeType: "video/mp4",
-              fileName: "provider-name.mp4",
-            },
-          ],
+    { inherited: true, runWithAgent: runCapabilityWithParentAgent },
+  ]) {
+    it.each([
+      { agent: "", message: "--agent must not be blank" },
+      { agent: "retired", message: 'Unknown agent id "retired"' },
+    ])(
+      inherited
+        ? "rejects invalid inherited agent '$agent' before dispatch"
+        : "rejects invalid image generation agent '$agent' before dispatch",
+      async ({ agent, message }) => {
+        mocks.loadConfig.mockReturnValue({
+          agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
         });
-        return runCapabilityWithParentAgent(
-          "video",
-          "generate",
-          "beta",
-          "--prompt",
-          "clip",
-          "--json",
-        );
+
+        await expect(
+          runWithAgent("image", "generate", agent, "--prompt", "friendly lobster", "--json"),
+        ).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains(message);
+        expect(mocks.generateImage).not.toHaveBeenCalled();
       },
-      selectedAgent: () => firstVideoGenerationCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-    {
-      name: "video describe",
-      run: () =>
-        runCapabilityWithParentAgent("video", "describe", "beta", "--file", "clip.mp4", "--json"),
-      selectedAgent: () => [
-        firstVideoDescriptionCall()?.agentId,
-        firstVideoDescriptionCall()?.agentDir,
-      ],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "embedding create",
-      run: () =>
-        runCapabilityWithParentAgent("embedding", "create", "beta", "--text", "hello", "--json"),
-      selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-  ])(
-    "inherits parent --agent through $name owner selection",
-    async ({ run, selectedAgent, expectedAgent }) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-      });
+    );
 
-      await run();
+    it.each(agentSelectionCases.filter((testCase) => !inherited || !testCase.leafOnly))(
+      inherited
+        ? "inherits parent --agent through $name owner selection"
+        : "routes --agent through $name owner selection",
+      async ({ run, selectedAgent, expectedAgent }) => {
+        mocks.loadConfig.mockReturnValue({
+          agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+        });
 
-      expect(selectedAgent()).toEqual(expectedAgent);
-    },
-  );
+        await run((domain, action, ...argv) => runWithAgent(domain, action, "beta", ...argv));
+
+        expect(selectedAgent()).toEqual(expectedAgent);
+      },
+    );
+  }
 
   it("prefers a leaf --agent over the parent selector", async () => {
     mocks.loadConfig.mockReturnValue({
@@ -2467,29 +2303,6 @@ describe("capability cli", () => {
     );
 
     expect(firstImageGenerationCall()?.agentDir).toBe("/tmp/agent-beta");
-  });
-
-  it.each([
-    { agent: "", message: "--agent must not be blank" },
-    { agent: "retired", message: 'Unknown agent id "retired"' },
-  ])("rejects invalid inherited agent '$agent' before dispatch", async ({ agent, message }) => {
-    mocks.loadConfig.mockReturnValue({
-      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-    });
-
-    await expect(
-      runCapabilityWithParentAgent(
-        "image",
-        "generate",
-        agent,
-        "--prompt",
-        "friendly lobster",
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains(message);
-    expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
   it("passes image output format and generic background hints through to generation runtime", async () => {
@@ -3801,11 +3614,8 @@ describe("capability cli", () => {
   });
 
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
-    const gatewayConnection = await import("../gateway/connection-details.js");
-    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
-      url: "wss://gateway.example.com",
-      urlSource: "config gateway.remote.url",
-      message: "Gateway target: wss://gateway.example.com",
+    mocks.loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.com" } },
     });
 
     await expect(

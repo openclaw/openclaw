@@ -56,8 +56,9 @@ data class GatewayCredentials(
     )
 }
 
-internal val defaultSidebarPageOrder = listOf("settings", "work", "home", "skills", "threads")
-internal val defaultSidebarVisiblePages = defaultSidebarPageOrder
+internal val defaultSidebarVisiblePages = listOf("home", "threads", "skills", "work")
+internal val defaultSidebarPageOrder =
+  defaultSidebarVisiblePages + listOf("agents", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop")
 
 internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
   val knownIds = defaultSidebarPageOrder.toSet()
@@ -314,17 +315,9 @@ class SecurePrefs(
   private val _sidebarVisiblePages = MutableStateFlow(loadSidebarVisiblePages())
   val sidebarVisiblePages: StateFlow<List<String>> = _sidebarVisiblePages
 
-  fun setLastDiscoveredStableId(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
-    _lastDiscoveredStableId.value = trimmed
-  }
+  fun setLastDiscoveredStableId(value: String) = _lastDiscoveredStableId.persistString("gateway.lastDiscoveredStableID", value.trim())
 
-  fun setDisplayName(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString(displayNameKey, trimmed) }
-    _displayName.value = trimmed
-  }
+  fun setDisplayName(value: String) = _displayName.persistString(displayNameKey, value.trim())
 
   fun setCameraEnabled(value: Boolean) = _cameraEnabled.persistBoolean(cameraEnabledKey, value)
 
@@ -339,11 +332,7 @@ class SecurePrefs(
 
   fun setManualEnabled(value: Boolean) = _manualEnabled.persistBoolean("gateway.manual.enabled", value)
 
-  fun setManualHost(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString("gateway.manual.host", trimmed) }
-    _manualHost.value = trimmed
-  }
+  fun setManualHost(value: String) = _manualHost.persistString("gateway.manual.host", value.trim())
 
   fun setManualPort(value: Int) {
     plainPrefs.edit { putInt("gateway.manual.port", value) }
@@ -738,11 +727,7 @@ class SecurePrefs(
 
   fun setSpeakerEnabled(value: Boolean) = _speakerEnabled.persistBoolean("voice.speakerEnabled", value)
 
-  fun setPreferredCameraFacing(value: String) {
-    val facing = value.takeIf { it == "back" } ?: "front"
-    plainPrefs.edit { putString(preferredCameraFacingKey, facing) }
-    _preferredCameraFacing.value = facing
-  }
+  fun setPreferredCameraFacing(value: String) = _preferredCameraFacing.persistString(preferredCameraFacingKey, value.takeIf { it == "back" } ?: "front")
 
   fun setPreferredAudioInputDevice(value: String?) {
     val key = value?.takeIf(String::isNotBlank)
@@ -1123,6 +1108,14 @@ class SecurePrefs(
     next: Boolean,
   ) {
     plainPrefs.edit { putBoolean(key, next) }
+    value = next
+  }
+
+  private fun MutableStateFlow<String>.persistString(
+    key: String,
+    next: String,
+  ) {
+    plainPrefs.edit { putString(key, next) }
     value = next
   }
 

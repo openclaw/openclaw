@@ -29,12 +29,12 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
+import { fetchGoogleMeetSpace } from "./src/meet-api.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
 import {
   buildGoogleMeetPreflightReport,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
-  fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import {

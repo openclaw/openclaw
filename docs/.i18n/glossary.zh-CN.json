@@ -3800,8 +3800,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",

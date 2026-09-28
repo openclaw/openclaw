@@ -186,7 +186,9 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       target: { skillKey: "invalid-relocation", skillDir },
     });
     await fs.mkdir(skillDir, { recursive: true });
-    seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
+    await seedLegacyV15ProposalRows(testState.env, [
+      { record, workspaceDir, claimReleasedTime: null },
+    ]);
 
     const result = await migrateLegacySkillWorkshopProposals({
       config: {},
@@ -299,7 +301,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     await fs.writeFile(normalSkillFile, normalContent, "utf8");
     await fs.mkdir(path.dirname(symlinkPath), { recursive: true });
     await fs.symlink(symlinkTarget, symlinkPath, "dir");
-    seedLegacyV15ProposalRows(
+    await seedLegacyV15ProposalRows(
       testState.env,
       records.map(({ record, workspaceDir: recordWorkspaceDir }) => ({
         record,
@@ -388,7 +390,9 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     });
     await fs.mkdir(destination, { recursive: true });
     await fs.writeFile(path.join(destination, "SKILL.md"), destinationContent, "utf8");
-    seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
+    await seedLegacyV15ProposalRows(testState.env, [
+      { record, workspaceDir, claimReleasedTime: null },
+    ]);
 
     const result = await migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env });
 
@@ -583,7 +587,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       await fs.writeFile(record.target.skillFile, content, "utf8");
     }
 
-    seedLegacyV15ProposalRows(
+    await seedLegacyV15ProposalRows(
       testState.env,
       records.map((record) => ({ record: record.record, workspaceDir, claimReleasedTime: null })),
     );

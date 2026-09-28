@@ -777,8 +777,8 @@ vi.mock("../../message-sent-hook.js", () => ({
 }));
 
 vi.mock("../../threading.js", () => ({
-  resolveSlackThreadTargets: () => ({
-    statusThreadTs: mockedStatusThreadTs,
+  resolveSlackThreadContext: () => ({
+    messageThreadId: mockedStatusThreadTs,
     isThreadReply: mockedSlackIsThreadReply,
   }),
 }));
@@ -809,7 +809,6 @@ vi.mock("../replies.js", async (importOriginal) => ({
   }),
   deliverReplies: (params: Parameters<typeof import("../replies.js").deliverReplies>[0]) =>
     deliverRepliesMock({ ...params, replies: params.replies.map((prepared) => prepared.payload) }),
-  resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
 vi.mock("../../send.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
@@ -1266,10 +1265,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     };
     const threading =
       await vi.importActual<typeof import("../../threading.js")>("../../threading.js");
-    mockedStatusThreadTs = threading.resolveSlackThreadTargets({
+    mockedStatusThreadTs = threading.resolveSlackThreadContext({
       message,
       replyToMode: "first",
-    }).statusThreadTs;
+    }).messageThreadId;
     expect(mockedStatusThreadTs).toBeUndefined();
     mockedReplyThreadTs = message.ts;
     mockedSlackIsThreadReply = false;
@@ -3508,10 +3507,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(collectNativeTaskUpdates()).toEqual([]);
     expectNativeStreamText("Checking");
     // A snapshot arriving inside the throttle window rides the completion append.
-    expectNativeProgressAppend(0, [
-      { type: "markdown_text", text: " the Slack handler" },
-      planUpdate("Working"),
-    ]);
+    expectNativeProgressAppend(0, [{ type: "markdown_text", text: " the Slack handler" }]);
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
 

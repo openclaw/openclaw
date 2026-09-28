@@ -5,34 +5,12 @@ import type {
 import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/**
- * Consecutive failures after which one settlement write counts as sustained.
- *
- * Reaching it changes reporting only. Neither the obligation nor the retry
- * cadence is touched: the durable write that cannot succeed now can succeed
- * once storage recovers, and the requester stays unsettled until it does.
- */
+// Reporting thresholds never change the durable obligation or retry cadence.
 const REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES = 5;
 
-/**
- * Longest gap between retries of one settlement write.
- *
- * Deliberately the ceiling this loop has always used. A settlement failing only
- * because storage is unavailable has to land promptly once storage returns, so
- * recovery latency stays bounded by this value and the reported flood is bounded
- * by {@link shouldReportRequesterSettleWakeFailure} instead of by waiting longer.
- */
 const REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS = 120_000;
 
-/**
- * Identical failure reports one retry episode emits before it withholds them.
- *
- * Counted against reports actually emitted rather than against
- * {@link PendingRequesterSettleWakeCommit.failures}, because that is the
- * quantity being bounded. The two track each other whenever a rejected write is
- * what failed, but only a report counter stays correct for a rejection that
- * reaches this reporting path without advancing the commit failure count.
- */
+// Count emitted reports separately: not every reported rejection advances commit failures.
 const REQUESTER_SETTLE_WAKE_FAILURE_REPORT_BUDGET = 5;
 
 function clearPendingWakeCommit(
@@ -56,16 +34,7 @@ function clearPendingWakeCommit(
   }
 }
 
-/**
- * Decides whether the lifecycle owner reports one more settlement failure.
- *
- * The retry loop is what repeats; the volume in the reported incident came from
- * reporting every one of its attempts. An episode reports its first few
- * failures in full, then withholds identical repeats and counts them for
- * {@link clearPendingWakeCommit}. A fault other than the one already reported is
- * not a repeat and is always reported, so a new failure mode is never hidden
- * behind an older one.
- */
+/** Bound identical reports per episode; a different failure always gets a fresh budget. */
 export function shouldReportRequesterSettleWakeFailure(
   context: SubagentLifecycleWakeContext,
   entry: SubagentRunRecord,
@@ -114,9 +83,7 @@ function deferWakeCommit(
     pending.failures >= REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES &&
     !pending.sustainedFailureReported
   ) {
-    // One report per episode: this warn does not repeat every attempt. It is
-    // also the notice that the per-attempt pair at the lifecycle owner is about
-    // to go quiet, so the drop in volume is attributable rather than mysterious.
+    // Explain why per-attempt reporting will go quiet while retries continue.
     pending.sustainedFailureReported = true;
     context.options.warn("requester settle wake commit still failing; retries continue", {
       failures: pending.failures,
@@ -139,9 +106,10 @@ export function commitRequesterWake(
   context: SubagentLifecycleWakeContext,
   entries: readonly SubagentRunRecord[],
   generation: number | undefined,
-  commit: (entries: readonly SubagentRunRecord[]) => boolean,
+  commit: (entries: readonly SubagentRunRecord[]) => boolean | Promise<boolean>,
   retainOnFailure: boolean,
-): void {
+  retryWholeBatch = false,
+): Promise<void> {
   const owners = entries.map((entry) => ({
     entry,
     runId: entry.runId,
@@ -158,6 +126,7 @@ export function commitRequesterWake(
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     commit,
+    retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
     isCurrent: (current) =>
@@ -210,47 +179,74 @@ export function commitRequesterWake(
         },
       ),
   };
-  const retain = () => {
-    if (!retainOnFailure) {
-      return;
+  // Sibling wakes must observe the same fence while the first worker write is
+  // still settling, before a failure has established its retry deadline.
+  for (const entry of entries) {
+    if (pending.isCurrent(entry)) {
+      context.pendingRequesterSettleWakeCommits.set(entry, pending);
     }
-    deferWakeCommit(context, pending);
-    for (const entry of entries) {
-      if (pending.isCurrent(entry)) {
-        context.pendingRequesterSettleWakeCommits.set(entry, pending);
-      }
-    }
-  };
-  try {
-    // A temporarily closed Gateway can defer settlement without invalidating
-    // already observed delivery. Only changed row ownership drops its fence.
-    if (!commit(entries)) {
-      retain();
-    }
-  } catch (error) {
-    retain();
-    throw error;
   }
+  return runPendingWakeCommit(context, pending, retainOnFailure, "initial");
 }
 
 export function retryPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
-): void {
+): Promise<void> {
+  if (pending.inFlight) {
+    return pending.inFlight;
+  }
   if (pending.nextAttemptAt > Date.now()) {
-    return;
+    return Promise.resolve();
   }
-  try {
-    const members = pending.entries.filter(
-      (member) => getPendingWakeCommit(context, member) === pending,
-    );
-    if (pending.commit(members)) {
-      clearPendingWakeCommit(context, pending);
-    } else {
+  return runPendingWakeCommit(context, pending, true, "retry");
+}
+
+function runPendingWakeCommit(
+  context: SubagentLifecycleWakeContext,
+  pending: PendingRequesterSettleWakeCommit,
+  retainOnFailure: boolean,
+  attempt: "initial" | "retry",
+): Promise<void> {
+  const retain = () => {
+    if (retainOnFailure) {
       deferWakeCommit(context, pending);
+    } else {
+      clearPendingWakeCommit(context, pending);
     }
-  } catch (error) {
-    deferWakeCommit(context, pending);
-    throw error;
-  }
+  };
+  const operation = Promise.resolve()
+    .then(async () => {
+      try {
+        const members = pending.entries.filter(
+          (member) => getPendingWakeCommit(context, member) === pending,
+        );
+        // A no-wake decision belongs to its complete original batch. Storage may
+        // retry it unchanged; changed membership needs a fresh sweeper decision.
+        if (pending.retryWholeBatch && members.length !== pending.entries.length) {
+          clearPendingWakeCommit(context, pending);
+          return;
+        }
+        // First admission requires every captured owner, including child-generation
+        // authority. Only retries can retain a known outcome for surviving members.
+        if (attempt === "initial" && members.length !== pending.entries.length) {
+          retain();
+          return;
+        }
+        if (members.length === 0 || (await pending.commit(members))) {
+          clearPendingWakeCommit(context, pending);
+        } else {
+          // A temporarily closed Gateway cannot erase already observed delivery.
+          retain();
+        }
+      } catch (error) {
+        retain();
+        throw error;
+      }
+    })
+    .finally(() => {
+      pending.inFlight = undefined;
+    });
+  pending.inFlight = operation;
+  return operation;
 }

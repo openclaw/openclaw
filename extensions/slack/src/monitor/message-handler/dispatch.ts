@@ -636,7 +636,7 @@ async function dispatchSlackMessageWithSetup(
   if (shouldLogVerbose()) {
     const finalCount = resolveInboundReplyDispatchCounts(settledDispatchResult).final;
     logVerbose(
-      `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
+      `slack: delivered ${finalCount} repl${finalCount === 1 ? "y" : "ies"} to ${prepared.replyTarget}`,
     );
   }
 }

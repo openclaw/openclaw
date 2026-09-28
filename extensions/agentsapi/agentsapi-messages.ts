@@ -16,6 +16,7 @@ import {
   type AgentsApiItem,
 } from "./agentsapi-client.js";
 import { AgentsApiNativeToolProjection } from "./agentsapi-native-tool-projection.js";
+import { readAgentsApiFinalText } from "./agentsapi-text.js";
 import {
   appendAgentsApiTranscriptMessage,
   canRecordAgentsApiTranscriptText,
@@ -45,7 +46,7 @@ type NativeTextState = {
 };
 
 /** Native identities keep saved-state recovery and live events on the same projection. */
-class AgentsApiMessageProjection {
+export class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
@@ -323,22 +324,7 @@ class AgentsApiMessageProjection {
       this.reportTranscriptOrderingGap();
     }
     await this.endReasoning();
-    const completedMessages = items.filter(
-      (item) => item.type === "message" && item.role === "assistant" && item.status === "completed",
-    );
-    const finalItems = completedMessages.filter((item) => item.phase === "final_answer");
-    const visibleItems = finalItems.length
-      ? finalItems
-      : completedMessages.filter((item) => item.phase !== "commentary");
-    const text = visibleItems
-      .map(
-        (item) =>
-          item.content
-            ?.filter((part) => part.type === "output_text")
-            .map((part) => part.text ?? "")
-            .join("") ?? "",
-      )
-      .join("\n");
+    const text = readAgentsApiFinalText(items);
     const assistant = createAgentHarnessAssistantMessage(this.attribution(), text, {
       tokenUsage: this.tokenUsage,
       aborted: turn.status === "cancelled",
@@ -674,15 +660,6 @@ class AgentsApiMessageProjection {
   private append<TMessage extends AgentMessage>(message: TMessage): Promise<TMessage> {
     return appendAgentsApiTranscriptMessage(this.params, message, this.assertCurrent);
   }
-}
-
-export function createAgentsApiMessageProjection(
-  params: AgentHarnessAttemptParamsV2,
-  remoteSessionId: string,
-  emitEvent: (event: AgentEvent) => void | Promise<void>,
-  assertCurrent: () => void,
-) {
-  return new AgentsApiMessageProjection(params, remoteSessionId, emitEvent, assertCurrent);
 }
 
 const INTERNAL_EVENT_TYPES = new Set([

@@ -1,9 +1,3 @@
-/**
- * Strict numeric parsers for browser route input.
- *
- * Converts query/body values into finite integer/timeout numbers while
- * preserving route-specific error messages for JSON responses.
- */
 import {
   parseStrictFiniteNumber,
   parseStrictInteger,

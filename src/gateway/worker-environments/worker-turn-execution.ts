@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import {
   loadManifestModelCatalog,
@@ -174,12 +175,17 @@ export async function executeWorkerTurn(
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
 
   assertContextCurrent();
-  const credential = await params.environments.acquireTurnCredential(params.turnClaim);
+  const credential = await waitForTurnOperation({
+    start: () => params.environments.acquireTurnCredential(params.turnClaim),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
   const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    }),
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: placement.environmentId,
+        ownerEpoch: placement.activeOwnerEpoch,
+      }),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
@@ -379,11 +385,12 @@ export async function executeWorkerTurn(
       throw new Error("Worker tunnel does not support worker turns");
     }
     // Presence belongs to the Gateway; workers cannot read its process-local node registry.
-    await prepareActiveNodeContext();
+    const requesterProfileId = readRunOperatorAuthority(turn)?.profileId;
+    await prepareActiveNodeContext(requesterProfileId);
     assertActive();
     const systemPrompt = [
       turn.extraSystemPrompt,
-      buildActiveNodeContextText(),
+      buildActiveNodeContextText(requesterProfileId),
       ...buildProactiveSubagentOrchestrationSection({
         enabled: turn.thinkLevel === "ultra",
         hasSessionsSpawn: toolAuthority.allowedToolNames.includes("sessions_spawn"),

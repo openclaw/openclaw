@@ -255,6 +255,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   lastReadAt?: number;
   lastActivityAt?: number;
   lastInteractionAt?: number;
+  agentStatus?: GatewayWireSessionsPatchResult["entry"]["agentStatus"];
   permissionMode?: GatewaySessionRow["permissionMode"];
   nativeRuntimeConsent?: string;
   modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];
@@ -295,20 +296,7 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
-export type CronRunResult =
-  | { ok: true; ran: true }
-  | { ok: true; enqueued: true; runId: string }
-  | {
-      ok: true;
-      ran: false;
-      reason:
-        | "not-due"
-        | "already-running"
-        | "restart-recovery-pending"
-        | "invalid-spec"
-        | "stopped";
-    }
-  | { ok: false };
+export type { CronServiceRunResult as CronRunResult } from "../../../src/cron/service-contract.js";
 
 export type CronJobsListResult<Row = ProtocolCronJob> = {
   jobs: Row[];

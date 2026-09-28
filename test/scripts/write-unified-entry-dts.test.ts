@@ -133,7 +133,7 @@ describe("write-unified-entry-dts", () => {
     }
   });
 
-  it.concurrent("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
+  it("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
     command,
     onTestFailed,
   }) =>

@@ -28,9 +28,8 @@ import {
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import {
   collectPresentOpenClawTools,
-  shouldIncludeAskUserToolForOpenClawTools,
+  shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
-  shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
@@ -216,6 +215,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           sandbox,
           cwd: options?.cwd,
           fsPolicy: options?.fsPolicy,
+          activeModel:
+            options?.modelProvider && options.modelId
+              ? {
+                  provider: options.modelProvider,
+                  model: options.modelId,
+                  supportsImages: options.modelHasVision === true,
+                }
+              : undefined,
           deferAutoModelResolution: true,
         })
       : null;
@@ -394,6 +401,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
+            stopAllowed: options?.swarmCollector !== true,
+            controlOnly: options?.senderIsOwner === false,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentSessionId: options?.sessionId,
             requesterAgentIdOverride: sessionAgentId,
@@ -463,24 +472,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: sessionAgentId,
     }),
-    createGetGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionAgentId,
-      config: resolvedConfig,
-    }),
-    createCreateGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionAgentId,
-      config: resolvedConfig,
-    }),
-    createUpdateGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionAgentId,
-      config: resolvedConfig,
-    }),
+    ...[createGetGoalTool, createCreateGoalTool, createUpdateGoalTool].map((createTool) =>
+      createTool({
+        agentSessionKey: options?.agentSessionKey,
+        runSessionKey: options?.runSessionKey,
+        sessionAgentId,
+        config: resolvedConfig,
+      }),
+    ),
     ...(resolveSkillWorkshopToolConstructionBlock({
       sandboxed: options?.sandboxed,
       libraryAuthoring: options?.skillWorkshop?.libraryAuthoring,
@@ -500,7 +499,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         ]),
     ...collectPresentOpenClawTools([progressCardTool]),
     ...swarmToolGroups.structuredOutput,
-    ...(shouldIncludeAskUserToolForOpenClawTools({
+    ...(shouldIncludePrimarySessionToolForOpenClawTools("ask_user", {
       config: resolvedConfig,
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       pluginToolDenylist: options?.pluginToolDenylist,
@@ -514,7 +513,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           }),
         ]
       : []),
-    ...(shouldIncludeSecretsToolForOpenClawTools({
+    ...(shouldIncludePrimarySessionToolForOpenClawTools("secrets", {
       config: resolvedConfig,
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       pluginToolDenylist: options?.pluginToolDenylist,
@@ -549,29 +548,22 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ...(embedded
       ? []
       : [
-          createConversationsListTool({
-            agentId: sessionAgentId,
-            agentSessionId: options?.sessionId,
-            agentSessionKey: options?.agentSessionKey,
-            config: resolvedConfig,
-            senderIsOwner: options?.senderIsOwner,
-          }),
-          createConversationsSendTool({
-            agentId: sessionAgentId,
-            agentSessionId: options?.sessionId,
-            agentSessionKey: options?.agentSessionKey,
-            config: resolvedConfig,
-            senderIsOwner: options?.senderIsOwner,
-          }),
-          createConversationsTurnTool({
-            agentId: sessionAgentId,
-            agentSessionId: options?.sessionId,
-            agentSessionKey: options?.agentSessionKey,
-            config: resolvedConfig,
-            senderIsOwner: options?.senderIsOwner,
-          }),
+          ...[
+            createConversationsListTool,
+            createConversationsSendTool,
+            createConversationsTurnTool,
+          ].map((createTool) =>
+            createTool({
+              agentId: sessionAgentId,
+              agentSessionId: options?.sessionId,
+              agentSessionKey: options?.agentSessionKey,
+              config: resolvedConfig,
+              senderIsOwner: options?.senderIsOwner,
+            }),
+          ),
           // Keep the in-process caller so materialized agent roots retain their creation stamp.
           createSessionsSendTool({
+            requesterTurnRunId: options?.runId,
             agentId: sessionAgentId,
             // Match sessions_spawn: spawned children record the durable run
             // session as spawnedBy, so the parent check must use the same key.

@@ -4,7 +4,9 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
-function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
+export function collectConfiguredModelProviderSelectionIds(
+  cfg: OpenClawConfig,
+): ReadonlySet<string> {
   const ids = new Set<string>();
   const add = (value: unknown) => {
     const id = normalizeId(value);
@@ -42,7 +44,9 @@ function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
   return ids;
 }
 
-function collectConfiguredMediaProviderIds(cfg: OpenClawConfig): Set<string> {
+export function collectConfiguredMediaProviderSelectionIds(
+  cfg: OpenClawConfig,
+): ReadonlySet<string> {
   const ids = new Set<string>();
   const add = (value: unknown) => {
     const id = normalizeId(value);
@@ -50,32 +54,19 @@ function collectConfiguredMediaProviderIds(cfg: OpenClawConfig): Set<string> {
       ids.add(id.toLowerCase());
     }
   };
-  const addModels = (value: unknown) => {
-    if (!Array.isArray(value)) {
-      return;
-    }
-    for (const model of value) {
+  const models = cfg.tools?.media?.models;
+  if (Array.isArray(models)) {
+    for (const model of models) {
       add(asNullableRecord(model)?.provider);
     }
-  };
-  const media = cfg.tools?.media;
-  addModels(media?.models);
+  }
   return ids;
 }
 
 /** Provider ids used by static and installed-registry plugin matching. */
 export function collectConfiguredProviderSelectionIds(cfg: OpenClawConfig): ReadonlySet<string> {
-  return new Set([...collectConfiguredProviderIds(cfg), ...collectConfiguredMediaProviderIds(cfg)]);
-}
-
-export function collectConfiguredMediaProviderSelectionIds(
-  cfg: OpenClawConfig,
-): ReadonlySet<string> {
-  return collectConfiguredMediaProviderIds(cfg);
-}
-
-export function collectConfiguredModelProviderSelectionIds(
-  cfg: OpenClawConfig,
-): ReadonlySet<string> {
-  return collectConfiguredProviderIds(cfg);
+  return new Set([
+    ...collectConfiguredModelProviderSelectionIds(cfg),
+    ...collectConfiguredMediaProviderSelectionIds(cfg),
+  ]);
 }

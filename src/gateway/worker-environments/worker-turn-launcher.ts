@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
   LocalTurnPlacementClaim,
@@ -6,6 +7,7 @@ import type {
 } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
@@ -17,6 +19,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import {
@@ -178,6 +181,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       });
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
+      const restartSignal = getGatewayRestartDrainSignal();
       const runLocalTurn = () =>
         executeLocalTurn({
           claim,
@@ -440,6 +444,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent: remoteExec ? assertRunCurrent : assertAdmissionCurrent,
           });
         } catch (error) {
+          const abortReason = turn.abortSignal?.reason;
+          if (!remoteExec && restartSignal.aborted && isAgentRunRestartAbortReason(abortReason)) {
+            // Keep the exact claim and pending result for startup's stop-and-recover owner.
+            // Releasing here would allow a new turn before the old worker is settled.
+            throw abortReason;
+          }
           const disconnectedBeforeHandoff =
             !handedOff &&
             (error instanceof WorkerTunnelOwnerDisconnectedError ||
@@ -557,14 +567,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               requireActivePlacement(reconciled);
             }
           }
-          const pendingWorkspaceResult = options.placements
-            .listPendingWorkspaceResults(turnClaim.sessionId)
-            .find(
-              (pending) =>
-                pending.sessionId === turnClaim.sessionId &&
-                pending.claimId === turnClaim.claimId &&
-                pending.runId === turnClaim.runId,
-            );
+          const pendingWorkspaceResult = findPendingWorkerWorkspaceResult(
+            options.placements,
+            turnClaim,
+          );
           if (pendingWorkspaceResult) {
             if (turnClaim.owner.kind === "local") {
               // The Gateway-owned run is already terminal. Atomically record the

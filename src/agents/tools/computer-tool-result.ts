@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import type { ComputerActResult } from "../../plugins/computer-use-contract.js";
 import { DEFAULT_IMAGE_MAX_DIMENSION_PX } from "../image-sanitization.js";
@@ -64,10 +65,7 @@ function computerFrameImageIdentity(
   if (!image || duplicate) {
     return undefined;
   }
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify([image.mimeType, image.data]))
-    .digest("hex");
+  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
 }
 
 function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {

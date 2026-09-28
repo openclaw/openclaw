@@ -10,7 +10,7 @@ import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js
 import {
   formatEmbeddedAgentQueueFailureSummary,
   getSubagentAnnounceRuntimeConfig,
-  getSubagentRequesterSessionActivity,
+  getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   queueSubagentAnnounceMessage,
@@ -21,21 +21,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
 
-export function resolveRequesterSessionActivity(
-  requesterSessionKey: string,
-  requesterAgentId?: string,
-) {
-  const cfg = getSubagentAnnounceRuntimeConfig();
-  const resolvedAgentId = tryResolveSubagentRequesterAgentId(
-    cfg,
-    requesterSessionKey,
-    requesterAgentId,
-  );
-  if (!resolvedAgentId) {
-    return { isActive: false };
-  }
-  return getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
-}
+export { resolveRequesterSessionActivity };
 
 // Backoff schedule for re-attempting an active-requester steer while the run is
 // compacting. Compaction is transient and usually finishes quickly, so a denser

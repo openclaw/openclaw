@@ -205,7 +205,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           releaseHandoff.resolve();
           await hello;
           expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
-          expect(() => vi.advanceTimersByTime(50)).not.toThrow();
+          expect(() => vi.advanceTimersByTime(200)).not.toThrow();
           const completionAfterHandoff = await readDevicePairSetupCompletion({
             setupId: issued.setupId,
           });

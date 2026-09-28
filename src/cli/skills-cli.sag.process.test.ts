@@ -89,7 +89,9 @@ async function createSagCliFixture(binaryPresent: boolean, enabled?: boolean) {
             4 * 1024 * 1024,
           ),
         )
-      : await tempDirs.track(runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024));
+      : await tempDirs.track(
+          runBuiltRuntime(runtimeRoot, env, args, 60_000, { maxBuffer: 4 * 1024 * 1024 }),
+        );
     const output = `${result.stderr}\n${result.stdout}`;
     expect(result.signal, output).toBeNull();
     expect(result.code, output).toBe(0);

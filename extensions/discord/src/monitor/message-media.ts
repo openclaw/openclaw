@@ -232,19 +232,14 @@ export async function resolveReferencedReplyMediaList(
     : [];
 }
 
-async function fetchDiscordMedia(params: {
-  url: string;
-  filePathHint: string;
-  maxBytes: number;
-  fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
-  readIdleTimeoutMs?: number;
-  totalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  endpointRuntime: DiscordEndpointRuntime | null;
-  fallbackContentType?: string;
-  originalFilename?: string;
-}) {
+async function fetchDiscordMedia(
+  params: Omit<DiscordMediaOperation, "out"> & {
+    url: string;
+    filePathHint: string;
+    fallbackContentType?: string;
+    originalFilename?: string;
+  },
+) {
   const endpointGuard = resolveDiscordEndpointMediaGuard(params.url, params.endpointRuntime);
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal =

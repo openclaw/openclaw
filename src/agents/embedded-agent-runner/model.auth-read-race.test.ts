@@ -224,6 +224,18 @@ it.each([
       "other:key": { type: "api_key", provider: "other", key: "fixture-other-key" },
     },
   };
+  const localStore = (overrides: Partial<OAuthCredential> = {}): AuthProfileStore => ({
+    version: 1,
+    profiles: {
+      [profileId]: {
+        ...credential,
+        access: "fixture-local-access",
+        refresh: "fixture-local-refresh",
+        accountId: "fixture-local-account",
+        ...overrides,
+      },
+    },
+  });
   if (copiedPeer) {
     saveAuthProfileStore(store, readAgentDir);
   }
@@ -239,21 +251,12 @@ it.each([
     expect(loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId]).toEqual(credential);
     clearRuntimeAuthProfileStoreSnapshots();
   } else if (localOverride || localRemoved || foreignLocalChange || foreignSharedChange) {
-    const localStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          ...credential,
-          access: "fixture-local-access",
-          refresh: "fixture-local-refresh",
-          accountId: "fixture-local-account",
-          ...(scope === "foreign shared portable replacement" ? { copyToAgents: true } : {}),
-        },
-      },
-    };
-    saveAuthProfileStore(localStore, readAgentDir);
+    const local = localStore(
+      scope === "foreign shared portable replacement" ? { copyToAgents: true } : {},
+    );
+    saveAuthProfileStore(local, readAgentDir);
     setRuntimeAuthProfileStoreSnapshot(
-      { ...localStore, runtimeLocalProfileIds: [profileId] },
+      { ...local, runtimeLocalProfileIds: [profileId] },
       readAgentDir,
     );
     if (cold) {
@@ -289,17 +292,7 @@ it.each([
         params.candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
         !externallyReplacedStore
       ) {
-        externallyReplacedStore = {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              ...credential,
-              access: "fixture-local-access",
-              refresh: "fixture-local-refresh",
-              accountId: "fixture-local-account",
-            },
-          },
-        };
+        externallyReplacedStore = localStore();
         // A foreign writer changes SQLite without publishing into this process's observation registry.
         runAuthProfileWriteTransaction(readAgentDir, (database) => {
           writePersistedAuthProfileStoreRaw(externallyReplacedStore, readAgentDir, database);
@@ -341,6 +334,12 @@ it.each([
     readBootstrapCredential: () => null,
   });
   const captureSettlement = oauthObservation.captureOAuthRefreshSettlement;
+  const observe = (owner = agentDir) =>
+    captureSettlement({
+      databasePaths: [resolveAuthProfileDatabasePath(owner)],
+      profileId,
+      matchesProvider: () => true,
+    });
   vi.spyOn(oauthObservation, "captureOAuthRefreshSettlement").mockImplementation((params) => {
     const wait = captureSettlement(params);
     return wait
@@ -422,20 +421,7 @@ it.each([
           if (localRemoved) {
             saveAuthProfileStore({ version: 1, profiles: {} }, readAgentDir);
           } else if (localAdded) {
-            saveAuthProfileStore(
-              {
-                version: 1,
-                profiles: {
-                  [profileId]: {
-                    ...credential,
-                    access: "fixture-local-access",
-                    refresh: "fixture-local-refresh",
-                    accountId: "fixture-local-account",
-                  },
-                },
-              },
-              readAgentDir,
-            );
+            saveAuthProfileStore(localStore(), readAgentDir);
           } else if (scope === "other local profile changes") {
             const current = loadPersistedAuthProfileStore(readAgentDir);
             if (!current) {
@@ -533,12 +519,6 @@ it.each([
     } else if (localRemoved || localAdded) {
       releaseRefresh.resolve();
     } else if (scope === "restored claim") {
-      const observe = () =>
-        captureSettlement({
-          databasePaths: [resolveAuthProfileDatabasePath(agentDir)],
-          profileId,
-          matchesProvider: () => true,
-        });
       const beforeReplacement = observe();
       if (!beforeReplacement) {
         throw new Error("Expected pending claim before replacement");
@@ -583,21 +563,9 @@ it.each([
         },
         agentDir,
       );
-      expect(
-        captureSettlement({
-          databasePaths: [resolveAuthProfileDatabasePath(agentDir)],
-          profileId,
-          matchesProvider: () => true,
-        }),
-      ).toBeUndefined();
+      expect(observe()).toBeUndefined();
       if (scope === "reconnected primary with peer") {
-        expect(
-          captureSettlement({
-            databasePaths: [resolveAuthProfileDatabasePath(readAgentDir)],
-            profileId,
-            matchesProvider: () => true,
-          }),
-        ).toEqual(expect.any(Function));
+        expect(observe(readAgentDir)).toEqual(expect.any(Function));
         releaseRefresh.resolve();
       }
     } else {

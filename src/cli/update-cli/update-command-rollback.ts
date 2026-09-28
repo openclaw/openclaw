@@ -18,7 +18,7 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
@@ -55,7 +55,6 @@ import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.
 import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveUpdatedGatewayRestartPort,
   type PreManagedServiceStop,
@@ -512,8 +511,7 @@ export async function rollbackFailedUpdate(params: {
     if (stopped.windowsTaskAutoStartRecovery) {
       params.onGatewayStartAttempted?.();
     }
-    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-      stopped,
+    await stopped.windowsTaskAutoStartRecovery?.restore(
       true,
       createWindowsTaskAutoStartGuard({
         root: serviceRoot,
@@ -530,6 +528,7 @@ export async function rollbackFailedUpdate(params: {
       resolveGatewayService(),
       recoveryEnv,
       params.timeoutMs,
+      { managerUid: restoredService.serviceManagerUid, assertCurrent },
     );
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,

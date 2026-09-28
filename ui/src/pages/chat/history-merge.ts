@@ -392,25 +392,35 @@ export function publishChatSessionProjectionMessages(
   return projection;
 }
 
+// History arrays are replaced, never mutated; index each once, not per scroll render.
+const userIdentities = new WeakMap<
+  readonly unknown[],
+  { userIds: Set<string>; sendKeys: Set<string> }
+>();
+
 /** Custody is its own display collection; only canonical user IDs can replace it. */
 export function selectChatInputDisplay(
   messages: readonly unknown[],
   queue: readonly ChatQueueItem[],
   inputs: ChatPendingInputsPage["items"],
 ) {
-  const userIds = new Set<string>();
-  const sendKeys = new Set<string>();
-  for (const message of messages) {
-    const identity = readSessionMessageIdentity(message);
-    if (identity?.role === "user") {
-      if (identity.id) {
-        userIds.add(identity.id);
-      }
-      if (identity.idempotencyKey) {
-        sendKeys.add(identity.idempotencyKey);
+  let identities = userIdentities.get(messages);
+  if (!identities) {
+    identities = { userIds: new Set(), sendKeys: new Set() };
+    for (const message of messages) {
+      const identity = readSessionMessageIdentity(message);
+      if (identity?.role === "user") {
+        if (identity.id) {
+          identities.userIds.add(identity.id);
+        }
+        if (identity.idempotencyKey) {
+          identities.sendKeys.add(identity.idempotencyKey);
+        }
       }
     }
+    userIdentities.set(messages, identities);
   }
+  const { userIds, sendKeys } = identities;
   const accepted = new Set(inputs.map((input) => input.runId));
   return {
     queue: queue.filter(
@@ -420,7 +430,12 @@ export function selectChatInputDisplay(
           !sendKeys.has(item.sendRunId) &&
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
-    pendingInputs: inputs.filter((input) => !userIds.has(input.id) && !input.queued),
+    pendingInputs: inputs.filter(
+      (input) =>
+        !userIds.has(input.id) &&
+        !input.queued &&
+        asNullableRecord(input.message)?.display !== false,
+    ),
     queuedInputs: inputs.filter((input) => !userIds.has(input.id) && input.queued),
   };
 }

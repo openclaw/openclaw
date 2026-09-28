@@ -140,6 +140,15 @@ input layout while navigating results, and remeasures edits, width changes, and
 reconnected fields. Status clocks pause in hidden tabs and render only when their
 displayed value or properties change.
 
+The first connected, presented transcript commit renders two neighboring rows beyond each
+viewport edge. The next animation frame restores the six-row scrolling buffer;
+pending navigation, focus, or anchor reconciliation uses that full buffer immediately,
+including neighboring controls such as folded-work headers. Focused and anchored
+rows remain retained independently. Link-preview discovery
+waits for browser idle time, then follows transcript mutations instead of rescanning
+unchanged content on every pane update. Hiding or retiring the pane cancels pending
+discovery.
+
 Streaming Markdown retains normalized input, split progress, and rendered prefixes
 in one bounded cache. Completed independent blocks render once; replacements,
 locale or display-option changes, and document-wide Markdown dependencies invalidate
@@ -154,10 +163,13 @@ render; virtualizer and sidebar geometry changes retain their explicit sync path
 Rail labels are shared across mounted markers, so offscreen history does not add
 translation work on each stream update.
 
-Sidebar narration releases its session interests while hidden. Failed releases
-retain their original subscription handles for the next sidebar synchronization
-or disconnect cleanup, including subscriptions that finish acquiring after hiding.
-The shared connection coordinator settles each release independently of other viewers.
+Sidebar narration releases its session interests while hidden. Acquires and releases
+share bounded exponential retry backoff with full jitter and server delay hints.
+Failed releases retain their original handles, including late hidden acquisitions;
+returning interests cancel queued releases and reacquire before retiring those handles.
+The shared connection coordinator renews observers after uncertain unsubscribe timeouts
+and preserves other viewers' leases and approval delivery. DOM detachment pauses timers
+without dropping retained handles; connection closure retires them and cancels retries.
 
 ## Talk live smoke test
 

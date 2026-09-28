@@ -408,7 +408,16 @@ export function redactSupportDiagnosticLine(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
   );
-  return truncateUtf16Safe(commandRedacted.trim(), maxLength);
+  // Loader errors lead with a library path, and can arrive as a later worker cause.
+  // Retain only the numeric ABI requirement before either boundary removes it.
+  const missingGlibc = /\bversion [`'"](GLIBC_\d{1,3}(?:\.\d{1,3}){1,2})['"] not found\b/u.exec(
+    value,
+  )?.[1];
+  const diagnostic =
+    missingGlibc && !commandRedacted.includes(`${missingGlibc} not found`)
+      ? `${missingGlibc} not found; ${commandRedacted.trim()}`
+      : commandRedacted.trim();
+  return truncateUtf16Safe(diagnostic, maxLength);
 }
 
 const PUBLIC_ERROR_CODES = new Set([
@@ -519,7 +528,7 @@ export function redactPublicSupportDiagnosticLine(
   );
   const causes = (
     lines.match(
-      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   // Candidate admission's existing text protocol carries only these fixed validation lines.

@@ -1,9 +1,3 @@
-/**
- * Browser control authentication helpers.
- *
- * Resolves browser-control auth from Gateway auth config and auto-generates a
- * token/password for local control when safe to persist one.
- */
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGatewayAuth, ensureGatewayStartupAuth } from "openclaw/plugin-sdk/gateway-runtime";
@@ -30,17 +24,16 @@ export function resolveBrowserControlAuth(
     env,
     tailscaleMode: cfg?.gateway?.tailscale?.mode,
   });
-  const token = normalizeOptionalString(auth.token) ?? "";
-  const password = normalizeOptionalString(auth.password) ?? "";
-  const mode = auth.mode;
+  const token = normalizeOptionalString(auth.token);
+  const password = normalizeOptionalString(auth.password);
 
-  switch (mode) {
+  switch (auth.mode) {
     case "password":
     case "trusted-proxy":
-      return { password: password || undefined };
+      return { password };
     case "token":
     case "none":
-      return { token: token || undefined };
+      return { token };
     default:
       return {};
   }
@@ -151,12 +144,8 @@ export async function ensureBrowserControlAuth(params: {
     env,
     persist: true,
   });
-  const ensuredAuth = {
-    token: ensured.auth.token,
-    password: ensured.auth.password,
-  };
   return {
-    auth: ensuredAuth,
+    auth: { token: ensured.auth.token, password: ensured.auth.password },
     generatedToken: ensured.generatedToken,
   };
 }

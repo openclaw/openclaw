@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { clean as cleanSemver } from "semver";
 import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
@@ -28,6 +27,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromInstalledPackageDir } from "./install-installed-package.js";
@@ -382,7 +382,10 @@ export async function installPluginFromManagedNpmRoot(
             fs.rm(packagePath, { recursive: true, force: true }),
           ),
         );
-        freshCache = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-npm-cache-" });
+        freshCache = await tempWorkspace({
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "openclaw-npm-cache-",
+        });
         install = await runCommandWithTimeout(npmInstallArgs, {
           ...npmInstallOptions,
           env: {

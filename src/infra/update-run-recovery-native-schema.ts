@@ -177,7 +177,6 @@ export function currentUpdateRecoveryNativeFacts(
  * dispatches and unrelated native histories require their ordinary owners. */
 export function isRecoverablePreparationNative(
   manager: z.infer<typeof RecoveryNativeManagerSchema>,
-  restored = false,
 ): boolean {
   const { original, effects } = manager;
   if (effects.length === 0) {
@@ -189,22 +188,18 @@ export function isRecoverablePreparationNative(
     original.enabled === true &&
     original.loaded &&
     !original.stopped &&
-    effects.length <= 2 &&
+    effects.length === 2 &&
     stop?.action === "stop" &&
-    stop.state !== "not-applied" &&
     isDeepStrictEqual(stop.before, original) &&
     isDeepStrictEqual(stop.after, {
       ...original,
       stopped: true,
       loaded: manager.identity.platform !== "darwin",
     }) &&
-    (restore
-      ? stop.state === "observed" &&
-        restore.action === "restore" &&
-        restore.state !== "not-applied" &&
-        isDeepStrictEqual(restore.before, stop.after) &&
-        isDeepStrictEqual(restore.after, original) &&
-        (!restored || restore.state === "observed")
-      : !restored)
+    stop.state === "observed" &&
+    restore?.action === "restore" &&
+    restore.state === "observed" &&
+    isDeepStrictEqual(restore.before, stop.after) &&
+    isDeepStrictEqual(restore.after, original)
   );
 }

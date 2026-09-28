@@ -1221,6 +1221,49 @@ postgres Created
     }
   });
 
+  posixIt.each(["extra field", "oversized", "two receipts", "injected phase"])(
+    "never promotes logs or invalid %s metadata into an annotation",
+    async (kind) => {
+      const root = tempDirs.make("docker-failure-metadata-");
+      const logFile = path.join(root, "lane.log");
+      const metadata = { phase: "update-candidate", exitStatus: 7, signal: null };
+      const valid = JSON.stringify(metadata);
+      const payload =
+        kind === "oversized"
+          ? "x".repeat(1025)
+          : kind === "two receipts"
+            ? valid + valid
+            : JSON.stringify(
+                kind === "extra field"
+                  ? { ...metadata, secret: "PRIVATE_ENV_BYTES" }
+                  : { ...metadata, phase: "update\n::error::PRIVATE_LOG_BYTES" },
+              );
+      const program = [
+        "const fs = require('node:fs');",
+        "console.error(" + JSON.stringify(valid) + ");",
+        "fs.writeSync(3," + JSON.stringify(payload) + ");",
+        "process.exitCode = 7;",
+      ].join("\n");
+      const entry = path.join(root, "metadata.cjs");
+      writeFileSync(entry, program);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await runShellCommand({
+          command: JSON.stringify(process.execPath) + " " + JSON.stringify(entry),
+          env: { ...process.env, GITHUB_ACTIONS: "true" },
+          label: "metadata",
+          logFile,
+          captureUpgradeFailure: true,
+        });
+        expect(result).toMatchObject({ status: 7, timedOut: false, noOutputTimedOut: false });
+        expect(error.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+        expect(readFileSync(logFile, "utf8")).toContain(valid);
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
+
   posixIt("clamps oversized shell command timers before scheduling", async () => {
     const result = await runShellCommand({
       command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
@@ -1475,7 +1518,15 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
+      let runnerStderr = "";
+      runner.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr += chunk;
+      });
       await waitFor(() => {
+        // A runner that fails to load never becomes ready; report its error, not a timeout.
+        if (runner?.exitCode !== null) {
+          throw new Error(`runner exited before readiness:\n${runnerStderr}`);
+        }
         grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
         return existsSync(readyPath) && grandchildPid > 0;
       });

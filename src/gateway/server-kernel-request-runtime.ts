@@ -99,6 +99,11 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   }
   if (projection) {
     projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+    // The initial roster must be usable before reconnecting clients can issue lists.
+    await projection.ensureMaterialized();
+    if (projectionLifetime.closing) {
+      throw new Error("Gateway closed during session projection startup");
+    }
   }
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);

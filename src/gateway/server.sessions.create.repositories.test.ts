@@ -93,6 +93,9 @@ test("sessions.create retains a cloud repository across replay without creating 
   const gitRead = vi
     .spyOn(gitWorker, "runGitWorkerOperation")
     .mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type === "checkout.context") {
         return {
           root: operation.input.root,

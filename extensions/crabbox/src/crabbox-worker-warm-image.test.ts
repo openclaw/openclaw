@@ -4,17 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
-  commandResult,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,

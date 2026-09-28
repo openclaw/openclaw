@@ -1,12 +1,10 @@
-/**
- * Browser config resolution.
- *
- * Normalizes raw browser config into resolved runtime defaults, profile
- * records, SSRF policy, timeouts, headless mode, and managed Chrome settings.
- */
 import os from "node:os";
 import path from "node:path";
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import type {
+  ResolvedBrowserConfig as ResolvedBrowserConfigContract,
+  ResolvedBrowserTabCleanupConfig,
+} from "openclaw/plugin-sdk/browser-config";
 import type {
   BrowserConfig,
   BrowserProfileConfig,
@@ -45,6 +43,7 @@ import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
 import type { ManagedBrowserHeadlessSource, ResolvedBrowserProfile } from "./profile.types.js";
 export type { ResolvedBrowserProfile } from "./profile.types.js";
+export type { ResolvedBrowserTabCleanupConfig } from "openclaw/plugin-sdk/browser-config";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -68,31 +67,9 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
 };
 
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
-export type ResolvedBrowserConfig = {
-  enabled: boolean;
-  evaluateEnabled: boolean;
-  controlPort: number;
-  cdpPortRangeStart: number;
-  cdpPortRangeEnd: number;
-  cdpProtocol: "http" | "https";
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  remoteCdpTimeoutMs: number;
-  remoteCdpHandshakeTimeoutMs: number;
-  localLaunchTimeoutMs: number;
-  localCdpReadyTimeoutMs: number;
-  actionTimeoutMs: number;
-  color: string;
-  executablePath?: string;
-  headless: boolean;
+export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
-  noSandbox: boolean;
-  attachOnly: boolean;
-  defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
-  tabCleanup: ResolvedBrowserTabCleanupConfig;
-  ssrfPolicy?: SsrFPolicy;
-  extraArgs: string[];
   /** Default loopback port for extension-driver relay servers. */
   extensionRelayDefaultPort: number;
   /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
@@ -105,14 +82,6 @@ export type ResolvedBrowserConfig = {
   extensionRelayInternalTokens: Record<string, string>;
   /** Host-local HMAC key last adopted by the relay lifecycle, not raw config resolution. */
   extensionRelayToken?: string;
-};
-
-/** Normalized tab-cleanup settings for session-owned browser tabs. */
-export type ResolvedBrowserTabCleanupConfig = {
-  enabled: boolean;
-  idleMinutes: number;
-  maxTabsPerSession: number;
-  sweepMinutes: number;
 };
 
 /** Read a named browser profile without falling through to inherited object keys. */
@@ -444,7 +413,7 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl;
-  const driver =
+  const driver: ResolvedBrowserProfile["driver"] =
     profile.driver === "existing-session" || profile.driver === "extension"
       ? profile.driver
       : "openclaw";
@@ -452,6 +421,13 @@ export function resolveProfile(
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
+  const common = {
+    name: profileName,
+    engine,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+    driver,
+    executablePath,
+  };
 
   if (driver === "extension") {
     // Each extension profile needs its own loopback relay port. Explicit
@@ -469,15 +445,11 @@ export function resolveProfile(
       ? `http://${EXTENSION_RELAY_CDP_USER}:${encodeURIComponent(token)}@127.0.0.1:${relayPort}`
       : `http://127.0.0.1:${relayPort}`;
     return {
-      name: profileName,
-      engine,
+      ...common,
       cdpPort: relayPort,
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
-      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      driver,
-      executablePath,
       headless: false,
       headlessSource: "default",
       attachOnly: true,
@@ -491,8 +463,7 @@ export function resolveProfile(
       profileName,
     );
     return {
-      name: profileName,
-      engine,
+      ...common,
       cdpPort: 0,
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
@@ -500,9 +471,6 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs,
-      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      driver,
-      executablePath,
       headless,
       headlessSource,
       attachOnly: true,
@@ -543,15 +511,11 @@ export function resolveProfile(
   }
 
   return {
-    name: profileName,
-    engine,
+    ...common,
     cdpPort,
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-    driver,
-    executablePath,
     headless,
     headlessSource,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,

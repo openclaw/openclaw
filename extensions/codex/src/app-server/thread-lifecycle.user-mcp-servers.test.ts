@@ -1,15 +1,13 @@
 // Codex tests cover thread lifecycle.user mcp servers plugin behavior.
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
-  resetCodexTestBindingStore,
   seedCodexTestBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
@@ -17,14 +15,14 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createParams,
-  resetThreadLifecycleTestFixtures,
   startOrResumeThread,
   threadResumeResult,
   threadStartResult,
 } from "./thread-lifecycle.test-fixtures.js";
 import {
-  closePolicyHttpServers,
+  setupUserMcpServerTestHooks,
   startPolicyHttpServer,
+  tempDir,
   writePolicyProbeServer,
 } from "./thread-lifecycle.user-mcp-servers.test-support.js";
 
@@ -50,22 +48,7 @@ function createRequest(
 }
 
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
-  let tempDir = "";
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
-    // Bindings are keyed by session identity, not tempDir, so sibling tests
-    // would otherwise leak resumable threads into fresh-start expectations.
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    resetThreadLifecycleTestFixtures();
-    await closePolicyHttpServers();
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
+  setupUserMcpServerTestHooks();
 
   it("projects cfg.mcp.servers into the thread/start config patch under mcp_servers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

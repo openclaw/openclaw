@@ -48,6 +48,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },
   { name: "personal_instructions", family: "openclaw" },
+  { name: "presence", family: "openclaw" },
   { name: "session_status", family: "openclaw" },
   { name: "show_widget", family: "openclaw" },
   { name: "progress_card", family: "openclaw" },

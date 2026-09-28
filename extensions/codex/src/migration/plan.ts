@@ -195,12 +195,9 @@ function hasExistingCodexPluginEntry(
   if (existingEntry !== undefined) {
     return !isLegacyDestructivePolicyRepair(existingEntry, nextEntry);
   }
-  return Object.values(existingEntries).some((entry) => {
-    if (!isRecord(entry)) {
-      return false;
-    }
-    return entry.pluginName === pluginName;
-  });
+  return Object.values(existingEntries).some(
+    (entry) => isRecord(entry) && entry.pluginName === pluginName,
+  );
 }
 
 function isLegacyDestructivePolicyRepair(
@@ -420,16 +417,15 @@ export function buildCodexPluginsConfigValue(
         ]),
     ),
   };
-  const pluginConfig: Record<string, unknown> = {
-    codexPlugins: {
-      enabled: true,
-      allow_destructive_actions: readExistingAllowDestructiveActions(config) ?? true,
-      plugins,
-    },
-  };
   return {
     enabled: true,
-    config: pluginConfig,
+    config: {
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: readExistingAllowDestructiveActions(config) ?? true,
+        plugins,
+      },
+    },
   };
 }
 

@@ -232,6 +232,24 @@ struct ChatInputHistory: Equatable, Sendable {
 }
 
 extension OpenClawChatViewModel {
+    /// Captures the admitted route for synchronous editor callbacks without invalidating them on refresh.
+    public func composerModelResolver() -> @MainActor () -> OpenClawChatViewModel? {
+        let session = self.currentSessionSnapshot()
+        return { [weak self] in
+            guard let self, !self.isTransportDetached,
+                  self.sessionKey == session.key,
+                  self.currentSessionSnapshot().deliveryAgentID == session.deliveryAgentID
+            else { return nil }
+            let contractSensitive = self.usesMutableContractRouting(
+                sessionKey: self.sessionKey,
+                contract: session.sessionRoutingContract) ||
+                self.usesMutableContractRouting(sessionKey: self.sessionKey, contract: self.sessionRoutingContract)
+            guard !contractSensitive || self.sessionRoutingContract == session.sessionRoutingContract
+            else { return nil }
+            return self
+        }
+    }
+
     func composerSessionKey(for sessionKey: String, agentID: String? = nil) -> String {
         let qualifiedOwner = OpenClawChatSessionKey.agentID(from: sessionKey)
         guard let agentID = qualifiedOwner ?? agentID ??

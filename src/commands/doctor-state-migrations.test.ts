@@ -49,14 +49,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  loadTaskFlowRegistryStateFromSqlite,
-  upsertTaskFlowRegistryRecordToSqlite,
-} from "../tasks/task-flow-registry.store.sqlite.js";
-import {
-  loadTaskRegistryStateFromSqlite,
-  upsertTaskWithDeliveryStateToSqlite,
-} from "../tasks/task-registry.store.sqlite.js";
 import { createLegacyAgentDatabaseRegistry } from "./doctor-state-migrations.agent-registry.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -2880,41 +2872,13 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(targetPath)).toBe(false);
   });
 
-  it("leaves retired sidecars untouched while shared task and plugin state remain usable", async () => {
+  it("leaves retired sidecars untouched while shared plugin state remains usable", async () => {
     const root = makeDoctorStateDir();
     const sidecars = writeRetiredStateSidecars(root).map((sourcePath) => ({
       sourcePath,
       bytes: fs.readFileSync(sourcePath),
     }));
     await withStateDir(root, async () => {
-      upsertTaskWithDeliveryStateToSqlite({
-        task: {
-          taskId: "current-task",
-          runtime: "cron",
-          sourceId: "nightly",
-          requesterSessionKey: "",
-          ownerKey: "system:cron:nightly",
-          scopeKind: "system",
-          task: "Current shared-state task",
-          status: "running",
-          deliveryStatus: "not_applicable",
-          notifyPolicy: "silent",
-          createdAt: 300,
-        },
-        deliveryState: { taskId: "current-task", lastNotifiedEventAt: 310 },
-      });
-      upsertTaskFlowRegistryRecordToSqlite({
-        flowId: "current-flow",
-        syncMode: "managed",
-        ownerKey: "agent:main:main",
-        controllerId: "tests/current-flow",
-        revision: 1,
-        status: "running",
-        notifyPolicy: "done_only",
-        goal: "Current shared-state flow",
-        createdAt: 300,
-        updatedAt: 310,
-      });
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
         namespace: "components",
         maxEntries: 10,
@@ -2932,24 +2896,6 @@ describe("doctor legacy state migrations", () => {
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     }
     await withStateDir(root, async () => {
-      const taskState = loadTaskRegistryStateFromSqlite();
-      expect([...taskState.tasks.keys()]).toEqual(["current-task"]);
-      expect(taskState.tasks.get("current-task")).toMatchObject({
-        task: "Current shared-state task",
-        ownerKey: "system:cron:nightly",
-        status: "running",
-      });
-      expect(taskState.deliveryStates.get("current-task")).toMatchObject({
-        taskId: "current-task",
-        lastNotifiedEventAt: 310,
-      });
-      const flowState = loadTaskFlowRegistryStateFromSqlite();
-      expect([...flowState.flows.keys()]).toEqual(["current-flow"]);
-      expect(flowState.flows.get("current-flow")).toMatchObject({
-        goal: "Current shared-state flow",
-        controllerId: "tests/current-flow",
-        revision: 1,
-      });
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
         namespace: "components",
         maxEntries: 10,

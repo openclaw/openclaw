@@ -507,7 +507,7 @@ describe("browser server-context tab selection state", () => {
   });
 
   it("keeps dashboard-owned tabs when the managed page cap evicts older ordinary tabs", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockReturnValue([
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
       {
         version: 1,
         sessionKey: "agent:main:main",

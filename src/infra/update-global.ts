@@ -1,4 +1,3 @@
-// Runs package-manager based global update and install flows.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -40,7 +39,6 @@ import {
 } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 
-/** Supported package managers for OpenClaw global install and update flows. */
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
 type ResolvedGlobalInstallCommand = {
@@ -51,10 +49,6 @@ type ResolvedGlobalInstallCommand = {
   };
 };
 
-/**
- * Resolved package-manager command plus the root paths used for install,
- * verification, and staged package swaps.
- */
 export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
@@ -75,10 +69,6 @@ const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=e
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
 const BUN_OPENCLAW_TRUST_FLAG = "--trust";
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
-const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
-  "dist/extensions/qa-channel",
-  "dist/extensions/qa-lab",
-]);
 
 type NpmLifecyclePolicy = "unflagged" | "allow-scripts-advisory" | "allow-scripts";
 
@@ -86,7 +76,6 @@ type NpmLifecyclePolicyGate =
   | { policy: NpmLifecyclePolicy | null; error: null }
   | { policy: null; error: string };
 
-/** Selects npm's lifecycle policy from the version of the owning executable. */
 function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
   const parsed = parseSemver(version);
   if (!parsed) {
@@ -144,15 +133,10 @@ function normalizePackageVersionForComparison(value: string | null | undefined):
   return trimmed.replace(/^[vV](?=\d)/, "");
 }
 
-/** Returns true when a user target requests the moving main-branch package spec. */
 function isMainPackageTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(value) === "main";
 }
 
-/**
- * Returns true for targets that should pass through as package-manager specs
- * rather than being treated as registry dist-tags.
- */
 function isExplicitPackageInstallSpec(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -442,11 +426,8 @@ async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Pr
   const expectedFiles = new Set<string>();
   await Promise.all(
     BUNDLED_RUNTIME_SIDECAR_PATHS.map(async (relativePath) => {
-      const pluginRoot = resolveBundledPluginRoot(relativePath);
-      if (pluginRoot === null) {
-        return;
-      }
-      if (OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS.has(pluginRoot)) {
+      const pluginRoot = /^dist\/extensions\/[^/]+/u.exec(relativePath)?.[0];
+      if (!pluginRoot) {
         return;
       }
       if (
@@ -458,11 +439,6 @@ async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Pr
     }),
   );
   return [...expectedFiles].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolveBundledPluginRoot(relativePath: string): string | null {
-  const match = /^dist\/extensions\/[^/]+/u.exec(relativePath);
-  return match ? match[0] : null;
 }
 
 async function collectInstalledPathErrors(params: {
@@ -560,10 +536,6 @@ function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
   }
 }
 
-/**
- * Converts a user tag or explicit package target into the package-manager spec
- * used by global install commands.
- */
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -605,6 +577,9 @@ export async function createGlobalInstallEnv(
   applyCorepackDownloadPromptEnv(merged);
   applyNpmFreshnessBypassEnv(merged);
   applyPosixNpmScriptShellEnv(merged);
+  if (process.versions.bun) {
+    merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
+  }
   return merged;
 }
 
@@ -971,36 +946,18 @@ export async function resolvePnpmGlobalInstallOwner(
   return { ownerRoot, packageRoot };
 }
 
-function resolvePreferredGlobalManagerCommand(
-  manager: GlobalInstallManager,
-  pkgRoot?: string | null,
-): string {
-  if (manager !== "npm") {
-    return manager;
-  }
-  return resolvePreferredNpmCommand(pkgRoot) ?? manager;
-}
-
-/**
- * Resolves the package-manager command to execute for a global install.
- * npm may use the npm binary beside an existing package root when available.
- */
-function resolveGlobalInstallCommand(
-  manager: GlobalInstallManager,
-  pkgRoot?: string | null,
-): ResolvedGlobalInstallCommand {
-  return {
-    manager,
-    command: resolvePreferredGlobalManagerCommand(manager, pkgRoot),
-  };
-}
-
 function normalizeGlobalInstallCommand(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   pkgRoot?: string | null,
 ): ResolvedGlobalInstallCommand {
   return typeof managerOrCommand === "string"
-    ? resolveGlobalInstallCommand(managerOrCommand, pkgRoot)
+    ? {
+        manager: managerOrCommand,
+        command:
+          managerOrCommand === "npm"
+            ? (resolvePreferredNpmCommand(pkgRoot) ?? managerOrCommand)
+            : managerOrCommand,
+      }
     : managerOrCommand;
 }
 
@@ -1025,7 +982,7 @@ function resolveInstallCommandForManager(
   const normalized = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   return normalized.manager === manager
     ? normalized
-    : resolveGlobalInstallCommand(manager, pkgRoot);
+    : normalizeGlobalInstallCommand(manager, pkgRoot);
 }
 
 /**
@@ -1194,7 +1151,7 @@ async function inspectNpmGlobalOwner(
   const selected = await probeNpmGlobalPrefix(
     runCommand,
     timeoutMs,
-    resolvePreferredGlobalManagerCommand("npm", pkgRoot),
+    resolvePreferredNpmCommand(pkgRoot) ?? "npm",
     diagnostics,
   );
   const pkgReal = await tryRealpath(pkgRoot);
@@ -1218,7 +1175,6 @@ async function inspectNpmGlobalOwner(
   );
 }
 
-/** Identifies a global owner from command probes and installed layout evidence. */
 export async function detectGlobalInstallManagerForRoot(
   runCommand: CommandRunner,
   pkgRoot: string,
@@ -1337,40 +1293,6 @@ export function globalInstallArgs(
   ];
 }
 
-/**
- * Builds npm's retry argv without optional dependencies.
- * Non-npm managers have no equivalent fallback and return null.
- */
-export function globalInstallFallbackArgs(
-  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
-  spec: string,
-  pkgRoot?: string | null,
-  installPrefix?: string | null,
-  installCwd?: string | null,
-  npmLifecyclePolicy: NpmLifecyclePolicy = "allow-scripts",
-): string[] | null {
-  const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
-  if (resolved.manager !== "npm") {
-    return null;
-  }
-  return [
-    resolved.command,
-    "i",
-    "-g",
-    ...(npmLifecyclePolicy !== "unflagged"
-      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd, npmLifecyclePolicy)]
-      : []),
-    ...(installPrefix ? ["--prefix", installPrefix] : []),
-    spec,
-    "--omit=optional",
-    ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
-    ...createNpmFreshnessBypassArgs(process.env, new Date(), {
-      npmConfigPrefix: installPrefix,
-    }),
-  ];
-}
-
-/** Removes leftover hidden global package directories from interrupted renames. */
 export async function cleanupGlobalRenameDirs(params: {
   globalRoot: string;
   packageName: string;

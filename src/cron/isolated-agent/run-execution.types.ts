@@ -25,6 +25,7 @@ export type CronRunExecutionParams = Pick<
   | "resolvedDelivery"
   | "deliveryRequested"
   | "deliverySystemPrompt"
+  | "messageToolFormatPrompt"
   | "sourceDelivery"
   | "skillsSnapshot"
   | "agentPayload"

@@ -5,7 +5,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   getChatAttachmentDataUrl,

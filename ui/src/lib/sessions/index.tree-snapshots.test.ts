@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -81,13 +82,64 @@ function treeHarness(rows = [child, parent, grandparent]) {
 }
 
 describe("tree row snapshots", () => {
+  it("applies participant snapshots locally while refreshing involvement-filtered membership", async () => {
+    vi.useFakeTimers();
+    const participants = [{ identity: { type: "profile" as const, id: "viewer" } }];
+    const updated = { ...settledChild, participants, participantCount: 1 };
+    let participated = false;
+    const request = vi.fn(async (_method: string, params?: unknown) =>
+      sessionsResult(
+        asOptionalRecord(params)?.involvingMe
+          ? participated
+            ? [updated]
+            : []
+          : [child, parent, grandparent],
+        100,
+      ),
+    );
+    const gateway = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway.gateway);
+    const query = { agentId: "main", involvingMe: true };
+    const stop = sessions.subscribeList(query, () => {});
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ ...query, force: true });
+      request.mockClear();
+      participated = true;
+      gateway.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          agentId: "main",
+          reason: "participants",
+          session: updated,
+          ancestorSessions: [settledParent, settledGrandparent],
+          ts: 101,
+        },
+      });
+      expect(sessions.state.result?.sessions[0]).toEqual(updated);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ involvingMe: true }),
+      );
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([updated]);
+    } finally {
+      stop();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["sessions.changed", "session.message"])(
     "keeps %s ancestor references equivalent to full snapshots without roster or descriptor reads",
     async (event) => {
       vi.useFakeTimers();
       const outcomes: GatewaySessionRow[][] = [];
+      const summary = { state: "stale" as const, canEnsure: true };
       try {
-        for (const references of [false, true]) {
+        for (const references of [true, false]) {
           const h = treeHarness();
           const invalidated = vi.fn();
           const observer = h.sessions.observeRow(
@@ -104,6 +156,7 @@ describe("tree row snapshots", () => {
               const ancestors = [
                 {
                   ...settledParent,
+                  activitySummary: summary,
                   totalTokensFresh: false,
                   snapshotAt,
                   ancestorRevision: "parent-revision",
@@ -140,7 +193,27 @@ describe("tree row snapshots", () => {
                   ts: snapshotAt,
                 },
               });
-              await vi.dynamicImportSettled();
+              if (snapshotAt === 102) {
+                // Page reads omit opt-in recaps and retain the wire's empty usage marker.
+                const read = h.holdRead();
+                const refresh = h.sessions.refreshList({
+                  agentId: "main",
+                  includeUnknown: false,
+                  force: true,
+                });
+                read.resolve(
+                  sessionsResult(
+                    [
+                      { ...settledChild, totalTokensFresh: false, snapshotAt },
+                      { ...settledParent, totalTokensFresh: false, snapshotAt },
+                      { ...settledGrandparent, totalTokensFresh: false, snapshotAt },
+                    ],
+                    snapshotAt,
+                  ),
+                );
+                await refresh;
+                h.request.mockClear();
+              }
             }
             // Snapshot clocks are sampling metadata, not a row-content difference.
             outcomes.push(
@@ -156,8 +229,8 @@ describe("tree row snapshots", () => {
           }
         }
         expect(outcomes).toEqual([
-          [settledChild, settledParent, settledGrandparent],
-          [settledChild, settledParent, settledGrandparent],
+          [settledChild, { ...settledParent, activitySummary: summary }, settledGrandparent],
+          [settledChild, { ...settledParent, activitySummary: summary }, settledGrandparent],
         ]);
       } finally {
         vi.useRealTimers();
@@ -185,7 +258,6 @@ describe("tree row snapshots", () => {
             ],
           },
         });
-        await vi.dynamicImportSettled();
         if (change === "list replacement") {
           const read = h.holdRead();
           const refresh = h.sessions.refresh({ agentId: "main", force: true });
@@ -275,11 +347,12 @@ describe("tree row snapshots", () => {
     ).toEqual(expect.arrayContaining(legacyRows));
   });
 
-  it("confirms cleared ancestor fields ahead of an overlapping list read", async () => {
+  it.each(["omitted", "null"])("keeps %s ancestor clears over a stale read", async (clear) => {
     vi.useFakeTimers();
+    const activitySummary = { state: "stale" as const, canEnsure: true };
     const h = treeHarness([
       child,
-      { ...parent, label: "Cleared label", snapshotAt: 100 },
+      { ...parent, label: "Cleared label", activitySummary, snapshotAt: 100 },
       grandparent,
     ]);
     try {
@@ -295,7 +368,12 @@ describe("tree row snapshots", () => {
             ancestorSessions: reference
               ? [settledGrandparent]
               : [
-                  { ...settledParent, ancestorRevision: "parent-revision", snapshotAt: 101 },
+                  {
+                    ...settledParent,
+                    ...(clear === "null" ? { activitySummary: null } : {}),
+                    ancestorRevision: "parent-revision",
+                    snapshotAt: 101,
+                  },
                   settledGrandparent,
                 ],
             ...(reference
@@ -313,7 +391,6 @@ describe("tree row snapshots", () => {
           },
         });
       emit(false);
-      await vi.dynamicImportSettled();
       const pending = h.holdRead();
       const refresh = h.sessions.refresh({ agentId: "main", force: true });
       emit(true);
@@ -321,7 +398,7 @@ describe("tree row snapshots", () => {
         sessionsResult(
           [
             settledChild,
-            { ...settledParent, label: "Stale read label", snapshotAt: 102 },
+            { ...settledParent, label: "Stale read label", activitySummary, snapshotAt: 102 },
             settledGrandparent,
           ],
           102,

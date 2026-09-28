@@ -27,6 +27,7 @@ import { splitMediaFromOutput } from "../../media/parse.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
@@ -48,6 +49,7 @@ import {
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
+  hasManagedOutgoingAssistantContent,
   isMediaBearingPayload,
   prepareAssistantDisplayText,
   sanitizeAssistantDisplayText,
@@ -508,16 +510,16 @@ export function createChatSendReplyDispatch(params: {
     if (rewritten && transcriptScope) {
       appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
-      await publishAssistantTranscriptRewrite({
-        scope: transcriptScope,
-        rewritten: [rewritten],
-      });
       if (assistantContent?.length) {
-        attachManagedOutgoingMediaToMessage({
+        await attachManagedOutgoingMediaToMessage({
           messageId: rewritten.messageId,
           blocks: assistantContent,
         });
       }
+      await publishAssistantTranscriptRewrite({
+        scope: transcriptScope,
+        rewritten: [rewritten],
+      });
       return;
     }
     const hasOnlyFailureDisplay =
@@ -570,14 +572,16 @@ export function createChatSendReplyDispatch(params: {
           : `${clientRunId}:assistant-media`,
       ttsSupplement: ttsSupplementMarker,
       cfg,
+      onMessageCommitted: (receipt, acceptCompletion) => {
+        const blocks = readAssistantDisplayContent(receipt.message);
+        if (hasManagedOutgoingAssistantContent(blocks)) {
+          acceptCompletion(async () => {
+            await attachManagedOutgoingMediaToMessage({ messageId: receipt.messageId, blocks });
+          });
+        }
+      },
     });
     if (appended.ok) {
-      if (appended.messageId && assistantContent?.length) {
-        attachManagedOutgoingMediaToMessage({
-          messageId: appended.messageId,
-          blocks: assistantContent,
-        });
-      }
       appendedWebchatAgentMedia = true;
       finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       return;

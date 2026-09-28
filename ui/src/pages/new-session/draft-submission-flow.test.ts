@@ -34,6 +34,20 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("preserves a restored file draft and reports disabled uploads without creating a session", async () => {
+    const { context, flow } = createDraftFixture();
+    context.config.current.uploadsEnabled = false;
+    const attachment = registerTextPayload("retained-upload");
+    flow.setMessage("Keep this prompt");
+    flow.attachmentDraft.restore([attachment]);
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(flow.message).toBe("Keep this prompt");
+    expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+    expect(flow.error).toContain("uploads are disabled");
+    flow.disconnect();
+  });
+
   it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {
     const { context, flow } = createDraftFixture();
     let accept!: (value: { key: string; initialRun: { status: "started"; runId: string } }) => void;

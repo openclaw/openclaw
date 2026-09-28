@@ -18,7 +18,6 @@ import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { ExitError } from "../../runtime.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
@@ -106,7 +105,6 @@ describe("cron CLI delivery suppression readback", () => {
       { layout: "home", prefix: "openclaw-cron-cli-suppression-" },
       async (state) => {
         await state.writeConfig({});
-        resetTaskRegistryForTests({ persist: false });
         const storePath = state.statePath("cron", "jobs.json");
         const events: CronEvent[] = [];
         let phase:
@@ -340,7 +338,6 @@ describe("cron CLI delivery suppression readback", () => {
           ).toBe(6);
         } finally {
           cron.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );

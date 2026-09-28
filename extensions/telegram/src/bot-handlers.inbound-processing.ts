@@ -60,7 +60,6 @@ type TelegramInboundMessage = {
   msg: Message;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
   threadSpec: TelegramThreadSpec;
   dmPolicy: DmPolicy;
   storeAllowFrom: string[];
@@ -81,6 +80,8 @@ export function createTelegramInboundProcessing({
   params: {
     cfg,
     accountId,
+    ownerAgentId,
+    telegramDeps,
     bot,
     opts,
     runtime,
@@ -106,6 +107,8 @@ export function createTelegramInboundProcessing({
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
     params: {
       accountId,
+      ownerAgentId,
+      telegramDeps,
       bot,
       opts,
       runtime,
@@ -125,7 +128,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       dmPolicy,
       storeAllowFrom,
@@ -187,7 +189,6 @@ export function createTelegramInboundProcessing({
         msg,
         chatId,
         isGroup,
-        isForum,
         threadSpec,
         storeAllowFrom,
         senderId,
@@ -210,7 +211,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       senderId,
       effectiveGroupAllow,

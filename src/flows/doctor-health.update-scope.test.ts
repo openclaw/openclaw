@@ -48,10 +48,8 @@ vi.mock("../gateway/github-public-api.js", () => ({
     return false;
   },
 }));
-vi.mock("../commands/doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: () => undefined,
-}));
 vi.mock("../commands/doctor-workspace.js", () => ({
+  collectWorkspaceBackupTip: () => undefined,
   MEMORY_SYSTEM_PROMPT: "synthetic",
   shouldSuggestMemorySystem: async () => {
     obs.events.push("workspace-suggestions");

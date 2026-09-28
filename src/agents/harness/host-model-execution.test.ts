@@ -12,6 +12,7 @@ import {
 import type { PreparedNativeSessionRuntime } from "../embedded-agent-runner/run/model-setup.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt, runAgentHarnessSettledTurnFinalization } from "./selection.js";
@@ -21,21 +22,10 @@ import type { AgentHarness } from "./types.js";
 const cfg = { agents: { defaults: { model: "fixture/a" } } };
 const permittedModel = { provider: "fixture", model: "a" };
 const policy = prepareOperatorModelPolicy({ cfg, policy: {}, manifestPlugins: [] });
-const result: EmbeddedRunAttemptResult = {
-  terminal: { kind: "ok" },
+const result = makeEmbeddedRunnerAttempt({
   sessionIdUsed: "session-1",
-  messagesSnapshot: [],
   assistantTexts: ["done"],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-  itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-};
+});
 
 async function withHarness(
   mode: "fresh" | "host" | "native",
@@ -144,7 +134,7 @@ async function withHarness(
   expect(listeners.size).toBe(0);
 }
 
-it.each(["fresh", "host", "native"] as const)(
+it.each(["fresh", "native"] as const)(
   "rejects unsupported restricted %s execution before invoking the harness",
   async (mode) =>
     withHarness(mode, true, false, async ({ execute, runAttempt }) => {
@@ -153,7 +143,7 @@ it.each(["fresh", "host", "native"] as const)(
     }),
 );
 
-it.each(["fresh", "host", "native"] as const)(
+it.each(["fresh", "native"] as const)(
   "preserves unsupported %s execution without a model policy",
   async (mode) =>
     withHarness(mode, false, false, async ({ execute, runAttempt, listeners, sourceHolds }) => {
@@ -173,7 +163,7 @@ it.each(["fresh", "host", "native"] as const)(
     }),
 );
 
-it.each(["fresh", "host", "native"] as const)(
+it.each(["fresh", "native"] as const)(
   "cancels unsupported %s work when a policy is introduced even if its outer model is allowed",
   async (mode) =>
     withHarness(

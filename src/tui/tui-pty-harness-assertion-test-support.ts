@@ -30,7 +30,9 @@ export const COMPACT_TERMINAL_SIZES = [
 export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
   try {
     const text = await readFile(logPath, "utf8");
+    // A concurrent append can expose an unfinished record; its newline commits it.
     return text
+      .slice(0, text.lastIndexOf("\n") + 1)
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as FixtureLogEntry);

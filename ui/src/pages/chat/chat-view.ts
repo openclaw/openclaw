@@ -13,18 +13,22 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
-} from "../../lib/keyboard-shortcut-catalog.ts";
+} from "../../lib/keyboard-shortcut-contract.ts";
 import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
@@ -40,9 +44,9 @@ import {
   renderChatComposerNotices,
   renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
+import "./components/chat-comment-controller.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
-import "./components/chat-comment-controller.ts";
 import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import {
   renderComposerQuestionDock,
@@ -86,6 +90,8 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "commentAttachments"
+  | "commentsDisabled"
   | "onAddToChat"
   | "onOpenSession"
   | "onSend"
@@ -156,6 +162,13 @@ export type ChatProps = Omit<
     githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
   };
 
+// renderChat runs on every pane render and the chat-item cache keys the queue by
+// identity; reuse the appended copy until the outbox publishes a new array.
+const placementQueues = new WeakMap<
+  readonly ChatQueueItem[],
+  { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
+>();
+
 export function renderChat(props: ChatProps) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
@@ -191,9 +204,16 @@ export function renderChat(props: ChatProps) {
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
   const placementStartup =
     props.placementStartup?.phase === "failed" ? null : props.placementStartup;
-  const queue = props.placementStartup?.initialTurn
-    ? [...props.queue, props.placementStartup.initialTurn]
-    : props.queue;
+  const initialTurn = props.placementStartup?.initialTurn;
+  let queue = props.queue;
+  if (initialTurn) {
+    let cached = placementQueues.get(props.queue);
+    if (cached?.initialTurn !== initialTurn) {
+      cached = { initialTurn, queue: [...props.queue, initialTurn] };
+      placementQueues.set(props.queue, cached);
+    }
+    queue = cached.queue;
+  }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
   const thread = renderPluginSurface(
@@ -235,9 +255,10 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
-        commentAttachments: props.suggestionComposer ? undefined : props,
+        commentAttachments: props.suggestionComposer ? undefined : props.attachments,
+        commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
         onAddToChat:
-          props.canSend && !props.suggestionComposer
+          props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
             ? (selection, anchorRect) => {
                 const focusComposer = () =>
                   props.transcript.scrollElement
@@ -256,6 +277,10 @@ export function renderChat(props: ChatProps) {
                   onSave: (comment): boolean => {
                     if (props.readSignal?.aborted || !props.onAttachmentsChange) {
                       return true;
+                    }
+                    if (!uploadsEnabled(props.uploadConfig)) {
+                      showToast({ message: uploadsDisabledMessage() });
+                      return false;
                     }
                     const attachment = createChatSelectionAttachment(
                       {
@@ -459,7 +484,8 @@ export function renderChat(props: ChatProps) {
   const transcriptEmpty =
     !runWorking &&
     props.messages.length === 0 &&
-    (pendingInputs?.page.items.length ?? 0) === 0 &&
+    inputDisplay.pendingInputs.length === 0 &&
+    inputDisplay.queuedInputs.length === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&
@@ -543,7 +569,7 @@ export function renderChat(props: ChatProps) {
               .presented=${props.presented ?? true}
             ></openclaw-chat-comment-controller>`
       }
-      <div class="chat-workbench">
+      <div class="chat-workbench" ${shellLayoutTraits({ workbench: true })}>
         <div class="chat-workbench__main">
           <div class="chat-split-container">
             <div class="chat-main">

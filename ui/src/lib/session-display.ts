@@ -119,25 +119,14 @@ export function resolveSessionWorkContext(
     };
   }
 
-  if (row.execNode) {
-    const workspacePath = normalizeOptionalString(row.execCwd);
-    return workspacePath
-      ? { kind: "workspace", name: repoName(workspacePath), path: workspacePath }
-      : undefined;
-  }
-
   // Match the chat workspace owner: local spawned sessions own their recorded
   // workspace first, then their spawned cwd.
-  const workspacePath =
-    normalizeOptionalString(row.spawnedWorkspaceDir) ?? normalizeOptionalString(row.spawnedCwd);
-  if (!workspacePath) {
-    return undefined;
-  }
-  return {
-    kind: "workspace",
-    name: repoName(workspacePath),
-    path: workspacePath,
-  };
+  const workspacePath = row.execNode
+    ? normalizeOptionalString(row.execCwd)
+    : (normalizeOptionalString(row.spawnedWorkspaceDir) ?? normalizeOptionalString(row.spawnedCwd));
+  return workspacePath
+    ? { kind: "workspace", name: repoName(workspacePath), path: workspacePath }
+    : undefined;
 }
 
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */

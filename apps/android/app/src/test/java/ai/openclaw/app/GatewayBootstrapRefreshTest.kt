@@ -9,6 +9,7 @@ import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import android.content.Context
 import android.media.AudioRecord
+import android.net.ConnectivityManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -40,6 +41,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAudioRecord
+import org.robolectric.shadows.ShadowNetwork
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
 import java.util.UUID
@@ -206,7 +208,12 @@ class GatewayBootstrapRefreshTest {
     }
 
   @Test
-  fun capabilityChangeDuringSetupPreservesHandoffAndRelaunchAccess() =
+  fun capabilityChangeDuringSetupPreservesHandoffAndRelaunchAccess() = assertSetupHandoffSurvivesRefresh(networkAttachment = false)
+
+  @Test
+  fun networkAttachmentDuringSetupPreservesHandoffAndRelaunchAccess() = assertSetupHandoffSurvivesRefresh(networkAttachment = true)
+
+  private fun assertSetupHandoffSurvivesRefresh(networkAttachment: Boolean) =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
       // Robolectric owns this application's preference directory; no live app state is used.
@@ -255,6 +262,12 @@ class GatewayBootstrapRefreshTest {
         // The Gateway has consumed the setup code, but Android has not received the role grants.
         // Changing an onboarding capability must not replace that in-flight handoff socket.
         runtime.setCameraEnabled(true)
+        if (networkAttachment) {
+          val network = ShadowNetwork.newInstance(321)
+          shadowOf(app.getSystemService(ConnectivityManager::class.java)).networkCallbacks.toList().forEach { callback ->
+            callback.onAvailable(network)
+          }
+        }
         delayedHello.first.send(gateway.hello(delayedHello.second, "node", bootstrap = true))
 
         val refreshed = withTimeout(5_000) { gateway.nodeConnects.receive() }

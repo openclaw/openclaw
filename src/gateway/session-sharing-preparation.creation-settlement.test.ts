@@ -78,7 +78,6 @@ it.each([
             stateContext?: Parameters<typeof original>[2],
             assertCurrent?: Parameters<typeof original>[3],
             createAdmission?: Parameters<typeof original>[4],
-            requireStateLifecycle?: Parameters<typeof original>[5],
           ) => {
             let initializing = false;
             let initializationAdmission: SqliteWorkerOperationAdmission | undefined;
@@ -139,7 +138,6 @@ it.each([
                   }
                   return admitted;
                 }),
-              requireStateLifecycle,
             );
           },
         );

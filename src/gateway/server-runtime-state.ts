@@ -7,6 +7,7 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -70,6 +71,7 @@ function hasMatchingGatewayPluginRoute(
 
 /** Creates the HTTP/WebSocket transport for one gateway start. */
 export async function createGatewayHttpTransport(params: {
+  scheduler: GatewayScheduler;
   cfg: import("../config/config.js").OpenClawConfig;
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
@@ -181,6 +183,7 @@ export async function createGatewayHttpTransport(params: {
         // matches the configured base path so startup avoids importing hook runtime code.
         const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
         loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+          scheduler: params.scheduler,
           deps: params.deps,
           dispatcher: await getHookDispatcher(),
           getHooksConfig: params.hooksConfig,

@@ -300,27 +300,28 @@ describe("qa scenario catalog channel contracts", () => {
     expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
-  it("uses public parent history and durable task records before accepting fanout", () => {
+  it("uses public parent history and native delivery records before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(flow).toContain('"call":"startAgentRun"');
     expect(flow).not.toContain('"call":"runAgentPrompt"');
-    expect(flow).toContain('"taskTracking":false');
+    expect(flow).not.toContain("taskTracking");
     expect(flow).toContain('"saveAs":"parentOutbound"');
     expect(flow).toContain("waitForAgentHistoryReply");
     expect(flow).not.toContain('"call":"waitForOutboundMessage"');
     expect(flow).not.toContain("childCompletionMarker");
-    expect(flow).toContain("['tasks', 'list', '--json', '--runtime', 'subagent']");
-    expect(flow).toContain("task.requesterSessionKey === sessionKey");
-    expect(flow).toContain("task?.status === 'succeeded'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
+    expect(flow).toContain("readNativeQaSubagentRuns(env, sessionKey)");
+    expect(flow).toContain("run.requesterSessionKey === sessionKey");
+    expect(flow).toContain("run?.execution.status === 'terminal'");
+    expect(flow).toContain("run.execution.outcome?.status === 'ok'");
+    expect(flow).toContain("run.delivery?.status === 'delivered'");
     expect(flow).not.toContain("readRawQaSessionStore");
     expect(flow).not.toContain("readSessionTranscriptSummary");
     expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
   });
 
-  it("settles terminal-reply scenarios from durable task facts instead of sleeps", () => {
+  it("settles terminal-reply scenarios from native run facts instead of sleeps", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
     const flow = JSON.stringify(scenario.execution.flow);
     const config = scenario.execution.config as
@@ -349,11 +350,12 @@ describe("qa scenario catalog channel contracts", () => {
         expectedSendCount: 1,
       },
     ]);
-    expect(flow).toContain("env.gateway.call('tasks.list'");
-    expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
-    expect(flow).toContain("terminalTask.status === 'completed'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
-    expect(flow).toContain("readSettledTerminalTask('restart')");
+    expect(flow).toContain("readNativeQaSubagentRuns(env)");
+    expect(flow).not.toContain("tasks.list");
+    expect(flow).toContain("run.label === `qa-terminal-${caseName}`");
+    expect(flow).toContain("terminalRun.execution.status === 'terminal'");
+    expect(flow).toContain("run.delivery?.status === 'delivered'");
+    expect(flow).toContain("readSettledTerminalRun('restart')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
@@ -368,8 +370,8 @@ describe("qa scenario catalog channel contracts", () => {
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(scenario.execution.providerMode).toBe("mock-openai");
-    expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
-    expect(flow).toContain("task.terminalOutcome === 'succeeded'");
+    expect(flow).toContain("run.delivery?.status === 'not_required'");
+    expect(flow).toContain("run.execution.outcome?.status === 'ok'");
     expect(flow).toContain("emptyTerminalOutbound.length === 0");
     expect(flow).toContain('"saveAs":"requesterAcknowledgements"');
     expect(flow).toContain("requesterAcknowledgements.length === 1");

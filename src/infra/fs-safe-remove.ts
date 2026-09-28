@@ -109,6 +109,7 @@ export async function removePathWithinRoot(params: {
   recursive?: boolean;
   force?: boolean;
   assertBeforeMutation?: () => void;
+  signal?: AbortSignal;
   /** Package trees contain links; unlink their leaves without traversing their targets. */
   symlinks?: "reject" | "unlink";
 }): Promise<void> {
@@ -167,7 +168,6 @@ export async function removePathWithinRoot(params: {
         // before awaits instead of adopting replacement objects on later visits.
         const children: PinnedPath[] = [];
         for (const name of names) {
-          assertEntry();
           try {
             children.push(pinPath(path.join(entry.path, name)));
           } catch (error) {
@@ -185,7 +185,8 @@ export async function removePathWithinRoot(params: {
       // Root's native removal owns Windows read-only handling. This walk owns
       // the admitted link policy and canonical parent pins through that call.
       await run(
-        () => root.remove(operationPath, { assertBeforeMutation: assertEntry }),
+        () =>
+          root.remove(operationPath, { assertBeforeMutation: assertEntry, signal: params.signal }),
         assertParents,
       );
     } catch (error) {

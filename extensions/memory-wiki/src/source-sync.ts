@@ -9,7 +9,7 @@ import {
   resolveMemoryWikiVaultMutationKey,
   withMemoryWikiVaultMutation,
 } from "./mutation-coordinator.js";
-import type { BridgeMemoryWikiResult } from "./source-import.js";
+import { emptySourceImportResult, type BridgeMemoryWikiResult } from "./source-import.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -64,15 +64,7 @@ async function syncMemoryWikiImportedSourcesOnce(
       params.config,
       params.signal ? { signal: params.signal } : undefined,
     );
-    syncResult = {
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    };
+    syncResult = emptySourceImportResult();
   }
   params.signal?.throwIfAborted();
   const refreshResult = await refreshMemoryWikiIndexesAfterImport({

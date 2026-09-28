@@ -13,11 +13,11 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
+import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
 import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
@@ -215,16 +215,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = showComposerInput
     ? html`
         ${renderChatVoiceStatus({
-          status:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? "error"
-              : props.realtimeTalkStatus,
-          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
           onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-          onDismissError:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? undefined
-              : props.onDismissRealtimeTalkError,
+          onDismissError: props.realtimeTalkCameraError
+            ? undefined
+            : props.onDismissRealtimeTalkError,
         })}
         ${
           props.realtimeTalkInputNotice
@@ -454,7 +450,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}
-                ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
+                ${renderChatAttachmentInputs({
+                  ...props,
+                  disabled: !canCompose,
+                  cameraActive: showComposer && props.cameraActive !== false,
+                })}
                 ${
                   props.realtimeTalkVideoStream
                     ? html`

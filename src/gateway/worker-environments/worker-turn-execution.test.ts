@@ -11,7 +11,7 @@ import {
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -369,15 +369,15 @@ describe("worker turn execution", () => {
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
       };
-      setActiveNodeContext(
-        { nodeId: "fixture-node" },
+      setActiveNodeContexts([
         {
+          nodeId: "fixture-node",
           prepare: async () => {
             entered.resolve();
             await release.promise;
           },
         },
-      );
+      ]);
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
@@ -427,7 +427,7 @@ describe("worker turn execution", () => {
       } finally {
         release.resolve();
         await operation;
-        setActiveNodeContext(null);
+        setActiveNodeContexts([]);
         input.preparedRunAdmission.close();
       }
     },

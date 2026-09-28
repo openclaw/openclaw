@@ -100,7 +100,7 @@ describe("AppSidebar person activity card", () => {
       "iPad · Web",
     ]);
     expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
-    expect(facts[1]?.textContent?.trim()).toBe("Not observed yet");
+    expect(facts[1]?.textContent?.trim()).toBe("Activity unavailable");
     const sections = card.querySelectorAll("section");
     expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
     expect(sections[0]?.textContent).toContain("Visible 0");

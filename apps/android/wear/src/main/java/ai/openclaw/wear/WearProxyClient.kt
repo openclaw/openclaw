@@ -425,7 +425,7 @@ internal class WearEventSequenceTracker {
       return
     }
     val previous = lastSequence
-    val streamChanged = this.streamId != streamId && (this.streamId != null || streamId != null)
+    val streamChanged = this.streamId != streamId
     this.streamId = streamId
     if (awaitingSnapshot || previous == null || streamChanged || sequence > previous) lastSequence = sequence
     awaitingSnapshot = false
@@ -444,12 +444,7 @@ internal class WearEventSequenceTracker {
       eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
-    if (this.streamId != streamId && (this.streamId != null || streamId != null)) {
-      awaitingSnapshot = true
-      eventGeneration += 1
-      return WearSequenceDecision.GapOrReset
-    }
-    if (sequence == previous + 1) {
+    if (this.streamId == streamId && sequence == previous + 1) {
       lastSequence = sequence
       eventGeneration += 1
       return WearSequenceDecision.Accepted
@@ -502,12 +497,7 @@ internal class WearEventSequenceTracker {
     sequence: Long?,
   ): Boolean {
     if (awaitingSnapshot) return false
-    if (
-      this.streamId != responseStreamId &&
-      (this.streamId != null || responseStreamId != null)
-    ) {
-      return false
-    }
+    if (this.streamId != responseStreamId) return false
     val currentSequence = lastSequence
     return if (sequence == null) {
       requestEventGeneration == eventGeneration

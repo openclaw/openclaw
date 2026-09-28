@@ -43,6 +43,32 @@ async function open(dataDir: string) {
   return store;
 }
 
+async function aliasedFrameRead() {
+  const directory = tempDirs.make("logbook-frame-read-");
+  const dataDir = path.join(directory, "data");
+  const aliasDir = path.join(directory, "alias");
+  const owner = await open(dataDir);
+  await fs.symlink(dataDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+  const reader = await open(aliasDir);
+  const day = dayKeyFor(1);
+  const bytes = Buffer.from("synthetic frame");
+  const frameId = await owner.captureFrame({
+    capturedAtMs: 1,
+    day,
+    screenIndex: 0,
+    buffer: bytes,
+  });
+  const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  vi.mocked(fs.readFile).mockImplementationOnce(async (file) => {
+    entered.resolve();
+    await release.promise;
+    return await actualFs.readFile(file);
+  });
+  return { owner, reader, day, bytes, frameId, entered, release };
+}
+
 describe("Logbook worker and frame I/O ownership", () => {
   it("bootstraps and reopens durable state without opening SQLite in the application thread", async () => {
     const directory = tempDirs.make("logbook-worker-bootstrap-");
@@ -59,29 +85,8 @@ describe("Logbook worker and frame I/O ownership", () => {
   it.each(["frame", "batch"] as const)(
     "drains an admitted %s read before pruning through a directory alias or closing its client",
     async (kind) => {
-      const directory = tempDirs.make("logbook-frame-drain-");
-      const dataDir = path.join(directory, "data");
-      const aliasDir = path.join(directory, "alias");
-      const owner = await open(dataDir);
-      await fs.symlink(dataDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
-      const reader = await open(aliasDir);
-      const day = dayKeyFor(1);
-      const bytes = Buffer.from("synthetic frame before pruning");
-      const frameId = await owner.captureFrame({
-        capturedAtMs: 1,
-        day,
-        screenIndex: 0,
-        buffer: bytes,
-      });
+      const { owner, reader, day, bytes, frameId, entered, release } = await aliasedFrameRead();
       const batchId = await owner.createBatch({ day, startMs: 1, endMs: 2, frameIds: [frameId] });
-      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      vi.mocked(fs.readFile).mockImplementationOnce(async (file) => {
-        entered.resolve();
-        await release.promise;
-        return await actualFs.readFile(file);
-      });
       const reading = kind === "frame" ? reader.framePayload(frameId) : reader.batchImages(batchId);
       await entered.promise;
       let pruned = false;
@@ -121,28 +126,7 @@ describe("Logbook worker and frame I/O ownership", () => {
   );
 
   it("bounds pending frame reads and keeps admitted reads alive through close", async () => {
-    const directory = tempDirs.make("logbook-frame-capacity-");
-    const dataDir = path.join(directory, "data");
-    const aliasDir = path.join(directory, "alias");
-    const owner = await open(dataDir);
-    await fs.symlink(dataDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
-    const reader = await open(aliasDir);
-    const bytes = Buffer.from("bounded frame queue");
-    const day = "2026-07-03";
-    const frameId = await owner.captureFrame({
-      capturedAtMs: 1,
-      day,
-      screenIndex: 0,
-      buffer: bytes,
-    });
-    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    vi.mocked(fs.readFile).mockImplementationOnce(async (file) => {
-      entered.resolve();
-      await release.promise;
-      return await actualFs.readFile(file);
-    });
+    const { owner, reader, day, bytes, frameId, entered, release } = await aliasedFrameRead();
     const reads = Array.from({ length: 128 }, () => reader.framePayload(frameId));
     const accepted = Promise.allSettled(reads);
     await entered.promise;

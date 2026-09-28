@@ -30,7 +30,7 @@ import {
   type ModelSetupPrepareOption,
   preparedModelActivation,
 } from "./prepare-options.ts";
-import { manualProviderActivation } from "./provider-picker.ts";
+import { manualProviderActivation, revealManualProvider } from "./provider-picker.ts";
 import { createModelSetupDetectTask, createModelSetupVerifyTask } from "./rpc.ts";
 import {
   activationTargetId,
@@ -122,6 +122,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   );
   private readonly login = new ModelProviderLoginController(this, {
     getScope: () => ({ context: this.context, agentId: this.agentSelection.state.selectedId }),
+    getManualProviders: () =>
+      this.pageState.phase === "ready" ? this.pageState.result.manualProviders : [],
+    onManualProvider: (authChoice) => {
+      this.selectManualProvider(authChoice);
+      revealManualProvider(this.renderRoot);
+    },
     canStart: () =>
       this.canUseSetup(this.context.gateway.snapshot.client) &&
       !this.firstRun.unresolved &&

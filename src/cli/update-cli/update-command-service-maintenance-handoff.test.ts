@@ -8,6 +8,7 @@ import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
+import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
@@ -40,29 +41,43 @@ function mockHandoffServicePlatform(platform: NodeJS.Platform) {
   });
 }
 
+function handoffService(home: string, overrides: Partial<GatewayService> = {}, pid = process.ppid) {
+  return createMockGatewayService({
+    readCommand: async () => ({
+      programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+      ...(process.platform === "win32" ? { sourcePath: mocks.taskScriptPath } : {}),
+      environment: { HOME: home },
+    }),
+    readRuntime: async () => ({
+      status: "running",
+      pid,
+      systemd: { managerUid: 2001, controlGroup: "/system.slice/openclaw-gateway.service" },
+    }),
+    isLoaded: async () => true,
+    ...overrides,
+  });
+}
+
 const servingAncestorMaintenanceCases = [
-  ...(["linux", "darwin", "win32"] as const).flatMap((platform) =>
-    (["inspect", "prepare"] as const).flatMap((phase) =>
-      (["ancestor", "inherited environment"] as const).flatMap((ancestry) =>
-        (["current updater", "missing marker"] as const).map((identity) => ({
-          platform,
-          identity,
-          phase,
-          ancestry,
-          authorized: identity === "current updater",
-        })),
-      ),
-    ),
-  ),
-  ...(["linux", "darwin", "win32"] as const).map(
+  ...(["linux", "darwin", "win32"] as const).flatMap(
     (platform) =>
-      ({
-        platform,
-        identity: "missing marker",
-        phase: "prepare",
-        ancestry: "unavailable ancestry",
-        authorized: false,
-      }) as const,
+      [
+        { platform, identity: "current updater", phase: "inspect" },
+        { platform, identity: "current updater", phase: "prepare" },
+        { platform, identity: "missing marker", phase: "prepare" },
+        {
+          platform,
+          identity: "missing marker",
+          phase: "prepare",
+          ancestry: "inherited environment",
+        },
+        {
+          platform,
+          identity: "missing marker",
+          phase: "prepare",
+          ancestry: "unavailable ancestry",
+        },
+      ] as const,
   ),
   ...(["linux", "darwin"] as const).flatMap((platform) =>
     (["inside", "unknown"] as const).map(
@@ -72,29 +87,26 @@ const servingAncestorMaintenanceCases = [
           identity: "missing marker",
           phase: "prepare",
           ancestry: "reparented",
-          authorized: false,
           membership,
         }) as const,
     ),
   ),
-  { platform: "linux", identity: "missing metadata", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing lease", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "replaced owner", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different root", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing run", phase: "inspect", authorized: false },
-  { platform: "linux", identity: "different run", phase: "inspect", authorized: false },
-  { platform: "linux", identity: "missing lease", phase: "inspect", authorized: false },
+  { platform: "linux", identity: "missing metadata", phase: "prepare" },
+  { platform: "linux", identity: "missing lease", phase: "prepare" },
+  { platform: "linux", identity: "replaced owner", phase: "prepare" },
+  { platform: "linux", identity: "different root", phase: "prepare" },
+  { platform: "linux", identity: "different run", phase: "prepare" },
+  { platform: "linux", identity: "stale start identity", phase: "prepare" },
+  { platform: "linux", identity: "parent lease", phase: "prepare" },
+  { platform: "linux", identity: "missing run", phase: "inspect" },
+  { platform: "linux", identity: "different run", phase: "inspect" },
+  { platform: "linux", identity: "missing lease", phase: "inspect" },
+  { platform: "linux", identity: "current updater", phase: "prepare", splitRoot: false },
 ] as const;
 
 it.runIf(process.platform === "linux" || process.platform === "darwin").each(
   servingAncestorMaintenanceCases
-    .flatMap((scenario) => [
-      { ...scenario, splitRoot: false },
-      { ...scenario, splitRoot: true },
-    ])
+    .map((scenario) => Object.assign({ splitRoot: true }, scenario))
     .filter(
       // Binding a foreign PID reads native process identity, so only exercise that
       // fixture where the simulated Linux policy matches the actual host.
@@ -104,7 +116,8 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
   "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase $ancestry split=$splitRoot",
   (scenario) =>
     withServiceHome(async (home) => {
-      const { platform, identity, phase, authorized, splitRoot } = scenario;
+      const { platform, identity, phase, splitRoot } = scenario;
+      const authorized = identity === "current updater";
       const external = "ancestry" in scenario && scenario.ancestry === "inherited environment";
       const unresolved = "ancestry" in scenario && scenario.ancestry === "unavailable ancestry";
       const inherited = external || unresolved;
@@ -198,18 +211,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
           OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
         },
         async () => {
-          const service = createMockGatewayService({
-            readCommand: async () => ({
-              programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-              environment: { HOME: home },
-            }),
-            readRuntime: async () => ({
-              status: "running",
-              pid: gatewayPid,
-              systemd: { managerUid: 2001, controlGroup: "/system.slice/openclaw-gateway.service" },
-            }),
-            isLoaded: async () => true,
-          });
+          const service = handoffService(home, {}, gatewayPid);
           mocks.service.mockReturnValue(service);
           const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
             root,
@@ -300,11 +302,7 @@ it
       let runtimeReads = 0;
       const stop = vi.fn(async () => undefined);
       mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: { HOME: home },
-          }),
+        handoffService(home, {
           readRuntime: async () => {
             runtimeReads += 1;
             if (runtimeReads === 2) {
@@ -325,7 +323,6 @@ it
               systemd: { managerUid: 2001 },
             };
           },
-          isLoaded: async () => true,
           stop,
         }),
       );
@@ -360,13 +357,8 @@ it.runIf(process.platform === "linux" || process.platform === "darwin")(
     withServiceHome(async (home) => {
       const root = process.cwd();
       mockHandoffServicePlatform("darwin");
-      const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
+      const service = handoffService(home, {
         readRuntime: async () => ({ status: "running", pid: 2 }),
-        isLoaded: async () => true,
         stop: async () => {
           throw new ServiceInspectionError("service-membership-unverified");
         },
@@ -397,11 +389,7 @@ it
     withServiceHome(async (home) => {
       const root = process.cwd();
       mockHandoffServicePlatform("linux");
-      const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
+      const service = handoffService(home, {
         readRuntime: async () => ({
           status: "running",
           state: "active",
@@ -412,7 +400,6 @@ it
             controlGroup: "/system.slice/openclaw-gateway.service",
           },
         }),
-        isLoaded: async () => true,
       });
       mocks.service.mockReturnValue(service);
       const outcome = await maybeStopManagedServiceBeforeMutableUpdate({

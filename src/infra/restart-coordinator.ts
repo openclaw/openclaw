@@ -14,7 +14,9 @@ type SafeGatewayRestartCounts = {
   cronRuns: number;
   backgroundExecSessions: number;
   rootRequests: number;
-  activeTasks: number;
+  agentRuns: number;
+  acpRuns: number;
+  mediaRuns: number;
   totalActive: number;
 };
 type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
@@ -25,7 +27,9 @@ type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
     | "cron-run"
     | "background-exec"
     | "root-request"
-    | "task";
+    | "agent-run"
+    | "acp-run"
+    | "media-generation";
 };
 
 type SafeRestartInspectors = Pick<
@@ -36,8 +40,9 @@ type SafeRestartInspectors = Pick<
   | "getCronRuns"
   | "getBackgroundExecSessions"
   | "getRootRequests"
-  | "getActiveTasks"
-  | "getTaskBlockers"
+  | "getAgentRuns"
+  | "getAcpRuns"
+  | "getMediaRuns"
 >;
 
 type SafeGatewayRestartPreflight = {
@@ -73,7 +78,9 @@ export function createSafeGatewayRestartPreflight(
     cronRuns: snapshot.counts.cronRuns,
     backgroundExecSessions: snapshot.counts.backgroundExecSessions,
     rootRequests: snapshot.counts.rootRequests,
-    activeTasks: snapshot.counts.activeTasks,
+    agentRuns: snapshot.counts.agentRuns,
+    acpRuns: snapshot.counts.acpRuns,
+    mediaRuns: snapshot.counts.mediaRuns,
     totalActive:
       snapshot.counts.queueSize +
       snapshot.counts.pendingReplies +
@@ -81,7 +88,9 @@ export function createSafeGatewayRestartPreflight(
       snapshot.counts.cronRuns +
       snapshot.counts.backgroundExecSessions +
       snapshot.counts.rootRequests +
-      snapshot.counts.activeTasks,
+      snapshot.counts.agentRuns +
+      snapshot.counts.acpRuns +
+      snapshot.counts.mediaRuns,
   };
   const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
 

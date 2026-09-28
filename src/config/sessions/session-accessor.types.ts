@@ -405,10 +405,11 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
    */
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
   /**
-   * Rechecks the newest assistant row after the write transaction begins.
+   * Rechecks authority after the write transaction begins. Read the newest assistant
+   * only when the predicate needs it, synchronously within this callback.
    * Direct synchronous writers bypass the process queue, so prepared facts can be stale.
    */
-  shouldAppendInTransaction?: (latestAssistantMessage: unknown) => boolean;
+  shouldAppendInTransaction?: (readLatestAssistantMessage: () => unknown) => boolean;
 };
 
 export type SessionTranscriptTurnWriteContext = Partial<SessionTranscriptRuntimeTarget>;
@@ -441,11 +442,14 @@ export type SessionTranscriptTurnPersistOptions = {
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
   /**
-   * Complete appended or matched messages synchronously after guarded SQLite commit,
-   * before the write yields to cancellation, owner drain, or transcript publication.
+   * Accept appended or matched messages synchronously after guarded SQLite commit.
+   * Explicit completion work is joined before owner drain or transcript publication.
    * The canonical result preserves replay bytes. Throws cannot roll back committed rows.
    */
-  onMessageCommitted?: (result: TranscriptMessageAppendResult<unknown>) => void;
+  onMessageCommitted?: (
+    result: TranscriptMessageAppendResult<unknown>,
+    acceptCompletion: (complete: () => Promise<void>) => void,
+  ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */

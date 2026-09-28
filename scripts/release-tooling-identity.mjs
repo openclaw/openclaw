@@ -102,9 +102,6 @@ export function resolveReleaseToolingIdentity({
     ? parseIdentityJson(requestedIdentityJson)
     : undefined;
   if (!requested) {
-    if (contract !== "1" && contract !== "2") {
-      fail(`release tooling contract ${contract} requires explicit trusted workflow identity.`);
-    }
     if (!directRoute) {
       fail("release-ci and protected-tag workflows require explicit trusted workflow identity.");
     }
@@ -408,8 +405,10 @@ export function verifyReleaseToolingIdentity({
     workflowSha,
   });
 
+  let tagRef;
+  let branchRef;
+  let mainComparisonStatus;
   if (identity.route === "protected-tag") {
-    let tagRef;
     try {
       tagRef = parseJson(
         runGh([
@@ -423,27 +422,7 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("protected release tooling tag is missing or unreadable.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      tagRef,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  if (identity.route === "main") {
+  } else if (identity.route === "main") {
     let comparison;
     try {
       comparison = parseJson(
@@ -461,45 +440,29 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("main release tooling ancestry could not be verified.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      mainComparisonStatus: isRecord(comparison) ? comparison.status : undefined,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  let branchRef;
-  try {
-    branchRef = parseJson(
-      runGh([
-        "api",
-        `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
-        "--method",
-        "GET",
-      ]),
-      "prevalidated release tooling branch",
-    );
-  } catch (error) {
-    throw new Error("prevalidated release tooling branch is missing or unreadable.", {
-      cause: error,
-    });
+    mainComparisonStatus = isRecord(comparison) ? comparison.status : undefined;
+  } else {
+    try {
+      branchRef = parseJson(
+        runGh([
+          "api",
+          `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
+          "--method",
+          "GET",
+        ]),
+        "prevalidated release tooling branch",
+      );
+    } catch (error) {
+      throw new Error("prevalidated release tooling branch is missing or unreadable.", {
+        cause: error,
+      });
+    }
   }
   const validated = validateReleaseToolingIdentity({
     allowPrevalidatedRef,
     branchRef,
+    tagRef,
+    mainComparisonStatus,
     workflowFullRef,
     workflowRef,
     workflowSha,

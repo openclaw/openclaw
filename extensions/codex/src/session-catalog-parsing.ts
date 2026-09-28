@@ -483,7 +483,10 @@ export function filterCatalogPageByTitle(
   };
 }
 
-export function unwrapNodeInvokePayload(value: unknown): unknown {
+export function unwrapNodeInvokePayload(
+  value: unknown,
+  malformedMessage = "Codex node returned malformed session catalog JSON",
+): unknown {
   if (!isRecord(value)) {
     return value;
   }
@@ -491,7 +494,7 @@ export function unwrapNodeInvokePayload(value: unknown): unknown {
     try {
       return JSON.parse(value.payloadJSON) as unknown;
     } catch (error) {
-      throw new Error("Codex node returned malformed session catalog JSON", { cause: error });
+      throw new Error(malformedMessage, { cause: error });
     }
   }
   return "payload" in value ? value.payload : value;

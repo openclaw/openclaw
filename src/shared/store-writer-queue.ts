@@ -240,13 +240,16 @@ export async function runQueuedStoreWrite<T>(params: {
   return await completion;
 }
 
-/** Rejects pending queued writes and clears queue state for test cleanup. */
+/** Rejects pending queued writes and clears idle queue state for test cleanup. */
 export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message: string): void {
-  for (const queue of queues.values()) {
+  for (const [storePath, queue] of queues) {
     for (const task of queue.pending) {
       task.reject(new Error(message));
     }
     queue.pending.length = 0;
+    // An active writer keeps its lane; a fresh queue would admit a second writer.
+    if (!queue.drainPromise) {
+      queues.delete(storePath);
+    }
   }
-  queues.clear();
 }

@@ -24,10 +24,8 @@ import {
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
-
-type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
   GATEWAY_CLIENT_IDS.TUI,

@@ -63,22 +63,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/tasks/task-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
     "src/agents/plugin-model-catalog.ts",
     {
       priority: 6,
@@ -114,7 +98,7 @@ const workerModules = new Set([
   "src/infra/session-cost-usage-worker.ts",
 ]);
 const exceptionModules = new Set([
-  "src/state/openclaw-state-db-write-coordination.ts",
+  "src/state/openclaw-state-db-transaction.ts",
   "src/state/openclaw-state-lease-store.ts",
   "src/state/openclaw-state-lease-storage.ts",
   "src/state/openclaw-agent-db-lease.ts",
@@ -319,7 +303,7 @@ function render(rows) {
     "| 1 | `ensureProfileForEmail`; `updateExecApprovals` | Separate write-coordination lane; exclude from this cutover. The 47% is shared, not a measurement of either method alone. |",
     "| 2 | `sessions.list` → `listProjectedSessions` → resident session row projection | Warm requests already reuse resident rows with no host Kysely reads. Hydration, dirty/archived rows, and membership reads remain migration debt; preserve identity-keyed reuse and projection revisions. |",
     "| 3 | `chat.history` → history worker | Ordinary durable pages already use the worker. This cutover moves raw cursor delta reads and JSON parsing through the same owner; display/profile projection, byte budgets, and fresh sharing checks stay on the host. |",
-    "| 4 | Transcript search → `session-transcript-search.ts` | The async facade moves durable FTS reads through the existing worker lifecycle for all four runtime callers: `sessions-read.ts`, `sessions-search-projected.ts`, `control-ui-session-pr-references.ts`, and `embedded-gateway-stub.ts`. Callers recheck current scope and authorization after awaiting. |",
+    "| 4 | Transcript search → `session-transcript-search.ts` | The async facade moves durable FTS reads through the existing worker lifecycle for the runtime callers: `sessions-read.ts`, `sessions-search-projected.ts`, and `embedded-gateway-stub.ts`. Callers recheck current scope and authorization after awaiting. |",
     "| 5 | Task/flow registry | Async read facades already use workers; native mutations and mixed kernels remain. Preserve accepted-write fences and projection publication. |",
     "| 6 | Provider catalog → `plugin-model-catalog.ts` | Persisted reads reached from `models-config.ts` and prepared model runtime; keep Doctor imports distinct. |",
     "",

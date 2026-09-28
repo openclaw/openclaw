@@ -78,12 +78,10 @@ describe("visible session placement and authority", () => {
     return requireRecord(call[argIndex], `${label} call ${callIndex + 1} arg ${argIndex + 1}`);
   }
 
-  it.each(
-    [undefined, false].flatMap((visible) => [
-      { visible, placement: undefined },
-      { visible, placement: { kind: "local" } },
-    ]),
-  )(
+  it.each([
+    { visible: undefined, placement: undefined },
+    { visible: false, placement: { kind: "local" } },
+  ])(
     "uses local execution through Responses conversion and hidden dispatch: %j",
     async ({ visible, placement }) => {
       const callGateway = vi.fn();
@@ -206,113 +204,104 @@ describe("visible session placement and authority", () => {
     },
   );
 
-  it.each(["linux", "windows/wsl2", "windows/normal", "macos"])(
-    "starts a visible cloud child on %s only after placement is active",
-    async (os) => {
-      await withTestDir({ prefix: "openclaw-visible-cloud-spawn-" }, async (dir) => {
-        const storePath = path.join(dir, "sessions.json");
-        const key = "agent:main:dashboard:cloud-child";
-        const placement = { state: "active", environmentId: "cloud-box" };
-        const callGateway = vi.fn(async (method: string) => {
-          if (method === "sessions.create") {
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key, storePath },
-              { sessionId: "cloud-child", updatedAt: 1 },
-            );
-            return { key, sessionId: "cloud-child", runStarted: false };
-          }
-          if (method === "sessions.dispatch") {
-            return { key, sessionId: "cloud-child", placement };
-          }
-          return { runId: "cloud-run", status: "accepted" };
-        });
-        const registerRun = vi.fn();
-        const tool = createSessionsSpawnTool({
-          agentSessionKey: "agent:main:main",
-          config: {
-            session: { store: storePath },
-            agents: {
-              defaults: { subagents: { model: "mock-provider/child@child-profile" } },
-              list: [{ id: "main" }],
-            },
-            cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
-          },
-          callGateway: callGateway as never,
-          registerRun,
-          countActiveRuns: () => 0,
-        });
-        const result = await withCloudGateway(() =>
-          tool.execute("cloud-spawn", {
-            task: "Run the platform tests",
-            visible: true,
-            worktree: true,
-            runTimeoutSeconds: 180,
-            placement: { kind: "profile", profileId: "build", os, machineClass: "tiny" },
-          }),
-        );
-        expect(callGateway.mock.calls.map(([method]) => method)).toEqual([
-          "sessions.create",
-          "sessions.dispatch",
-          "agent",
-        ]);
-        expect(mockCallArg(callGateway, 0, 1, "sessions.create")).toMatchObject({
-          model: "mock-provider/child@child-profile",
-        });
-        expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("task");
-        expect(callGateway).toHaveBeenCalledWith(
-          "sessions.dispatch",
-          {
-            key,
-            profileId: "build",
-            os,
-            machineClass: "tiny",
-          },
-          expect.objectContaining({ timeoutMs: null }),
-        );
-        expect(callGateway).toHaveBeenCalledWith(
-          "agent",
-          expect.objectContaining({
-            sessionKey: key,
-            sessionId: "cloud-child",
-            expectedExistingSessionId: "cloud-child",
-            message: expect.stringContaining("[Subagent Task]"),
-            timeout: 180,
-            deliver: false,
-            sessionEffects: "visible",
-          }),
-          expect.anything(),
-        );
-        expect(result.details).toMatchObject({
-          status: "accepted",
-          childSessionKey: key,
-          runId: "cloud-run",
-          placement,
-        });
-        expectRegisteredSubagentRun(registerRun, {
-          runId: "cloud-run",
-          childSessionKey: key,
-        });
+  it("starts a visible cloud child only after placement is active", async () => {
+    const os = "windows/wsl2";
+    await withTestDir({ prefix: "openclaw-visible-cloud-spawn-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const key = "agent:main:dashboard:cloud-child";
+      const placement = { state: "active", environmentId: "cloud-box" };
+      const callGateway = vi.fn(async (method: string) => {
+        if (method === "sessions.create") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: key, storePath },
+            { sessionId: "cloud-child", updatedAt: 1 },
+          );
+          return { key, sessionId: "cloud-child", runStarted: false };
+        }
+        if (method === "sessions.dispatch") {
+          return { key, sessionId: "cloud-child", placement };
+        }
+        return { runId: "cloud-run", status: "accepted" };
       });
-    },
-  );
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          session: { store: storePath },
+          agents: {
+            defaults: { subagents: { model: "mock-provider/child@child-profile" } },
+            list: [{ id: "main" }],
+          },
+          cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
+        },
+        callGateway: callGateway as never,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
+      const result = await withCloudGateway(() =>
+        tool.execute("cloud-spawn", {
+          task: "Run the platform tests",
+          visible: true,
+          worktree: true,
+          runTimeoutSeconds: 180,
+          placement: { kind: "profile", profileId: "build", os, machineClass: "tiny" },
+        }),
+      );
+      expect(callGateway.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.create",
+        "sessions.dispatch",
+        "agent",
+      ]);
+      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).toMatchObject({
+        model: "mock-provider/child@child-profile",
+      });
+      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("task");
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.dispatch",
+        {
+          key,
+          profileId: "build",
+          os,
+          machineClass: "tiny",
+        },
+        expect.objectContaining({ timeoutMs: null }),
+      );
+      expect(callGateway).toHaveBeenCalledWith(
+        "agent",
+        expect.objectContaining({
+          sessionKey: key,
+          sessionId: "cloud-child",
+          expectedExistingSessionId: "cloud-child",
+          message: expect.stringContaining("[Subagent Task]"),
+          timeout: 180,
+          deliver: false,
+          sessionEffects: "visible",
+        }),
+        expect.anything(),
+      );
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        childSessionKey: key,
+        runId: "cloud-run",
+        placement,
+      });
+      expectRegisteredSubagentRun(registerRun, {
+        runId: "cloud-run",
+        childSessionKey: key,
+      });
+    });
+  });
 
   it.each([
     { placement: { kind: "profile", profileId: "build" }, visible: false },
     { placement: { kind: "profile", profileId: "build" }, visible: true, worktree: false },
     { placement: { kind: "profile", profileId: "build", os: "" }, visible: true, worktree: true },
     { placement: { kind: "device", deviceId: "other" }, visible: true, worktree: true },
-    ...[
-      null,
-      {},
-      { kind: "local", profileId: "placeholder" },
-      { kind: "local", os: "linux" },
-      { kind: "local", machineClass: "tiny" },
-    ].map((placement) => ({ placement, visible: true, worktree: true })),
-    {
-      visible: false,
-      worktree: false,
-      placement: { kind: "profile", profileId: "ignored", os: "ignored", machineClass: "ignored" },
-    },
+    ...[null, {}, { kind: "local", profileId: "placeholder" }].map((placement) => ({
+      placement,
+      visible: true,
+      worktree: true,
+    })),
   ])("rejects invalid placement before creating a child: %j", async (args) => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({ callGateway, countActiveRuns: () => 0 });

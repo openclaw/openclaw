@@ -12,13 +12,12 @@ import { showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
 type CommentAttachment = ChatAttachment & { selectionAnnotation: ChatSelectionAnnotation };
 
-export function currentChatComments(props: ChatAttachmentControlsProps, sessionKey: string) {
-  return (props.getAttachments?.() ?? props.attachments ?? []).filter(
-    (item): item is CommentAttachment =>
-      Boolean(
-        item.selectionAnnotation &&
-        areUiSessionKeysEquivalent(item.selectionAnnotation.sessionKey, sessionKey),
-      ),
+export function currentChatComments(attachments: readonly ChatAttachment[], sessionKey: string) {
+  return attachments.filter((item): item is CommentAttachment =>
+    Boolean(
+      item.selectionAnnotation &&
+      areUiSessionKeysEquivalent(item.selectionAnnotation.sessionKey, sessionKey),
+    ),
   );
 }
 
@@ -70,7 +69,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       !this.presented ||
       this.props.disabled ||
       (this.editingId &&
-        !currentChatComments(this.props, this.sessionKey).some(
+        !currentChatComments(this.currentAttachments(), this.sessionKey).some(
           (item) => item.id === this.editingId,
         ))
     ) {
@@ -140,7 +139,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       this.clearComments();
       return;
     }
-    const attachment = currentChatComments(this.props, this.sessionKey).find(
+    const attachment = currentChatComments(this.currentAttachments(), this.sessionKey).find(
       (item) => item.id === event.detail?.id,
     );
     if (!attachment) {
@@ -172,7 +171,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   private clearComments() {
     this.retireEditor();
-    const removed = currentChatComments(this.props, this.sessionKey);
+    const removed = currentChatComments(this.currentAttachments(), this.sessionKey);
     if (removed.length === 0) {
       return;
     }
@@ -189,7 +188,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     this.retireEditor();
     const signal = this.props.readSignal;
     const sessionKey = this.sessionKey;
-    const comments = currentChatComments(this.props, sessionKey);
+    const comments = currentChatComments(this.currentAttachments(), sessionKey);
     const index = comments.findIndex((item) => item.id === id);
     const next = comments[index + 1] ?? comments[index - 1];
     const current = this.currentAttachments();

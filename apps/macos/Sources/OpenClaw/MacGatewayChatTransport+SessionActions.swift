@@ -2,6 +2,29 @@ import Foundation
 import OpenClawChatUI
 
 extension MacGatewayChatTransport {
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        // The window's first catalog load can precede its event subscription connecting.
+        let serverLease = try await self.connection.acquireServerLease()
+        try await self.requireCurrentOutboxGateway()
+        try await self.loadAgents(ifCurrentServerLease: serverLease, onUpdate: onUpdate)
+    }
+
+    private func loadAgents(
+        ifCurrentServerLease serverLease: GatewayConnection.ServerLease,
+        onUpdate: OpenClawChatAgentCatalogUpdate) async throws
+    {
+        try await OpenClawChatAgentsListResponse.load(
+            request: { request in
+                try await self.connection.request(
+                    method: request.method,
+                    params: request.params,
+                    timeoutMs: request.timeoutMs,
+                    ifCurrentServerLease: serverLease)
+            },
+            isCurrent: { await self.connection.isCurrentServerLease(serverLease) },
+            onUpdate: onUpdate)
+    }
+
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
         guard let serverLease = await self.connection.captureServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
@@ -13,9 +36,8 @@ extension MacGatewayChatTransport {
                 ifCurrentServerLease: serverLease)
         }
         return OpenClawChatNewSessionRouteLease(
-            listAgents: {
-                let data = try await request(OpenClawChatGatewayRequests.agentsList())
-                return try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
+            loadAgents: { onUpdate in
+                try await self.loadAgents(ifCurrentServerLease: serverLease, onUpdate: onUpdate)
             },
             createSession: { key, label, explicitAgentID, parentSessionKey, worktree, worktreeBaseRef in
                 let agentID = explicitAgentID

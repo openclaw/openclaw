@@ -727,8 +727,6 @@ describe("session.message websocket events", () => {
       countPendingDescendantRuns: () => 0,
       getLatestRunForChildSession: () => null,
       suppressAnnounceForSteerRestart: () => false,
-      resolveSubagentTask: () => ({ lookup: "available" }),
-      resolveSubagentTaskAsync: async () => ({ lookup: "available" }),
       shouldEmitEndedHookForRun: () => false,
       emitSubagentEndedHookForRun: vi.fn(async () => {}),
       emitSubagentProgressEndedForRun,
@@ -770,7 +768,7 @@ describe("session.message websocket events", () => {
       expectRecordFields(event.payload, {
         sessionKey: entry.childSessionKey,
         reason: "subagent-status",
-        status: "failed",
+        status: "interrupted",
         endedAt: completion.endedAt,
         spawnedBy: entry.requesterSessionKey,
       });

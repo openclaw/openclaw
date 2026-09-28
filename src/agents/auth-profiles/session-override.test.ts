@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -10,6 +10,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createBedrockAwsSdkConfig } from "./config-fixtures.test-support.js";
+import { authProfilesLog } from "./constants.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
@@ -664,6 +665,9 @@ describe("resolveSessionAuthProfileOverride", () => {
     "does not replace a $name user override with an auth profile in cooldown",
     async ({ profile }) => {
       await withAuthState(async (state) => {
+        const warn = profile
+          ? undefined
+          : vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
         const agentDir = await prepareCooldownAuthState(state);
         if (profile) {
           authStoreMocks.state.store.profiles["anthropic:stale"] = profile;
@@ -684,6 +688,15 @@ describe("resolveSessionAuthProfileOverride", () => {
         expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
         expect(sessionEntry.authProfileOverrideSource).toBe(profile ? undefined : "user");
         expect(sessionEntry.authProfileOverrideCompactionCount).toBe(profile ? undefined : 2);
+        if (!profile) {
+          expect(warn).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({
+              event: "session_auth_profile_unavailable",
+              profileId: "openai:missing",
+            }),
+          );
+        }
       });
     },
   );

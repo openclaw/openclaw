@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -60,10 +61,8 @@ import {
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
 import {
-  postCoreUpdateParentOwnsCompletion,
   readPostCorePluginInstallRecordsFile,
-  resolvePostCoreUpdateOperatorOptions,
-  resolvePostCoreUpdateStartedAtMs,
+  resolvePostCoreUpdateHandoff,
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
@@ -92,14 +91,11 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
         parentError = error;
       }
     }
-    const opts = await resolvePostCoreUpdateOperatorOptions({
+    const { opts, parentOwnsCompletion } = await resolvePostCoreUpdateHandoff({
       opts: params.opts,
       resultPath: process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
     });
-    const resumed = { ...params, opts };
-    const parentOwnsCompletion = await postCoreUpdateParentOwnsCompletion(
-      process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
-    );
+    const resumed = { ...params, opts, parentOwnsCompletion };
     const record =
       runId && !params.opts.run && !parentOwnsCompletion ? getUpdateRun(runId, { env }) : undefined;
     if (runId && !params.opts.run && !parentOwnsCompletion && !record) {
@@ -224,10 +220,15 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     );
     throw error;
   }
-  defaultRuntime.exit(0);
+  // A supplied executor belongs to the caller, which must settle it before exit.
+  if (!params.opts.run?.executorFence) {
+    defaultRuntime.exit(0);
+  }
 }
 
-async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams): Promise<{
+async function resumePostCoreUpdateInternal(
+  params: ResumePostCoreUpdateParams & { parentOwnsCompletion: boolean },
+): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   result: UpdateRunResult;
   assertRequesterCurrent: () => void;
@@ -261,10 +262,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     (await readPackageVersion(params.root)) ?? VERSION;
   assertCurrent?.();
 
-  const parentOwnsCompletion = await postCoreUpdateParentOwnsCompletion(
-    process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
-  );
-  assertCurrent?.();
+  const { parentOwnsCompletion } = params;
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
@@ -347,7 +345,9 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
           suppressFutureVersionWarning: true,
           observe: false,
         });
-        const updateStartedAtMs = await resolvePostCoreUpdateStartedAtMs(process.env);
+        const updateStartedAtMs = parseStrictPositiveInteger(
+          process.env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "",
+        );
         const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
           sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
           currentSnapshot: configSnapshot,
@@ -363,9 +363,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
           requestedChannel,
           preUpdateConfig: preUpdateSourceConfig,
           parentPluginInstallRecords,
-          updateStartedAtMs: process.env[POST_CORE_UPDATE_STARTED_AT_ENV]?.trim()
-            ? updateStartedAtMs
-            : undefined,
+          updateStartedAtMs,
           assertCurrent,
         });
         producedPluginUpdate = pluginUpdate;

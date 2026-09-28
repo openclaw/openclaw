@@ -1,4 +1,3 @@
-/** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
@@ -26,8 +25,6 @@ import type {
   ImageGenerationSourceImage,
 } from "./types.js";
 
-// Factory for providers that expose OpenAI-style /images/generations and
-// /images/edits endpoints while still allowing provider-specific bodies.
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
 
 /** OpenAI-compatible image endpoint mode. */
@@ -91,23 +88,12 @@ export type OpenAiCompatibleImageProviderOptions = {
   };
 };
 
-function readProviderConfig(
-  cfg: OpenClawConfig | undefined,
-  providerConfigKey: string,
-): ModelProviderConfig | undefined {
-  return cfg?.models?.providers?.[providerConfigKey];
-}
-
 function resolveDefaultModel(model: string | undefined, fallback: string): string {
   return normalizeOptionalString(model) ?? fallback;
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/u, "");
-}
-
 function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
-  return `${trimTrailingSlash(baseUrl)}/images/${mode === "edit" ? "edits" : "generations"}`;
+  return `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`;
 }
 
 function resolveRequestTimeoutMs(params: {
@@ -137,9 +123,7 @@ function resolveResponseMaxImages(params: {
   mode: OpenAiCompatibleImageRequestMode;
   options: OpenAiCompatibleImageProviderOptions;
 }): number {
-  return params.mode === "edit"
-    ? (params.options.capabilities.edit.maxCount ?? params.count)
-    : (params.options.capabilities.generate.maxCount ?? params.count);
+  return params.options.capabilities[params.mode].maxCount ?? params.count;
 }
 
 /** Creates an image-generation provider backed by OpenAI-style image endpoints. */
@@ -148,11 +132,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
 ): ImageGenerationProvider {
   const providerConfigKey = options.providerConfigKey ?? options.id;
   const normalizeModel = options.normalizeModel ?? resolveDefaultModel;
-  const resolveCount =
-    options.resolveCount ??
-    (({ req }) => {
-      return req.count ?? 1;
-    });
+  const resolveCount = options.resolveCount ?? (({ req }) => req.count ?? 1);
 
   return {
     id: options.id,
@@ -181,12 +161,6 @@ export function createOpenAiCompatibleImageGenerationProvider(
             }.`,
         );
       }
-      if (mode === "edit" && inputImages.length === 0) {
-        throw new Error(
-          options.missingInputImageError ?? `${options.label} image edit missing reference image.`,
-        );
-      }
-
       const auth = await resolveApiKeyForProvider({
         provider: options.id,
         cfg: req.cfg,
@@ -197,7 +171,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
       }
 
-      const providerConfig = readProviderConfig(req.cfg, providerConfigKey);
+      const providerConfig = req.cfg?.models?.providers?.[providerConfigKey];
       const resolvedBaseUrl =
         options.resolveBaseUrl?.({
           req,

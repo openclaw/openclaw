@@ -6,6 +6,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
@@ -53,13 +54,6 @@ import {
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
 const MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY = "__voice_call_no_remote__";
-
-type Logger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-  debug?: (message: string) => void;
-};
 
 const loadRealtimeTranscriptionRuntime = createLazyRuntimeModule(
   () => import("./realtime-transcription.runtime.js"),
@@ -193,7 +187,7 @@ export class VoiceCallWebhookServer {
   private coreConfig: OpenClawConfig | null;
   private fullConfig: OpenClawConfig | null;
   private agentRuntime: OpenClawPluginApi["runtime"]["agent"] | null;
-  private logger: Logger;
+  private logger: PluginLogger;
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
@@ -214,7 +208,7 @@ export class VoiceCallWebhookServer {
     coreConfig?: OpenClawConfig,
     fullConfig?: OpenClawConfig,
     agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
-    logger?: Logger,
+    logger?: PluginLogger,
   ) {
     this.config = normalizeVoiceCallConfig(config);
     this.manager = manager;
@@ -262,9 +256,6 @@ export class VoiceCallWebhookServer {
     });
   }
 
-  /**
-   * Get the media stream handler (for wiring to provider).
-   */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
   }
@@ -362,15 +353,14 @@ export class VoiceCallWebhookServer {
    */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const pluginConfig =
-      this.fullConfig ?? (this.coreConfig as unknown as OpenClawConfig | undefined);
+    const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
     const resolution = resolveConfiguredCapabilityProvider({
       configuredProviderId: streaming.provider,
       providerConfigs: streaming.providers,
       cfg: pluginConfig,
-      cfgForResolve: pluginConfig ?? ({} as OpenClawConfig),
+      cfgForResolve: pluginConfig ?? {},
       getConfiguredProvider: (providerId) =>
         getRealtimeTranscriptionProvider(providerId, pluginConfig),
       listProviders: () =>
@@ -402,7 +392,7 @@ export class VoiceCallWebhookServer {
     const streamConfig: MediaStreamConfig = {
       transcriptionProvider: provider,
       providerConfig,
-      cfg: this.fullConfig ?? (this.coreConfig as OpenClawConfig | null) ?? undefined,
+      cfg: pluginConfig,
       preStartTimeoutMs: streaming.preStartTimeoutMs,
       maxPendingConnections: streaming.maxPendingConnections,
       maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
@@ -573,7 +563,7 @@ export class VoiceCallWebhookServer {
           }
           const path = this.getUpgradePathname(request);
           if (path === streamPath && this.mediaStreamHandler) {
-            this.mediaStreamHandler?.handleUpgrade(request, socket, head);
+            this.mediaStreamHandler.handleUpgrade(request, socket, head);
           } else {
             // HTTP relinquishes upgraded sockets; own errors while the 404 flushes.
             socket.once("error", () => {});
@@ -613,9 +603,6 @@ export class VoiceCallWebhookServer {
     return this.startPromise;
   }
 
-  /**
-   * Stop the webhook server.
-   */
   stop(): Promise<void> {
     if (this.stopPromise) {
       return this.stopPromise;
@@ -690,9 +677,6 @@ export class VoiceCallWebhookServer {
     return normalizeWebhookPath(requestPath) === normalizeWebhookPath(configuredPath);
   }
 
-  /**
-   * Handle incoming HTTP request.
-   */
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -756,7 +740,12 @@ export class VoiceCallWebhookServer {
     try {
       let body = "";
       try {
-        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
+        // Defer destruction so a limit rejection can be answered before the close.
+        body = await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_WEBHOOK_BODY_BYTES,
+          timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+          destroyOnLimit: false,
+        });
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
           await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
@@ -1079,18 +1068,6 @@ export class VoiceCallWebhookServer {
       }
     }
     res.end(payload.body);
-  }
-
-  /**
-   * Read request body as string with timeout protection.
-   */
-  private readBody(
-    req: http.IncomingMessage,
-    maxBytes: number,
-    timeoutMs: number,
-  ): Promise<string> {
-    // Defer destruction so a limit rejection can be answered before the close.
-    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs, destroyOnLimit: false });
   }
 
   /**
