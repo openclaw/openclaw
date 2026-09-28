@@ -35,7 +35,10 @@ import {
   isReleaseOnlyRuntimeTestFile,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
-import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
+import {
+  createNativeSoloTimingKey,
+  isRuntimePlacementIncludePatterns,
+} from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -2678,12 +2681,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it.each([
-    { profile: "blacksmith", legacy: 116, measured: 310, defaultSeconds: 25 },
-    { profile: "github", legacy: 186, measured: 370, defaultSeconds: 40 },
-    { profile: "hybrid", legacy: 101, measured: 310, defaultSeconds: 22 },
+    { profile: "blacksmith", legacy: 116, measured: 310, defaultSeconds: 25, preparation: 60 },
+    { profile: "github", legacy: 186, measured: 370, defaultSeconds: 40, preparation: 96 },
+    { profile: "hybrid", legacy: 101, measured: 310, defaultSeconds: 22, preparation: 60 },
   ])(
     "prefers $profile measurements while retaining unmeasured hints and defaults",
-    ({ profile, legacy, measured, defaultSeconds }) => {
+    ({ profile, legacy, measured, defaultSeconds, preparation }) => {
       const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
       const options = {
         includeReleaseOnlyPluginShards: false,
@@ -2695,7 +2698,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         plan.find((shard) =>
           shard.groups.some((group) => group.shard_name === "core-runtime-tui-pty"),
         );
-      expect(tuiJob(fallback)?.predictedSeconds).toBe(legacy);
+      expect(tuiJob(fallback)?.pretestBuildMode).toBe("runtime");
+      expect(tuiJob(fallback)?.predictedSeconds).toBe(legacy + preparation);
       timings.mockImplementation((runner) => ({
         "core-runtime-tui-pty": runner === "blacksmith" ? 310 : 370,
         "removed-test-group": 999,
@@ -2704,7 +2708,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(tuiJob(updated)?.groups.map((group) => group.shard_name)).toEqual([
         "core-runtime-tui-pty",
       ]);
-      expect(tuiJob(updated)?.predictedSeconds).toBe(measured);
+      expect(tuiJob(updated)?.predictedSeconds).toBe(measured + preparation);
       expect(
         updated.find((shard) =>
           shard.groups.some((group) => group.shard_name === "core-support-boundary"),
@@ -3177,9 +3181,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it.each([false, true])(
-    "retains measured storage module work despite a stale parent timing (companion: %s)",
-    async (companion) => {
+  it.each([
+    { companion: false, nativeSample: false },
+    { companion: true, nativeSample: false },
+    { companion: true, nativeSample: true },
+  ])(
+    "prices storage work without changing placement (companion: $companion, native sample: $nativeSample)",
+    async ({ companion, nativeSample }) => {
       const config = "test/vitest/vitest.infra.config.ts";
       const longest = MEASURED_STORAGE_RECOVERY_TEST;
       const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
@@ -3199,9 +3207,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         listTrackedTestFiles: (root: string) =>
           companion && root === "src/infra" ? [ordinary] : [],
       }));
+      const measurements: Record<string, number> = { "core-runtime-infra-storage-state": 1 };
       vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
         ...testTimings,
-        readCompactGroupTimings: () => ({ "core-runtime-infra-storage-state": 1 }),
+        readCompactGroupTimings: () => measurements,
         readRuntimePlacementTimings: () => [],
       }));
       vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
@@ -3211,8 +3220,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         resolveVitestPretestBuildMode: () => undefined,
       }));
       try {
-        const { createNodeTestShardBundles: createPlan } =
-          await import("../../scripts/lib/ci-node-test-plan.mts");
+        const {
+          createNodeTestShardBundles: createPlan,
+          createSelectedNodeTestShardBundles: createSelectedPlan,
+        } = await import("../../scripts/lib/ci-node-test-plan.mts");
         const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
         expect(
           plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
@@ -3225,6 +3236,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(279.963 + 20);
         expect(longestJob.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
         expect(plan.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
+        if (nativeSample) {
+          const targets = [longest, ordinary];
+          const selectedBefore = createSelectedPlan(targets, { runnerBackend: "blacksmith" });
+          const hostedBefore = createPlan({ compactMode: "push", runnerBackend: "github" });
+          const key = expectDefined(
+            createNativeSoloTimingKey(longestJob.groups[0]!),
+            "native solo key",
+          );
+          measurements[key] = 123;
+          for (const [before, after] of [
+            [plan, createPlan({ compactMode: "push", runnerBackend: "blacksmith" })],
+            [selectedBefore, createSelectedPlan(targets, { runnerBackend: "blacksmith" })],
+          ]) {
+            expect(before).not.toBeNull();
+            expect(after).not.toBeNull();
+            const expected = structuredClone(before!);
+            for (const job of expected) {
+              if (job.groups.some((group) => group.includePatterns?.includes(longest))) {
+                job.predictedSeconds = 123;
+                job.predictedTestSeconds = 123;
+              }
+            }
+            expect(after).toEqual(expected);
+          }
+          // A native price cannot reprice hosted execution of the same file.
+          expect(createPlan({ compactMode: "push", runnerBackend: "github" })).toEqual(
+            hostedBefore,
+          );
+        }
       } finally {
         vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
         vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
@@ -5143,8 +5183,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("keeps precise tooling selection through hosted overflow refusal", () => {
     const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    const selected = tooling.flatMap((shard) => shard.includePatterns ?? []).slice(0, 96);
+    // Full-suite rows include release proofs; precise PR plans always exclude them.
+    const selected = tooling
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .filter((file) => !isCiProofTestFile(file))
+      .slice(0, 96);
     expect(selected).toHaveLength(96);
+    vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
     vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
     // Every selected file is now indivisible above the admission cap. Overflow
     // must retain these 96 files without adding unrelated dist owners or the full suite.
@@ -6547,6 +6592,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
       "src/agents/sessions/sdk.auth-migration.test.ts",
@@ -7309,6 +7355,33 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ]);
   });
 
+  it("packs precise plugin tests through their canonical owner without enabling the sweep", () => {
+    const targets = [
+      "src/plugins/runtime.test.ts",
+      "src/plugins/public-surface-loader.test.ts",
+      "src/plugins/plugin-instance.consumer.test.ts",
+    ];
+    const selected = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "selected plugin owner",
+    );
+    const groups = selected.flatMap((shard) => shard.groups);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    expect(
+      groups.every(
+        (group) =>
+          group.configs.length === 1 && group.configs[0] === "test/vitest/vitest.plugins.config.ts",
+      ),
+    ).toBe(true);
+    expect(
+      createNodeTestShards({ includeReleaseOnlyPluginShards: false }).some((shard) =>
+        shard.configs.includes("test/vitest/vitest.plugins.config.ts"),
+      ),
+    ).toBe(false);
+  });
+
   it("retains only exact changed plugin-owner tests in deterministic order", () => {
     const options = {
       includeReleaseOnlyPluginShards: false,
@@ -7718,14 +7791,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(policies(serial, beforeInherited)).toEqual(policies(before, beforeInherited)),
         ).toThrow();
         const promoted = structuredClone(before);
+        const isInheritedHostedGroup = (group: Group) =>
+          group.timing_key !== undefined &&
+          parseCompactSplitTimingKey(group.timing_key) !== undefined &&
+          beforeInherited.has(group.shard_name);
         const recipient = expectDefined(
           promoted.find(
             (job) =>
               job.planConcurrency === 2 &&
               job.groups.some(
                 (group) =>
-                  group.timing_key &&
-                  parseCompactSplitTimingKey(group.timing_key) &&
+                  isInheritedHostedGroup(group) &&
                   group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined,
               ) &&
               job.groups.every(
@@ -7763,12 +7839,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           group.env = { OPENCLAW_VITEST_MAX_WORKERS: "2", ...group.env };
         }
         const hosted = expectDefined(
-          recipient.groups.find(
-            (group) =>
-              group.timing_key &&
-              parseCompactSplitTimingKey(group.timing_key) &&
-              beforeInherited.has(group.shard_name),
-          ),
+          recipient.groups.find(isInheritedHostedGroup),
           "hosted recipient group",
         );
         const original = expectDefined(

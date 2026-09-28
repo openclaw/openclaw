@@ -97,6 +97,7 @@ jobs:
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
           cache-mode: read-write
           dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}

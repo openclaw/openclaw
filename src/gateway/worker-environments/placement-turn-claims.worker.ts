@@ -8,6 +8,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getRequired } from "./placement-row-codec.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
   PlacementTurnClaimReceipt,
@@ -22,13 +23,16 @@ export function executePlacementTurnClaimCommand(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const runtime = {
+      const runtime: PlacementStoreRuntime = {
         path: database.path,
         instanceId:
-          command.type === "placementTurns.recoverWorkspace" ? command.input.gatewayInstanceId : "",
+          command.type === "placementTurns.recoverWorkspace" ||
+          command.type === "placementTurns.handoffRuntimeRefreshResult"
+            ? command.input.gatewayInstanceId
+            : "",
         now: () => command.input.nowMs ?? Date.now(),
         read: () => db,
-        write: <T>(operation: (database: typeof db) => T) => operation(db),
+        write: (operation) => operation(db),
       };
       const claims = createPlacementTurnClaimOps(runtime);
       let receipt: PlacementTurnClaimReceipt;
@@ -40,6 +44,19 @@ export function executePlacementTurnClaimCommand(
         results.markWorkspaceResultPending(command.input.claim);
         results.handoffWorkspaceResultRecovery(command.input.claim);
         receipt = { placement: getRequired(db, command.input.claim.sessionId) };
+      } else if (command.type === "placementTurns.handoffRuntimeRefreshResult") {
+        const placement = getRequired(db, command.input.claim.sessionId);
+        if (
+          placement.state !== "active" ||
+          placement.generation !== command.input.expectedGeneration ||
+          command.input.claim.owner.kind !== "worker"
+        ) {
+          throw new Error("Worker runtime refresh lost its workspace result owner");
+        }
+        createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(
+          command.input.claim,
+        );
+        receipt = { placement };
       } else if (
         command.type === "placementTurns.releaseIfOwned" &&
         !claims.validateTurnClaim(command.input.claim)

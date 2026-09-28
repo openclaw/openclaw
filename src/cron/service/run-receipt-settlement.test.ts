@@ -20,12 +20,13 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
-  claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 
@@ -219,15 +220,15 @@ describe("cron run receipt settlement", () => {
       };
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
-          receiptSchema: prepareCronRunReceiptWriteSchema(db),
           prepared,
           resolveAgentId: () => "alpha",
         }),
@@ -304,15 +305,15 @@ describe("cron run receipt settlement", () => {
     };
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "alpha",
       startedAtMs,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
-        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: () => "alpha",
       }),

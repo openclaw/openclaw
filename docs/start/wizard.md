@@ -289,7 +289,9 @@ Local mode (default) walks through these steps:
    install with guidance. If both `gateway.auth.token` and
    `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
    is blocked until you set the mode explicitly.
-8. **Health check** - starts the Gateway and verifies it is reachable.
+8. **Health check** - waits for a managed or temporary session Gateway startup and verifies it is reachable.
+   If onboarding did not start a Gateway, it checks current reachability and explains
+   how to start one without waiting for a service that onboarding did not start.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you pass `--reset`.

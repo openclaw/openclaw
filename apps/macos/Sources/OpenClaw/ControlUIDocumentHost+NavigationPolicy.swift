@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OpenClawKit
 import WebKit
@@ -8,7 +9,15 @@ enum DashboardBrowserResponseAction: Equatable {
     case cancel
 }
 
-extension DashboardWindowController {
+extension ControlUIDocumentHost {
+    static func appPath(fromDocumentPath path: String, baseURL: URL) -> String? {
+        guard DashboardRouteMap.isValidSameAppPath(path) else { return nil }
+        let mount = self.allowedPath(for: baseURL)
+        guard mount != "/" else { return path }
+        guard path.hasPrefix(mount) else { return nil }
+        return "/" + path.dropFirst(mount.count)
+    }
+
     static func isTrustedLinkSource(_ sourceURL: URL?, dashboardURL: URL) -> Bool {
         guard let sourceURL, sameOrigin(sourceURL, dashboardURL) else { return false }
         let allowedPath = Self.allowedPath(for: dashboardURL)
@@ -189,5 +198,99 @@ extension DashboardWindowController {
         case "https": 443
         default: nil
         }
+    }
+}
+
+extension ControlUIDocumentHost {
+    func decidePolicy(
+        for navigationAction: WKNavigationAction,
+        documentReady: Bool,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+        if navigationAction.targetFrame == nil {
+            let allowEditorURLs = ControlUIDocumentHost.shouldAllowEditorURLLaunch(
+                from: navigationAction.sourceFrame.request.url,
+                isMainFrame: navigationAction.sourceFrame.isMainFrame,
+                dashboardURL: self.currentURL)
+            self.decideTargetlessNavigation(
+                url,
+                navigationType: navigationAction.navigationType,
+                buttonNumber: navigationAction.buttonNumber,
+                allowEditorURLs: allowEditorURLs,
+                decisionHandler: decisionHandler)
+            return
+        }
+        if ControlUIDocumentHost.shouldAllowIdentityNavigation(
+            to: url,
+            auth: self.auth,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            sourceIsDashboard: ControlUIDocumentHost.isTrustedLinkSource(
+                self.webView.url,
+                dashboardURL: self.currentURL) &&
+                (!self.auth.usesBrowserIdentity || documentReady),
+            navigationType: navigationAction.navigationType)
+        {
+            decisionHandler(.allow)
+            return
+        }
+        if ControlUIDocumentHost.shouldAllowNavigation(
+            to: url,
+            dashboardURL: self.currentURL,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
+                ControlUIDocumentHost.isTrustedLinkSource(
+                    navigationAction.sourceFrame.request.url,
+                    dashboardURL: self.currentURL))
+        {
+            decisionHandler(.allow)
+            return
+        }
+        // Back/forward can reach entries from a previous gateway endpoint after
+        // a tunnel/port swap; opening those externally would launch a dead URL
+        // in the browser, so swallow the traversal instead.
+        if navigationAction.navigationType == .backForward {
+            decisionHandler(.cancel)
+            return
+        }
+        if ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
+            url,
+            navigationType: navigationAction.navigationType,
+            buttonNumber: navigationAction.buttonNumber)
+        {
+            self.openExternal(url)
+        }
+        decisionHandler(.cancel)
+    }
+
+    func decideTargetlessNavigation(
+        _ url: URL,
+        navigationType: WKNavigationType,
+        buttonNumber: Int,
+        allowEditorURLs: Bool,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        switch ControlUIDocumentHost.targetlessNavigationAction(
+            for: url,
+            navigationType: navigationType,
+            buttonNumber: buttonNumber,
+            allowEditorURLs: allowEditorURLs)
+        {
+        case .allow:
+            decisionHandler(.allow)
+        case .openExternal:
+            self.openExternal(url)
+            decisionHandler(.cancel)
+        case .cancel:
+            decisionHandler(.cancel)
+        }
+    }
+
+    private func openExternal(_ url: URL) {
+        guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
+        NSWorkspace.shared.open(url)
     }
 }

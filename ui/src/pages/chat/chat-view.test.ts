@@ -5106,26 +5106,23 @@ describe("chat attachment picker", () => {
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the camera input from the attachment menu and attaches the captured photo", async () => {
+  it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
-    const input = requireAttachmentInput(
-      container,
-      ".agent-chat__camera-input",
-      "camera capture input",
-    );
+    const camera = container.querySelector("openclaw-chat-camera-capture");
+    if (!camera) {
+      throw new Error("Missing camera capture dialog");
+    }
     const cameraButton = getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
-    const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
-
-    expect(input.accept).toBe("image/*");
-    expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton).toBeInstanceOf(HTMLElement);
-    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
+    const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
+    const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
+    expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();
     selectAttachmentMenuOption(cameraButton);
-    expect(clickInput).toHaveBeenCalledTimes(1);
+    expect(show).toHaveBeenCalledOnce();
+    expect(fileClick).not.toHaveBeenCalled();
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
-    selectFile(input, photo);
+    camera.onCapture?.(photo);
 
     await waitForFast(() => {
       const attachments = requireFirstAttachmentsChange(onAttachmentsChange);

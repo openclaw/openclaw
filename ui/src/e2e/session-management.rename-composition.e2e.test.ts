@@ -100,6 +100,7 @@ suite.define(() => {
           expect(await input.inputValue()).toBe(draft);
           expect(patches).toEqual([]);
 
+          const listCountBeforeRename = (await gateway.getRequests("sessions.list")).length;
           await input.fill(finalTitle);
           await input.press("Enter");
           const committed = await waitForPatch(gateway, (params) => params.label === finalTitle);
@@ -110,6 +111,11 @@ suite.define(() => {
           });
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
           await input.waitFor({ state: "detached" });
+          // The patch request precedes the session owner's reconciliation. Wait for that
+          // boundary before asserting the rendered projection under a loaded E2E shard.
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.list")).length)
+            .toBeGreaterThan(listCountBeforeRename);
           await expect.poll(() => title.textContent()).toContain(finalTitle);
         },
       );

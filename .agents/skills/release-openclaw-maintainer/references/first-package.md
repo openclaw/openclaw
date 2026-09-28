@@ -57,7 +57,10 @@ ClawHub package.
   unique terminal readback artifact and bind its main-only workflow SHA/attempt,
   target SHA, requested packages, package artifact ID/name/digest, and
   per-package SHA-256/size/npm integrity metadata. The parent approval attests a
-  separate exact trusted-main child workflow SHA; the child run and protected
-  approval must match it. Rerun-failed recovery may reuse a prior package
+  separate exact trusted-main child workflow SHA; the parent-dispatched child
+  must run it. Direct human recovery dispatches a fresh child from `main` with
+  the original child's inputs; `main` must contain the approved SHA, the
+  attested approval still binds it, the completed parent may have failed, and
+  the `clawhub-plugin-bootstrap` gate still applies. Rerun-failed recovery may reuse a prior package
   artifact only when the exact producer job succeeded. Final evidence must also
   preserve the locked ClawHub version, lock SHA-256, and npm integrity.

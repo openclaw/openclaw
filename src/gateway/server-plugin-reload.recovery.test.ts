@@ -495,6 +495,7 @@ it.each(["commit", "rollback"])(
     });
     let held = false;
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: fixture.getConfig,
       channelLogs: {},
       channelRuntimeEnvs: {},

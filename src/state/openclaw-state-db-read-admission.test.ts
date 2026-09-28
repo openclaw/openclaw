@@ -1,8 +1,22 @@
-import { existsSync, linkSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import fs, {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
+import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -27,10 +41,139 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { getOpenClawStateWorkerOwner } from "./openclaw-state-worker-owner.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { openExistingSqliteWorkerBackend } from "./openclaw-state.worker.js";
+
+const hostBirth: {
+  paths: Set<string>;
+  mode: "zero" | "changing" | "ctime" | undefined;
+  relocated: boolean;
+} = { paths: new Set(), mode: undefined, relocated: false };
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
+  try {
+    await closeOpenClawStateDatabaseAsync();
+  } finally {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    hostBirth.paths.clear();
+    hostBirth.mode = undefined;
+    hostBirth.relocated = false;
+  }
+});
+
+function observeHostBirthtime(mode: typeof hostBirth.mode, paths: string[]): void {
+  hostBirth.mode = mode;
+  for (const pathname of paths) {
+    hostBirth.paths.add(pathname);
+    hostBirth.paths.add(
+      path.join(realpathSync.native(path.dirname(pathname)), path.basename(pathname)),
+    );
+  }
+  if (!mode) {
+    return;
+  }
+  const readStat = fs.statSync;
+  vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+    const result = readStat(...args);
+    if (result && args[1]?.bigint && hostBirth.paths.has(String(args[0]))) {
+      Object.defineProperty(result, "birthtimeNs", {
+        value:
+          mode === "ctime" && "ctimeNs" in result
+            ? result.ctimeNs
+            : mode === "zero"
+              ? 0n
+              : hostBirth.relocated
+                ? 2n
+                : 1n,
+      });
+    }
+    return result;
+  });
+  // Native-passthrough identity modules must observe the same builtin as this test.
+  syncBuiltinESMExports();
+}
+
+it("keeps healthy same-file admissions when birthtime falls back to ctime", async () => {
+  await withOpenClawTestState({ label: "state-ctime-alias" }, async (state) => {
+    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
+    const pathname = state.statePath("same-file.sqlite");
+    const alias = state.statePath("same-file-alias.sqlite");
+    const initial = new DatabaseSync(pathname);
+    initial.exec("PRAGMA user_version = 0");
+    initial.close();
+    observeHostBirthtime("ctime", [pathname, alias]);
+    const before = statSync(pathname, { bigint: true });
+    const admitted = lifecycle.capture(pathname);
+    expect(admitted.identity.birthtime).toBe(before.ctimeNs.toString());
+    const peer = new DatabaseSync(pathname);
+    peer.exec("PRAGMA user_version = 0");
+    peer.close();
+    linkSync(pathname, alias);
+    const after = statSync(pathname, { bigint: true });
+    expect(after.ino).toBe(before.ino);
+    expect(after.ctimeNs).not.toBe(before.ctimeNs);
+    const linked = lifecycle.capture(alias);
+    expect(linked.identity.key).toBe(admitted.identity.key);
+    expect(admitted.assertCurrent).not.toThrow();
+    expect(linked.assertCurrent).not.toThrow();
+  });
+});
+
+it("permits a lazy native write after healthy peer changes when birthtime falls back to ctime", async () => {
+  await withOpenClawTestState({ label: "state-ctime-lazy" }, async (state) => {
+    const pathname = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const alias = state.statePath("same-file-alias.sqlite");
+    observeHostBirthtime("ctime", [pathname, alias]);
+    const before = statSync(pathname, { bigint: true });
+    const captured = captureOpenClawStateWorkerContext({ env: state.env });
+    expect(databaseIdentity.readDatabasePathIdentitySync(pathname).birthtime).toBe(
+      before.ctimeNs.toString(),
+    );
+    const backend = runWithSqliteWorkerStateContext(captured, () =>
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath: pathname,
+        existingIdentity: captured.admission.identity.key,
+      }),
+    );
+    try {
+      await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.patch");
+      const peer = new DatabaseSync(pathname);
+      peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      peer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      peer.close();
+      linkSync(pathname, alias);
+      const after = statSync(pathname, { bigint: true });
+      expect(after.ino).toBe(before.ino);
+      expect(after.ctimeNs).not.toBe(before.ctimeNs);
+      await withExistingOpenClawStateSchema({ path: pathname }, async () => {
+        const current = captureOpenClawStateWorkerContext({ env: state.env });
+        expect(
+          runWithSqliteWorkerStateContext(current, () =>
+            backend.execute({
+              type: "config.health.patch",
+              input: {
+                configPath: "/synthetic-ctime.json",
+                patch: { last_observed_suspicious_signature: "healthy-peer" },
+                expected: null,
+                updatedAtMs: 100,
+              },
+            }),
+          ),
+        ).toBe(true);
+        const database = openOpenClawStateDatabase({ env: state.env });
+        expect(
+          database.db
+            .prepare(
+              "SELECT last_observed_suspicious_signature FROM config_health_entries WHERE config_path = ?",
+            )
+            .get("/synthetic-ctime.json"),
+        ).toEqual({ last_observed_suspicious_signature: "healthy-peer" });
+      });
+    } finally {
+      await backend.close();
+    }
+  });
 });
 
 async function retainExistingReader(context: OpenClawStateWorkerContext) {
@@ -51,7 +194,7 @@ async function retainExistingReader(context: OpenClawStateWorkerContext) {
 }
 
 it.each(["native", "zero", "changing"] as const)(
-  "joins a stale worker's retirement after inode reuse with %s birth timestamps",
+  "joins a stale worker's retirement after same-inode relocation with %s birth timestamps",
   async (birth) => {
     await withOpenClawTestState({ label: "state-worker-inode-reuse" }, async (state) => {
       const inspectedPath = state.statePath("inspected.sqlite");
@@ -61,28 +204,14 @@ it.each(["native", "zero", "changing"] as const)(
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const readIdentity = databaseIdentity.readDatabasePathIdentitySync;
       const retiredKey = readIdentity(inspectedPath).key;
-      let observedBirth = 1n;
-      // Fix the allocator's reused-inode outcome, not the lifecycle decision.
-      // Zero and changing values cannot act as a file-generation token.
-      vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync").mockImplementation((pathname) => {
-        const identity = readIdentity(pathname);
-        return {
-          ...identity,
-          key: pathname === databasePath ? retiredKey : identity.key,
-          birthtime:
-            birth === "zero"
-              ? "0"
-              : birth === "changing"
-                ? (observedBirth++).toString()
-                : identity.birthtime,
-        };
-      });
+      mkdirSync(path.dirname(databasePath), { recursive: true });
+      observeHostBirthtime(birth === "native" ? undefined : birth, [inspectedPath, databasePath]);
       const context = captureOpenClawStateWorkerContext({ path: inspectedPath, env: state.env });
       const retained = await retainExistingReader(context);
       const actor = workerStore.getSqliteWorkerActorIdentity(retained);
-      unlinkSync(inspectedPath);
-      mkdirSync(path.dirname(databasePath), { recursive: true });
-      new DatabaseSync(databasePath).close();
+      renameSync(inspectedPath, databasePath);
+      hostBirth.relocated = true;
+      expect(readIdentity(databasePath).key).toBe(retiredKey);
 
       const retiring = createDeferredCore();
       const releaseRetirement = createDeferredCore();
@@ -260,7 +389,7 @@ it("propagates an unexpected recorded-admission error without retiring the actor
 });
 
 it.each(["read", "refused-read", "closed-writer"] as const)(
-  "admits worker creation after a %s file's inode is reused",
+  "admits first worker creation when a retired %s inode becomes its target",
   async (kind) => {
     await withOpenClawTestState({ label: "state-read-admission" }, async (state) => {
       const inspectedPath = path.join(state.stateDir, "inspected.sqlite");
@@ -286,24 +415,53 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
       } else {
         expect(read()).toBe("inspected");
       }
-      unlinkSync(inspectedPath);
-
+      const retainedPath = state.statePath("retained-inode.sqlite");
+      renameSync(inspectedPath, retainedPath);
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
-      const readIdentity = databaseIdentity.readDatabasePathIdentitySync;
-      // Linux can reuse a deleted file's inode. Fix that allocator outcome while
-      // keeping the real missing-path capture, worker open, and publication.
-      vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync").mockImplementation((pathname) => {
-        const identity = readIdentity(pathname);
-        return pathname === databasePath && identity.key.startsWith("file:")
-          ? { ...identity, key: retiredIdentity.key }
-          : identity;
-      });
+      mkdirSync(path.dirname(databasePath), { recursive: true });
+      const canonicalTarget = path.join(
+        realpathSync.native(path.dirname(databasePath)),
+        path.basename(databasePath),
+      );
+      let moved = false;
+      const interceptOpen = () => {
+        const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+          this: Worker,
+          message,
+          ...args
+        ) {
+          dispatch.mockRestore();
+          if (
+            isRecord(message) &&
+            message.type === "open" &&
+            message.databasePath === canonicalTarget
+          ) {
+            // The target is absent at admission, then gets the real retained inode before native open.
+            renameSync(retainedPath, databasePath);
+            writeFileSync(databasePath, "");
+            expect(databaseIdentity.readDatabasePathIdentitySync(databasePath).key).toBe(
+              retiredIdentity.key,
+            );
+            moved = true;
+          }
+          try {
+            return this.postMessage(message, ...args);
+          } finally {
+            if (!moved) {
+              interceptOpen();
+            }
+          }
+        });
+      };
+      interceptOpen();
       const store = createPluginStateKeyedStore<string>("discord", {
         namespace: "read-admission",
         maxEntries: 1,
         env: state.env,
       });
       await store.register("retained", "original");
+      expect(moved).toBe(true);
+      expect(existsSync(inspectedPath)).toBe(false);
       await expect(store.lookup("retained")).resolves.toBe("original");
       if (assertRetiredAdmission) {
         expect(assertRetiredAdmission).toThrow(/admission changed/);
@@ -344,7 +502,7 @@ it("keeps live aliases when an earlier recorded path becomes a directory", async
 
     const observed = lifecycle.capture(newAlias);
     expect(observed.identity.key).toBe(original.identity.key);
-    original.assertCurrent();
+    expect(original.assertCurrent).toThrow(/admission changed/);
     retained.assertCurrent();
     observed.assertCurrent();
   });

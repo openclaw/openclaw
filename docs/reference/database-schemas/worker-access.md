@@ -94,13 +94,28 @@ not recreate a missing file. Preparing a new database directory and quarantining
 orphaned sidecars require the existing schema-maintenance owner; later permission
 hardening never recreates a removed directory.
 
-Cached shared-state actors retain their original database-generation admission.
-The owner checks each matching actor separately from the caller: an invalid idle
-candidate retires before reuse, including after relocation or inode reuse. Active
-callbacks must settle before replacement. A current actor can serve a new schema
-scope, but a caller's ended scope still rejects with its original error.
-This prevents migrations from recreating retired paths or acquiring leases in the
-wrong database. Existing update drivers and stored schemas need no migration.
+Cached shared-state actors retain their opening path independently of client
+aliases. Cold path binding retires vanished aliases while preserving live hardlinks;
+warm admission checks use the retained identity maps rather than polling the
+filesystem. Reuse and command admission check the actor's known opening-path
+binding even after its original client closes. An entry retains the lifecycle
+owner's physical path admission separately from the original caller's schema scope.
+Each matching actor is checked separately from the caller. A current actor can serve
+a new schema scope, but an ended caller scope still rejects with its original error.
+Each requesting caller still needs complete live admission. A retired secondary
+alias closes only its client, so healthy peers can continue while
+that client's callbacks settle. Losing the actor's opening path requires its active
+work to settle before replacement. A lazy actor retains its admitted device/inode
+key until its first writable native open. Birth time is not a long-lived incarnation
+token: Node can report ctime or zero, and healthy metadata updates can change it.
+The generic broker's supplied file-key contract is unchanged; lifecycle admission
+owns generation changes that the file key alone cannot identify. A cold open refuses
+a missing or replaced source before acquiring schema authority or creating files,
+including device identity, audit, and existing-schema lease writers. An external removal that has not yet
+reached cold path binding does not authorize recreating the actor's opening path.
+This prevents Doctor and plugin migrations from recreating retired paths or
+acquiring leases in the wrong database. Existing update
+drivers and stored schemas need no migration.
 
 Each SQLite broker worker admits up to 128 running and queued requests. A busy
 worker's admission queue does not consume another worker's request capacity;
@@ -311,6 +326,14 @@ remembered-session restore. The existing scope keys, heartbeat filtering,
 SQLite rows, missing-store behavior, and update behavior are unchanged.
 
 ## Migrate a caller
+
+Completed-child archive lookups resolve durable store ownership and check exact
+archive registration through the existing history reader. Empty lookups do not
+start the archive reader. Positive lookups retain the original physical database
+and logical session through metadata preparation, archive integrity checks, and
+reader cleanup. Process-held incognito preflight retains its native owner pending
+the memory namespace migration. Schemas, stored bytes, retention, and update
+behavior are unchanged.
 
 1. Trace the registered request, event, or timer through the store owner. Check
    whether a worker adapter already exists; separate durable databases from
@@ -567,21 +590,28 @@ opening settles. The remaining native Cron transitions still need migration.
 This cutover preserves schemas, stored bytes, retention, configuration, and update
 behavior.
 
-Native cron receipt guards read deletion authority through their transaction's
-admitted connection. Other synchronous current-authority readers may reuse that
+Cron receipt guards use the current read-only owner without initializing storage
+or waiting for the worker's writer transaction. They read deletion authority
+through the admitted connection. Synchronous current-authority readers may reuse that
 same thread's managed write transaction, including its pending lifecycle rows;
 ordinary discovery reads retain committed-state isolation. This avoids preparing
 a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
 
-Cron activation, exact reservation cleanup, and stale-family removal use typed
+Cron reservation creation, activation, exact reservation cleanup, and stale-family removal use typed
 commands through the existing worker mutation owner. The host retains the
 partition lock, reservation identity, live policy, and runner settlement. The
 worker rereads durable receipt and deletion guards before committing. Publication
 uses the matching committed receipt once; a lost reply never causes a replay.
 Deferred receipt finishing retains the captured physical worker context through
-settlement. Reservation creation and remaining manual or timer finalizers retain
+settlement. Reservation transactions supply compact receipt facts to the host's
+liveness and current-caller checks. Prospective local receipt ownership lasts
+through native settlement; only committed receipts transfer to callers, and a
+conflict retries only after confirmed rollback. Owner edits observe receipts
+through the read worker before their existing synchronous authority capture.
+Pending work retains the partition queue and fences retired service generations,
+including deferred startup jobs. Remaining manual or timer finalizers retain
 their native implementation as migration debt. Schemas, retention, configuration,
 and update behavior are unchanged.
 

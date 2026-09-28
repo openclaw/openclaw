@@ -1,5 +1,5 @@
 @media (min-width: 1121px) {
-  .content--chat:has(.chat-workbench) {
+  .content--chat.content--workbench {
     padding-left: 0;
     padding-right: 0;
   }
@@ -111,7 +111,7 @@
 }
 
 /* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
-.chat-thread:has(> .lazy-view-state--loading) {
+.chat-thread.chat-thread--route-loading {
   display: flex;
   padding: 0;
 }

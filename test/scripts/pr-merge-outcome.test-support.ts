@@ -188,6 +188,7 @@ export function createMergeOutcomeFixtureHarness() {
       settlementSleeps: [] as number[],
       observations: [] as Array<{
         pr?: Record<string, unknown>;
+        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
         main?: string;
         invalid?: boolean;
         unavailable?: boolean;
@@ -602,6 +603,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
     s.observationReads++;
     const step=s.observations.shift();
     if(step?.pr) Object.assign(s.pr,step.pr);
+    if(step?.priorCi) Object.assign(s.priorCi,step.priorCi);
     if(step?.main) git(["push","-q","--force","origin",step.main+":refs/heads/main"]);
     if(step?.advanceMain) advanceMain();
     if(step?.unavailable) fail("metadata unavailable");
@@ -678,6 +680,14 @@ verify_crabbox_admin_merge_bypass() {
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
 pr_git() {
+  if [ "$1" = --no-lazy-fetch ] &&
+    [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
+  if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&
+    [ "$(command jq -r .priorCi.revokeAdminOnMainFetch "$FIXTURE_STATE")" = true ]; then
+    command git "$@" || return
+    command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));state.priorCi.membership="member";state.priorCi.revokeAdminOnMainFetch=false;state.priorCi.adminRevokedDuringMainFetch=true;fs.writeFileSync(path,JSON.stringify(state));'
+    return
+  fi
   if [ "$1" = update-ref ] && [ "\${3-}" = refs/openclaw/pr-merge-outcomes/123 ]; then
     local crash
     crash=$(command jq -r .crash "$FIXTURE_STATE")

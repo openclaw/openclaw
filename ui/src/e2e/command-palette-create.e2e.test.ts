@@ -92,6 +92,23 @@ suite.define(() => {
         suite.server.baseUrl,
       );
       await gateway.waitForRequest("environments.list");
+      const hints = palette.locator(".cmd-palette__hint");
+      await expect.poll(() => hints.count()).toBe(3);
+      const alignment = await hints.evaluateAll((rows) =>
+        rows.map((row) => {
+          const key = row.querySelector("kbd");
+          const label = row.querySelector(":scope > span");
+          if (!key || !label) {
+            throw new Error("Shortcut hint is missing its keycap or label");
+          }
+          const keyBox = key.getBoundingClientRect();
+          const labelBox = label.getBoundingClientRect();
+          return keyBox.y + keyBox.height / 2 - labelBox.y - labelBox.height / 2;
+        }),
+      );
+      for (const delta of alignment) {
+        expect(Math.abs(delta)).toBeLessThan(0.1);
+      }
       const capture = captureAfter(page, "palette-manual-scroll");
       const prompt = [
         "FIRST WORDS: Review the complete task before starting.",

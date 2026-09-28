@@ -117,6 +117,8 @@ async function createBuildRecoveryHarness(
   const environments: WorkerTurnEnvironmentService &
     Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
     ...unusedEnvironments(),
+    fenceWorkerTurnForRecovery:
+      createWorkerSessionPlacementGate(placements).fenceWorkerTurnForRecovery,
     prepareProjectIntent: async () => {
       throw new Error("unexpected prepared intent");
     },
@@ -236,11 +238,15 @@ async function createBuildRecoveryHarness(
     reconcileActivePlacement: async (environmentId) => {
       if (!options.pendingResult) {
         if (options.refreshInPlace) {
-          createWorkerSessionPlacementGate(placements).assertWorkerRuntimeRefresh({
+          const refresh = await createWorkerSessionPlacementGate(
+            placements,
+          ).prepareWorkerRuntimeRefresh({
             sessionId: SESSION_ID,
             environmentId,
             ownerEpoch: OWNER_EPOCH,
           });
+          refresh.assertCurrent();
+          refresh.release();
           const bundleHash = "b".repeat(64);
           environment = {
             ...environment,

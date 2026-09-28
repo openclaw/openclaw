@@ -53,6 +53,8 @@ export function resolveSharedVitestCompilerEnv(
   const resolved = environments.map((env) => resolveVitestProcessEnv(env));
   const shared = { ...resolved[0] };
   const testOnlyKeys = new Set([
+    // test-projects owns group overlap; the worker compiler does not schedule tests.
+    "OPENCLAW_TEST_PROJECTS_PARALLEL",
     "OPENCLAW_VITEST_MAX_WORKERS",
     "OPENCLAW_TEST_WORKERS",
     "OPENCLAW_VITEST_SHARD_NAME",
