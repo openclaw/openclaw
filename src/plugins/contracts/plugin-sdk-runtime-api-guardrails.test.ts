@@ -247,20 +247,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
     'export type { WizardPrompter } from "openclaw/plugin-sdk/setup";',
   ],
-  [contractPluginPath({
-    rootDir: ROOT_DIR,
-    pluginId: "voice-call",
-    relativePath: "runtime-api.ts",
-  })]: [
-    'export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";',
-    'export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";',
-    'export type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";',
-    'export { isRequestBodyLimitError, readRequestBodyWithLimit, requestBodyErrorToText, sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";',
-    'export { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";',
-    'export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "openclaw/plugin-sdk/tts-runtime";',
-    'export { sleep } from "openclaw/plugin-sdk/runtime-env";',
-  ],
   [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "whatsapp", relativePath: "runtime-api.ts" })]:
     [
       'export { getActiveWebListener, resolveWebAccountId, type ActiveWebListener, type ActiveWebSendOptions } from "./src/active-listener.js";',
