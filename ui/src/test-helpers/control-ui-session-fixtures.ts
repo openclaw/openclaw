@@ -379,7 +379,13 @@ export function createControlUiSessionFixtures(
       typeof params.key === "string" &&
       (response.status === "aborted" || response.status === "no-active-run")
     ) {
-      settleSessionAbort(params.key, response.status === "aborted");
+      // Like the Gateway, a run-scoped Stop settles only that run; only a
+      // session-wide Stop cascades to every run and controlled descendant.
+      if (typeof params.runId !== "string") {
+        settleSessionAbort(params.key, response.status === "aborted");
+      } else if (response.status === "aborted") {
+        abortRuns(params.key, params.runId, {});
+      }
     }
     return undefined;
   };
