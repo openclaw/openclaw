@@ -117,7 +117,7 @@ it.each([
 });
 
 it("keeps the moving-in bag for unoccupied claws", () => {
-  for (const id of ["crimson", "clawfather"]) {
+  for (const id of ["crimson", "blue"]) {
     const palette = expectDefined(
       LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
       "unoccupied palette",

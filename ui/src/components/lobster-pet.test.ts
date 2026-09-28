@@ -969,7 +969,6 @@ describe("rare lobster loads", () => {
     ["leonardodepinchy", "Leonardo de Pinchy"],
     ["shellvis", "Shellvis"],
     ["alexandergrahamshell", "Alexander Graham Shell"],
-    ["clawfather", "The Clawfather"],
   ] as const)("records a genuine %s arrival with its signature identity", async (id, name) => {
     vi.useFakeTimers();
     const now = new Date("2026-07-09T12:00:00");
