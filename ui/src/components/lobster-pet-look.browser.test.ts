@@ -63,24 +63,28 @@ it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () =
   }
 });
 
-it("keeps Taylor’s microphone attached through claw sizes and wave poses", () => {
+it.each([
+  ["taylorpinch", ".lob-microphone"],
+  ["shellvis", ".lob-microphone"],
+  ["leonardodepinchy", ".lob-leonardodepinchy__brush"],
+] as const)("keeps %s’s prop attached through claw sizes and wave poses", (id, propSelector) => {
   const palette = expectDefined(
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === "taylorpinch"),
-    "Taylor palette",
+    LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
+    "prop palette",
   );
   document.body.append(container);
-  container.className = "lobster-pet lobster-pet--palette-taylorpinch lobster-pet--act-wave";
+  container.className = `lobster-pet lobster-pet--palette-${id} lobster-pet--act-wave`;
   for (const clawSize of ["dainty", "regular", "mighty"] as const) {
     const look = { ...canonicalLobsterLook(palette), clawSize };
     container.style.cssText = lobsterLookStyle(look);
     render(renderLobsterSvg(look), container);
     const claw = expectDefined(container.querySelector<SVGGElement>(".lob-claw--r"), "right claw");
     const hand = expectDefined(
-      claw.querySelector<SVGPathElement>("path:not(.lob-taylorpinch__mic)"),
+      claw.querySelector<SVGPathElement>(`path:not(${propSelector})`),
       "hand",
     );
-    const microphone = container.querySelectorAll<SVGPathElement>(".lob-taylorpinch__mic");
-    expect(microphone.length).toBeGreaterThan(0);
+    const prop = container.querySelectorAll<SVGPathElement>(propSelector);
+    expect(prop.length).toBeGreaterThan(0);
     const wave = expectDefined(
       claw
         .getAnimations()
@@ -94,9 +98,9 @@ it("keeps Taylor’s microphone attached through claw sizes and wave poses", () 
       const matrix = expectDefined(hand.getCTM(), "hand transform");
       const transform = [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
       poses.add(transform.join(","));
-      for (const part of microphone) {
+      for (const part of prop) {
         expect(part.parentElement).toBe(claw);
-        const attached = expectDefined(part.getCTM(), "microphone transform");
+        const attached = expectDefined(part.getCTM(), "prop transform");
         expect([attached.a, attached.b, attached.c, attached.d, attached.e, attached.f]).toEqual(
           transform,
         );
@@ -105,5 +109,5 @@ it("keeps Taylor’s microphone attached through claw sizes and wave poses", () 
     expect(poses.size).toBeGreaterThan(1);
   }
   render(renderLobsterSvg(canonicalLobsterLook(palette), { shell: true }), container);
-  expect(container.querySelector(".lob-taylorpinch__mic")).toBeNull();
+  expect(container.querySelector(propSelector)).toBeNull();
 });

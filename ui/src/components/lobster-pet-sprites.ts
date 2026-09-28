@@ -169,11 +169,24 @@ const CLAWIE_STARDUST_BOLT = svg`
 `;
 
 // Direct claw paths inherit the existing size transform as well as wave/snip.
-export const TAYLOR_PINCH_MICROPHONE = svg`
-  <path class="lob-taylorpinch__mic" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747" />
-  <path class="lob-taylorpinch__mic" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80" />
-  <path class="lob-taylorpinch__mic" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round" />
+const MICROPHONE = svg`
+  <path class="lob-microphone" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747" />
+  <path class="lob-microphone" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80" />
+  <path class="lob-microphone" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round" />
 `;
+
+const LEONARDO_PAINTBRUSH = svg`
+  <path class="lob-leonardodepinchy__brush" d="M107 32 L112 33 L106 57 Q104 59 102 56 Z" fill="#855233" />
+  <path class="lob-leonardodepinchy__brush" d="M106 27 L114 29 L112 36 L104 34 Z" fill="#b4b7b5" />
+  <path class="lob-leonardodepinchy__brush" d="M106 27 C105 21 110 18 111 11 C119 21 118 26 114 29 Z" fill="#e6c88e" />
+  <path class="lob-leonardodepinchy__brush" d="M111 11 Q114 16 115 18 Q111 21 108 22 Q110 16 111 11 Z" fill="#4a89b8" />
+`;
+
+export const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
+  taylorpinch: MICROPHONE,
+  shellvis: MICROPHONE,
+  leonardodepinchy: LEONARDO_PAINTBRUSH,
+};
 
 const TAYLOR_PINCH_SPARKLES = svg`
   <g class="lob-taylorpinch">
@@ -202,6 +215,30 @@ const CLAWTOO_DEETOO_PANELS = svg`
       <path d="M54 86 H66 M54 90 H66" stroke-linecap="round" />
     </g>
     <circle cx="87" cy="49" r="2.5" fill="#ef5261" />
+  </g>
+`;
+
+const LEONARDO_SMOCK = svg`
+  <g class="lob-leonardodepinchy">
+    <path d="M18 48 Q60 61 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#5f6950" />
+    <path d="M60 63 V93 M27 64 Q31 77 40 84 M93 64 Q89 77 80 84" fill="none" stroke="#87906e" stroke-width="1.6" stroke-linecap="round" />
+    <path d="M40 42 Q60 52 80 42 Q78 58 60 66 Q42 58 40 42 Z" fill="#eee3ce" />
+    <path d="M52 49 Q60 54 68 49" fill="none" stroke="#c7b99e" stroke-width="1.5" stroke-linecap="round" />
+    <path d="M25 24 C29 9 51 5 67 8 C83 4 96 10 95 20 Q71 29 25 24 Z" fill="#49352c" />
+    <path d="M28 23 Q61 27 91 21" fill="none" stroke="#765545" stroke-width="2" stroke-linecap="round" />
+    <circle cx="38" cy="72" r="3" fill="#bd644f" /><circle cx="77" cy="81" r="3" fill="#4a89b8" /><circle cx="83" cy="65" r="2.5" fill="#dfb34f" />
+  </g>
+`;
+
+const SHELLVIS_JUMPSUIT = svg`
+  <g class="lob-shellvis">
+    <path d="M18 48 L43 47 L60 62 L77 47 L102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#fff7e9" />
+    <path d="M43 49 L48 66 L60 61 L72 66 L77 49 M26 80 Q60 87 94 80" fill="none" stroke="#d7ab4c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M53 46 L60 50 L67 46 L64 54 L72 74 L65 71 L59 56 L51 68 L48 63 L56 53 Z" fill="#c84248" />
+    <rect x="56" y="80" width="8" height="6" rx="1.5" fill="#d7ab4c" />
+    <path d="M24 26 Q21 10 41 9 Q42 1 62 5 C76 1 96 7 96 19 L91 29 Q82 21 77 20 Q59 31 43 21 Q34 21 24 26 Z" fill="#29272d" />
+    <path d="M35 17 Q50 10 61 13 Q75 8 85 15" fill="none" stroke="#4d4750" stroke-width="2" stroke-linecap="round" />
+    <path d="M25 27 L32 25 L32 42 L26 38 Z M88 25 L95 27 L94 38 L88 42 Z" fill="#29272d" />
   </g>
 `;
 
@@ -288,6 +325,8 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "clawiestardust",
   "taylorpinch",
   "clawtoodeetoo",
+  "leonardodepinchy",
+  "shellvis",
   "clawtron",
   "selene",
   "pixel",
@@ -406,6 +445,8 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   clawiestardust: CLAWIE_STARDUST_BOLT,
   taylorpinch: TAYLOR_PINCH_SPARKLES,
   clawtoodeetoo: CLAWTOO_DEETOO_PANELS,
+  leonardodepinchy: LEONARDO_SMOCK,
+  shellvis: SHELLVIS_JUMPSUIT,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,

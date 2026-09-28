@@ -26,7 +26,7 @@ describe("renderLobsterdex", () => {
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/46 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/48 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
     expect(seen?.id).toBe("lobsterdex-crimson");
@@ -75,6 +75,13 @@ describe("renderLobsterdex", () => {
       "A resourceful little droid.",
       "Speaks fluent beep. Fixes things anyway.",
     ],
+    [
+      "leonardodepinchy",
+      "Leonardo de Pinchy",
+      "A little Renaissance is washing ashore.",
+      "Every shell is a canvas.",
+    ],
+    ["shellvis", "Shellvis", "Someone brought blue suede claws.", "The king of rock and claw."],
   ] as const)(
     "discovers %s by palette, not an existing visitor name, and retains shiny sightings",
     (id, name, hint, flavor) => {

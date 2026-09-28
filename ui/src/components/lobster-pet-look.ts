@@ -32,6 +32,7 @@ import {
   GRUMPY_FACE,
   HEADWEAR,
   PALETTE_OVERLAYS,
+  PALETTE_RIGHT_CLAW_PROPS,
   PATTERNED_PALETTES,
   PIXEL_LOBSTER,
   RETRO_ANTENNAE,
@@ -41,7 +42,6 @@ import {
   SELENE_MOON,
   SPLIT_HALF,
   TAIL_FAN,
-  TAYLOR_PINCH_MICROPHONE,
 } from "./lobster-pet-sprites.ts";
 
 const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
@@ -348,7 +348,7 @@ export function renderLobsterSvg(
                   ? nothing
                   : svg`
                       <g class="lob-claw lob-claw--r">
-                        ${look.palette.id === "taylorpinch" && !options.shell ? TAYLOR_PINCH_MICROPHONE : nothing}
+                        ${options.shell ? nothing : (PALETTE_RIGHT_CLAW_PROPS[look.palette.id] ?? nothing)}
                         <path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" />
                       </g>
                     `
