@@ -175,7 +175,7 @@ export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): 
     try {
       onStall();
     } finally {
-      exitAfterSignalExitBarriers(exitCode, { finalizersStalled: true });
+      exitAfterSignalExitBarriers(exitCode);
     }
   }, 10_000).unref();
 }

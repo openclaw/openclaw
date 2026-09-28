@@ -90,13 +90,9 @@ its workers and removes that directory after success, failure, an exception, or
 `SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
 cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
 and leaves cleanup available to Doctor. A cleanup warning does not replace the
-original update outcome. The recorded-output watchdog keeps its ten-second grace: if
-retained-worker cleanup still has not settled, it keeps the runtime with a warning
-instead of waiting indefinitely. Once directory removal starts, the watchdog waits
-for that removal to finish or fail before exiting, so it cannot interrupt deletion.
-An earlier nonzero exit remains nonzero even if the watchdog recorded success.
-Mutation and recovery owners must still drain; their failures produce a nonzero exit
-even if the printed command result was successful.
+original update outcome. An earlier nonzero exit remains nonzero while cleanup
+is draining. Mutation and recovery owners must still drain; their failures produce
+a nonzero exit even if the printed command result was successful.
 
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink

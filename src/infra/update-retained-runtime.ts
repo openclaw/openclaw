@@ -223,25 +223,21 @@ export async function withRetainedUpdateRuntime<T>(
         })();
         return preparation;
       }),
-    async (signal, beginRemoval) => {
+    async () => {
       closing = true;
       // A signal can arrive during projection; stop and join its last filesystem write.
       await preparation?.catch(() => undefined);
-      if (signal.aborted) {
-        return;
-      }
       const retained = directory;
       if (retained) {
-        beginRemoval();
         await removeTemporaryArtifacts(retained, "Updater runtime", (error) => {
           reportRetainedUpdateRuntime(retained, `cleanup failed: ${formatErrorMessage(error)}`);
         });
       }
       unregister?.();
     },
-    (reason, immediate) => {
+    (reason) => {
       if (directory) {
-        reportRetainedUpdateRuntime(directory, reason, immediate);
+        reportRetainedUpdateRuntime(directory, reason);
       }
       return directory;
     },

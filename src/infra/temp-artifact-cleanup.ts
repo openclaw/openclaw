@@ -1,4 +1,3 @@
-import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,19 +22,10 @@ export function registerRetainedUpdateRuntime(directory: string): () => void {
   return () => void retainedRuntimes.delete(directory);
 }
 
-export function reportRetainedUpdateRuntime(
-  directory: string,
-  reason: string,
-  immediate = false,
-): string {
+export function reportRetainedUpdateRuntime(directory: string, reason: string): string {
   const message = `Runtime retained at ${directory}: ${reason}`;
   try {
-    if (immediate) {
-      // The output deadline cannot wait for an asynchronous log transport.
-      writeSync(2, `${message}\n`);
-    } else {
-      log.warn(message);
-    }
+    log.warn(message);
   } catch {
     // The caller still records the warning.
   }
