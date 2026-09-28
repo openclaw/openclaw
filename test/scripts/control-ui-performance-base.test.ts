@@ -208,7 +208,7 @@ export default {
       );
     }
 
-    const runComparison = () => {
+    const runComparison = (baseRef = base) => {
       fs.rmSync(identityCapture, { force: true });
       return spawnSync(
         process.execPath,
@@ -216,7 +216,7 @@ export default {
           "--import",
           tsxImport,
           path.join(root, "scripts/check-control-ui-performance-base.mts"),
-          base,
+          baseRef,
         ],
         {
           cwd: root,
@@ -282,6 +282,25 @@ export default {
         fs.readdirSync(scratch).filter((name) => name.startsWith("openclaw-ui-performance-base-")),
       ).toEqual([]);
     }
+    write("ui/style.css", css(1_001));
+    write("ui/main.js", "export const = broken;");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "broken base");
+    const brokenBase = git("rev-parse", "HEAD");
+    write(
+      "ui/main.js",
+      'import "./style.css"; import { message } from "../packages/styles/main.js"; document.body.textContent = message;',
+    );
+    git("add", ".");
+    git("commit", "--quiet", "-m", "repair base build");
+    const brokenBaseResult = runComparison(brokenBase);
+    const brokenBaseOutput = `${brokenBaseResult.stdout}${brokenBaseResult.stderr}`;
+    expect(brokenBaseResult.status, brokenBaseOutput).toBe(0);
+    expect(brokenBaseOutput).toContain(
+      "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+    );
+    expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
+    expect(fs.readFileSync(identityCapture, "utf8").trim().split("\n")).toHaveLength(1);
     const protectedRoot = path.join(temporaryRoot, "protected");
     fs.mkdirSync(protectedRoot);
     fs.writeFileSync(path.join(protectedRoot, "sentinel"), "keep");

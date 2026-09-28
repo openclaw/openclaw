@@ -20,9 +20,15 @@ const COMPARISON_BUILD_ENV = {
   OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
 } satisfies NodeJS.ProcessEnv;
 
-function run(command: string, args: string[], cwd = repoRoot, env = process.env): void {
+function run(
+  command: string,
+  args: string[],
+  cwd = repoRoot,
+  env = process.env,
+  acceptFailure = false,
+): boolean {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
-  if (result.error || result.status !== 0) {
+  if (result.error || (!acceptFailure && result.status !== 0)) {
     throw new Error(
       `${path.basename(command)} failed (${result.signal ?? result.status ?? "launch"})`,
       {
@@ -30,6 +36,7 @@ function run(command: string, args: string[], cwd = repoRoot, env = process.env)
       },
     );
   }
+  return result.status === 0;
 }
 
 function resolveCommit(ref: string): string {
@@ -154,15 +161,27 @@ function main(): void {
     // Both builds use the candidate's toolchain and shared dependencies; only
     // base-only dependencies come from its lockfile. Calling Vite directly
     // keeps historical policy out; one identity isolates source bytes.
-    for (const root of [repoRoot, baseRoot]) {
-      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), buildEnv);
-    }
+    run(process.execPath, [viteBin, "build"], path.join(repoRoot, "ui"), buildEnv);
+    const baseBuildPassed = run(
+      process.execPath,
+      [viteBin, "build"],
+      path.join(baseRoot, "ui"),
+      buildEnv,
+      true,
+    );
     const loader = path.join(repoRoot, "scripts/tsx.mjs");
     run(process.execPath, [
       "--import",
       loader,
       "scripts/check-control-ui-precompressed-assets.mts",
     ]);
+    if (!baseBuildPassed) {
+      console.warn(
+        "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+      );
+      run(process.execPath, ["--import", loader, "scripts/check-control-ui-performance.mts"]);
+      return;
+    }
     const baseDist = path.join(baseRoot, "dist/control-ui");
     const baseAssets = path.join(baseDist, "assets");
     // Normalize historical CSS with the candidate's canonical compressor too:
