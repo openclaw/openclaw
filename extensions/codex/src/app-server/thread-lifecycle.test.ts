@@ -642,7 +642,7 @@ describe("Codex delegation capability", () => {
         },
       });
       expect(request.developerInstructions).not.toContain("`message(action=send)`");
-      expect(request.developerInstructions).not.toContain("`spawn_agent`");
+      expect(request.developerInstructions).not.toContain("For native Codex subagents");
       expect(request.developerInstructions).not.toContain("`tool_search`");
     }
     expect(start.environments).toEqual([]);
@@ -677,7 +677,7 @@ describe("Codex delegation capability", () => {
           env: { MCP_MODE: "restricted" },
         },
       });
-      expect(normal.developerInstructions).toContain("`spawn_agent`");
+      expect(normal.developerInstructions).toContain("For native Codex subagents");
     }
   });
 });
@@ -999,17 +999,12 @@ describe("Codex app-server native code mode config", () => {
       ],
     });
 
-    expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
-    // Codex defers native collab tools behind tool_search or code mode; the
-    // instructions must teach both retrieval paths or models fall back to the
-    // always-direct sessions_spawn.
-    expect(instructions).toContain("Use `tool_search` when directly callable");
+    expect(instructions).toContain("For native Codex subagents");
+    expect(instructions).toContain("calling conventions exposed by Codex");
+    expect(instructions).not.toContain("ALL_TOOLS");
+    expect(instructions).not.toContain("may be deferred");
     expect(instructions).toContain(
-      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
-    );
-    expect(instructions).toContain("call the matching entry through `tools`");
-    expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.",
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for an available native collaboration tool on internal legwork.",
     );
   });
 
@@ -1025,7 +1020,7 @@ describe("Codex app-server native code mode config", () => {
 
     for (const params of restrictedParams) {
       const instructions = buildDeveloperInstructions(params);
-      expect(instructions).not.toContain("`spawn_agent`");
+      expect(instructions).not.toContain("For native Codex subagents");
       expect(instructions).not.toContain("`sessions_spawn`");
       expect(instructions).not.toContain("`wait_agent`");
     }
@@ -1033,7 +1028,7 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [],
     });
-    expect(instructions).toContain("`spawn_agent`");
+    expect(instructions).toContain("For native Codex subagents");
     expect(instructions).not.toContain("`sessions_spawn`");
   });
 
@@ -1088,14 +1083,12 @@ describe("Codex app-server native code mode config", () => {
     expect(withSessionsYield).toContain(
       "end the current turn with `openclaw_direct.sessions_yield`",
     );
-    expect(withSessionsYield).toContain(
-      "Use native `wait_agent` only for an intentional same-turn wait",
-    );
+    expect(withSessionsYield).toContain("use a native waiting tool only if Codex exposes one");
     expect(withSessionsYield).toContain("Never loop-poll for native child completion.");
     expect(withoutSessionsYield).not.toContain("`openclaw_direct.sessions_yield`");
-    expect(withoutSessionsYield).not.toContain("native `wait_agent`");
+    expect(withoutSessionsYield).not.toContain("native waiting tool");
     expect(withWrongNamespace).not.toContain("`openclaw_direct.sessions_yield`");
-    expect(withWrongNamespace).not.toContain("native `wait_agent`");
+    expect(withWrongNamespace).not.toContain("native waiting tool");
   });
 
   it.each([
@@ -1129,7 +1122,7 @@ describe("Codex app-server native code mode config", () => {
 
       expect(namespaceReads).toBe(1);
       expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(exposesNativeYield);
-      expect(instructions.includes("native `wait_agent`")).toBe(exposesNativeYield);
+      expect(instructions.includes("native waiting tool")).toBe(exposesNativeYield);
     },
   );
 
