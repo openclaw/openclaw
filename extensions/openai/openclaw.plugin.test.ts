@@ -160,11 +160,11 @@ describe("OpenAI plugin manifest", () => {
     expect(signInWithChatGpt?.choiceHint).toBe(
       "Use your Codex allowance with per-instance usage tracking and token limits",
     );
-    for (const choice of [openAiDeviceCode, openAiLogin, apiKey]) {
-      expect(signInWithChatGpt?.assistantPriority).toBeLessThan(
-        choice?.assistantPriority ?? Number.NEGATIVE_INFINITY,
-      );
-    }
+    expect(
+      choices
+        .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
+        .map((choice) => choice.choiceId),
+    ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
     expect(apiKey?.choiceLabel).toBe("OpenAI API Key");
     expect(apiKey?.choiceHint).toBe("Use your OpenAI API key directly");
     expect(apiKey?.groupId).toBe("openai");

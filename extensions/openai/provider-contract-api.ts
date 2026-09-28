@@ -133,7 +133,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceId: "openai-token-sharing",
           choiceLabel: "Sign in with ChatGPT (Beta)",
           choiceHint: "Use your Codex allowance with per-instance usage tracking and token limits",
-          assistantPriority: -50,
+          assistantPriority: 0,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },

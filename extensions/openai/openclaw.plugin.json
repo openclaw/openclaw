@@ -345,7 +345,7 @@
       "choiceLabel": "Sign in with ChatGPT (Beta)",
       "choiceHint": "Use your Codex allowance with per-instance usage tracking and token limits",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
-      "assistantPriority": -50,
+      "assistantPriority": 0,
       "groupId": "openai",
       "groupLabel": "OpenAI",
       "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key"
