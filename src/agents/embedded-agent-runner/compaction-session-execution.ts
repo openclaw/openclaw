@@ -137,25 +137,26 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-    const sessionManager = guardSessionManager(
-      memoryTranscript?.sessionManager ?? SessionManager.open(sessionTarget),
-      {
-        agentId: sessionAgentId,
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-        config: params.config,
-        contextWindowTokens: contextTokenBudget,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        missingToolResultText:
-          effectiveModel.api === "openai-responses" ||
-          effectiveModel.api === "azure-openai-responses" ||
-          effectiveModel.api === "openai-chatgpt-responses"
-            ? "aborted"
-            : undefined,
-        allowedToolNames,
-        withCompactionPersistence: params.transcriptByteCompactionPersistence,
-      },
-    );
+    const preparedSessionManager =
+      memoryTranscript?.sessionManager ??
+      (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
+    assertActive();
+    const sessionManager = guardSessionManager(preparedSessionManager, {
+      agentId: sessionAgentId,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      config: params.config,
+      contextWindowTokens: contextTokenBudget,
+      allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+      missingToolResultText:
+        effectiveModel.api === "openai-responses" ||
+        effectiveModel.api === "azure-openai-responses" ||
+        effectiveModel.api === "openai-chatgpt-responses"
+          ? "aborted"
+          : undefined,
+      allowedToolNames,
+      withCompactionPersistence: params.transcriptByteCompactionPersistence,
+    });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
       ? (usage: UsageLike) => {
