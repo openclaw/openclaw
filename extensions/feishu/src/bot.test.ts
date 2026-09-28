@@ -2312,8 +2312,8 @@ describe("handleFeishuMessage command authorization", () => {
       contentType: "merge_forward",
       content:
         "[Merged and Forwarded Messages]\n" +
-        "- alpha\n" +
-        "- Task summary\n" +
+        "- [2024-03-09T16:00:00.000Z] ou-alpha: alpha\n" +
+        "- [2024-03-09T16:00:01.000Z] ou-bravo: Task summary\n" +
         "Task | Owner\n" +
         "Investigate | Alice\n" +
         "- [File: report.pdf]",
@@ -2337,8 +2337,8 @@ describe("handleFeishuMessage command authorization", () => {
     const context = inboundContext();
     expect(context.BodyForAgent).toContain(
       "[Merged and Forwarded Messages]\n" +
-        "- alpha\n" +
-        "- Task summary\n" +
+        "- [2024-03-09T16:00:00.000Z] ou-alpha: alpha\n" +
+        "- [2024-03-09T16:00:01.000Z] ou-bravo: Task summary\n" +
         "Task | Owner\n" +
         "Investigate | Alice\n" +
         "- [File: report.pdf]",
@@ -2370,7 +2370,7 @@ describe("handleFeishuMessage command authorization", () => {
     ];
 
     expect(parseMergeForwardContent(items)).toBe(
-      "[Merged and Forwarded Messages]\n- partial\n- valid",
+      "[Merged and Forwarded Messages]\n- partial\n- [1970-01-01T00:00:01.000Z] valid",
     );
   });
 
