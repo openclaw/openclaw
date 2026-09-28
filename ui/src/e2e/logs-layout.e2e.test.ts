@@ -35,6 +35,83 @@ const logLines = Array.from({ length: 40 }, (_value, index) =>
 );
 
 suite.define(() => {
+  it.each([
+    { name: "fresh portrait", width: 390, height: 844, resize: false },
+    { name: "desktop navigation resized to landscape", width: 844, height: 390, resize: true },
+  ])("keeps the last log entry reachable on $name", async ({ width, height, resize }) => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: resize ? { width: 1440, height: 900 } : { width, height },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              cursor: logLines.length,
+              file: "/tmp/openclaw/isolated-gateway/logs/mobile-layout-reproduction/diagnostics/openclaw-2026-09-18-session.log",
+              lines: logLines,
+              reset: true,
+            },
+          },
+        });
+        if (resize) {
+          await page.goto(`${suite.server.baseUrl}settings/general`);
+          await page.locator('.settings-sidebar__item[href="/logs"]').click();
+          await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+          await page.setViewportSize({ width, height });
+        } else {
+          await page.goto(`${suite.server.baseUrl}logs`);
+        }
+        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        const follow = page.locator("wa-switch.settings-toggle");
+        await follow.focus();
+        await follow.press("Space");
+        await expect
+          .poll(() => follow.evaluate((element) => Reflect.get(element, "checked")))
+          .toBe(false);
+        await follow.press("Space");
+        await expect
+          .poll(() => follow.evaluate((element) => Reflect.get(element, "checked")))
+          .toBe(true);
+        const stream = page.locator(".log-stream");
+        await expect
+          .poll(() =>
+            stream.evaluate(
+              (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+            ),
+          )
+          .toBeLessThan(2);
+
+        // Wheel over the page gutter, outside the independently scrolling stream.
+        const content = await page.locator(".content").boundingBox();
+        if (!content) {
+          throw new Error("Logs content is not visible");
+        }
+        await page.mouse.move(content.x + 2, content.y + 20);
+        await page.mouse.wheel(0, height * 2);
+        const lastRow = page.locator(".log-row").last();
+        await expect
+          .poll(() => lastRow.evaluate((row) => row.getBoundingClientRect().bottom))
+          .toBeLessThanOrEqual(height);
+        const rowLayout = await lastRow.evaluate((row) => {
+          const time = row.querySelector(".log-time")!.getBoundingClientRect();
+          const level = row.querySelector(".log-level")!.getBoundingClientRect();
+          const message = row.querySelector(".log-message")!.getBoundingClientRect();
+          return {
+            timeLeft: time.left,
+            messageLeft: message.left,
+            levelBottom: level.bottom,
+            messageTop: message.top,
+          };
+        });
+        expect(rowLayout.messageLeft).toBe(rowLayout.timeLeft);
+        expect(rowLayout.messageTop).toBeGreaterThanOrEqual(rowLayout.levelBottom);
+      },
+    );
+  });
+
   it("keeps wrapped filters inside their rows in the macOS dashboard viewport", async () => {
     if (artifactDir) {
       await mkdir(path.join(artifactDir, proofLabel, "video"), { recursive: true });
