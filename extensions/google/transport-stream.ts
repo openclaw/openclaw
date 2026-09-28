@@ -657,13 +657,6 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
-function cloneGoogleGenerateContentRequest(
-  params: GoogleGenerateContentRequest,
-): GoogleGenerateContentRequest {
-  const serialized = JSON.stringify(params);
-  return JSON.parse(serialized) as GoogleGenerateContentRequest;
-}
-
 function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
@@ -675,7 +668,7 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   if (!thinkingLevel) {
     return undefined;
   }
-  const retryRequest = cloneGoogleGenerateContentRequest(params.request);
+  const retryRequest = JSON.parse(JSON.stringify(params.request)) as GoogleGenerateContentRequest;
   const generationConfig =
     retryRequest.generationConfig && typeof retryRequest.generationConfig === "object"
       ? retryRequest.generationConfig
@@ -764,20 +757,6 @@ type GoogleSseAttempt =
     }
   | { type: "timeout" };
 
-async function notifyGoogleTransportHttpResponse(
-  model: GoogleTransportModel,
-  options: GoogleTransportOptions | undefined,
-  response: Response,
-  signal?: AbortSignal,
-): Promise<void> {
-  await notifyProviderHttpResponse({
-    options,
-    response,
-    model: canonicalGoogleModel(model),
-    signal,
-  });
-}
-
 async function openGoogleSseAttempt(params: {
   guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
   url: string;
@@ -816,7 +795,12 @@ async function openGoogleSseAttempt(params: {
   try {
     // Response hooks share the first-response deadline. A stalled hook must cancel
     // the unread body and enter the same Gemini fallback as a stalled fetch or body.
-    await notifyGoogleTransportHttpResponse(params.model, params.options, response, signal);
+    await notifyProviderHttpResponse({
+      options: params.options,
+      response,
+      model: canonicalGoogleModel(params.model),
+      signal,
+    });
   } catch (error) {
     return handleTimedOperationError(error);
   }
@@ -870,12 +854,12 @@ async function openGoogleSseChunks(params: {
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal: params.options?.signal,
     });
-    await notifyGoogleTransportHttpResponse(
-      params.model,
-      params.options,
+    await notifyProviderHttpResponse({
+      options: params.options,
       response,
-      params.options?.signal,
-    );
+      model: canonicalGoogleModel(params.model),
+      signal: params.options?.signal,
+    });
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }

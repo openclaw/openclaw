@@ -13,6 +13,11 @@ Catalog reference for provider plugins: shared live model discovery, catalog
 helpers, pricing normalization, and the narrower single-provider entry point.
 Part of the [Building provider plugins](/plugins/sdk-provider-plugins) guide.
 
+For lightweight model-reference normalization, use
+`openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
+and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
+rules without loading provider replay or transport helpers.
+
 ## Live model discovery
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
