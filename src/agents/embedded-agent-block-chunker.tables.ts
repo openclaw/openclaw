@@ -20,38 +20,42 @@ export function findUnsplittableTableSpans(
   maxChars: number,
   streaming: boolean,
 ): BreakSpan[] {
-  const tables = findMarkdownTableRanges(source);
-  if (streaming && source.includes("|")) {
-    const last = tables.at(-1);
-    if (last && !/\n[^\n]*\n/.test(source.slice(last.end))) {
-      // Until a full line follows the table, the unfinished line after it (even
-      // a bare "> ") may still become a row.
-      last.end = source.length;
-    } else {
-      // A header line is not a table until its delimiter row arrives.
-      const lineStart = source.lastIndexOf("\n") + 1;
-      const line = source.slice(lineStart);
-      const headerStart = source.lastIndexOf("\n", lineStart - 2) + 1;
-      const pendingStart =
-        lineStart > 0 &&
-        /^[\s>|:-]*$/.test(line) &&
-        source.slice(headerStart, lineStart).includes("|")
-          ? headerStart
-          : line.includes("|")
-            ? lineStart
-            : source.length;
-      if (pendingStart < source.length) {
-        tables.push({ start: pendingStart, end: source.length });
-      }
-    }
+  const parsed = findMarkdownTableRanges(source);
+  const fits = (table: BreakSpan) =>
+    table.end - table.start <= maxChars && isSafeFenceBreak(fenceSpans, table.start);
+  const tables = parsed.filter(fits);
+  if (!streaming || !source.includes("|")) {
+    return tables;
   }
-  // An open span also covers the line break after its last row and any
-  // whitespace on the next line; only those are excluded from the table's size.
-  return tables.filter(
-    (table) =>
-      source.slice(table.start, table.end).replace(/\r?\n[ \t]*$/, "").length <= maxChars &&
-      isSafeFenceBreak(fenceSpans, table.start),
-  );
+  const last = parsed.at(-1);
+  if (last && !/\n[^\n]*\n/.test(source.slice(last.end))) {
+    // Until a full line follows the table, the unfinished line after it (even
+    // a bare "> ") may still become a row. It doesn't count toward the fit
+    // until it does, when the parser includes it in the table.
+    if (tables.at(-1) === last) {
+      last.end = source.length;
+    }
+    return tables;
+  }
+  // A header line is not a table until its delimiter row arrives.
+  const lineStart = source.lastIndexOf("\n") + 1;
+  const line = source.slice(lineStart);
+  const headerStart = source.lastIndexOf("\n", lineStart - 2) + 1;
+  const pending = {
+    start:
+      lineStart > 0 &&
+      /^[\s>|:-]*$/.test(line) &&
+      source.slice(headerStart, lineStart).includes("|")
+        ? headerStart
+        : line.includes("|")
+          ? lineStart
+          : source.length,
+    end: source.length,
+  };
+  if (pending.start < source.length && fits(pending)) {
+    tables.push(pending);
+  }
+  return tables;
 }
 
 /**

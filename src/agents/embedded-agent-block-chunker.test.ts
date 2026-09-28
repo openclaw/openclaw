@@ -965,8 +965,14 @@ describe("EmbeddedBlockChunker", () => {
         text: `${tableAtCap}\n\n${outro}`,
         expected: [tableAtCap, outro],
       },
-    ])("keeps a streamed table that fits maxChars whole $name", ({ text, expected }) => {
-      for (const delta of [1, 17, 43]) {
+      {
+        name: "when it exactly fills maxChars and a heading follows directly",
+        text: `${intro}\n\n${tableAtCap}\n# Next steps`,
+        expected: [intro, tableAtCap, "# Next steps"],
+        oneShot: true,
+      },
+    ])("keeps a streamed table that fits maxChars whole $name", ({ text, expected, oneShot }) => {
+      for (const delta of oneShot ? [1, 17, 43, text.length] : [1, 17, 43]) {
         expect(streamChunks(text, delta)).toEqual(expected);
       }
     });
