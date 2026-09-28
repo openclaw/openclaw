@@ -255,10 +255,6 @@ export function buildWriteDiffLines(content: string, maxLines = 80): DiffLine[] 
   return lines;
 }
 
-export function countTextLines(content: string): number {
-  return splitDiffLines(content).length;
-}
-
 /**
  * Concatenate per-edit diffs with skip separators, e.g. for multi-edit calls
  * where each `edits[i]` produced its own local diff.

@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -8,6 +9,11 @@ vi.mock("node:net", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:net")>();
   // Native socket prototypes outlive a test file in shared workers.
   return { ...actual, createServer: vi.fn(actual.createServer) };
+});
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, tmpdir: vi.fn(actual.tmpdir) };
 });
 
 const mocks = vi.hoisted(() => ({
@@ -168,10 +174,53 @@ describe("cross-OS manual gateway lane evidence", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.mocked(tmpdir).mockRestore();
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
   });
+
+  it.each(["win32", "linux"] as const)(
+    "passes the inherited temp directories to the published updater on %s",
+    async (platform) => {
+      arrangeSuccessfulLane();
+      const shortTemp = String.raw`C:\Users\RUNNER~1\AppData\Local\Temp`;
+      const longTemp = String.raw`C:\Users\runneradmin\AppData\Local\Temp`;
+      vi.mocked(tmpdir).mockReturnValue(logsDir);
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const realpath = vi.spyOn(realpathSync, "native").mockReturnValue(longTemp);
+      for (const key of ["TEMP", "TMP", "TMPDIR", "Temp"]) {
+        vi.stubEnv(key, shortTemp);
+      }
+
+      const result = await runUpgradeLane(upgradeParams());
+
+      expect(result).toMatchObject({ status: "pass" });
+      const expectedTemp = platform === "win32" ? longTemp : shortTemp;
+      const expectedEnv = {
+        TEMP: expectedTemp,
+        TMP: expectedTemp,
+        TMPDIR: expectedTemp,
+        Temp: expectedTemp,
+      };
+      expect(mocks.installPackageSpec).toHaveBeenCalledWith(
+        expect.objectContaining({ env: expect.objectContaining(expectedEnv) }),
+      );
+      expect(mocks.runOpenClaw).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining(["update", "--json"]),
+          env: expect.objectContaining(expectedEnv),
+        }),
+      );
+      expect(process.env.TEMP).toBe(shortTemp);
+      if (platform === "win32") {
+        expect(realpath).toHaveBeenCalledWith(shortTemp);
+      } else {
+        expect(realpath).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   describe.each([
     ["fresh", runFreshLane],

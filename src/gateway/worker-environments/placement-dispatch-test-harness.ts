@@ -120,28 +120,7 @@ export function createHarness(
     }
   };
   const placements: WorkerDispatchPlacementStore = {
-    get: (sessionId) => placementStore.get(sessionId),
-    readProjection: (sessionIds, readOptions) =>
-      placementStore.readProjection(sessionIds, readOptions),
-    readRecoveryCandidates: () => placementStore.readRecoveryCandidates(),
-    readChangeSnapshot: () => placementStore.readChangeSnapshot(),
-    loadWorkspaceReconciliation: (owner, loadOptions) =>
-      placementStore.loadWorkspaceReconciliation(owner, loadOptions),
-    beginWorkspaceReconciliation: (owner, journal) =>
-      placementStore.beginWorkspaceReconciliation(owner, journal),
-    abortWorkspaceReconciliation: (owner, abortOptions) =>
-      placementStore.abortWorkspaceReconciliation(owner, abortOptions),
-    listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
-    listPendingWorkspaceResults: (sessionId) =>
-      placementStore.listPendingWorkspaceResults(sessionId),
-    workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
-    validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
-    recordStagedWorkspaceResult: (claim, ref, repositoryWorkspaceId) =>
-      placementStore.recordStagedWorkspaceResult(claim, ref, repositoryWorkspaceId),
-    recordWorkspaceResultConflict: (claim, conflict) =>
-      placementStore.recordWorkspaceResultConflict(claim, conflict),
-    claimTurn: (params) => placementStore.claimTurn(params),
-    claimReclaimWorkspaceResult: (...args) => placementStore.claimReclaimWorkspaceResult(...args),
+    ...placementStore,
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     beginPlacementMove: (params) => {
       const begun = placementStore.beginPlacementMove(params);
@@ -150,7 +129,6 @@ export function createHarness(
       }
       return begun;
     },
-    cancelPlacementMove: (params) => placementStore.cancelPlacementMove(params),
     completePlacementMoveSourceToLocal: (params) => {
       log.push("placement:local");
       return placementStore.completePlacementMoveSourceToLocal(params);
@@ -159,14 +137,7 @@ export function createHarness(
       log.push("placement:local");
       return placementStore.completeAbandonedPlacementMoveSourceToLocal(params);
     },
-    completePlacementMoveToWorker: (params) => placementStore.completePlacementMoveToWorker(params),
-    getPlacementMove: (sessionId) => placementStore.getPlacementMove(sessionId),
-    recordPlacementMoveError: (params) => placementStore.recordPlacementMoveError(params),
-    markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    handoffWorkspaceResultRecovery: (claim) => placementStore.handoffWorkspaceResultRecovery(claim),
-    cancelWorkspaceResultAndReleaseTurn: (claim) =>
-      placementStore.cancelWorkspaceResultAndReleaseTurn(claim),
     completeWorkspaceResultAndReleaseTurn: (claim) =>
       placementStore.completeWorkspaceResultAndReleaseTurn(claim),
     failWorkspaceResultAndReleaseTurn: (pending, error) => {
@@ -177,16 +148,10 @@ export function createHarness(
       log.push("placement:reconciling", "placement:failed");
       return placementStore.failWorkspaceResultAndReleaseTurn(pending, error);
     },
-    abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
-    releaseTurn: (claim) => placementStore.releaseTurn(claim),
-    retainInterruptedTurnWorkspace: (claim, assertCurrent) =>
-      placementStore.retainInterruptedTurnWorkspace(claim, assertCurrent),
-    updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     startDispatch: (params, dispatchOptions) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params, dispatchOptions);
     },
-    bindPreparedEnvironment: (params) => placementStore.bindPreparedEnvironment(params),
     transition: (params) => {
       log.push(`placement:${params.to}`);
       return placementStore.transition(params);
@@ -195,8 +160,6 @@ export function createHarness(
       log.push("placement:failed");
       return placementStore.fail(params);
     },
-    list: () => placementStore.list(),
-    listForReconcile: (sessionKey) => placementStore.listForReconcile(sessionKey),
     startDrain: (params) => {
       log.push("placement:draining");
       if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {

@@ -12,8 +12,10 @@
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
+    "../../ui/src/components/**",
     "../../ui/src/pages/**",
     "../../ui/src/e2e/**",
-    "../../ui/src/app/shell-layout-traits.test.ts"
+    "../../ui/src/app/shell-layout-traits.test.ts",
+    "../../ui/src/test-helpers/control-ui-e2e*.test.ts"
   ]
 }

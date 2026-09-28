@@ -71,7 +71,7 @@ describe("update-cli", () => {
     }
     const nodeRunner = path.resolve("fixture-runtime", "node");
     const expectedRunner = runtime.bun ? process.execPath : nodeRunner;
-    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(nodeRunner);
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(expectedRunner);
     Object.defineProperty(process, "versions", {
       value: { ...process.versions, bun: runtime.bun },
     });
@@ -147,9 +147,7 @@ describe("update-cli", () => {
       throw new Error("Missing process.versions descriptor");
     }
     const execPath = process.execPath;
-    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(
-      path.resolve("fixture-runtime", "node"),
-    );
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(execPath);
     Object.defineProperty(process, "versions", {
       value: { ...process.versions, bun: "1.4.3" },
     });

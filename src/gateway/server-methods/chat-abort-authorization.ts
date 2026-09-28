@@ -8,12 +8,21 @@ import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-o
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { pendingChatSendDedupeKey, PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  SessionMutationAuthorization,
+} from "./types.js";
 
 export type ChatAbortRequester = {
   connId?: string;
   deviceId?: string;
   isAdmin: boolean;
+  /** Host-only tool authority for the exact session admitted by the router. */
+  sessionAuthority?: {
+    target: NonNullable<SessionMutationAuthorization["admittedTarget"]>;
+    assertCurrent: () => void;
+  };
 };
 
 type PreRegisteredAgentDedupePayload = {
@@ -55,20 +64,45 @@ export function buildAbortedChatSendPayload(params: {
 
 export function resolveChatAbortRequester(
   client: GatewayRequestHandlerOptions["client"],
+  authorization?: SessionMutationAuthorization,
 ): ChatAbortRequester {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const caller = client?.internal?.syntheticClient ? client.internal.agentToolCaller : undefined;
+  const assertCallerCurrent = caller?.assertCurrent;
+  const sessionTarget = authorization?.admittedTarget;
+  const assertCurrent =
+    assertCallerCurrent && authorization && sessionTarget
+      ? () => {
+          assertCallerCurrent();
+          authorization.assertCurrent();
+        }
+      : undefined;
+  assertCurrent?.();
   return {
     connId: normalizeOptionalString(client?.connId),
     deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
+    ...(assertCurrent && sessionTarget
+      ? { sessionAuthority: { target: sessionTarget, assertCurrent } }
+      : {}),
   };
 }
 
 export function canRequesterAbortChatRun(
-  entry: Pick<ChatAbortControllerEntry, "ownerDeviceId" | "ownerConnId">,
+  entry: Pick<ChatAbortControllerEntry, "ownerDeviceId" | "ownerConnId"> &
+    Partial<Pick<ChatAbortControllerEntry, "agentId" | "sessionKey" | "sessionId">>,
   requester: ChatAbortRequester,
   options: { requireOwnerMatch?: boolean } = {},
 ): boolean {
+  if (requester.sessionAuthority) {
+    requester.sessionAuthority.assertCurrent();
+    const { target } = requester.sessionAuthority;
+    return (
+      entry.sessionKey === target.sessionKey &&
+      entry.sessionId === target.sessionId &&
+      resolveChatRunOwnerAgentId(entry) === target.agentId
+    );
+  }
   if (requester.isAdmin) {
     return true;
   }
@@ -172,6 +206,9 @@ export function canRequesterAbortPreRegisteredRun(
     {
       ownerConnId: normalizeOptionalString(payload.ownerConnId),
       ownerDeviceId: normalizeOptionalString(payload.ownerDeviceId),
+      agentId: normalizeOptionalString(payload.agentId),
+      sessionKey: normalizeOptionalString(payload.sessionKey),
+      sessionId: normalizeOptionalString(payload.sessionId),
     },
     requester,
   );

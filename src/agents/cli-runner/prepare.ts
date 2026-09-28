@@ -1048,23 +1048,22 @@ async function prepareCliRunContextWithinReadFence(
   const requestedLoopbackToolsAllow =
     runtimeToolsAllowPolicy ??
     (rootedExecution ? rootedToolsAllow : params.cliToolAvailability?.openClaw);
-  const mcpProjectionContext =
-    mcpContextBase && requestedLoopbackToolsAllow !== undefined
-      ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
-      : mcpContextBase;
   const resolveProjectedTools =
     runtimeToolsAllowPolicy !== undefined || (rootedExecution && rootedToolsAllow === undefined)
       ? prepareDeps.resolveMcpLoopbackPolicyTools
       : prepareDeps.resolveMcpLoopbackScopedTools;
   params.assertCurrent?.();
   const projectedToolsBeforePromptBuild =
-    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) &&
-    mcpProjectionContext
+    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) && mcpContextBase
       ? (
           await resolveProjectedTools({
             cfg: runConfig,
             signal: params.abortSignal,
-            context: mcpProjectionContext,
+            context:
+              requestedLoopbackToolsAllow !== undefined
+                ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
+                : mcpContextBase,
+            sessionControlAuthority: readRunOperatorAuthority(params),
             rootedExecution,
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),

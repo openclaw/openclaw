@@ -45,6 +45,7 @@ import {
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { failPromptContextSequence, mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
+import { prepareTelegramFinalDeliveryConfig } from "./final-delivery-config.js";
 import {
   copyTelegramDroppedControlFallback,
   resolveFinalTelegramPresentationText,
@@ -255,6 +256,8 @@ export async function sendPayload(
     }
     const durable = await durableDelivery({
       cfg: turn.cfg,
+      prepareRuntimeHandoff: (cfg) =>
+        prepareTelegramFinalDeliveryConfig(cfg, turn.context.route.accountId, turn.opts.token),
       channel: "telegram",
       to:
         turn.context.ctxPayload.OriginatingTo ??

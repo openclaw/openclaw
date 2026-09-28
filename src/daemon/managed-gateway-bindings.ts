@@ -1,5 +1,6 @@
 /** Map installed managed Gateway services to profile-scoped inspection bindings. */
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
@@ -14,6 +15,7 @@ export type ManagedGatewayBinding = {
   readonly env: GatewayServiceEnv;
   readonly scope?: "user" | "system";
   readonly systemdReadTarget?: SystemdServiceReadTarget;
+  readonly windowsStartupEntry?: string;
 };
 
 function bindingSelectorKey(binding: ManagedGatewayBinding): string {
@@ -21,6 +23,9 @@ function bindingSelectorKey(binding: ManagedGatewayBinding): string {
     binding.profile,
     binding.scope ?? binding.systemdReadTarget?.scope ?? "",
     binding.systemdReadTarget?.unitPath ?? "",
+    binding.windowsStartupEntry
+      ? path.win32.normalize(binding.windowsStartupEntry).toLowerCase()
+      : "",
     binding.env.OPENCLAW_SYSTEMD_UNIT ?? "",
     binding.env.OPENCLAW_LAUNCHD_LABEL ?? "",
     binding.env.OPENCLAW_WINDOWS_TASK_NAME ?? "",
@@ -209,9 +214,19 @@ export async function discoverManagedGatewayBindings(
         push(await bindingFromLaunchdService(svc, env));
         continue;
       }
-      if (svc.windowsProfile !== undefined) {
-        push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
+      if (svc.windowsProfile === undefined) {
+        continue;
       }
+      if (svc.windowsStartupEntry !== undefined) {
+        push({
+          profile: svc.windowsProfile,
+          scope: "user",
+          windowsStartupEntry: svc.windowsStartupEntry,
+          env: hostBindingEnv(env, profileEnvFields(svc.windowsProfile)),
+        });
+        continue;
+      }
+      push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
     }
   } catch {
     return results;

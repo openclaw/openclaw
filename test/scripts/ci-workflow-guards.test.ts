@@ -1492,9 +1492,12 @@ AFTER_CD
 
   it("starts Apple builds and screenshots directly on hosted capacity", () => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["macos-swift", "ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["macos-swift", "ios-build"]) {
       expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"]), jobName).toBe("xcode-27");
     }
+    expect(evaluateWorkflowRunner(workflow.jobs["ios-screenshot-shard"]["runs-on"])).toBe(
+      "xcode-27-xlarge",
+    );
     expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
   });
 
@@ -1517,9 +1520,14 @@ AFTER_CD
     expect(workflow.jobs.check["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '240') }}",
     );
-    expect(workflow.jobs.check["runs-on"]).toBe(
-      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
-    );
+    for (const [eventName, expectedRunner] of [
+      ["pull_request", "ubuntu-24.04"],
+      ["workflow_dispatch", "blacksmith-32vcpu-ubuntu-2404"],
+    ] as const) {
+      expect(evaluateWorkflowRunner(workflow.jobs.check["runs-on"], { eventName })).toBe(
+        expectedRunner,
+      );
+    }
     const beginStep = workflow.jobs.check.steps.find(
       (step: { name?: string }) => step.name === "Begin Testbox",
     );
@@ -3627,7 +3635,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       for (const jobName of jobNames) {
         const job = workflow.jobs[jobName];
         expect(evaluateWorkflowRunner(job["runs-on"]), `${workflowPath}: ${jobName}`).toBe(
-          "xcode-27",
+          jobName === "ios-screenshot-shard" ? "xcode-27-xlarge" : "xcode-27",
         );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
@@ -7774,10 +7782,7 @@ server.listen(0, "127.0.0.1", () => {
   it("bounds release ref validation fetches across checkout auth modes", () => {
     const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
 
-    for (const stepName of [
-      "Validate selected ref belongs to this repository",
-      "Validate Tideclaw alpha target matches workflow branch",
-    ]) {
+    for (const stepName of ["Validate selected ref belongs to this repository"]) {
       const step = resolveTargetSteps.find(
         (candidate: WorkflowStep) => candidate.name === stepName,
       );
@@ -11560,7 +11565,6 @@ it.each(["publish", "promote"])(
       ["v2026.9.4", "latest", "success", true],
       ["v2026.9.4", "beta", "success", true],
       ["v2026.9.4-beta.1", "beta", "success", false],
-      ["v2026.9.4-alpha.1", "alpha", "success", false],
       ["v2026.8.33", "extended-stable", "success", false],
       ["v2026.9.4", "latest", "failure", false],
       ["v2026.9.4", "latest", "skipped", false],

@@ -42,6 +42,7 @@ import {
   createDefaultGatewayReloadState,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
+  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
@@ -132,6 +133,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     });
     let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},
@@ -142,10 +144,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     const reloader = startManagedGatewayConfigReloader({
       scheduler: createTestGatewayScheduler("fake-timers"),
       getPluginRegistry: () => registry,
-      configRevisionProjector: {
-        projectRawHash: (hash) => hash,
-        projectResolvedHash: (hash) => hash,
-      },
+      configRevisionProjector: createTestConfigRevisionProjector(),
       minimalTestGateway: false,
       initialConfig,
       initialCompareConfig: initialConfig,

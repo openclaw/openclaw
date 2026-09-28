@@ -22,7 +22,14 @@ export function createManagedHandoffMutationReader(
       return currentLegacyParent(lease, db);
     }
     const value = row(db, lease.key);
-    return Boolean(value && isDeepStrictEqual(handle(lease.key, value), lease));
+    return Boolean(
+      value &&
+      sameRow(
+        { owner: lease.owner, payload_json: lease.payload, updated_at: lease.updatedAt },
+        value,
+      ) &&
+      isDeepStrictEqual(handle(lease.key, value), lease),
+    );
   }
   function originalAllowsMutation(lease: ManagedHandoffParent, db: HandoffDatabase): boolean {
     if (lease.version !== 2 || !lease.mutationOriginal) {
