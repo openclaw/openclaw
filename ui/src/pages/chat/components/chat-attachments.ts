@@ -9,6 +9,7 @@ import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
 import {
   generateAttachmentId,
   getChatAttachmentPreviewUrl,
@@ -19,6 +20,7 @@ import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
+import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import {
   ChatAttachmentReadLifecycle,
@@ -99,7 +101,8 @@ function chatAttachmentFromFile(
 }
 
 function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): boolean {
-  if (!props.onAttachmentsChange) {
+  if (!props.onAttachmentsChange || !uploadsEnabled(props.uploadConfig)) {
+    // Large text remains ordinary native paste instead of becoming a file.
     return false;
   }
   const text = e.clipboardData?.getData("text/plain");
@@ -131,7 +134,12 @@ function dataImageClipboardFile(
     return null;
   }
   try {
-    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    // Avoid the string iterator and a callback per byte on multi-megabyte pastes.
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
     return {
       file: new File([bytes], `${baseName}.${mimeType.slice("image/".length)}`, { type: mimeType }),
       dataUrl: `data:${mimeType};base64,${base64}`,
@@ -181,17 +189,12 @@ function readAttachmentFile(
     return;
   }
   const reader = new FileReader();
+  let preparedFile = file;
+  const preparation = new AbortController();
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = CHAT_ATTACHMENT_READ_TIMEOUT_MS;
-  const clearTimer = () => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  const onTimeout = () => {
-    finish("error");
+  const cancel = (outcome: "error" | "aborted") => {
+    finish(outcome);
     try {
       reader.abort();
     } catch {
@@ -203,14 +206,20 @@ function readAttachmentFile(
       return;
     }
     settled = true;
-    clearTimer();
+    preparation.abort();
+    clearTimeout(timer);
+    timer = undefined;
     signal.removeEventListener("abort", abort);
     entry.cancel = undefined;
-    if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
+    if (outcome === "ready" && !uploadsEnabled(props.uploadConfig)) {
+      showToast({ message: uploadsDisabledMessage() });
+      // Keep a failed slot visible rather than silently dropping the rejected file.
+      reads.settle(entry, "error");
+    } else if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
       const completedAttachment = registerChatAttachmentPayload({
         attachment: entry.attachment,
         dataUrl: reader.result,
-        file,
+        file: preparedFile,
       });
       const ready = [...entry.destination.getAttachments(), completedAttachment];
       const readyIds = new Set(ready.map(({ id }) => id));
@@ -221,21 +230,20 @@ function readAttachmentFile(
           .filter(({ attachment }) => readyIds.has(attachment.id))
           .map(({ attachment }) => attachment),
       );
-      reads.complete(entry);
+      reads.settle(entry, "ready");
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
     } else {
-      reads.fail(entry);
+      reads.settle(entry, "error");
     }
     entry.destination.onPendingReadsChange?.(-1);
   };
-  const abort = () => {
-    finish("aborted");
-    try {
-      reader.abort();
-    } catch {
-      // Ignore reader abort errors on stalled handles.
-    }
+  const abort = () => cancel("aborted");
+  const onTimeout = () => cancel("error");
+  const setProcessing = (processing: boolean) => {
+    clearTimeout(timer);
+    timer =
+      processing && !settled ? setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS) : undefined;
   };
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
@@ -245,20 +253,43 @@ function readAttachmentFile(
   reader.addEventListener("progress", (event) => {
     if (!settled && event.lengthComputable && event.total > 0) {
       reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
-      if (timeoutMs > 0 && timer !== undefined) {
-        clearTimer();
-        timer = setTimeout(onTimeout, timeoutMs);
+      if (timer !== undefined) {
+        setProcessing(true);
       }
     }
   });
   entry.destination.onPendingReadsChange?.(1);
-  if (timeoutMs > 0) {
-    timer = setTimeout(onTimeout, timeoutMs);
-  }
-  try {
-    reader.readAsDataURL(file);
-  } catch {
-    finish("error");
+  setProcessing(true);
+  const readPreparedFile = (prepared: File) => {
+    if (settled) {
+      return;
+    }
+    // Reapply strict admission to the encoded result before any base64 read.
+    if (admitAttachmentFiles([prepared], props.attachmentLimits).length === 0) {
+      finish("error");
+      return;
+    }
+    preparedFile = prepared;
+    entry.attachment = {
+      ...entry.attachment,
+      mimeType: prepared.type || "application/octet-stream",
+      sizeBytes: prepared.size,
+    };
+    setProcessing(true);
+    try {
+      reader.readAsDataURL(prepared);
+    } catch {
+      finish("error");
+    }
+  };
+  const imageLimit = props.attachmentLimits?.maxImageBytes;
+  if (imageLimit !== undefined && file.type.startsWith("image/") && file.size > imageLimit) {
+    void resizeChatAttachmentImage(file, imageLimit, preparation.signal, setProcessing).then(
+      readPreparedFile,
+      () => finish("error"),
+    );
+  } else {
+    readPreparedFile(file);
   }
 }
 
@@ -267,6 +298,10 @@ export function appendChatAttachmentFiles(
   props: ChatAttachmentControlsProps,
 ): number {
   if (!props.onAttachmentsChange || candidates.length === 0 || props.readSignal?.aborted) {
+    return 0;
+  }
+  if (!uploadsEnabled(props.uploadConfig)) {
+    showToast({ message: uploadsDisabledMessage() });
     return 0;
   }
   const unsupported = props.imagesOnly
@@ -278,6 +313,7 @@ export function appendChatAttachmentFiles(
   const files = admitAttachmentFiles(
     candidates.filter((file) => !unsupported.includes(file)),
     props.attachmentLimits,
+    { resizeImages: true },
   );
   if (files.length === 0) {
     return 0;
@@ -306,6 +342,17 @@ export function handleChatAttachmentPaste(
   if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
   }
+  if (!uploadsEnabled(props.uploadConfig)) {
+    const hasFiles = Array.from(e.clipboardData.items ?? []).some(
+      (item) => item.kind === "file" || item.type.startsWith("image/"),
+    );
+    const hasInlineImage = /^data:image\//i.test(e.clipboardData.getData("text/plain").trim());
+    if (hasFiles || hasInlineImage) {
+      e.preventDefault();
+      showToast({ message: uploadsDisabledMessage() });
+    }
+    return;
+  }
   const { files: imageFiles, inline: pasted } = readChatClipboardImages(e.clipboardData);
   if (imageFiles.length === 0) {
     if (!options.imagesOnly) {
@@ -314,7 +361,10 @@ export function handleChatAttachmentPaste(
     return;
   }
   e.preventDefault();
-  if (pasted) {
+  if (
+    pasted &&
+    (!props.attachmentLimits || pasted.file.size <= props.attachmentLimits.maxImageBytes)
+  ) {
     if (admitAttachmentFiles([pasted.file], props.attachmentLimits).length === 0) {
       return;
     }
@@ -337,11 +387,6 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   appendChatAttachmentFiles(files, props);
 }
 
-function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
-  e.preventDefault();
-  appendChatAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
-}
-
 type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
   canCompose: boolean;
 };
@@ -356,7 +401,11 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       return;
     }
     if (active) {
-      if (!props.canCompose || !isFileDrag(event.dataTransfer)) {
+      if (
+        !props.canCompose ||
+        !uploadsEnabled(props.uploadConfig) ||
+        !isFileDrag(event.dataTransfer)
+      ) {
         return;
       }
       depth += 1;
@@ -398,7 +447,8 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       event.preventDefault();
       event.stopPropagation();
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = props.canCompose ? "copy" : "none";
+        event.dataTransfer.dropEffect =
+          props.canCompose && uploadsEnabled(props.uploadConfig) ? "copy" : "none";
       }
     },
     onDrop: (event: DragEvent) => {
@@ -412,13 +462,16 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       event.stopPropagation();
       clearActive(event);
       if (props.canCompose) {
-        handleChatAttachmentDrop(event, props);
+        appendChatAttachmentFiles([...(event.dataTransfer?.files ?? [])], props);
       }
     },
   };
 }
 
 export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
+  if (!uploadsEnabled(props.uploadConfig)) {
+    return nothing;
+  }
   return html`
     ${(["file", "photo", "camera"] as const).map(
       (kind) => html`

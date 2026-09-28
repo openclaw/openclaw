@@ -1,5 +1,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   normalizeUpdateFailureFacts,
@@ -14,9 +15,14 @@ import {
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { createGatewayRestartDeadline } from "../daemon-cli/restart-health-deadline.js";
+import { GATEWAY_RESTART_PROBE_TIMEOUT_MS } from "../daemon-cli/restart-health-probe.js";
 import {
   renderRestartDiagnostics,
   type GatewayRestartSnapshot,
@@ -40,20 +46,34 @@ import { formatPostUpdateGatewayRecoveryInstructions } from "./update-command-se
 export async function readFailedUpdateGatewayState(
   run: UpdateCommandOptions["run"],
   env: NodeJS.ProcessEnv,
+  timeoutMs = GATEWAY_RESTART_PROBE_TIMEOUT_MS,
 ): Promise<UpdateRunResult["verification"]> {
   if (!run) {
     return undefined;
   }
   const executor = run.executorFence;
   executor?.assertCurrent();
-  const runtime = await resolveGatewayService()
-    .readRuntime(env)
-    .catch((error: unknown) => {
-      if (hasCommandProcessCleanupError(error)) {
-        throw error;
-      }
-      return undefined;
-    });
+  const deadline = createGatewayRestartDeadline({
+    timeoutMs: Math.min(timeoutMs, GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+  });
+  let runtime: GatewayServiceRuntime | undefined;
+  try {
+    runtime = await deadline.run(() =>
+      deadline.read("failed update service state", () =>
+        resolveGatewayService().readRuntime(env, { timeoutMs: deadline.remainingMs() }),
+      ),
+    );
+  } catch (error) {
+    const cleanup = await deadline.cleanup;
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    if (cleanup === "unknown") {
+      throw new CommandProcessCleanupError({ cause: error });
+    }
+  } finally {
+    deadline.dispose();
+  }
   executor?.assertCurrent();
   const verified = getUpdateRun(run.runId, { env: run.env })?.verification;
   // A failed readiness check does not invalidate health/version facts for the same process.
@@ -85,8 +105,9 @@ export async function recordFailedUpdateGatewayState(
   run: UpdateCommandOptions["run"],
   env: NodeJS.ProcessEnv,
   assertCurrent: () => void,
+  timeoutMs?: number,
 ): Promise<void> {
-  const facts = await readFailedUpdateGatewayState(run, env);
+  const facts = await readFailedUpdateGatewayState(run, env, timeoutMs);
   assertCurrent();
   if (run && facts) {
     recordUpdateRunVerification(run.runId, facts, { env: run.env });
@@ -137,7 +158,7 @@ export async function verifyPreviousManagedGatewayForUpdate(
   }
 }
 
-export function recordUpdateGatewayHealth(
+function recordUpdateGatewayHealth(
   run: UpdateCommandOptions["run"],
   health: GatewayRestartSnapshot,
   port: number,
@@ -186,7 +207,6 @@ export async function verifyUpdatedGateway(
   params: UpdateGatewayReadinessParams & {
     result: UpdateRunResult;
     opts: UpdateCommandOptions;
-    nodeRunner?: string;
     onVerified?: (verifiedAtMs: number) => void;
     purpose?: "recovery";
   },
@@ -345,19 +365,17 @@ export async function verifyUpdatedGateway(
               ? "service-not-running"
               : (health.waitOutcome ?? "restart-unhealthy");
   const facts: UpdateFailureFact[] = [];
-  if (health.versionMismatch) {
-    facts.push({
-      check: "versionMatch",
-      code: "version-mismatch",
-      message: `Expected Gateway version ${health.versionMismatch.expected}; observed ${health.versionMismatch.actual ?? "unavailable"}.`,
-    });
-  }
-  if (health.buildIdMismatch) {
-    facts.push({
-      check: "versionMatch",
-      code: "build-id-mismatch",
-      message: `Expected Gateway build ${health.buildIdMismatch.expected}; observed ${health.buildIdMismatch.actual ?? "unavailable"}.`,
-    });
+  for (const [mismatch, label, code] of [
+    [health.versionMismatch, "version", "version-mismatch"],
+    [health.buildIdMismatch, "build", "build-id-mismatch"],
+  ] as const) {
+    if (mismatch) {
+      facts.push({
+        check: "versionMatch",
+        code,
+        message: `Expected Gateway ${label} ${mismatch.expected}; observed ${mismatch.actual ?? "unavailable"}.`,
+      });
+    }
   }
   if (httpFailed) {
     facts.push({
@@ -373,23 +391,15 @@ export async function verifyUpdatedGateway(
       message: `Managed Gateway service status: ${health.runtime.status ?? "unknown"}.`,
     });
   }
-  for (const error of health.activatedPluginErrors ?? []) {
-    facts.push({
-      check: "pluginErrors",
-      code: "plugin-errors",
-      pluginId: error.id,
-      message: error.error,
-    });
+  for (const [errors, check, code] of [
+    [health.activatedPluginErrors, "pluginErrors", "plugin-errors"],
+    [health.channelProbeErrors, "channelsReady", "channel-errors"],
+  ] as const) {
+    for (const error of errors ?? []) {
+      facts.push({ check, code, pluginId: error.id, message: error.error });
+    }
   }
-  for (const error of health.channelProbeErrors ?? []) {
-    facts.push({
-      check: "channelsReady",
-      code: "channel-errors",
-      pluginId: error.id,
-      message: error.error,
-    });
-  }
-  if (!facts.length) {
+  if (!facts.length || health.waitOutcome === "timeout") {
     facts.push({
       check: "settled",
       code: health.waitOutcome ?? "restart-unhealthy",

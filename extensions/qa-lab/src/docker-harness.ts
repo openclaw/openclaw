@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements docker harness behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -20,10 +19,6 @@ function toPosixRelative(fromDir: string, toPath: string): string {
   return path.relative(fromDir, toPath).split(path.sep).join("/");
 }
 
-function yamlDoubleQuoted(value: string) {
-  return JSON.stringify(value);
-}
-
 function renderImageBlock(params: {
   outputDir: string;
   repoRoot: string;
@@ -34,7 +29,7 @@ function renderImageBlock(params: {
     return `    image: ${params.imageName}\n`;
   }
   const context = toPosixRelative(params.outputDir, params.repoRoot) || ".";
-  return `    build:\n      context: ${yamlDoubleQuoted(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
+  return `    build:\n      context: ${JSON.stringify(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
 }
 
 function renderCompose(params: {
@@ -91,8 +86,8 @@ ${imageBlock}    pull_policy: never
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
-      - ${yamlDoubleQuoted(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
-${params.bindUiDist ? `      - ${yamlDoubleQuoted(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}    healthcheck:
+      - ${JSON.stringify(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
+${params.bindUiDist ? `      - ${JSON.stringify(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}    healthcheck:
       test:
         - CMD
         - node
@@ -135,7 +130,7 @@ ${imageBlock}    pull_policy: never
       OPENCLAW_PROFILE: ""
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
-      - ${yamlDoubleQuoted(`${repoMount}:/opt/openclaw-repo:ro`)}
+      - ${JSON.stringify(`${repoMount}:/opt/openclaw-repo:ro`)}
     healthcheck:
       test:
         - CMD
@@ -272,15 +267,8 @@ export async function writeQaDockerHarnessFiles(params: {
   });
 
   const files = [
-    path.join(params.outputDir, "docker-compose.qa.yml"),
-    path.join(params.outputDir, ".env.example"),
-    path.join(params.outputDir, "README.md"),
-    path.join(params.outputDir, "state", "openclaw.json"),
-  ];
-
-  await Promise.all([
-    fs.writeFile(
-      path.join(params.outputDir, "docker-compose.qa.yml"),
+    [
+      "docker-compose.qa.yml",
       renderCompose({
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
@@ -291,10 +279,9 @@ export async function writeQaDockerHarnessFiles(params: {
         qaLabPort,
         includeQaLabUi,
       }),
-      "utf8",
-    ),
-    fs.writeFile(
-      path.join(params.outputDir, ".env.example"),
+    ],
+    [
+      ".env.example",
       renderEnvExample({
         gatewayPort,
         qaLabPort,
@@ -303,10 +290,9 @@ export async function writeQaDockerHarnessFiles(params: {
         qaBusBaseUrl,
         includeQaLabUi,
       }),
-      "utf8",
-    ),
-    fs.writeFile(
-      path.join(params.outputDir, "README.md"),
+    ],
+    [
+      "README.md",
       renderReadme({
         gatewayPort,
         qaLabPort,
@@ -314,20 +300,21 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         includeQaLabUi,
       }),
-      "utf8",
+    ],
+    [path.join("state", "openclaw.json"), `${JSON.stringify(config, null, 2)}\n`],
+  ] as const;
+
+  await Promise.all(
+    files.map(([name, content]) =>
+      fs.writeFile(path.join(params.outputDir, name), content, "utf8"),
     ),
-    fs.writeFile(
-      path.join(params.outputDir, "state", "openclaw.json"),
-      `${JSON.stringify(config, null, 2)}\n`,
-      "utf8",
-    ),
-  ]);
+  );
 
   return {
     outputDir: params.outputDir,
     imageName,
     files: [
-      ...files,
+      ...files.map(([name]) => path.join(params.outputDir, name)),
       path.join(params.outputDir, "state", "seed-workspace", "IDENTITY.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),

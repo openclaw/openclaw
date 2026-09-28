@@ -60,28 +60,18 @@ export type FreshNodePairingEligibilityParams = {
 export function isEligibleFreshNodePairingRequest(
   params: FreshNodePairingEligibilityParams,
 ): boolean {
-  if (params.existingPairedDevice) {
-    return false;
-  }
-  if (params.role !== "node") {
-    return false;
-  }
-  if (params.reason !== "not-paired") {
-    return false;
-  }
-  if (params.scopes.length > 0) {
-    return false;
-  }
-  if (params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) {
-    return false;
-  }
-  if (
-    params.reportedClientIpSource === "none" ||
-    params.reportedClientIpSource === "loopback-trusted-proxy"
-  ) {
-    return false;
-  }
-  return Boolean(params.reportedClientIp);
+  return (
+    !params.existingPairedDevice &&
+    params.role === "node" &&
+    params.reason === "not-paired" &&
+    params.scopes.length === 0 &&
+    !params.hasBrowserOriginHeader &&
+    !params.isControlUi &&
+    !params.isWebchat &&
+    params.reportedClientIpSource !== "none" &&
+    params.reportedClientIpSource !== "loopback-trusted-proxy" &&
+    Boolean(params.reportedClientIp)
+  );
 }
 
 /** Returns true when a node pairing request can be auto-approved by trusted CIDR policy. */

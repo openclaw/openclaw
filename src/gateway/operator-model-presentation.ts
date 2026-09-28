@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   AgentsListResult,
@@ -13,6 +14,7 @@ import {
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import {
   prepareOperatorModelPolicy,
+  readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
 } from "../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,10 +22,67 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import type { ChatMetadataResult } from "./server-methods/chat-metadata-contract.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "./session-utils.types.js";
+
+/** Inventory/auth changes do not retire choices; changed selection authority does. */
+export function modelSelectionPoliciesMatch(
+  previous: OpenClawConfig,
+  next: OpenClawConfig,
+): boolean {
+  if (
+    (previous.models?.mode ?? "merge") !== (next.models?.mode ?? "merge") ||
+    !isDeepStrictEqual(previous.gateway?.roles, next.gateway?.roles)
+  ) {
+    return false;
+  }
+  const manifestPlugins = getGatewayPluginMetadataSnapshot() ?? [];
+  for (const role of Object.values(next.gateway?.roles?.definitions ?? {})) {
+    const before = prepareOperatorModelPolicy({
+      cfg: previous,
+      policy: role.modelPolicy,
+      manifestPlugins,
+    });
+    const after = prepareOperatorModelPolicy({
+      cfg: next,
+      policy: role.modelPolicy,
+      manifestPlugins,
+    });
+    if (readOperatorModelPolicyMembership(before) !== readOperatorModelPolicyMembership(after)) {
+      return false;
+    }
+  }
+  const agentIds = new Set([
+    undefined,
+    ...Object.keys(previous.agents?.entries ?? {}),
+    ...Object.keys(next.agents?.entries ?? {}),
+  ]);
+  for (const agentId of agentIds) {
+    const policy = (cfg: OpenClawConfig) => {
+      const model = resolveDefaultModelForAgent({ cfg, agentId });
+      return createModelVisibilityPolicy({
+        cfg,
+        agentId,
+        catalog: [],
+        defaultProvider: model.provider,
+        defaultModel: model,
+        manifestPlugins,
+      });
+    };
+    const before = policy(previous);
+    const after = policy(next);
+    if (
+      before.allowAny !== after.allowAny ||
+      (!before.allowAny && !isDeepStrictEqual(before.allowedKeys, after.allowedKeys))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 type HistoricalModelFields = {
   model?: unknown;
@@ -40,7 +99,7 @@ export function projectOperatorModelRead<
     metadata?: ChatMetadataResult;
     sessionInfo?: GatewaySessionRow;
     kind?: string;
-    messages?: unknown[];
+    messages?: unknown[] | SerializedJsonArray;
     message?: unknown;
   },
 >(
@@ -72,9 +131,10 @@ export function projectOperatorModelRead<
     ...(result.sessionInfo ? { sessionInfo: presentation.session(result.sessionInfo) } : {}),
     ...(result.messages
       ? {
-          messages: result.messages.map(
-            result.kind === "delta" ? presentation.deltaMessage : presentation.message,
-          ),
+          messages: (result.messages instanceof SerializedJsonArray
+            ? result.messages.materialize()
+            : result.messages
+          ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
         }
       : {}),
     ...(Object.hasOwn(result, "message") ? { message: presentation.message(result.message) } : {}),

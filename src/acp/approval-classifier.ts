@@ -31,7 +31,7 @@ const CONTROL_PLANE_TOOL_IDS = new Set([
   "session_status",
 ]);
 
-export type AcpApprovalClass =
+type AcpApprovalClass =
   | "readonly_scoped"
   | "readonly_search"
   | "mutating"

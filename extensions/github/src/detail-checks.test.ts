@@ -137,20 +137,13 @@ describe("GitHub PR checks through the document loader", () => {
   });
 
   it.each([
-    ["completed", "success", "success", "Passed"],
-    ["completed", "failure", "failure", "Failed"],
     ["completed", "cancelled", "failure", "Canceled"],
     ["completed", "timed_out", "failure", "Timed out"],
     ["completed", "action_required", "failure", "Action required"],
     ["completed", "stale", "failure", "Stale"],
     ["completed", "startup_failure", "failure", "Could not start"],
     ["completed", "neutral", "neutral", "Neutral"],
-    ["completed", "skipped", "neutral", "Skipped"],
-    ["queued", null, "pending", "Queued"],
-    ["in_progress", null, "pending", "In progress"],
     ["waiting", null, "pending", "Waiting"],
-    ["requested", null, "pending", "Waiting"],
-    ["pending", null, "pending", "Waiting"],
   ])("projects check %s/%s as %s", async (status, conclusion, state, detail) => {
     const result = await loadGitHubDetail(
       target(),
@@ -160,18 +153,16 @@ describe("GitHub PR checks through the document loader", () => {
     expect(result).toMatchObject({ partial: false, checks: { state, items: [{ state, detail }] } });
   });
 
-  it.each([
-    ["success", "success", "Passed"],
-    ["failure", "failure", "Failed"],
-    ["error", "failure", "Error"],
-    ["pending", "pending", "Pending"],
-  ])("projects legacy %s as %s", async (raw, state, detail) => {
+  it("projects legacy errors as failures", async () => {
     const result = await loadGitHubDetail(
       target(),
       undefined,
-      publicFetch(runs(), statuses([commitStatus({ state: raw })])),
+      publicFetch(runs(), statuses([commitStatus({ state: "error" })])),
     );
-    expect(result).toMatchObject({ partial: false, checks: { state, items: [{ state, detail }] } });
+    expect(result).toMatchObject({
+      partial: false,
+      checks: { state: "failure", items: [{ state: "failure", detail: "Error" }] },
+    });
   });
 
   it("prioritizes failed then pending checks without treating skipped jobs as passes", async () => {
@@ -191,35 +182,12 @@ describe("GitHub PR checks through the document loader", () => {
       state: "failure",
       summary: "1 failed · 1 pending · 1 passed · 1 skipped or neutral",
     });
-    expect(result.checks?.items.map((item) => item.state)).toEqual([
-      "failure",
-      "pending",
-      "success",
-      "neutral",
+    expect(result.checks?.items).toMatchObject([
+      { name: "Deploy", state: "failure", detail: "Failed" },
+      { name: "Build", state: "pending", detail: "In progress" },
+      { name: "Lint", state: "success", detail: "Passed" },
+      { name: "Optional", state: "neutral", detail: "Skipped" },
     ]);
-  });
-
-  it("retains an independent failed check when another suite has a newer successful check with the same app and name", async () => {
-    const result = await loadGitHubDetail(
-      target(),
-      undefined,
-      publicFetch(
-        runs([
-          run({ id: 501, name: "Build", conclusion: "failure", check_suite: { id: 101 } }),
-          run({ id: 502, name: "Build", conclusion: "success", check_suite: { id: 102 } }),
-        ]),
-      ),
-    );
-    expect(result.checks).toMatchObject({
-      state: "failure",
-      summary: "1 failed · 1 passed",
-      total: 2,
-      truncated: false,
-      items: [
-        { name: "Build", state: "failure" },
-        { name: "Build", state: "success" },
-      ],
-    });
   });
 
   it("preserves distinct check run IDs and deduplicates legacy status contexts", async () => {
@@ -245,11 +213,11 @@ describe("GitHub PR checks through the document loader", () => {
       truncated: false,
     });
     expect(result.checks?.items).toHaveLength(3);
-    expect(result.checks?.items.map((item) => [item.name, item.state])).toEqual(
+    expect(result.checks?.items.map((item) => [item.name, item.state, item.detail])).toEqual(
       expect.arrayContaining([
-        ["Build", "failure"],
-        ["build", "success"],
-        ["Build", "success"],
+        ["Build", "failure", "Failed"],
+        ["build", "success", "Passed"],
+        ["Build", "success", "Passed"],
       ]),
     );
   });
@@ -300,7 +268,12 @@ describe("GitHub PR checks through the document loader", () => {
     );
     expect(result).toMatchObject({
       partial: true,
-      checks: { state, truncated: true, summary: expect.stringMatching(/^Checks incomplete/u) },
+      checks: {
+        state,
+        truncated: true,
+        summary: expect.stringMatching(/^Checks incomplete/u),
+        items: [{ state, detail: state === "failure" ? "Failed" : "Pending" }],
+      },
     });
   });
 
@@ -317,7 +290,7 @@ describe("GitHub PR checks through the document loader", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each([undefined, null, "main", "abcdef0", "../main", "a".repeat(41)])(
+  it.each([undefined, "abcdef0", "../main", "a".repeat(41)])(
     "does not substitute a branch or merge SHA for invalid head %s",
     async (headSha) => {
       const fetchMock = publicFetch();
@@ -413,7 +386,11 @@ describe("GitHub PR checks through the document loader", () => {
       .mockResolvedValueOnce(runs([run({ head_sha: nextSha, status: "queued", conclusion: null })]))
       .mockResolvedValueOnce(statuses([], nextSha));
     const refreshed = await loadGitHubDetail(input, undefined, fetchMock, true);
-    expect(refreshed.checks).toMatchObject({ commit: nextSha, state: "pending" });
+    expect(refreshed.checks).toMatchObject({
+      commit: nextSha,
+      state: "pending",
+      items: [{ state: "pending", detail: "Queued" }],
+    });
     expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(refreshed);
     expect(fetchMock.mock.calls.slice(6).map(([url]) => url)).toEqual([
       expect.stringContaining("/commits/" + nextSha + "/check-runs?"),

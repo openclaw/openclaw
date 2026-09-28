@@ -37,7 +37,11 @@ import {
   type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import { CLAW_OUTPUT_STABILITY, type ClawPackagePreflight } from "./types.js";
+import {
+  CLAW_OUTPUT_STABILITY,
+  type ClawAppliedExtension,
+  type ClawPackagePreflight,
+} from "./types.js";
 import { readAllClawWorkspaceFiles, readClawWorkspaceFiles } from "./workspace.js";
 
 const CLAW_STATUS_SCHEMA_VERSION = "openclaw.clawStatus.v1" as const;
@@ -71,12 +75,7 @@ async function inspectClawPackageCompatibility(params: {
   if (!params.packageRef.extension || inspected.state !== "present") {
     return inspected;
   }
-  let current: {
-    detectedFormat: NonNullable<ClawPackageInspection["extension"]>["detectedFormat"];
-    mapped: string[];
-    unavailable: string[];
-    adapterIdentity: string;
-  };
+  let current: Omit<ClawAppliedExtension, "id" | "format">;
   if (params.packagePreflight) {
     const preflight = await params.packagePreflight(params.packageRef, params.install.workspace);
     if (!preflight.ok) {
@@ -121,10 +120,7 @@ async function inspectClawPackageCompatibility(params: {
   };
   inspected.extensionCompatibility = {
     state: stableStringify(current) === stableStringify(recorded) ? "compatible" : "drifted",
-    detectedFormat: current.detectedFormat,
-    mapped: current.mapped,
-    unavailable: current.unavailable,
-    adapterIdentity: current.adapterIdentity,
+    ...current,
   };
   return inspected;
 }
@@ -281,6 +277,9 @@ export async function readClawStatus(
       cronJobs: readClawCronRefs(install.agentId, options),
     });
   }
+  const packages = records.flatMap((record) => record.packages);
+  const mcpServers = records.flatMap((record) => record.mcpServers);
+  const cronJobs = records.flatMap((record) => record.cronJobs);
   return {
     schemaVersion: CLAW_STATUS_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,
@@ -294,35 +293,29 @@ export async function readClawStatus(
       driftedFiles: records
         .flatMap((record) => record.workspaceFiles)
         .filter((file) => file.state !== "unchanged").length,
-      packageRefs: records.flatMap((record) => record.packages).length,
-      missingPackages: records
-        .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.state === "missing").length,
-      driftedPackages: records
-        .flatMap((record) => record.packages)
-        .filter(
-          (pkg) =>
-            pkg.state === "modified" ||
-            pkg.state === "ambiguous" ||
-            pkg.extensionCompatibility?.state === "drifted",
-        ).length,
-      unavailableExtensions: records
-        .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.extensionCompatibility?.state === "unavailable").length,
-      incompletePackages: records
-        .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.state === "incomplete").length,
-      mcpServerRefs: records.flatMap((record) => record.mcpServers).length,
-      driftedMcpServers: records
-        .flatMap((record) => record.mcpServers)
-        .filter((server) => server.state === "modified" || server.state === "missing").length,
-      unresolvedMcpServerRefs: records
-        .flatMap((record) => record.mcpServers)
-        .filter((server) => server.state === "pending" || server.state === "failed").length,
-      cronRefs: records.flatMap((record) => record.cronJobs).length,
-      unresolvedCronRefs: records
-        .flatMap((record) => record.cronJobs)
-        .filter((cron) => cron.status !== "complete" || !cron.schedulerJobId).length,
+      packageRefs: packages.length,
+      missingPackages: packages.filter((pkg) => pkg.state === "missing").length,
+      driftedPackages: packages.filter(
+        (pkg) =>
+          pkg.state === "modified" ||
+          pkg.state === "ambiguous" ||
+          pkg.extensionCompatibility?.state === "drifted",
+      ).length,
+      unavailableExtensions: packages.filter(
+        (pkg) => pkg.extensionCompatibility?.state === "unavailable",
+      ).length,
+      incompletePackages: packages.filter((pkg) => pkg.state === "incomplete").length,
+      mcpServerRefs: mcpServers.length,
+      driftedMcpServers: mcpServers.filter(
+        (server) => server.state === "modified" || server.state === "missing",
+      ).length,
+      unresolvedMcpServerRefs: mcpServers.filter(
+        (server) => server.state === "pending" || server.state === "failed",
+      ).length,
+      cronRefs: cronJobs.length,
+      unresolvedCronRefs: cronJobs.filter(
+        (cron) => cron.status !== "complete" || !cron.schedulerJobId,
+      ).length,
     },
   };
 }

@@ -59,6 +59,18 @@ const EXECUTABLE_ENTRYPOINTS = [
     status: 0,
   },
   {
+    args: ["--clawhub-release-security-mode", "2026.6.35"],
+    output: "absent",
+    script: "scripts/e2e/lib/package-compat.mjs",
+    status: 0,
+  },
+  {
+    args: ["--clawhub-release-security-mode", "2026.8.33"],
+    output: "required",
+    script: "scripts/e2e/lib/package-compat.mjs",
+    status: 0,
+  },
+  {
     args: [],
     output: "docker_e2e_count=",
     script: "scripts/plan-release-workflow-matrix.mjs",
@@ -177,13 +189,30 @@ function expectShimLoader(
 }
 
 describe("script direct-run entrypoints", () => {
-  it.skipIf(process.platform === "win32")(
-    "lets the Vitest implementation finish cleanup beyond the shim force-kill window",
-    async () => {
-      await withShimFixture("scripts/run-vitest.mjs", async (fixture) => {
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      "scripts/run-vitest.mjs",
+      "scripts/check-changed.mjs",
+      "scripts/run-tsgo.mjs",
+      "scripts/run-oxlint.mjs",
+      "scripts/run-tsgo-core-test-shards.mjs",
+    ] as const)(
+    "lets %s finish implementation cleanup beyond the shim force-kill window",
+    async (wrapper) => {
+      await withShimFixture(wrapper, async (fixture) => {
         const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
         const ownerPath = path.join(fixtureRoot, "owner.pid");
         const settledPath = path.join(fixtureRoot, "cleanup-settled");
+        const clockPath = path.join(fixtureRoot, "supervisor-clock.mjs");
+        // Scale both owners equally: a competing 5s or 10s cutoff must still fail.
+        // Readiness and the test harness retain real time.
+        writeFileSync(
+          clockPath,
+          `const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay, ...args) =>
+  realSetTimeout(callback, delay / 20, ...args);\n`,
+        );
         writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
         writeFileSync(
           implementationPath,
@@ -194,12 +223,21 @@ process.once("SIGTERM", () => {
     fs.writeFileSync(${JSON.stringify(settledPath)}, "settled");
     clearInterval(keepAlive);
     process.exitCode = 143;
-  }, 5500);
+  }, 11000);
 });
 fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
 `,
         );
-        const completion = runNode([wrapperPath], process.env, fixtureRoot);
+        const completion = runNode(
+          [wrapperPath],
+          {
+            ...process.env,
+            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(clockPath).href}`]
+              .filter(Boolean)
+              .join(" "),
+          },
+          fixtureRoot,
+        );
         const owner = await waitForPidFile(ownerPath, 10_000);
         process.kill(owner, "SIGTERM");
         const result = await completion;
@@ -552,13 +590,25 @@ record("stdout-write-returned");
         ["--version"],
       ]);
       for (const invocation of invocations) {
+        if (process.platform === "win32") {
+          expect(
+            Number.isSafeInteger(invocation.startTimeMs) && (invocation.startTimeMs ?? 0) > 0,
+            `${JSON.stringify(invocation)}\n${details}`,
+          ).toBe(true);
+        }
+        // Windows may reuse an exited probe's PID before the remaining probes finish.
+        // An unreadable identity for a live PID still cannot prove child cleanup.
+        const observedStartTimeMs = readWindowsProcessStartTimeSync(invocation.pid, 0);
         const alive = isProcessAlive(invocation.pid);
         expect(
-          alive,
+          alive &&
+            (process.platform !== "win32" ||
+              observedStartTimeMs === null ||
+              observedStartTimeMs === invocation.startTimeMs),
           alive
             ? `${JSON.stringify({
                 invocation,
-                observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
+                observedStartTimeMs,
                 invocations,
               })}\n${formatShimResult(result)}`
             : undefined,
@@ -675,13 +725,16 @@ record("stdout-write-returned");
     ).toBe(true);
   });
 
-  it.each(DIRECT_RUN_SCRIPTS)("uses the canonical guard in %s", (script) => {
-    const source = readFileSync(script, "utf8");
+  it.each(["scripts/android-app-i18n.ts", "scripts/generate-bundled-channel-config-metadata.ts"])(
+    "uses the canonical guard in %s",
+    (script) => {
+      const source = readFileSync(script, "utf8");
 
-    expect(source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu)).toHaveLength(
-      1,
-    );
-  });
+      expect(
+        source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each([
     ...DIRECT_RUN_SCRIPTS,

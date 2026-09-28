@@ -1,4 +1,3 @@
-// Amazon Bedrock tests cover stream plugin behavior.
 import {
   BedrockRuntimeClient,
   ConversationRole,
@@ -620,124 +619,60 @@ describe("Bedrock thinking request composition", () => {
     expect(input.additionalModelRequestFields).toBeUndefined();
   });
 
-  it.each([
-    { reasoning: "minimal" as const, maxTokens: 1024 },
-    { reasoning: "low" as const, maxTokens: 1500 },
-  ])("disables legacy $reasoning thinking beyond a $maxTokens cap", async (testCase) => {
+  it("disables legacy thinking when the output cap leaves no thinking budget", async () => {
     const input = await captureCommandInput(
       bedrockModel({
         id: "anthropic.claude-haiku-4-5-v1:0",
         name: "Claude Haiku 4.5",
-        maxTokens: testCase.maxTokens,
+        maxTokens: 1024,
       }),
       context,
-      { reasoning: testCase.reasoning },
+      { reasoning: "minimal" },
     );
 
-    expect(input.inferenceConfig).toEqual({ maxTokens: testCase.maxTokens });
+    expect(input.inferenceConfig).toEqual({ maxTokens: 1024 });
     expect(input.additionalModelRequestFields).toBeUndefined();
   });
 
   it.each([
-    {
-      name: "native model cap",
-      modelMaxTokens: 128_000,
-      requestedMaxTokens: undefined,
-      expected: 128_000,
-      reasoning: "high" as const,
-    },
-    {
-      name: "fallback model cap",
-      modelMaxTokens: 4096,
-      requestedMaxTokens: undefined,
-      expected: undefined,
-      reasoning: "high" as const,
-    },
-    {
-      name: "explicit request cap",
-      modelMaxTokens: 128_000,
-      requestedMaxTokens: 32_000,
-      expected: 32_000,
-      reasoning: "high" as const,
-    },
-    {
-      name: "native model cap with thinking disabled",
-      modelMaxTokens: 128_000,
-      requestedMaxTokens: undefined,
-      expected: 128_000,
-      reasoning: "off" as const,
-    },
-    {
-      name: "native model cap with default thinking",
-      modelMaxTokens: 128_000,
-      requestedMaxTokens: undefined,
-      expected: 128_000,
-      reasoning: undefined,
-    },
-    {
-      name: "fallback model cap with thinking disabled",
-      modelMaxTokens: 4096,
-      requestedMaxTokens: undefined,
-      expected: undefined,
-      reasoning: "off" as const,
-    },
-    {
-      name: "fallback model cap with default thinking",
-      modelMaxTokens: 4096,
-      requestedMaxTokens: undefined,
-      expected: undefined,
-      reasoning: undefined,
-    },
-    {
-      name: "medium fallback model cap with thinking disabled",
-      modelMaxTokens: 8192,
-      requestedMaxTokens: undefined,
-      expected: undefined,
-      reasoning: "off" as const,
-    },
-    {
-      name: "large fallback model cap with thinking disabled",
-      modelMaxTokens: 16_384,
-      requestedMaxTokens: undefined,
-      expected: undefined,
-      reasoning: "off" as const,
-    },
-    {
-      name: "explicit request cap with thinking disabled",
-      modelMaxTokens: 128_000,
-      requestedMaxTokens: 4096,
-      expected: 4096,
-      reasoning: "off" as const,
-    },
-  ])("uses the $name for adaptive-capable models", async (testCase) => {
-    const input = await captureCommandInput(
-      bedrockModel({
-        id: "us.anthropic.claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        contextWindow: 1_000_000,
-        maxTokens: testCase.modelMaxTokens,
-      }),
-      context,
-      {
-        ...(testCase.reasoning === undefined ? {} : { reasoning: testCase.reasoning }),
-        ...(testCase.requestedMaxTokens === undefined
-          ? {}
-          : { maxTokens: testCase.requestedMaxTokens }),
-      },
-    );
+    ["native model cap", 128_000, undefined, 128_000, "high"],
+    ["fallback model cap", 4096, undefined, undefined, "high"],
+    ["explicit request cap", 128_000, 32_000, 32_000, "high"],
+    ["native model cap with thinking disabled", 128_000, undefined, 128_000, "off"],
+    ["native model cap with default thinking", 128_000, undefined, 128_000, undefined],
+    ["fallback model cap with thinking disabled", 4096, undefined, undefined, "off"],
+    ["fallback model cap with default thinking", 4096, undefined, undefined, undefined],
+    ["medium fallback model cap with thinking disabled", 8192, undefined, undefined, "off"],
+    ["large fallback model cap with thinking disabled", 16_384, undefined, undefined, "off"],
+    ["explicit request cap with thinking disabled", 128_000, 4096, 4096, "off"],
+  ] as const)(
+    "uses the %s for adaptive-capable models",
+    async (_name, modelMaxTokens, requestedMaxTokens, expected, reasoning) => {
+      const input = await captureCommandInput(
+        bedrockModel({
+          id: "us.anthropic.claude-opus-4-8",
+          name: "Claude Opus 4.8",
+          contextWindow: 1_000_000,
+          maxTokens: modelMaxTokens,
+        }),
+        context,
+        {
+          ...(reasoning === undefined ? {} : { reasoning }),
+          ...(requestedMaxTokens === undefined ? {} : { maxTokens: requestedMaxTokens }),
+        },
+      );
 
-    expect(input.inferenceConfig).toEqual(
-      testCase.expected === undefined ? {} : { maxTokens: testCase.expected },
-    );
-    expect(input.additionalModelRequestFields).toEqual(
-      testCase.reasoning !== "high"
-        ? undefined
-        : {
-            thinking: { type: "adaptive", display: "summarized" },
-            output_config: { effort: "high" },
-          },
-    );
-  });
+      expect(input.inferenceConfig).toEqual(expected === undefined ? {} : { maxTokens: expected });
+      expect(input.additionalModelRequestFields).toEqual(
+        reasoning !== "high"
+          ? undefined
+          : {
+              thinking: { type: "adaptive", display: "summarized" },
+              output_config: { effort: "high" },
+            },
+      );
+    },
+  );
 
   it.each([
     { reasoning: undefined, expectedEffort: "high" },
@@ -805,23 +740,12 @@ describe("Bedrock Fable contract", () => {
   }
 
   it("sends always-adaptive high effort without unsupported request controls", async () => {
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        { messageStop: { stopReason: "end_turn" } },
-      ]),
-    } as never);
-
-    const stream = streamBedrockForTest(fableModel(), context(), {
+    const input = await captureCommandInput(fableModel(), context(), {
       reasoning: "high",
       temperature: 0.2,
       toolChoice: "any",
     });
-    await stream.result();
-
-    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
-    expect(command.input).toMatchObject({
+    expect(input).toMatchObject({
       modelId: "production-fable",
       inferenceConfig: {},
       messages: [
@@ -840,22 +764,11 @@ describe("Bedrock Fable contract", () => {
   });
 
   it("preserves explicit tool disabling", async () => {
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        { messageStop: { stopReason: "end_turn" } },
-      ]),
-    } as never);
-
-    const stream = streamBedrockForTest(fableModel(), context(), {
+    const input = await captureCommandInput(fableModel(), context(), {
       reasoning: "high",
       toolChoice: "none",
     });
-    await stream.result();
-
-    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
-    expect(command.input?.toolConfig).toBeUndefined();
+    expect(input.toolConfig).toBeUndefined();
   });
 
   it.each([
@@ -1031,13 +944,6 @@ describe("Bedrock canonical Claude aliases", () => {
   ])(
     "uses adaptive thinking and omits temperature for $canonicalModelId aliases",
     async ({ canonicalModelId, reasoning, thinkingLevelMap, expectedEffort }) => {
-      const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-        $metadata: { httpStatusCode: 200 },
-        stream: streamEvents([
-          { messageStart: { role: ConversationRole.ASSISTANT } },
-          { messageStop: { stopReason: "end_turn" } },
-        ]),
-      } as never);
       const model = bedrockModel({
         id: "production-claude",
         name: "Production Claude",
@@ -1046,17 +952,12 @@ describe("Bedrock canonical Claude aliases", () => {
         thinkingLevelMap,
       });
 
-      await streamSimpleBedrock(
+      const input = await captureCommandInput(
         model,
-        { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] } as never,
-        {
-          reasoning,
-          temperature: 0.2,
-        },
-      ).result();
-
-      const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
-      expect(command.input).toMatchObject({
+        { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] },
+        { reasoning, temperature: 0.2 },
+      );
+      expect(input).toMatchObject({
         modelId: "production-claude",
         inferenceConfig: {},
         additionalModelRequestFields: {

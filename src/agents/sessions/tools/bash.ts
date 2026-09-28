@@ -192,15 +192,7 @@ export function createBashToolDefinition(
     description: `Run bash in cwd; stdout+stderr. Returns last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; full truncated output saved temp. Optional timeout seconds.`,
     promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
     parameters: bashSchema,
-    async execute(
-      toolCallId,
-      { command, timeout }: { command: string; timeout?: number },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void ctx;
+    async execute(_toolCallId, { command, timeout }, signal, onUpdate, _ctx) {
       resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
       const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);

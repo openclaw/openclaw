@@ -115,7 +115,7 @@ function normalizeChoice<T extends string>(
   values: readonly T[],
   fallback: T,
 ): (value: unknown) => T {
-  return (value) => (values.includes(value as T) ? (value as T) : fallback);
+  return (value) => values.find((candidate) => candidate === value) ?? fallback;
 }
 
 export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
@@ -126,9 +126,7 @@ export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
 
 export function normalizeChatFollowUpModeOverride(value: unknown): ChatFollowUpMode | undefined {
-  return CHAT_FOLLOW_UP_MODES.includes(value as ChatFollowUpMode)
-    ? (value as ChatFollowUpMode)
-    : undefined;
+  return CHAT_FOLLOW_UP_MODES.find((mode) => mode === value);
 }
 
 const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
@@ -231,6 +229,8 @@ export type UiSettings = {
   sessionDeleteConfirm?: boolean;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
+  // Browser-local opt-in; absence preserves native panels and plugin readers.
+  openLinksExternally?: boolean;
 };
 
 export type UiPreferences = Omit<UiSettings, "token">;
@@ -584,6 +584,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
+      ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
@@ -729,6 +730,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
+    openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
   const serialized = JSON.stringify(persisted);
   const { token: _token, ...preferences } = next;

@@ -1,6 +1,7 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
 import type {
   ChatGoalDraftMode,
+  ChatReplyTarget,
   DurableComposerDraftAttachment,
   HumanMention,
 } from "./chat-types.ts";
@@ -12,6 +13,7 @@ import {
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { parseStoredChatOutboxScope, storedChatOutboxScopeKey } from "./outbox-store.ts";
+import { isChatReplyTarget } from "./reply-target.ts";
 
 const STORE_NAME = "composerDrafts";
 const OWNER_INDEX = "ownerKey";
@@ -47,6 +49,7 @@ type DurableComposerDraft = {
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
@@ -158,6 +161,7 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
     typeof record.writeId !== "string" ||
     typeof record.text !== "string" ||
     (record.goalMode !== undefined && !isChatGoalDraftMode(record.goalMode)) ||
+    (record.replyTarget !== undefined && !isChatReplyTarget(record.replyTarget)) ||
     typeof record.revision !== "number" ||
     !Number.isSafeInteger(record.revision) ||
     record.revision <= 0 ||
@@ -189,6 +193,7 @@ function isActiveDraft(record: StoredDurableComposerDraft): boolean {
   return Boolean(
     record.text ||
     record.goalMode ||
+    record.replyTarget ||
     record.modelSelection ||
     record.attachments.length > 0 ||
     record.questionDrafts?.length,
@@ -203,6 +208,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     text: "",
     mentions: undefined,
     goalMode: undefined,
+    replyTarget: undefined,
     modelSelection: undefined,
     attachments: [],
     questionDrafts: undefined,
@@ -488,6 +494,7 @@ export async function readDurableComposerDraft(
         text: record.text,
         ...(record.mentions?.length ? { mentions: record.mentions } : {}),
         ...(record.goalMode ? { goalMode: record.goalMode } : {}),
+        ...(record.replyTarget ? { replyTarget: { ...record.replyTarget } } : {}),
         ...(record.modelSelection ? { modelSelection: record.modelSelection } : {}),
         attachments: record.attachments,
         ...(record.questionDrafts?.length ? { questionDrafts: record.questionDrafts } : {}),
@@ -559,6 +566,7 @@ export async function writeDurableComposerDraft(
         ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
         : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
+      ...(draft.replyTarget ? { replyTarget: { ...draft.replyTarget } } : {}),
       ...(draft.modelSelection ? { modelSelection: { ...draft.modelSelection } } : {}),
       attachments: draft.attachments,
       ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),

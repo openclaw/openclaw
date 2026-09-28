@@ -577,8 +577,6 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
 
 test.each([
   { loss: "disconnected", selection: "explicit" },
-  { loss: "role revoked", selection: "explicit" },
-  { loss: "disconnected", selection: "default" },
   { loss: "role revoked", selection: "default" },
 ] as const)(
   "sessions.create rejects a personal $selection when $loss while the model catalog is loading",

@@ -73,9 +73,6 @@ export async function signalGatewayRestart(
   const restartIntent = params.restartIntent?.force
     ? { force: true, drainBudgetMs: params.restartIntent.waitMs }
     : params.restartIntent;
-  if (params.enforceRestartConfig) {
-    await assertUnmanagedGatewayRestartEnabled(port);
-  }
   const pids = resolveVerifiedGatewayListenerPids(port, params.env);
   if (pids.length === 0) {
     return null;
@@ -102,18 +99,12 @@ export async function signalGatewayRestart(
       `gateway lock identity does not match the verified listener on port ${port}; use "openclaw gateway status --deep" and restart through its supervisor or original terminal`,
     );
   }
-  const intentWritten = previousLockIdentity.ownerId
-    ? false
-    : writeGatewayRestartIntentSync({
-        targetPid: pid,
-        reason: "gateway.restart",
-        ...(params.restartIntent ? { intent: params.restartIntent } : {}),
-      });
-  if (!previousLockIdentity.ownerId && !intentWritten) {
-    throw new Error("failed to persist the gateway restart intent");
-  }
-  try {
+  const assertTargetCurrent = async () => {
     const currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
+    const currentPids = resolveVerifiedGatewayListenerPids(port, params.env);
+    if (currentPids.length !== 1 || currentPids[0] !== pid) {
+      throw new Error(`Gateway listener changed before restart on port ${port}`);
+    }
     if (
       !currentLockIdentity ||
       currentLockIdentity.pid !== pid ||
@@ -140,6 +131,24 @@ export async function signalGatewayRestart(
         throw new Error(`Foreground Gateway owner changed before restart on port ${port}`);
       }
     }
+  };
+  if (params.enforceRestartConfig) {
+    await assertTargetCurrent();
+    await assertUnmanagedGatewayRestartEnabled(port);
+    await assertTargetCurrent();
+  }
+  const intentWritten = previousLockIdentity.ownerId
+    ? false
+    : writeGatewayRestartIntentSync({
+        targetPid: pid,
+        reason: "gateway.restart",
+        ...(params.restartIntent ? { intent: params.restartIntent } : {}),
+      });
+  if (!previousLockIdentity.ownerId && !intentWritten) {
+    throw new Error("failed to persist the gateway restart intent");
+  }
+  try {
+    await assertTargetCurrent();
     if (previousLockIdentity.ownerId) {
       const result = await callGatewayCli<{ pid: number }>({
         method: "gateway.restart.request",

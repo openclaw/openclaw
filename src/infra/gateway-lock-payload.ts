@@ -4,6 +4,8 @@ import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),
+  /** A cold opener may wait for this transient owner, never enter while it is held. */
+  stateOwnerKind: z.literal("schema").optional(),
   /** Present when Gateway cron writes use the dynamic-default ownership projection. */
   cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),

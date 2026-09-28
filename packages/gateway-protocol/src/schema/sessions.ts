@@ -21,7 +21,12 @@ export {
 export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
-export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
+export {
+  SessionsListParamsSchema,
+  SessionOwnerSessionCountSchema,
+  type SessionsListParams,
+  type SessionOwnerSessionCount,
+} from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   SessionParticipantIdentitySchema,
@@ -56,12 +61,16 @@ export {
   type SessionsPatchParams,
 } from "./sessions-patch.js";
 export {
+  SessionAncestorRefSchema,
   SessionCreatedActorSchema,
+  SessionEventAncestorsSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
+  type SessionAncestorRef,
   type SessionCreatedActor,
+  type SessionEventAncestors,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,

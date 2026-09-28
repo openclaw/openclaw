@@ -3,7 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
@@ -17,11 +18,10 @@ import {
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { observeCronTimerAdmissions } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
-import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-batch-" });
@@ -37,6 +37,7 @@ async function seedInterruptedBatch() {
   const onEvent = vi.fn();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",
@@ -54,22 +55,23 @@ async function seedInterruptedBatch() {
     const startedAtMs = job.state.runningAtMs!;
     const prepared = prepareCronRunReceiptClaim({ storePath, job, agentId: "alpha", startedAtMs });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+      claimCronRunReceiptInDatabase({
+        database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
+        prepared,
+        resolveAgentId: () => "alpha",
+      }),
     );
     job.state.runningReceiptId = receipt.receiptId;
-    expect(
-      tryCreateCronTaskRunHandle({ state, job, startedAt: startedAtMs, runReceipt: receipt }),
-    ).toBeDefined();
     releaseLocalCronRunReceiptOwnership(receipt);
   }
   await writeCronStoreSnapshot({ storePath, jobs });
   const history = (jobId: string) =>
-    readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId }).entries;
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId }).entries;
   return { storePath, jobs, state, onEvent, runner, history };
 }
 
 it("defers every repair when restart crosses the batch observation", async () => {
-  using deliveries = captureTaskDeliveryWork();
   const { storePath, jobs, state, onEvent, runner, history } = await seedInterruptedBatch();
   const entered = createDeferred();
   const release = createDeferred();
@@ -129,18 +131,14 @@ it("defers every repair when restart crosses the batch observation", async () =>
     expect(runner).not.toHaveBeenCalled();
     expect(state.activeTimerTicks).toBe(0);
     expect(state.queuedRunReservationsByJobId.size).toBe(0);
-    await deliveries.settle();
+
     await admissions.expectReleased(1);
   } finally {
     unrelated!.release();
     release.resolve();
     await Promise.allSettled([tick, ...(restarted ? [restarted] : [])]);
-    try {
-      await deliveries.settle();
-    } finally {
-      delayed.mockRestore();
-      stop(state);
-    }
+    delayed.mockRestore();
+    stop(state);
   }
 });
 
@@ -150,7 +148,6 @@ it.each([
 ] as const)(
   "publishes committed interruptions before retiring %s held at its reload",
   async (source, run) => {
-    using deliveries = captureTaskDeliveryWork();
     const { storePath, jobs, state, onEvent, runner, history } = await seedInterruptedBatch();
     const entered = createDeferred();
     const release = createDeferred();
@@ -221,17 +218,13 @@ it.each([
       expect(state.runAdmission.active).toBe(0);
       expect(state.runAdmission.waiters).toEqual([]);
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
-      await deliveries.settle();
+
       await admissions.expectReleased(source === "timer" ? 1 : 0);
     } finally {
       release.resolve();
       await Promise.allSettled([tick, ...(restarted ? [restarted] : [])]);
-      try {
-        await deliveries.settle();
-      } finally {
-        delayed.mockRestore();
-        stop(state);
-      }
+      delayed.mockRestore();
+      stop(state);
     }
   },
 );

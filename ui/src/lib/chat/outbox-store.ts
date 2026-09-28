@@ -3,8 +3,6 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import {
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
   hasUiSessionDefaults,
@@ -18,12 +16,18 @@ import {
   type StoredComposerSession,
 } from "./outbox-store-codec.ts";
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
+import {
+  storedChatOutboxScopeKey,
+  UNRESOLVED_GLOBAL_AGENT_SCOPE,
+  type StoredChatOutboxScope,
+} from "./outbox-store-scope.ts";
+
+export { storedChatOutboxScopeKey } from "./outbox-store-scope.ts";
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
-const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 const storedChatOutboxChangeListeners = new Set<() => void>();
 let storageChangeListenerInstalled = false;
 
@@ -46,11 +50,6 @@ type ComposerStorageTarget = {
   legacyOwnerIsUnambiguous: boolean;
 };
 
-export type StoredChatOutboxScope = {
-  sessionKey: string;
-  agentId?: string;
-};
-
 export type StoredComposerState = {
   version: 4;
   gatewayOwner: string;
@@ -70,13 +69,15 @@ export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
   draftMentions?: unknown;
   goalMode?: unknown;
+  replyTarget?: unknown;
 }): boolean {
-  if (!session.draft && !session.draftMentions && !session.goalMode) {
+  if (!session.draft && !session.draftMentions && !session.goalMode && !session.replyTarget) {
     return false;
   }
   delete session.draft;
   delete session.draftMentions;
   delete session.goalMode;
+  delete session.replyTarget;
   return true;
 }
 
@@ -211,7 +212,10 @@ export function resolvePendingComposerSessions(
       const existingIds = new Set(destination.queue?.map((item) => item.id));
       const conflict = session.queue?.some((item) => existingIds.has(item.id));
       const sourceNewer = (session.draftRevision ?? 0) > (destination.draftRevision ?? 0);
-      if (conflict || (session.draft && !sourceNewer)) {
+      if (
+        conflict ||
+        ((session.draft || session.goalMode || session.replyTarget) && !sourceNewer)
+      ) {
         holdComposerRecovery(store, `pending:${key}`, 4, key, session);
       } else {
         const draftOwner = sourceNewer ? session : destination;
@@ -251,22 +255,6 @@ export function captureChatOutboxAdmission(
   };
 }
 
-// Captured scopes never consult current defaults. Fill only an omitted agent;
-// explicit conflicting facts must remain visible to stored-scope validation.
-function storedChatOutboxAgentId(scope: StoredChatOutboxScope): string | undefined {
-  return scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
-}
-
-export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
-  const normalizedSessionKey = scope.sessionKey.trim().toLowerCase();
-  const agentScope =
-    storedChatOutboxAgentId(scope) ??
-    (normalizedSessionKey === "global" || normalizedSessionKey === DEFAULT_MAIN_KEY
-      ? UNRESOLVED_GLOBAL_AGENT_SCOPE
-      : DEFAULT_AGENT_ID);
-  return `${scope.sessionKey}\u0000agent:${agentScope}`;
-}
-
 /** Logical client ownership plus this key fences a retained delivery's display. */
 export function chatOutboxDeliveryKey(
   host: ChatComposerScope,
@@ -291,7 +279,12 @@ function holdComposerRecovery(
 ): void {
   const { queue, ...draft } = session;
   const groups = new Map<string | undefined, ChatQueueItem[]>();
-  if (draft.draft || draft.goalMode || (!queue?.length && draft.draftRevision !== undefined)) {
+  if (
+    draft.draft ||
+    draft.goalMode ||
+    draft.replyTarget ||
+    (!queue?.length && draft.draftRevision !== undefined)
+  ) {
     groups.set(undefined, []);
   }
   for (const item of queue ?? []) {
@@ -482,6 +475,7 @@ export function readStoredOutboxStore(
       if (
         session.draft ||
         session.goalMode ||
+        session.replyTarget ||
         session.draftRevision !== undefined ||
         session.queue?.length
       ) {
@@ -582,6 +576,8 @@ export function writeStoredOutboxStore(
         ([sessionKey, session]) =>
           sessionKey !== unresolvedGlobalKey &&
           !session.draft &&
+          !session.goalMode &&
+          !session.replyTarget &&
           session.draftRevision !== undefined,
       )
       .toSorted(byNewest),
@@ -591,7 +587,9 @@ export function writeStoredOutboxStore(
       ...outboxes.toSorted(byNewest),
       ...drafts
         .filter(
-          ([sessionKey, session]) => sessionKey !== unresolvedGlobalKey && Boolean(session.draft),
+          ([sessionKey, session]) =>
+            sessionKey !== unresolvedGlobalKey &&
+            Boolean(session.draft || session.goalMode || session.replyTarget),
         )
         .toSorted(byNewest),
     ].slice(0, MAX_STORED_SESSIONS),
@@ -729,7 +727,7 @@ export function applyStoredChatOutboxScope(
   scope: StoredChatOutboxScope,
 ): ChatQueueItem {
   const { agentId: _agentId, ...withoutAgentId } = item;
-  const agentId = storedChatOutboxAgentId(scope);
+  const agentId = scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
   return {
     ...withoutAgentId,
     sessionKey: scope.sessionKey,

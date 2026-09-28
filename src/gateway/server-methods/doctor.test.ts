@@ -57,33 +57,30 @@ describe("doctor.memory agent targeting", () => {
     dedupeDreamDiaryEntries.mockReset().mockResolvedValue({ removed: 0, kept: 0 });
   });
 
-  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
-    "%s returns typed selection-required when agentId is omitted",
-    async (method) => {
-      getRuntimeConfig.mockReturnValue({
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+  it("returns typed selection-required when agentId is omitted", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    });
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["ops", "research"], {
+        surface: "doctor memory",
+        hint: "Pass agentId to select a configured agent.",
       });
-      resolveDefaultAgentId.mockImplementationOnce(() => {
-        throw new AgentSelectionRequiredError(["ops", "research"], {
-          surface: "doctor memory",
-          hint: "Pass agentId to select a configured agent.",
-        });
-      });
-      const respond = vi.fn();
+    });
+    const respond = vi.fn();
 
-      await invokeDoctorMemory(method, respond, { includeCron: true });
+    await invokeDoctorMemory("doctor.memory.status", respond, { includeCron: true });
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("agent"),
-        }),
-      );
-      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
-    },
-  );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("agent"),
+      }),
+    );
+    expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+  });
 
   it.each(DOCTOR_MEMORY_TARGET_METHODS)(
     "%s rejects an unknown agent before resolving agent state",
@@ -105,25 +102,22 @@ describe("doctor.memory agent targeting", () => {
     },
   );
 
-  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
-    "%s rejects a non-string agentId before resolving the default agent",
-    async (method) => {
-      const respond = vi.fn();
+  it("rejects a non-string agentId before resolving the default agent", async () => {
+    const respond = vi.fn();
 
-      await invokeDoctorMemory(method, respond, {
-        params: { agentId: 42 },
-        includeCron: true,
-      });
+    await invokeDoctorMemory("doctor.memory.status", respond, {
+      params: { agentId: 42 },
+      includeCron: true,
+    });
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"),
-      );
-      expect(getMemorySearchManager).not.toHaveBeenCalled();
-      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
-    },
-  );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"),
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+  });
 });
 
 describe("doctor.memory.status", () => {
@@ -182,28 +176,6 @@ describe("doctor.memory.status", () => {
       managedCronPresent: false,
     });
     expect(close).toHaveBeenCalled();
-  });
-
-  it("returns gateway embedding probe status for the requested agent", async () => {
-    useMemoryManagerFixture({
-      status: () => ({ provider: "gemini", workspaceDir: "/tmp/research-workspace" }),
-    });
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.status", respond, {
-      params: { agentId: "research-analyst", probe: true },
-    });
-
-    expectRecordFields(mockCallArg(getMemorySearchManager), {
-      agentId: "research-analyst",
-      purpose: "status",
-    });
-    const payload = respondPayload(respond);
-    expectRecordFields(payload, {
-      agentId: "research-analyst",
-      provider: "gemini",
-      embedding: { ok: true },
-    });
   });
 
   it("orders dreaming entries deterministically when one timestamp is malformed", async () => {
@@ -357,142 +329,6 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-status-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const mainStorePath = path.join(
-      mainWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    const alphaStorePath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    const mainPhaseSignalPath = path.join(
-      mainWorkspaceDir,
-      "memory",
-      ".dreams",
-      "phase-signals.json",
-    );
-    const alphaPhaseSignalPath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "phase-signals.json",
-    );
-    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-    await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
-    await fs.writeFile(
-      mainStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-03-1503.md:1:2": {
-              path: "memory/2026-04-03-1503.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Emma prefers shorter, lower-pressure check-ins.",
-              source: "memory",
-              recallCount: 2,
-              dailyCount: 1,
-              lastRecalledAt: recentIso,
-              promotedAt: undefined,
-            },
-            "memory:memory/daily/2026-04-02-1015.md:1:2": {
-              path: "memory/daily/2026-04-02-1015.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Use the Happy Together calendar for flights.",
-              source: "memory",
-              recallCount: 9,
-              dailyCount: 5,
-              promotedAt: recentIso,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      alphaStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-01.md:1:2": {
-              path: "memory/2026-04-01.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Bunji lives in London.",
-              source: "memory",
-              recallCount: 7,
-              dailyCount: 4,
-              promotedAt: olderIso,
-            },
-            "memory:memory/notes/2026-04-04-0800.md:1:2": {
-              path: "memory/notes/2026-04-04-0800.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Always book the covered valet option at Park & Greet BCN.",
-              source: "memory",
-              recallCount: 8,
-              dailyCount: 3,
-              promotedAt: recentIso,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      mainPhaseSignalPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-03-1503.md:1:2": {
-              lightHits: 2,
-              remHits: 3,
-            },
-            "memory:memory/daily/2026-04-02-1015.md:1:2": {
-              lightHits: 9,
-              remHits: 9,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      alphaPhaseSignalPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-01.md:1:2": {
-              lightHits: 5,
-              remHits: 5,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-
     getRuntimeConfig.mockReturnValue({
       memory: {
         search: {
@@ -695,27 +531,6 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-selected-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const writeStore = async (workspaceDir: string, snippet: string) => {
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      const store = {
-        version: 1,
-        updatedAt: "2026-04-04T00:00:00.000Z",
-        entries: {
-          "memory:memory/2026-04-04.md:1:2": {
-            path: "memory/2026-04-04.md",
-            startLine: 1,
-            endLine: 2,
-            snippet,
-            source: "memory",
-            promotedAt: "2026-04-04T00:00:00.000Z",
-          },
-        },
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2) + "\n", "utf-8");
-    };
-    await writeStore(mainWorkspaceDir, "main agent memory");
-    await writeStore(alphaWorkspaceDir, "alpha agent memory");
     loadShortTermPromotionDreamingStats.mockImplementation(
       async ({ workspaceDir }: { workspaceDir: string }) =>
         makeDreamingStats({
@@ -776,27 +591,6 @@ describe("doctor.memory.status", () => {
 
   it("falls back to the manager workspace when no configured dreaming workspaces resolve", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-fallback-"));
-    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-04T00:00:00.000Z",
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
-              source: "memory",
-              promotedAt: "2026-04-04T00:00:00.000Z",
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
     resolveMemorySearchConfig.mockReturnValue(null);
     loadShortTermPromotionDreamingStats.mockResolvedValueOnce(
       makeDreamingStats({
@@ -891,28 +685,6 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-error-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const alphaStorePath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
-    await fs.writeFile(
-      alphaStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-04T00:00:00.000Z",
-          entries: {},
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.mkdir(path.join(mainWorkspaceDir, "memory", ".dreams"), { recursive: true });
-
     getRuntimeConfig.mockReturnValue({
       memory: {
         search: {

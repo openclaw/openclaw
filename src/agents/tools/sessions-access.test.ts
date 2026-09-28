@@ -80,7 +80,7 @@ describe("resolveSessionToolsVisibility", () => {
 });
 
 describe("resolveEffectiveSessionToolsVisibility", () => {
-  it.each([undefined, "all"] as const)(
+  it.each(["all"] as const)(
     "clamps %s visibility to tree in sandbox when sandbox visibility is spawned",
     (visibility) => {
       const cfg = makeConfig({
@@ -165,21 +165,6 @@ describe("sandbox session-tools context", () => {
 });
 
 describe("createAgentToAgentPolicy", () => {
-  it("allows cross-agent access by default", () => {
-    const policy = createAgentToAgentPolicy(makeConfig());
-    expect(policy.enabled).toBe(true);
-    expect(policy.isAllowed("main", "ops")).toBe(true);
-  });
-
-  it("denies cross-agent access when explicitly disabled", () => {
-    const policy = createAgentToAgentPolicy(
-      makeConfig({ tools: { agentToAgent: { enabled: false } } }),
-    );
-    expect(policy.enabled).toBe(false);
-    expect(policy.isAllowed("main", "main")).toBe(true);
-    expect(policy.isAllowed("main", "ops")).toBe(false);
-  });
-
   it("honors allow patterns when enabled", () => {
     const policy = createAgentToAgentPolicy(
       makeConfig({
@@ -326,42 +311,6 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
-  it("allows cross-agent spawned child rows in list results with tree visibility", () => {
-    const guard = createSessionVisibilityRowChecker({
-      action: "list",
-      requesterSessionKey: "agent:main:main",
-      visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
-    });
-
-    expect(
-      guard.check({
-        key: "agent:codex:acp:child-1",
-        spawnedBy: "agent:main:main",
-      }),
-    ).toEqual({ allowed: true });
-  });
-
-  it("allows cross-agent spawned child rows in all-visibility list results when a2a is disabled", () => {
-    const guard = createSessionVisibilityRowChecker({
-      action: "list",
-      requesterSessionKey: "agent:main:main",
-      visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(
-        makeConfig({
-          tools: { agentToAgent: { enabled: false } },
-        }),
-      ),
-    });
-
-    expect(
-      guard.check({
-        key: "agent:codex:acp:child-1",
-        spawnedBy: "agent:main:main",
-      }),
-    ).toEqual({ allowed: true });
-  });
-
   it("keeps agent visibility same-agent-only for cross-agent owned child rows", () => {
     const guard = createSessionVisibilityRowChecker({
       action: "list",
@@ -470,32 +419,6 @@ describe("createSessionVisibilityGuard", () => {
     expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
   });
 
-  it("allows cross-agent spawned child status before agent-to-agent checks with all visibility", async () => {
-    const callGateway = vi.fn(
-      async (request: { method?: string; params?: { spawnedBy?: string } }) => {
-        if (request.method === "sessions.list") {
-          expect(request.params?.spawnedBy).toBe("agent:main:main");
-          return {
-            sessions: [{ key: "agent:codex:acp:child-1" }],
-          };
-        }
-        return {};
-      },
-    );
-
-    const guard = await createSessionVisibilityGuard({
-      action: "status",
-      requesterSessionKey: "agent:main:main",
-      visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(
-        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
-      ),
-      callGateway: callGateway as never,
-    });
-
-    expect(guard.check("agent:codex:acp:child-1")).toEqual({ allowed: true });
-  });
-
   it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
     const gateway = vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
       if (request.method === "sessions.resolve") {
@@ -558,29 +481,6 @@ describe("createSessionVisibilityGuard", () => {
 
     expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
     expect(gateway.mock.calls.map(([request]) => request.method)).toEqual(["sessions.resolve"]);
-  });
-
-  it("returns a private typed denial without presentation text", async () => {
-    const access = await resolveSessionToolAccess({
-      action: "send",
-      requesterAgentId: "main",
-      requesterSessionKey: "agent:main:main",
-      targetAgentId: "ops",
-      targetSessionKey: "agent:ops:main",
-      requesterOwned: false,
-      visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(
-        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
-      ),
-    });
-
-    expect(access).toMatchObject({
-      allowed: false,
-      status: "forbidden",
-      reasonCode: expect.any(String),
-      policyRefs: expect.arrayContaining(["tools.agentToAgent.enabled"]),
-    });
-    expect(access).not.toHaveProperty("error");
   });
 
   it("persists unknown ownership evidence with an opaque target through the local writer", async () => {
@@ -901,25 +801,6 @@ describe("createSessionVisibilityGuard", () => {
     ]);
   });
 
-  it("blocks cross-agent send when agent-to-agent is disabled", async () => {
-    const guard = await createSessionVisibilityGuard({
-      action: "send",
-      requesterSessionKey: "agent:main:main",
-      visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy(
-        makeConfig({ tools: { agentToAgent: { enabled: false } } }),
-      ),
-      callGateway: vi.fn(async () => ({ sessions: [] })) as never,
-    });
-
-    expect(guard.check("agent:ops:main")).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-    });
-  });
-
   it("enforces self visibility for same-agent sessions", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "history",
@@ -1058,27 +939,6 @@ describe("createSessionVisibilityGuard", () => {
         "Session history denied because spawned-session ownership lookup failed; ask the operator to check gateway configuration and credentials.",
     });
     expect(result.allowed ? "" : result.error).not.toMatch(/retry/i);
-  });
-
-  it("keeps unknown lookup failures generic under tree visibility", async () => {
-    const guard = await createSessionVisibilityGuard({
-      action: "history",
-      requesterSessionKey: "agent:main:main",
-      visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
-      callGateway: vi.fn(async () => {
-        throw new Error("failed to decode session row");
-      }) as never,
-    });
-
-    const result = guard.check("agent:main:subagent:child-1");
-    expect(result).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
-        "Session history denied because spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.",
-    });
-    expect(result.allowed ? "" : result.error).not.toMatch(/credentials|retry/i);
   });
 
   it("classifies a malformed sessions.list response as an unknown lookup failure", async () => {

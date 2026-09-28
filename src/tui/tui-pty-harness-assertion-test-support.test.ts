@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as oracle from "./tui-pty-harness-assertion-test-support.js";
+import * as oracle from "./tui-pty-terminal-evidence-test-support.js";
 
 const FRAME_START = "\x1b[?2026h";
 const FRAME_END = "\x1b[?2026l";
@@ -14,6 +14,60 @@ const hasHistoricalExpected = (raw: string, dimensions = TERMINAL) =>
   oracle.hasHistoricalSynchronizedFrameRow(raw, MARKERS, EXPECTED, dimensions);
 
 describe("hasSynchronizedFrameRow", () => {
+  it("accepts only the exact cell-size query outside frames without authenticating output", () => {
+    const query = "\x1b[16t";
+    expect(parse(query)).toEqual([]);
+    expect(hasExpected(query + frame(EXPECTED) + query)).toBe(true);
+    expect(hasExpected(EXPECTED + query + frame(""))).toBe(false);
+    expect(parse(frame("x".repeat(32)) + query + frame("y"))).toEqual([["x".repeat(32), "y"]]);
+    expect(() => parse(frame(query + EXPECTED))).toThrow("lifecycle CSI");
+    for (const invalid of [
+      "\x1b[8;24;80t",
+      "\x1b[14t",
+      "\x1b[18t",
+      "\x1b[6;20;10t",
+      "\x1b[016t",
+      "\x1b[16;0t",
+      "\x1b[?16t",
+      "\x1b[1\t6t",
+      "\u009b16t",
+    ]) {
+      expect(() => parse(invalid + frame(EXPECTED))).toThrow();
+    }
+  });
+
+  it.each(["\x07", "\x1b\\"])("tracks current linked glyphs and destinations with %j", (end) => {
+    const url = "https://a.test/caf%C3%A9";
+    const link = (text: string, target = url) => `\x1b]8;;${target}${end}${text}\x1b]8;;${end}`;
+    const dimensions = { cols: 16, rows: 4 };
+    const raw = frame(`see ${link(url)} after`);
+    const links = (output: string) => oracle.synchronizedFrameLinks(output, dimensions);
+    expect(links(raw)).toEqual([
+      { row: 0, target: url, text: "https://a.te" },
+      { row: 1, target: url, text: "st/caf%C3%A9" },
+    ]);
+    expect(links(frame(`before ${link("界👩🏽‍💻é")} end`))).toEqual([
+      { row: 0, target: url, text: "界👩🏽‍💻é" },
+    ]);
+    expect(links(frame(link("label", "https://other.test")))).toEqual([
+      { row: 0, target: "https://other.test", text: "label" },
+    ]);
+    expect(links(frame(`${link("界")}\rX`))).toEqual([]);
+    for (const suffix of [
+      frame("\x1b[2J"),
+      frame("\x1b[H\x1b[Jreplacement"),
+      frame("\r\n\r\n\r\n\r\n"),
+      "\x1b[2J" + frame(""),
+      "unframed output",
+      FRAME_START,
+      "\x1b]8;;",
+    ]) {
+      expect(links(raw + suffix)).toEqual([]);
+    }
+    expect(links(frame(url))).toEqual([]);
+    expect(() => links(frame(`\x1b]8;;${url}${end}unclosed`))).toThrow();
+  });
+
   it.each(["\x07", "\x1b\\"])("accepts a renderer mailto link terminated by %j", (end) => {
     const address = "reader@example.test";
     const link = `\x1b]8;;mailto:${address}${end}${address}\x1b]8;;${end}`;

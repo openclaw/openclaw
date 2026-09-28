@@ -465,6 +465,9 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
             ? { completionOwnerSessionKey: trustedCreation.completionOwnerSessionKey }
             : {}),
           inheritedToolPolicy: trustedCreation.inheritedToolPolicy,
+          ...(trustedCreation.inheritedPermissionMode
+            ? { inheritedPermissionMode: trustedCreation.inheritedPermissionMode }
+            : {}),
           ...(trustedCreation.resolvedModel
             ? { resolvedModel: trustedCreation.resolvedModel }
             : {}),

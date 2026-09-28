@@ -345,16 +345,12 @@ export async function runReleasePublishPreflight(
             targetSha: sourceSha,
             npmDistTag: options.npmDistTag,
             pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement,
-            stableSoakWaiver: options.stableSoakWaiver,
-            // Report a sealed waiver as active only while the variable still holds it.
-            currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER,
           }),
       );
       if (sealedInputs) {
         options = {
           ...options,
           pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
-          stableSoakWaiver: sealedInputs.stableSoakWaiver,
         };
       }
       for (const consumer of [
@@ -372,11 +368,6 @@ export async function runReleasePublishPreflight(
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
-            stableSoakWaiver: options.stableSoakWaiver,
-            // The gate re-resolves the manifest; carry the live variable so a
-            // revoked sealed waiver is reported as revoked here too.
-            currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
-            laneWaiver: options.laneWaiver,
             expectedSha: sourceSha,
             expectedReleaseProfile: options.releaseProfile,
           }),
@@ -524,14 +515,13 @@ export async function runReleasePublishPreflight(
                 publishTag: plan.publishTag,
                 packageVersion: pkg.version,
                 releaseProfile: manifest?.releaseProfile,
-                stableSoakWaiver: options.stableSoakWaiver,
               });
         rows.push({ ...gate, id: `plugin-npm.bootstrap.${pkg.packageName}` });
       }
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in docs/reference/RELEASING.md using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
       );
     }
   }

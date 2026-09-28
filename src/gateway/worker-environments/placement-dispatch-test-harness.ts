@@ -21,6 +21,7 @@ import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import {
+  createPlacementTurnClaimFixtureOps,
   seedAttachedPlacementEnvironment,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
@@ -141,14 +142,16 @@ export function createHarness(
   };
   const placements: WorkerDispatchPlacementStore = {
     get: (sessionId) => placementStore.get(sessionId),
+    readProjection: (sessionIds, readOptions) =>
+      placementStore.readProjection(sessionIds, readOptions),
+    readRecoveryCandidates: () => placementStore.readRecoveryCandidates(),
+    readChangeSnapshot: () => placementStore.readChangeSnapshot(),
     loadWorkspaceReconciliation: (owner, loadOptions) =>
       placementStore.loadWorkspaceReconciliation(owner, loadOptions),
     beginWorkspaceReconciliation: (owner, journal) =>
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>
       placementStore.abortWorkspaceReconciliation(owner, abortOptions),
-    getWorkspaceReconciliationPlacement: (owner) =>
-      placementStore.getWorkspaceReconciliationPlacement(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: (sessionId) =>
       placementStore.listPendingWorkspaceResults(sessionId),
@@ -179,7 +182,6 @@ export function createHarness(
     },
     completePlacementMoveToWorker: (params) => placementStore.completePlacementMoveToWorker(params),
     getPlacementMove: (sessionId) => placementStore.getPlacementMove(sessionId),
-    listPlacementMoves: () => placementStore.listPlacementMoves(),
     recordPlacementMoveError: (params) => placementStore.recordPlacementMoveError(params),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
@@ -199,9 +201,9 @@ export function createHarness(
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
-    startDispatch: (params) => {
+    startDispatch: (params, dispatchOptions) => {
       log.push("placement:requested");
-      return placementStore.startDispatch(params);
+      return placementStore.startDispatch(params, dispatchOptions);
     },
     bindPreparedEnvironment: (params) => placementStore.bindPreparedEnvironment(params),
     transition: (params) => {
@@ -217,7 +219,7 @@ export function createHarness(
     startDrain: (params) => {
       log.push("placement:draining");
       if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
-        placementStore.claimTurn({
+        createPlacementTurnClaimFixtureOps(database).claimTurn({
           sessionId: params.sessionId,
           sessionKey: REQUEST.sessionKey,
           agentId: REQUEST.agentId,
@@ -491,7 +493,7 @@ export function createHarness(
         fail("preflight");
       }
       authorize?.();
-      const placement = startDispatch();
+      const placement = await startDispatch();
       if (options.failAt === "barrier") {
         throw new Error("barrier failed");
       }
@@ -616,8 +618,8 @@ export function createHarness(
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
       seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
         seedActive(ownerEpoch, executionMode),
-      seedDraining: (ownerEpoch: number) => {
-        const active = seedActive(ownerEpoch);
+      seedDraining: async (ownerEpoch: number) => {
+        const active = await seedActive(ownerEpoch);
         if (active.state !== "active") {
           throw new Error("active placement fixture was not active");
         }

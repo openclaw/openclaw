@@ -21,7 +21,6 @@ import {
   isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
-  listOfficialExternalPluginCatalogEntries,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds,
@@ -335,6 +334,12 @@ describe("official external plugin catalog", () => {
 
   it.each([
     { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
+    {
+      pluginId: "google-meet",
+      packageName: "@openclaw/google-meet",
+      packageBuild: { bundledDist: true },
+      external: false,
+    },
     { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
     { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
     {
@@ -449,24 +454,19 @@ describe("official external plugin catalog", () => {
     expect(getOfficialExternalPluginCatalogEntry("fish-audio")).toBeUndefined();
   });
 
-  it("curates featured external plugins with ClawHub install alternatives", () => {
+  it("curates featured external plugins", () => {
     const featured = [
-      ["diffs", "@openclaw/diffs", 40],
-      ["lobster", "@openclaw/lobster", 50],
-      ["tokenjuice", "@openclaw/tokenjuice", 60],
-      ["memory-lancedb", "@openclaw/memory-lancedb", 70],
+      ["diffs", 40],
+      ["lobster", 50],
+      ["tokenjuice", 60],
+      ["memory-lancedb", 70],
     ] as const;
 
-    for (const [id, npmSpec, order] of featured) {
+    for (const [id, order] of featured) {
       const entry = expectCatalogEntry(id);
       expect(getOfficialExternalPluginCatalogManifest(entry)?.catalog).toEqual({
         featured: true,
         order,
-      });
-      expect(resolveOfficialExternalPluginInstall(entry)).toMatchObject({
-        clawhubSpec: `clawhub:${npmSpec}`,
-        npmSpec,
-        defaultChoice: "npm",
       });
     }
   });
@@ -552,18 +552,6 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it("accepts the live ClawHub feed schema version", () => {
-    expect(
-      isOfficialExternalPluginCatalogFeed({
-        schemaVersion: 2,
-        id: "clawhub-official",
-        generatedAt: "2026-06-25T01:19:39.629Z",
-        sequence: 11,
-        entries: [],
-      }),
-    ).toBe(true);
-  });
-
   it("verifies the default ClawHub profile with injected trust anchors", async () => {
     const feed = {
       ...hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/default-signed" }),
@@ -598,33 +586,6 @@ describe("official external plugin catalog", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
     expectHosted(result);
     expect(result.feed?.id).toBe("clawhub-official");
-    expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
-  });
-
-  it("uses configured ClawHub trust when the built-in profile is customized", async () => {
-    const feed = {
-      ...hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/default-configured" }),
-      id: "clawhub-official",
-    };
-    const signed = signedHostedCatalogFeed({ feed });
-    const result = await loadHostedCatalog({
-      catalogConfig: {
-        feeds: {
-          "clawhub-public": {
-            url: "https://clawhub.ai/v1/feeds/plugins",
-            feedId: "clawhub-official",
-            verification: {
-              mode: "signed",
-              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
-            },
-          },
-        },
-      },
-      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
-      snapshotStore: null,
-    });
-
-    expectHosted(result);
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
   });
 
@@ -2037,81 +1998,6 @@ describe("official external plugin catalog", () => {
     ).toBeNull();
   });
 
-  it("lists the externalized provider and capability plugins with install metadata", () => {
-    const providers = [
-      ["arcee", "@openclaw/arcee-provider"],
-      ["cerebras", "@openclaw/cerebras-provider"],
-      ["chutes", "@openclaw/chutes-provider"],
-      ["cloudflare-ai-gateway", "@openclaw/cloudflare-ai-gateway-provider"],
-      ["deepinfra", "@openclaw/deepinfra-provider"],
-      ["deepseek", "@openclaw/deepseek-provider"],
-      ["groq", "@openclaw/groq-provider"],
-      ["longcat", "@openclaw/longcat-provider"],
-      ["kilocode", "@openclaw/kilocode-provider"],
-      ["kimi", "@openclaw/kimi-provider"],
-      ["qianfan", "@openclaw/qianfan-provider"],
-      ["qwen", "@openclaw/qwen-provider"],
-    ] as const;
-    const plugins = [
-      ["exa", "@openclaw/exa-plugin"],
-      ["firecrawl", "@openclaw/firecrawl-plugin"],
-      ["gradium", "@openclaw/gradium-speech"],
-      ["inworld", "@openclaw/inworld-speech"],
-      ["parallel", "@openclaw/parallel-plugin"],
-      ["perplexity", "@openclaw/perplexity-plugin"],
-    ] as const;
-    const newlyExternalized = [
-      ["clickclack", "@openclaw/clickclack"],
-      ["fireworks", "@openclaw/fireworks-provider"],
-      ["irc", "@openclaw/irc"],
-      ["mattermost", "@openclaw/mattermost"],
-      ["moonshot", "@openclaw/moonshot-provider"],
-      ["searxng", "@openclaw/searxng-plugin"],
-      ["signal", "@openclaw/signal"],
-      ["sms", "@openclaw/sms"],
-      ["tavily", "@openclaw/tavily-plugin"],
-      ["tencent", "@openclaw/tencent-provider"],
-      ["venice", "@openclaw/venice-provider"],
-      ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
-      ["zai", "@openclaw/zai-provider"],
-    ] as const;
-    const currentExternalized = [["featherless", "@openclaw/featherless-provider"]] as const;
-
-    for (const [id, npmSpec] of [...providers, ...plugins]) {
-      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
-        clawhubSpec: `clawhub:${npmSpec}`,
-        npmSpec,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.6.8",
-      });
-    }
-    for (const [id, npmSpec] of newlyExternalized) {
-      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toMatchObject({
-        clawhubSpec: `clawhub:${npmSpec}`,
-        npmSpec,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.6.9",
-      });
-    }
-    for (const [id, npmSpec] of currentExternalized) {
-      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
-        clawhubSpec: `clawhub:${npmSpec}`,
-        npmSpec,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.6.11",
-      });
-    }
-  });
-
-  it("advertises StepFun with its ClawHub package and plugin API floor", () => {
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("stepfun"))).toEqual({
-      clawhubSpec: "clawhub:@openclaw/stepfun-provider",
-      npmSpec: "@openclaw/stepfun-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.6.9",
-    });
-  });
-
   it("resolves third-party channel lookup aliases to published plugin ids", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
@@ -2154,52 +2040,11 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("keeps official launch package specs on the production package names", () => {
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("acpx"))?.npmSpec).toBe(
-      "@openclaw/acpx",
-    );
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("googlechat"))?.npmSpec).toBe(
-      "@openclaw/googlechat",
-    );
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("line"))?.npmSpec).toBe(
-      "@openclaw/line",
-    );
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("diffs-language-pack"))).toEqual(
-      {
-        npmSpec: "@openclaw/diffs-language-pack",
-        clawhubSpec: "clawhub:@openclaw/diffs-language-pack",
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.5.27",
-      },
-    );
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("llama-cpp"))?.npmSpec).toBe(
-      "@openclaw/llama-cpp-provider",
-    );
-  });
-
   it("lists GMI Cloud as an official external provider", () => {
     const gmi = expectCatalogEntry("gmi");
 
     expect(resolveOfficialExternalPluginId(gmi)).toBe("gmi");
     expect(getOfficialExternalPluginCatalogEntry("gmi-cloud")).toBe(gmi);
-    expect(resolveOfficialExternalPluginInstall(gmi)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/gmi-provider",
-      npmSpec: "@openclaw/gmi-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.6.8",
-    });
-  });
-
-  it("lists Cohere as an official external provider", () => {
-    const cohere = expectCatalogEntry("cohere");
-
-    expect(resolveOfficialExternalPluginId(cohere)).toBe("cohere");
-    expect(resolveOfficialExternalPluginInstall(cohere)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/cohere-provider",
-      npmSpec: "@openclaw/cohere-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.6.8",
-    });
   });
 
   it("lists OpenCode Zen with its model and media install surfaces", () => {
@@ -2207,12 +2052,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(opencode);
 
     expect(resolveOfficialExternalPluginId(opencode)).toBe("opencode");
-    expect(resolveOfficialExternalPluginInstall(opencode)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/opencode-provider",
-      npmSpec: "@openclaw/opencode-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["opencode"]);
     expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode"]);
     expect(manifest?.providerEndpoints).toEqual([
@@ -2228,12 +2067,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(opencodeGo);
 
     expect(resolveOfficialExternalPluginId(opencodeGo)).toBe("opencode-go");
-    expect(resolveOfficialExternalPluginInstall(opencodeGo)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/opencode-go-provider",
-      npmSpec: "@openclaw/opencode-go-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["opencode-go"]);
     expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode-go"]);
     expect(manifest?.providerEndpoints).toEqual([
@@ -2244,28 +2077,9 @@ describe("official external plugin catalog", () => {
     ]);
   });
 
-  it("lists Synthetic as an official external provider", () => {
-    const synthetic = expectCatalogEntry("synthetic");
-
-    expect(resolveOfficialExternalPluginId(synthetic)).toBe("synthetic");
-    expect(resolveOfficialExternalPluginInstall(synthetic)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/synthetic-provider",
-      npmSpec: "@openclaw/synthetic-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
-  });
-
   it("preserves DuckDuckGo's keyless web search setup contract", () => {
     const duckduckgo = expectCatalogEntry("duckduckgo");
     const manifest = getOfficialExternalPluginCatalogManifest(duckduckgo);
-
-    expect(resolveOfficialExternalPluginInstall(duckduckgo)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/duckduckgo-plugin",
-      npmSpec: "@openclaw/duckduckgo-plugin",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.contracts?.webSearchProviders).toEqual(["duckduckgo"]);
     expect(manifest?.webSearchProviders).toEqual([
       {
@@ -2289,12 +2103,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(voyage);
 
     expect(resolveOfficialExternalPluginId(voyage)).toBe("voyage");
-    expect(resolveOfficialExternalPluginInstall(voyage)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/voyage-provider",
-      npmSpec: "@openclaw/voyage-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.contracts?.embeddingProviders).toEqual(["voyage"]);
     expect(manifest?.providers).toEqual([
       expect.objectContaining({
@@ -2309,12 +2117,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(vydra);
 
     expect(resolveOfficialExternalPluginId(vydra)).toBe("vydra");
-    expect(resolveOfficialExternalPluginInstall(vydra)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/vydra-provider",
-      npmSpec: "@openclaw/vydra-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["vydra"]);
     expect(manifest?.contracts).toMatchObject({
       speechProviders: ["vydra"],
@@ -2330,12 +2132,6 @@ describe("official external plugin catalog", () => {
 
     expect(resolveOfficialExternalPluginId(entry)).toBe("volcengine");
     expect(getOfficialExternalPluginCatalogEntry("volcengine-plan")).toBe(entry);
-    expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/volcengine-provider",
-      npmSpec: "@openclaw/volcengine-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(volcengine?.aliases).toEqual(["volcengine-plan"]);
     expect(volcengine?.authChoices?.[0]).toMatchObject({
       choiceId: "volcengine-api-key",
@@ -2355,12 +2151,6 @@ describe("official external plugin catalog", () => {
 
     expect(resolveOfficialExternalPluginId(xiaomi)).toBe("xiaomi");
     expect(getOfficialExternalPluginCatalogEntry("xiaomi-token-plan")).toBe(xiaomi);
-    expect(resolveOfficialExternalPluginInstall(xiaomi)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/xiaomi-provider",
-      npmSpec: "@openclaw/xiaomi-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.providers?.map((provider) => provider.id)).toEqual([
       "xiaomi",
       "xiaomi-token-plan",
@@ -2395,12 +2185,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(byteplus);
 
     expect(getOfficialExternalPluginCatalogEntry("byteplus-plan")).toBe(byteplus);
-    expect(resolveOfficialExternalPluginInstall(byteplus)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/byteplus-provider",
-      npmSpec: "@openclaw/byteplus-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.contracts?.videoGenerationProviders).toEqual(["byteplus"]);
     expect(manifest?.providers?.[0]?.aliases).toEqual(["byteplus-plan"]);
     expect(
@@ -2418,12 +2202,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(comfy);
 
     expect(resolveOfficialExternalPluginId(comfy)).toBe("comfy");
-    expect(resolveOfficialExternalPluginInstall(comfy)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/comfy-provider",
-      npmSpec: "@openclaw/comfy-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.contracts).toMatchObject({
       imageGenerationProviders: ["comfy"],
       musicGenerationProviders: ["comfy"],
@@ -2436,12 +2214,6 @@ describe("official external plugin catalog", () => {
     const manifest = getOfficialExternalPluginCatalogManifest(mistral);
 
     expect(resolveOfficialExternalPluginId(mistral)).toBe("mistral");
-    expect(resolveOfficialExternalPluginInstall(mistral)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/mistral-provider",
-      npmSpec: "@openclaw/mistral-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-    });
     expect(manifest?.providers).toEqual([
       expect.objectContaining({
         id: "mistral",
@@ -2477,13 +2249,6 @@ describe("official external plugin catalog", () => {
       id: "imessage",
       aliases: ["imsg"],
       docsPath: "/channels/imessage",
-    });
-    expect(resolveOfficialExternalPluginInstall(imessage)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/imessage",
-      npmSpec: "@openclaw/imessage",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.7.2",
-      allowInvalidConfigRecovery: true,
     });
   });
 
@@ -2521,12 +2286,6 @@ describe("official external plugin catalog", () => {
 
     expect(resolveOfficialExternalPluginId(longcat)).toBe("longcat");
     expect(getOfficialExternalPluginCatalogEntry("meituan-longcat")).toBe(longcat);
-    expect(resolveOfficialExternalPluginInstall(longcat)).toEqual({
-      clawhubSpec: "clawhub:@openclaw/longcat-provider",
-      npmSpec: "@openclaw/longcat-provider",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.6.8",
-    });
   });
 
   it("resolves current external provider aliases beyond the primary provider id", () => {
@@ -2704,49 +2463,6 @@ describe("official external plugin catalog", () => {
       optionKey: "groqApiKey",
       cliFlag: "--groq-api-key",
       cliOption: "--groq-api-key <key>",
-    });
-  });
-
-  it("allows invalid-config recovery for externalized stock plugins", () => {
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("brave"))).toMatchObject({
-      npmSpec: "@openclaw/brave-plugin",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("slack"))).toMatchObject({
-      npmSpec: "@openclaw/slack",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("discord"))).toMatchObject({
-      npmSpec: "@openclaw/discord",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("mattermost"))).toMatchObject({
-      npmSpec: "@openclaw/mattermost",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("tavily"))).toMatchObject({
-      npmSpec: "@openclaw/tavily-plugin",
-      allowInvalidConfigRecovery: true,
-    });
-  });
-
-  it("lists Matrix as an official external npm-first channel after cutover", () => {
-    const ids = new Set<string>();
-    for (const entry of listOfficialExternalPluginCatalogEntries()) {
-      const pluginId = resolveOfficialExternalPluginId(entry);
-      if (pluginId) {
-        ids.add(pluginId);
-      }
-    }
-
-    expect(ids.has("matrix")).toBe(true);
-    expect(ids.has("mattermost")).toBe(true);
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
-      clawhubSpec: "clawhub:@openclaw/matrix",
-      npmSpec: "@openclaw/matrix",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.4.10",
-      allowInvalidConfigRecovery: true,
     });
   });
 });

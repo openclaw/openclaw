@@ -3998,6 +3998,7 @@ try {
       sourceCapsule = prepareCrabboxSourceCapsule({
         repoRoot,
         syncRoot,
+        reuseMirror: canonicalProvider === "blacksmith-testbox",
         syncPlan: spawnInvocation(
           binary,
           ["sync-plan", "--json", "--limit", "2147483647"],

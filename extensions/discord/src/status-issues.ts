@@ -10,14 +10,6 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type DiscordIntentSummary = {
-  messageContent?: "enabled" | "limited" | "disabled";
-};
-
-type DiscordApplicationSummary = {
-  intents?: DiscordIntentSummary;
-};
-
 type DiscordPermissionsAuditSummary = {
   unresolvedChannels?: number;
   channels?: Array<{
@@ -30,24 +22,8 @@ type DiscordPermissionsAuditSummary = {
   }>;
 };
 
-function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummary {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const intentsRaw = value.intents;
-  if (!isRecord(intentsRaw)) {
-    return {};
-  }
-  return {
-    intents: {
-      messageContent:
-        intentsRaw.messageContent === "enabled" ||
-        intentsRaw.messageContent === "limited" ||
-        intentsRaw.messageContent === "disabled"
-          ? intentsRaw.messageContent
-          : undefined,
-    },
-  };
+function isDiscordMessageContentIntentDisabled(value: unknown): boolean {
+  return isRecord(value) && isRecord(value.intents) && value.intents.messageContent === "disabled";
 }
 
 function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsAuditSummary {
@@ -109,7 +85,6 @@ export function collectDiscordStatusIssues(
       continue;
     }
 
-    const app = readDiscordApplicationSummary(account.application);
     if (account.groupPolicy === "allowlist" && account.guildsConfigured === 0) {
       const guildGuidance =
         accountId === "default"
@@ -125,8 +100,7 @@ export function collectDiscordStatusIssues(
       });
     }
 
-    const messageContent = app.intents?.messageContent;
-    if (messageContent === "disabled") {
+    if (isDiscordMessageContentIntentDisabled(account.application)) {
       issues.push({
         channel: "discord",
         accountId,

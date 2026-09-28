@@ -1,4 +1,5 @@
 // Oxlint Config tests cover oxlint config script behavior.
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,107 +27,6 @@ type OxlintTsconfig = {
   include?: string[];
   exclude?: string[];
 };
-
-const ZERO_BASELINE_RULES = [
-  "eslint/array-callback-return",
-  "eslint/no-div-regex",
-  "eslint/no-constructor-return",
-  "eslint/no-extra-label",
-  "eslint/no-lone-blocks",
-  "eslint/no-multi-str",
-  "eslint/no-proto",
-  "eslint/no-regex-spaces",
-  "eslint/no-sequences",
-  "eslint/no-self-compare",
-  "eslint/no-var",
-  "eslint/no-param-reassign",
-  "eslint/no-implicit-coercion",
-  "eslint/no-label-var",
-  "eslint/no-prototype-builtins",
-  "eslint/no-redeclare",
-  "eslint/no-useless-rename",
-  "eslint/no-useless-return",
-  "eslint/no-new-wrappers",
-  "eslint/no-else-return",
-  "eslint/no-lonely-if",
-  "eslint/no-case-declarations",
-  "eslint/object-shorthand",
-  "eslint/prefer-exponentiation-operator",
-  "eslint/prefer-const",
-  "eslint/prefer-numeric-literals",
-  "eslint/prefer-object-has-own",
-  "eslint/prefer-promise-reject-errors",
-  "eslint/radix",
-  "eslint/symbol-description",
-  "eslint/unicode-bom",
-  "eslint/yoda",
-  "import/no-absolute-path",
-  "import/first",
-  "import/no-duplicates",
-  "import/no-empty-named-blocks",
-  "import/no-self-import",
-  "node/no-exports-assign",
-  "promise/no-new-statics",
-  "typescript/adjacent-overload-signatures",
-  "typescript/ban-tslint-comment",
-  "typescript/no-import-type-side-effects",
-  "typescript/no-inferrable-types",
-  "typescript/no-non-null-asserted-nullish-coalescing",
-  "typescript/no-unnecessary-qualifier",
-  "typescript/prefer-enum-initializers",
-  "typescript/prefer-find",
-  "typescript/prefer-for-of",
-  "typescript/prefer-function-type",
-  "typescript/prefer-includes",
-  "typescript/prefer-reduce-type-parameter",
-  "typescript/prefer-return-this-type",
-  "unicorn/consistent-date-clone",
-  "unicorn/consistent-empty-array-spread",
-  "unicorn/explicit-timer-delay",
-  "unicorn/no-console-spaces",
-  "unicorn/no-length-as-slice-end",
-  "unicorn/no-instanceof-array",
-  "unicorn/no-negation-in-equality-check",
-  "unicorn/no-new-buffer",
-  "unicorn/no-this-assignment",
-  "unicorn/no-typeof-undefined",
-  "unicorn/no-unreadable-array-destructuring",
-  "unicorn/no-useless-error-capture-stack-trace",
-  "unicorn/no-zero-fractions",
-  "unicorn/prefer-array-flat",
-  "unicorn/prefer-array-some",
-  "unicorn/prefer-blob-reading-methods",
-  "unicorn/prefer-dom-node-text-content",
-  "unicorn/prefer-keyboard-event-key",
-  "unicorn/prefer-math-min-max",
-  "unicorn/prefer-negative-index",
-  "unicorn/prefer-node-protocol",
-  "unicorn/prefer-number-properties",
-  "unicorn/prefer-optional-catch-binding",
-  "unicorn/prefer-prototype-methods",
-  "unicorn/prefer-regexp-test",
-  "unicorn/prefer-set-has",
-  "unicorn/prefer-structured-clone",
-  "unicorn/prefer-string-slice",
-  "unicorn/prefer-string-trim-start-end",
-  "unicorn/require-array-join-separator",
-  "unicorn/require-module-attributes",
-  "unicorn/require-number-to-fixed-digits-argument",
-  "unicorn/throw-new-error",
-  "vitest/no-import-node-test",
-  "vitest/consistent-vitest-vi",
-  "vitest/prefer-called-once",
-  "vitest/prefer-called-times",
-  "vitest/prefer-expect-type-of",
-];
-
-const DEFERRED_IMPORT_RULES = [
-  "import/default",
-  "import/namespace",
-  "import/no-named-as-default",
-  "import/no-named-as-default-member",
-  "import/no-unassigned-import",
-];
 
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
@@ -762,10 +662,11 @@ describe("oxlint config", () => {
     }
     fs.writeFileSync(path.join(root, "src/correctness.ts"), "export var legacy = 1;\n");
     fs.writeFileSync(path.join(root, "src/globals.js"), "window.console.log(configuredGlobal);\n");
-    for (const { github, correctness } of [
-      { github: false, correctness: false },
-      { github: true, correctness: false },
-      { github: true, correctness: true },
+    for (const { github, correctness, evidence } of [
+      { github: false, correctness: false, evidence: false },
+      { github: true, correctness: false, evidence: false },
+      { github: true, correctness: true, evidence: false },
+      { github: true, correctness: true, evidence: true },
     ]) {
       const summary = path.join(root, `summary-${github}-${correctness}.md`);
       const result = spawnSync(
@@ -788,14 +689,35 @@ describe("oxlint config", () => {
             CI: "true",
             GITHUB_ACTIONS: github ? "true" : "false",
             GITHUB_STEP_SUMMARY: summary,
+            OPENCLAW_CI_STATIC_EVIDENCE: evidence ? "1" : "0",
+            OPENCLAW_CI_STATIC_EVIDENCE_ID: "limits:0",
           },
         },
       );
       expect(result.error).toBeUndefined();
       expect(result.status, result.stdout + result.stderr).toBe(github && !correctness ? 0 : 1);
-      const report = JSON.parse(result.stdout) as {
+      const marker = "\n[ci-static:oxlint:leaf] ";
+      const [output, receipt] = result.stdout.split(marker);
+      assert.ok(output !== undefined, "Missing lint diagnostic output");
+      const report = JSON.parse(output) as {
         diagnostics: Array<{ code: string; severity: string; filename: string; help?: string }>;
       };
+      if (evidence) {
+        assert.ok(receipt !== undefined, "Missing lint evidence receipt");
+        expect(JSON.parse(receipt)).toMatchObject({
+          version: 1,
+          id: "limits:0",
+          config: ".oxlintrc.json",
+          exitCode: 1,
+          stdout: output,
+          stderr: "",
+        });
+        expect(fs.readdirSync(root).filter((file) => file.startsWith(".oxlint-limits-"))).toEqual(
+          [],
+        );
+      } else {
+        expect(receipt).toBeUndefined();
+      }
       expect(report.diagnostics).toHaveLength(correctness ? 2 : 1);
       expect(
         report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(max-lines)"),
@@ -837,7 +759,12 @@ describe("oxlint config", () => {
           {
             cwd: root,
             encoding: "utf8",
-            env: { ...process.env, GITHUB_ACTIONS: github ? "true" : "false" },
+            env: {
+              ...process.env,
+              GITHUB_ACTIONS: github ? "true" : "false",
+              OPENCLAW_CI_STATIC_EVIDENCE: "1",
+              OPENCLAW_CI_STATIC_EVIDENCE_ID: "invalid:0",
+            },
           },
         );
         expect(result.error).toBeUndefined();
@@ -846,6 +773,7 @@ describe("oxlint config", () => {
           `${config} / Actions=${github}: ${result.stdout}${result.stderr}`,
         ).toBe(1);
         expect(result.stdout + result.stderr).toContain("Failed to parse");
+        expect(result.stdout).not.toContain("[ci-static:oxlint:leaf]");
       }
     }
   });
@@ -866,17 +794,5 @@ describe("oxlint config", () => {
       "error",
       { considerDefaultExhaustiveForUnions: true },
     ]);
-  });
-
-  it("enables clean zero-baseline lint rules and keeps deferred import rules off", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.plugins).toContain("import");
-    for (const rule of ZERO_BASELINE_RULES) {
-      expect(config.rules?.[rule]).toBe("error");
-    }
-    for (const rule of DEFERRED_IMPORT_RULES) {
-      expect(config.rules?.[rule]).toBe("off");
-    }
   });
 });

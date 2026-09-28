@@ -316,12 +316,11 @@ export async function fetchSessionPullRequestCheckDetails(
 ): Promise<{ checks: ControlUiSessionPullRequestCheck[]; error?: unknown }> {
   const rows = parseChecks(await fetchSessionPullRequestCheckRuns(target, request), target);
   const priority = { failed: 0, running: 1, passed: 2, skipped: 3 };
-  const orderedRows = rows.toSorted(
-    (a, b) =>
-      priority[a.check.state] - priority[b.check.state] ||
-      a.check.name.localeCompare(b.check.name) ||
-      a.check.id - b.check.id,
-  );
+  const compareChecks = (
+    a: ControlUiSessionPullRequestCheck,
+    b: ControlUiSessionPullRequestCheck,
+  ) => priority[a.state] - priority[b.state] || a.name.localeCompare(b.name) || a.id - b.id;
+  const orderedRows = rows.toSorted((a, b) => compareChecks(a.check, b.check));
   const suites = [
     ...new Set(
       orderedRows
@@ -369,12 +368,7 @@ export async function fetchSessionPullRequestCheckDetails(
     }
   }
   return {
-    checks: orderedRows
-      .map(({ check }) => details.get(check.id) ?? check)
-      .toSorted(
-        (a, b) =>
-          priority[a.state] - priority[b.state] || a.name.localeCompare(b.name) || a.id - b.id,
-      ),
+    checks: orderedRows.map(({ check }) => details.get(check.id) ?? check).toSorted(compareChecks),
     error,
   };
 }

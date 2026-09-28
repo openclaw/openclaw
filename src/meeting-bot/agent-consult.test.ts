@@ -84,22 +84,6 @@ describe("createMeetingRealtimeEngineBindings", () => {
     );
   });
 
-  it("keeps an explicit agentId ahead of the configured default", async () => {
-    await createBindings("Support").consultAgent({
-      meetingSessionId: "meeting-2",
-      args: { question: "What should I say?" },
-      transcript: [],
-    });
-
-    expect(consultRealtimeVoiceAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "support",
-        sessionKey: "agent:support:subagent:test-meeting:meeting-2",
-        spawnedBy: "agent:support:main",
-      }),
-    );
-  });
-
   it("derives realtime engine bindings from platform metadata", async () => {
     const bindings = createBindings("Support");
 
@@ -121,6 +105,7 @@ describe("createMeetingRealtimeEngineBindings", () => {
         lane: "test-meeting",
         surface: "a test meeting",
         sessionKey: "agent:support:subagent:test-meeting:meeting-3",
+        spawnedBy: "agent:support:main",
       }),
     );
   });

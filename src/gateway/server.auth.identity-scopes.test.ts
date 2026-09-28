@@ -164,7 +164,7 @@ describe("gateway identity scope grants", () => {
         accessPolicies.length = 0;
         expect((await connect("unavailable", "visitor@example.com")).result).toMatchObject({
           ok: false,
-          error: { code: "FORBIDDEN" },
+          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
         });
         const staff = await connect("staff", "staff@example.com");
         expect(staff.result.ok).toBe(true);
@@ -172,7 +172,7 @@ describe("gateway identity scope grants", () => {
         grant = undefined;
         expect((await connect("missing", "visitor@example.com")).result).toMatchObject({
           ok: false,
-          error: { code: "FORBIDDEN" },
+          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
         });
         grant = new AbortController();
         const guest = await connect("guest", "visitor@example.com");

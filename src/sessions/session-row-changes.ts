@@ -30,7 +30,7 @@ export type SessionRowChange =
       sessionKey: string;
       agentId?: string;
       storePath?: string;
-      scope?: "automation" | "runtime";
+      scope?: "automation" | "runtime" | "session-entry";
       /** An uncertain storage result requires worker reconciliation before facts are reused. */
       factsInvalidated?: true;
       /** Omission is a metadata notification; storage owners publish their changed facts. */
@@ -38,9 +38,18 @@ export type SessionRowChange =
     }
   | {
       all: true;
-      scope: string | { agentId?: string; storePath?: string };
+      scope: string | { agentId?: string; storePath?: string; topology?: true };
       factsInvalidated?: true;
     };
+
+/** Store discovery fences also apply to agent-scoped topology publications. */
+export function isSessionStoreTopologyChange(change: SessionRowChange): boolean {
+  return (
+    "all" in change &&
+    (change.scope === "stores" ||
+      (typeof change.scope === "object" && change.scope.topology === true))
+  );
+}
 
 type SessionRowNotification =
   | Omit<Extract<SessionRowChange, { sessionKey: string }>, "facts" | "factsInvalidated">

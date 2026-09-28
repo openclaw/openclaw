@@ -78,6 +78,11 @@ export function startManagedGatewayConfigReloader(
     };
   }
 
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
+    copyConfigResolutionFacts(config, applied);
+    return applied;
+  };
   const prepareRuntimeCandidate = (
     runtimeConfig: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -86,14 +91,7 @@ export function startManagedGatewayConfigReloader(
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
     copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
-    const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
-    copyConfigResolutionFacts(candidateConfig, prepared);
-    return prepared;
-  };
-  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
-    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
-    copyConfigResolutionFacts(config, applied);
-    return applied;
+    return applyRuntimeConfigOverrides(candidateConfig);
   };
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
@@ -348,10 +346,16 @@ export function startManagedGatewayConfigReloader(
       // Secret resolution can make the committed runtime config a different
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
+      const sessionStoresChanged =
+        committedRuntimeConfig.session?.store !== nextCommittedRuntimeConfig.session?.store ||
+        plan.changedPaths.some((path) => path === "env" || path.startsWith("env."));
       lastCommittedRuntimeConfig = nextCommittedRuntimeConfig;
       committedRuntimeConfig = nextCommittedRuntimeConfig;
       publishOperatorRoleConfigChange(params.resolveGatewayContext?.());
-      publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
+      // Store retirement follows locator changes, not unrelated presentation commits.
+      if (sessionStoresChanged) {
+        publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
+      }
       params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(nextCommittedRuntimeConfig);
@@ -504,11 +508,7 @@ export function startManagedGatewayConfigReloader(
     },
     onHotReload,
     onRestart: runManagedRestart,
-    log: {
-      info: (msg) => params.logReload.info(msg),
-      warn: (msg) => params.logReload.warn(msg),
-      error: (msg) => params.logReload.error(msg),
-    },
+    log: params.logReload,
     watchPath: params.watchPath,
   });
   return {

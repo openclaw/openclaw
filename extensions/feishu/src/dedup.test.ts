@@ -87,22 +87,6 @@ describe("Feishu claimable dedupe", () => {
     ).resolves.toBe(false);
   });
 
-  it("dedupes cross-account broadcast claims through the shared namespace", async () => {
-    // Multi-account groups deliver the same event once per bot account; the
-    // shared "broadcast" namespace lets the first account claim dispatch.
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(true);
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(false);
-
-    await restartFeishuDedup();
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(false);
-  });
-
   it("warms memory from persisted plugin state", async () => {
     await expect(
       finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),

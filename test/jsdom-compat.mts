@@ -1,8 +1,8 @@
-import { createRequire } from "node:module";
 import type { DOMWindow } from "jsdom";
 import type { Environment } from "vitest/runtime";
 
-const require = createRequire(import.meta.url);
+// VM tests must use the jsdom instance that created their native window.
+const require = process.getBuiltinModule("module").createRequire(import.meta.url);
 const adapterInstalled = Symbol.for("openclaw.vitest.jsdom-adapter");
 export type JsdomCustomElementDefinition = { name: string };
 
@@ -74,7 +74,10 @@ function installJsdomWindowAdapter(): void {
 export function installJsdomEnvironmentAdapter(environment: Environment): void {
   if (Object.hasOwn(environment, adapterInstalled)) return;
   Object.defineProperty(environment, adapterInstalled, { value: true });
-  installJsdomWindowAdapter();
+  // Bun also needs this repair for direct JSDOM consumers in Node-environment tests.
+  if (process.versions.bun) {
+    installJsdomWindowAdapter();
+  }
   const NativeBlob = globalThis.Blob;
   const NativeFile = globalThis.File;
   const NativeURL = globalThis.URL;
@@ -133,6 +136,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   }
 
   environment.setup = async (global, options) => {
+    installJsdomWindowAdapter();
     const originals = new Map(
       ["URL", "Request"].map((key) => [key, Object.getOwnPropertyDescriptor(global, key)]),
     );
@@ -153,6 +157,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   };
   if (setupVM) {
     environment.setupVM = async (options) => {
+      installJsdomWindowAdapter();
       const result = await setupVM(options);
       const context = result.getVmContext();
       installWebApis(context, context.jsdom.window);

@@ -22,6 +22,7 @@ import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   encodePluginDiscoveryId,
+  encodeLocalPluginDiscoveryId,
   findLocalPluginByIdentity,
   joinClawHubPluginCatalog,
   joinClawHubPluginDetail,
@@ -122,9 +123,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             const failure = failures.get(plugin.id);
             const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
             return Object.assign({}, plugin, {
-              ...(plugin.clawhubPackage
-                ? { catalogId: encodePluginDiscoveryId(plugin.clawhubPackage) }
-                : {}),
+              catalogId: plugin.clawhubPackage
+                ? encodePluginDiscoveryId(plugin.clawhubPackage)
+                : encodeLocalPluginDiscoveryId(plugin.id),
               runtime: {
                 state:
                   record?.status === "loaded"
@@ -243,7 +244,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
-      const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
+      const includeBundledOnly = intent === "bundled" || intent === "official" || intent === "all";
       const catalogOptions = {
         local,
         includeBundledOnly,
@@ -273,6 +274,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         const items = joinClawHubPluginCatalog({
           ...catalogOptions,
           remote: remote.items,
+          categories: remote.categories,
         });
         registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
         respond(
@@ -291,10 +293,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
             ...(params.cursor ? { nextCursor: params.cursor } : {}),
             remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-              includeBundledOnly
-                ? " Bundled plugins remain available."
-                : intent === "all"
-                  ? " Installed plugins remain available."
+              intent === "all"
+                ? " Installed plugins remain available."
+                : includeBundledOnly
+                  ? " Bundled plugins remain available."
                   : ""
             }`,
           },

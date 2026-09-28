@@ -1,8 +1,5 @@
-/**
- * Resolves user-message boundaries and transcript policy for an attempt.
- * It may assume normalized attempt and session inputs are ready.
- */
 import { stableStringify } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -14,7 +11,7 @@ import {
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
-import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type UserTranscriptContext = {
   runtimeMessage: AgentMessage;
@@ -41,31 +38,32 @@ export function splitLeadingTimestampEnvelope(text: string): {
   return { envelope, body: envelope ? text.slice(envelope.length) : text };
 }
 
-export function readFirstUserText(content: unknown): string | undefined {
+function readFirstUserText(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    return typedBlock.type === "text" && typeof typedBlock.text === "string";
-  });
-  return firstTextBlock?.text;
+  return content.find(isUserTextBlock)?.text;
+}
+
+export function isUserTextBlock(value: unknown): value is { type: "text"; text: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const block = value as { type?: unknown; text?: unknown };
+  return block.type === "text" && typeof block.text === "string";
 }
 
 export function hasNonBlankUserText(content: unknown): boolean {
   return typeof content === "string"
     ? Boolean(content.trim())
     : Array.isArray(content) &&
-        content.some((block) => Boolean(readFirstUserText([block])?.trim()));
+        content.some((block) => isUserTextBlock(block) && Boolean(block.text.trim()));
 }
 
-function contentMatchesTimestampOverride(
+export function contentMatchesTimestampOverride(
   content: unknown,
   override: CurrentUserTimestampMatch,
 ): boolean {
@@ -224,10 +222,6 @@ function readPersistedSender(message: AgentMessage): PersistedSender | undefined
   return sender;
 }
 
-function formatPersistedSenderContext(sender: PersistedSender): string {
-  return formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
-}
-
 function mergeSenderIntoLeadingConversationInfo(
   text: string,
   sender: PersistedSender,
@@ -241,24 +235,19 @@ function mergeSenderIntoLeadingConversationInfo(
   if (jsonEnd === -1) {
     return undefined;
   }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(body.slice(jsonPrefix.length, jsonEnd));
-  } catch {
-    return undefined;
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  const payload = safeParseJsonRecord(body.slice(jsonPrefix.length, jsonEnd));
+  if (!payload) {
     return undefined;
   }
   const suffix = body.slice(jsonEnd + "\n```".length);
   return `${envelope}${formatContextJsonBlock(CONVERSATION_INFO_LABEL, {
-    ...(payload as Record<string, unknown>),
+    ...payload,
     sender,
   })}${suffix}`;
 }
 
 function prependContextToUserMessage(message: AgentMessage, sender: PersistedSender): AgentMessage {
-  const context = formatPersistedSenderContext(sender);
+  const context = formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
     const { body, envelope } = splitLeadingTimestampEnvelope(content);
@@ -278,13 +267,7 @@ function prependContextToUserMessage(message: AgentMessage, sender: PersistedSen
     return message;
   }
 
-  const textIndex = content.findIndex((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const textBlock = block as { type?: unknown; text?: unknown };
-    return textBlock.type === "text" && typeof textBlock.text === "string";
-  });
+  const textIndex = content.findIndex(isUserTextBlock);
   if (textIndex === -1) {
     return {
       ...message,
@@ -374,18 +357,8 @@ function isToolCallAssistantMessage(message: AgentMessage): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  return content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const type = (block as { type?: unknown }).type;
-    return isRunnerToolCallBlockType(type);
-  });
+  return content.some(isRunnerToolCallBlock);
 }
-
-/**
- * Resolves transcript persistence policy for a single embedded-agent attempt.
- */
 
 type AttemptRuntimeModelContext = NonNullable<
   Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]

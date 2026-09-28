@@ -23,13 +23,8 @@ import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
-import {
-  getHealthVersion,
-  getPresenceVersion,
-  incrementPresenceVersion,
-} from "./server/health-state.js";
+import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -114,7 +109,6 @@ export async function startGatewayCoreRuntime(input: {
     sessionEventSubscribers,
     toolEventRecipients,
     broadcastToConnIds,
-    terminalSessions,
     controlUiBasePath,
     workerEnvironmentService,
     workerPlacementDispatchAvailable,
@@ -155,6 +149,7 @@ export async function startGatewayCoreRuntime(input: {
       .measure("runtime.early", () =>
         loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
+            scheduler: runtime.scheduler,
             minimalTestGateway,
             isClosing: () => runtime.lifecycle.closePreludeStarted,
             updateCanary: runtime.opts.updateCanary,
@@ -196,8 +191,7 @@ export async function startGatewayCoreRuntime(input: {
               pendingThawRestartTargets = failedTargets.length > 0 ? failedTargets : undefined;
               return failedTargets.length === 0;
             },
-            refreshPresence: () =>
-              broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
+            refreshPresence: runtime.publishPresence,
             resetEventLoopHealth: readinessEventLoopHealth.reset,
             logHealth,
             dedupe,
@@ -207,7 +201,14 @@ export async function startGatewayCoreRuntime(input: {
             chatRunState,
             removeChatRun,
             agentRunSeq,
-            nodeSendToSession,
+            nodeSendToSession: (
+              sessionKey,
+              event,
+              payload,
+              opts?: Parameters<typeof nodeSendToSession>[3],
+            ) => {
+              void nodeSendToSession(sessionKey, event, payload, opts);
+            },
             skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
             getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
             setSkillsRefreshTimer: (timer) => {
@@ -238,13 +239,21 @@ export async function startGatewayCoreRuntime(input: {
     ...runtimeSubscriptionUnsubs
   } = await startupTrace.measure("runtime.subscriptions", () =>
     startGatewayEventSubscriptions({
+      scheduler: runtime.scheduler,
       signal: runtime.connectionWork.signal,
       getSessionRowProjection: runtime.getSessionRowProjection,
       log,
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers,
-      nodeSendToSession,
+      nodeSendToSession: (
+        sessionKey,
+        event,
+        payload,
+        opts?: Parameters<typeof nodeSendToSession>[3],
+      ) => {
+        void nodeSendToSession(sessionKey, event, payload, opts);
+      },
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
@@ -252,7 +261,6 @@ export async function startGatewayCoreRuntime(input: {
       sessionMessageSubscribers,
       chatAbortControllers,
       restartRecoveryCandidates,
-      terminalSessions,
       refreshConnectedUserProfiles: () =>
         runtime.resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
     }),
@@ -260,7 +268,12 @@ export async function startGatewayCoreRuntime(input: {
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
   await startupTrace.measure("runtime.services", () =>
-    kernel.setChannelHealthMonitor(startGatewayChannelHealthMonitor({ channelManager })),
+    kernel.setChannelHealthMonitor(
+      startGatewayChannelHealthMonitor({
+        channelManager,
+        scheduler: runtime.scheduler,
+      }),
+    ),
   );
 
   const { createOperatorApprovalSessionEventRuntime } =
@@ -292,29 +305,17 @@ export async function startGatewayCoreRuntime(input: {
   );
 
   const {
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    forwardExecApprovalRequest,
-    forwardSystemAgentApprovalRequest,
-    forwardSystemAgentApprovalResolved,
-    execApprovalIosPushDelivery,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
-    bindApprovalPublicationContext,
     beginCloseApprovalObservers,
     stopOperatorInteractions,
     extraHandlers,
     coreGatewayHandlers,
+    ...approvalRuntime
   } = await startupTrace.measure("gateway.handlers", async () => {
     const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
     return {
       ...createGatewayAuxHandlers({
+        scheduler: runtime.scheduler,
         log,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
@@ -353,6 +354,8 @@ export async function startGatewayCoreRuntime(input: {
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
+  const { execApprovalManager, pluginApprovalManager, systemAgentApprovalManager } =
+    approvalRuntime;
   const requestLifetime = runtime.connectionWork.signal;
   requestLifetime.addEventListener("abort", beginCloseApprovalObservers, { once: true });
   if (requestLifetime.aborted) {
@@ -532,20 +535,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionActivitySummaries,
     channelAdmissionAudit,
     approvalSessionEvents,
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    forwardExecApprovalRequest,
-    forwardSystemAgentApprovalRequest,
-    forwardSystemAgentApprovalResolved,
-    execApprovalIosPushDelivery,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
-    bindApprovalPublicationContext,
+    ...approvalRuntime,
     validateAgentRuntimeApprovalAuthority,
     attachedGatewayExtraHandlers,
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,

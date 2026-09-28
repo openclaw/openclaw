@@ -56,7 +56,14 @@ export async function listWorkspacePath(
   }
   try {
     return await workspaceRoot.list(browserPath || ".", { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "invalid-path") {
+      throw new FsSafeError(
+        "invalid-path",
+        `Cannot list workspace directory ${JSON.stringify(browserPath || ".")}: ${error.message}`,
+        { cause: error },
+      );
+    }
     return undefined;
   }
 }

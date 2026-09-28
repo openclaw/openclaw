@@ -29,7 +29,18 @@ data class GatewayRegistryEntry(
   val tls: Boolean = true,
   val lastConnectedAtMs: Long = 0L,
   val contextPath: String = "",
-)
+  val localName: String? = null,
+) {
+  val displayName: String get() = localName ?: name
+
+  val address: String
+    get() {
+      val host = host ?: return stableId
+      val authority = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+      val scheme = if (kind == GatewayRegistryEntryKind.MANUAL) "${if (tls) "wss" else "ws"}://" else ""
+      return "$scheme$authority${port?.let { ":$it" }.orEmpty()}$contextPath"
+    }
+}
 
 @Serializable
 internal data class PersistedGatewayRegistry(
@@ -83,6 +94,8 @@ class GatewayRegistryStore(
         entry.copy(
           stableId = stableId,
           name = entry.name.trim().ifEmpty { stableId },
+          // Reconnect/discovery metadata never owns the user's local name.
+          localName = existing?.localName,
           host = entry.host?.trim()?.takeIf { it.isNotEmpty() },
           contextPath = normalizeGatewayContextPath(entry.contextPath),
           lastConnectedAtMs =
@@ -94,6 +107,20 @@ class GatewayRegistryStore(
         )
       _entries.value = (_entries.value.filterNot { it.stableId == stableId } + normalized).sortedForStorage()
       persist()
+    }
+
+  fun rename(
+    stableId: String,
+    name: String,
+  ): Boolean =
+    synchronized(mutationLock) {
+      if (!mutationsAllowed) return@synchronized false
+      val existing = _entries.value.firstOrNull { it.stableId == stableId } ?: return@synchronized false
+      val renamed = existing.copy(localName = name.trim().takeIf { it.isNotEmpty() })
+      val nextEntries = _entries.value.map { if (it.stableId == stableId) renamed else it }.sortedForStorage()
+      if (!prefs.commitSecureStrings(mapOf(STORAGE_KEY to encodedRegistry(entries = nextEntries)))) return@synchronized false
+      _entries.value = nextEntries
+      true
     }
 
   fun setActive(stableId: String?): Unit =
@@ -237,4 +264,4 @@ class GatewayRegistryStore(
   }
 }
 
-internal fun List<GatewayRegistryEntry>.sortedForStorage(): List<GatewayRegistryEntry> = sortedWith(compareBy<GatewayRegistryEntry>({ it.name.lowercase() }, { it.stableId }))
+internal fun List<GatewayRegistryEntry>.sortedForStorage(): List<GatewayRegistryEntry> = sortedWith(compareBy<GatewayRegistryEntry>({ it.displayName.lowercase() }, { it.stableId }))

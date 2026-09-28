@@ -5,10 +5,12 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/ios-release-upload.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
+  scripts/ios-release-upload.sh --stage-only --version 2026.7.2 --revision 1 --build-number 3
 
 Generates App Store screenshots, updates release metadata, archives, and uploads
 an App Store distribution build to App Store Connect. This does not submit the
 build for App Review.
+--stage-only recovers saved notes and build selection without rebuilding or uploading.
 EOF
 }
 
@@ -18,9 +20,17 @@ RELEASE_VERSION=""
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 
+STAGE_ONLY=0
+if [[ "${1:-}" == "--stage-only" ]]; then
+  STAGE_ONLY=1
+  shift
+fi
 parse_ios_release_args upload "$@"
 
 FASTLANE_ARGS=(ios release_upload)
+if [[ "${STAGE_ONLY}" == 1 ]]; then
+  FASTLANE_ARGS=(ios release_stage)
+fi
 if [[ -n "${RELEASE_VERSION}" ]]; then
   FASTLANE_ARGS+=("release_version:${RELEASE_VERSION}")
 fi

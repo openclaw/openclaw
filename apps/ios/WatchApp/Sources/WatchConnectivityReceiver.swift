@@ -127,15 +127,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             requestId: requestId,
             gatewayStableID: exactGatewayStableID)
         let payload = Self.encodeSnapshotRequestPayload(request)
-        if session.isReachable {
-            do {
-                try await sendReachableWatchMessage(payload, with: session)
-                return token
-            } catch {
-                // Fall through to queued delivery.
-            }
-        }
-        _ = session.transferUserInfo(payload)
+        _ = await self.sendPayload(payload, session: session)
         return token
     }
 
@@ -597,9 +589,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             "type": WatchPayloadType.appSnapshotRequest.rawValue,
             "requestId": request.requestId,
         ]
-        if let sentAtMs = request.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
+        payload["sentAtMs"] = request.sentAtMs
         return payload
     }
 
@@ -614,17 +604,13 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         {
             payload["sessionKey"] = sessionKey
         }
-        if let gatewayStableID = WatchGatewayID.exact(message.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
+        payload["gatewayStableID"] = WatchGatewayID.exact(message.gatewayStableID)
         if let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty
         {
             payload["text"] = text
         }
-        if let sentAtMs = message.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
+        payload["sentAtMs"] = message.sentAtMs
         return payload
     }
 
@@ -644,12 +630,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
                 return encoded
             },
         ]
-        if let sentAtMs = request.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
-        if let gatewayStableID = WatchGatewayID.exact(request.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
+        payload["sentAtMs"] = request.sentAtMs
+        payload["gatewayStableID"] = WatchGatewayID.exact(request.gatewayStableID)
         return payload
     }
 
@@ -662,12 +644,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             "decision": message.decision.rawValue,
             "replyId": message.replyId,
         ]
-        if let gatewayStableID = WatchGatewayID.exact(message.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let sentAtMs = message.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
+        payload["gatewayStableID"] = WatchGatewayID.exact(message.gatewayStableID)
+        payload["sentAtMs"] = message.sentAtMs
         return payload
     }
 }

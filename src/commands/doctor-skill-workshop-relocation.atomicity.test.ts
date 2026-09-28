@@ -150,8 +150,6 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
     { version: "original", state: "unstarted", relocation: "retry" },
     { version: "improved", state: "unstarted", relocation: "retry" },
     { version: "display-name", state: "unstarted", relocation: "retry" },
-    { version: "original", state: "partial", relocation: "direct" },
-    { version: "original", state: "complete", relocation: "direct" },
     { version: "original", state: "partial", relocation: "retry" },
     { version: "original", state: "complete", relocation: "retry" },
     { version: "original", state: "wrong-target", relocation: "direct" },

@@ -536,10 +536,18 @@ suite.define(() => {
       runId,
       state: "delta",
       deltaText: "Waiting for the accepted abort to settle.",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Waiting for the accepted abort to settle." }],
+      },
     });
     await currentPage
       .getByText("Waiting for the accepted abort to settle.", { exact: false })
       .waitFor();
+    const interrupted = currentPage.locator(".chat-bubble [role=status]", {
+      hasText: "Interrupted",
+    });
+    expect(await interrupted.count()).toBe(0);
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
     expect(await composer.inputValue()).toBe("keep this draft");
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
@@ -551,6 +559,9 @@ suite.define(() => {
     await stop.waitFor({ state: "detached" });
     await composer.fill("next message");
     await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
+    await captureMockStopProof(currentPage, "stopped-live");
+    await interrupted.waitFor({ state: "visible" });
+    expect(await interrupted.count()).toBe(1);
   });
 
   it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {

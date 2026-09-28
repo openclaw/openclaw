@@ -48,6 +48,7 @@ import {
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
+import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -66,6 +67,7 @@ import {
   isControlUiSourcePath,
   isPluginControlUiPath,
   isUiBrowserTestFile,
+  uiE2eRealGatewayTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import {
@@ -346,7 +348,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG, 50],
   [CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG, 35],
   [CONTRACTS_PLUGIN_VITEST_CONFIG, 20],
-  ["test/vitest/vitest.tasks.config.ts", 165],
   [CHANNEL_VITEST_CONFIG, 164],
   [UNIT_FAST_VITEST_CONFIG, 160],
   [UNIT_FAST_ISOLATED_VITEST_CONFIG, 159],
@@ -465,7 +466,6 @@ const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
-const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const PACKAGE_CONTRACT_VITEST_CONFIG = "test/vitest/vitest.package-contract.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
@@ -477,6 +477,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
 const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
+const FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE = 64;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE = 150;
@@ -525,7 +526,6 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   process: PROCESS_VITEST_CONFIG,
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
-  tasks: TASKS_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
   tuiPty: TUI_PTY_VITEST_CONFIG,
   mediaUnderstanding: MEDIA_UNDERSTANDING_VITEST_CONFIG,
@@ -1118,6 +1118,21 @@ function listAgentsCoreFullSuiteTestTargets(cwd: string) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function listInfraFullSuiteTestTargets(cwd: string) {
+  const infraDir = path.join(cwd, "src/infra");
+  return uniqueOrdered([
+    ...(fs.existsSync(infraDir) ? listRepoFilesRecursive(infraDir, cwd) : []),
+    ...databaseWorkerCoreTestFiles.filter((file) => fs.existsSync(path.join(cwd, file))),
+  ])
+    .filter(
+      (file) =>
+        file.endsWith(".test.ts") &&
+        !isSharedVitestExcludedPath(file) &&
+        classifyTarget(file, cwd) === "infra",
+    )
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function createBroadToolingScriptPlans(params: VitestRunPlan & { cwd: string }) {
   const { config, forwardedArgs, includePatterns, watchMode, cwd } = params;
   if (watchMode || config !== TOOLING_VITEST_CONFIG || !includePatterns) {
@@ -1538,7 +1553,6 @@ const exactSourceDirectoryRoots = [
   "src/process",
   "src/secrets",
   "src/shared",
-  "src/tasks",
   "src/tui",
   "src/utils",
   "src/wizard",
@@ -2497,12 +2511,18 @@ function isVitestConfigFileTarget(relative: string) {
   return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
+/** Config identities do not require test discovery or CI shard construction. */
+export function listRunnableVitestConfigTargets(): string[] {
+  return [...RUNNABLE_VITEST_CONFIG_TARGETS];
+}
+
 function isVitestConfigTargetForKind(kind: string, targetArg: string, cwd: string) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
 }
 
 function isControlUiE2eTarget(relative: string) {
   return (
+    uiE2eRealGatewayTestFiles.includes(relative) ||
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
     relative === "ui/src/e2e" ||
     relative.startsWith("ui/src/e2e/") ||
@@ -2740,6 +2760,22 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
+  // The native gate/check handoff crosses processes outside the import graph.
+  ["scripts/check.mts", ["check", "pr-gate-base"]],
+  [
+    "scripts/pr-lib/gates.sh",
+    [
+      "pr-correction-preparation",
+      "pr-crabbox-gate-plan",
+      "pr-main-refresh",
+      "pr-merge-hosted",
+      "pr-metadata",
+      "pr-prepare-gates",
+      "pr-prepare-preflight",
+      "pr-wrappers",
+      "pr-gate-base",
+    ],
+  ],
   [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
   [".github/actions/setup-android-toolchain/action.yml", [workflowPlanning]],
   [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
@@ -2842,6 +2878,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   ["scripts/lib/managed-child-process.mts", ["managed-child-process", "lint-status"]],
   ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership", "lint-status"]],
+  ["scripts/lib/dist-artifact-lock.mts", ["dist-artifact-ownership", "lint-status"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
@@ -4334,9 +4371,6 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (isPathAtOrUnder(relative, "src/shared")) {
     return "sharedCore";
   }
-  if (isPathAtOrUnder(relative, "src/tasks")) {
-    return "tasks";
-  }
   if (isPathAtOrUnder(relative, "src/tui")) {
     return "tui";
   }
@@ -4969,6 +5003,13 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           const targets = listUnitSrcFullSuiteTestTargets(cwd);
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === INFRA_VITEST_CONFIG) {
+          // Isolated infra files can share the scheduler without sharing fork state.
+          const targets = listInfraFullSuiteTestTargets(cwd);
+          chunks = splitTargetChunks(
+            targets,
+            Math.ceil(targets.length / FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE),
+          );
         } else if (config === TOOLING_VITEST_CONFIG) {
           // Tooling tests spawn package managers and native helpers. Keep native
           // process lifetime short enough that unrelated files cannot crash together.

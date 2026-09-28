@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw update` (updates, repair, and recovery cleanup)"
 read_when:
   - You want to update a source checkout safely
@@ -63,12 +64,18 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
-Invalid or unreadable configuration reports `invalid-config` before database
-schema inspection. For supported package targets, the candidate makes that
+Invalid configuration reports `invalid-config` before database schema inspection.
+An unreadable configuration file or failed configuration loading step instead
+reports `config-read-failed`, with a recognized filesystem error code when available.
+For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
-The diagnostic identifies invalid fields and recommends
+The local diagnostic identifies invalid fields and recommends
 `openclaw doctor --fix`, followed by correcting any remaining errors. A dry run
 keeps this guidance in its JSON `notes` without changing the configuration.
+Public failure reports retain the rejected schema area, such as `gateway.*`,
+while hiding operator-defined keys and rejected values. Admission still runs
+when the selected package version matches the installed version; the no-op
+decision follows validation of the selected artifact and live installation.
 Guided recovery recognizes the saved config failure after a later successful
 update and still verifies the installed runtime and Gateway readiness.
 
@@ -177,6 +184,9 @@ When replacement is needed, the updater retains its running worker files before
 changing the installed package. Linux OverlayFS installations use private copies
 so hard-link copy-up cannot invalidate the retained files’ identity checks.
 Other supported filesystems keep the hard-link fast path and copy fallback.
+
+Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
+An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
 
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the
@@ -307,6 +317,13 @@ still apply; older or unrecognized handoffs retain their existing finite-deadlin
 behavior. Probes, ownership admission, readiness, recovery, and cleanup retain
 their own bounds. An explicit `--timeout <seconds>` limits each finalization phase
 and its child commands. Admission and config phases scale with shared SQLite state.
+
+After activation or rollback is verified, obsolete package and launcher backup
+trees share a five-minute cleanup budget. Expiry retains the remaining backups
+and records their paths as a warning without undoing the verified installation.
+Cleanup checks this budget between filesystem operations and waits for operations
+already in flight to settle, so stalled storage can extend the cleanup wait.
+Ownership and path-identity failures remain distinct from cleanup expiry.
 
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin

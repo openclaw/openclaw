@@ -15,7 +15,7 @@ it.each(["transaction", "commit"] as const)(
       let current = true;
       const hook = vi
         .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback) =>
+        .mockImplementation((callback, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "transaction") {
               expect(request.facts).toEqual({ names: ["Existing"] });
@@ -25,7 +25,7 @@ it.each(["transaction", "commit"] as const)(
               current = false;
             }
             callback(request, grant);
-          }),
+          }, attachment),
         );
       try {
         await expect(
@@ -52,14 +52,14 @@ it("reconciles a granted registration after close without replaying the mutation
     let commits = 0;
     const hook = vi
       .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback) =>
+      .mockImplementation((callback, attachment) =>
         createAdmission((request, grant) => {
           callback(request, grant);
           if (request.stage === "commit") {
             commits++;
             closing = closeOpenClawStateDatabaseAsync();
           }
-        }),
+        }, attachment),
       );
     try {
       await expect(ensureSessionGroupRegistered("Committed")).rejects.toThrow();

@@ -100,22 +100,8 @@ export function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
 ): ResolvedExternalCliOverlayOptions {
   const discovery = options?.externalCli;
-  if (!discovery) {
-    return {
-      ...(options?.allowKeychainPrompt !== undefined
-        ? { allowKeychainPrompt: options.allowKeychainPrompt }
-        : {}),
-      ...(options?.config ? { config: options.config } : {}),
-      ...(options?.externalCliProviderIds
-        ? { externalCliProviderIds: options.externalCliProviderIds }
-        : {}),
-      ...(options?.externalCliProfileIds
-        ? { externalCliProfileIds: options.externalCliProfileIds }
-        : {}),
-    };
-  }
-  if (discovery.mode === "none") {
-    const config = discovery.config ?? options?.config;
+  const config = discovery?.config ?? options?.config;
+  if (discovery?.mode === "none") {
     return {
       allowKeychainPrompt: false,
       ...(config ? { config } : {}),
@@ -123,21 +109,22 @@ export function resolveExternalCliOverlayOptions(
       externalCliProfileIds: [],
     };
   }
-  if (discovery.mode === "existing") {
-    const allowKeychainPrompt = discovery.allowKeychainPrompt ?? options?.allowKeychainPrompt;
-    const config = discovery.config ?? options?.config;
-    return {
-      ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
-      ...(config ? { config } : {}),
-    };
-  }
-  const allowKeychainPrompt = discovery.allowKeychainPrompt ?? options?.allowKeychainPrompt;
-  const config = discovery.config ?? options?.config;
+  const allowKeychainPrompt = discovery?.allowKeychainPrompt ?? options?.allowKeychainPrompt;
+  const providerIds = !discovery
+    ? options?.externalCliProviderIds
+    : discovery.mode === "scoped"
+      ? discovery.providerIds
+      : undefined;
+  const profileIds = !discovery
+    ? options?.externalCliProfileIds
+    : discovery.mode === "scoped"
+      ? discovery.profileIds
+      : undefined;
   return {
     ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
     ...(config ? { config } : {}),
-    ...(discovery.providerIds ? { externalCliProviderIds: discovery.providerIds } : {}),
-    ...(discovery.profileIds ? { externalCliProfileIds: discovery.profileIds } : {}),
+    ...(providerIds ? { externalCliProviderIds: providerIds } : {}),
+    ...(profileIds ? { externalCliProfileIds: profileIds } : {}),
   };
 }
 

@@ -9,6 +9,7 @@ import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
 } from "../agents/operator-model-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -44,16 +45,29 @@ type OperatorSource = {
 // Comparison records live only while captured work retains their original authority.
 const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
 
-function retainOperatorSource(
-  client: GatewayClient,
-  owners: OperatorSource["owners"],
-  membership: string | undefined,
-) {
+function getOperatorSources(client: GatewayClient): Set<OperatorSource> {
   let sources = operatorSources.get(client);
   if (!sources) {
     sources = new Set();
     operatorSources.set(client, sources);
   }
+  return sources;
+}
+
+/** A captured transport principal keeps its source's comparison identity, not new authority. */
+export function transferGatewayOperatorSourceIdentity(
+  source: GatewayClient,
+  target: GatewayClient,
+): void {
+  operatorSources.set(target, getOperatorSources(source));
+}
+
+function retainOperatorSource(
+  client: GatewayClient,
+  owners: OperatorSource["owners"],
+  membership: string | undefined,
+) {
+  const sources = getOperatorSources(client);
   let source =
     membership === undefined
       ? undefined
@@ -77,6 +91,77 @@ function retainOperatorSource(
       }
     },
   };
+}
+
+/** Bridge a prepared linked principal while retaining its exact channel admission capability. */
+export function captureChannelOperatorRunAuthority(input: {
+  profileId: string;
+  assignedRole: string | null;
+  scopes: readonly string[];
+  gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
+  getRuntimeConfig: () => OpenClawConfig;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+}): AdmittedRunOperatorAuthority {
+  const params = { ...input };
+  params.assertCurrent();
+  let modelPolicyConfig = params.getRuntimeConfig();
+  let modelPolicyMetadata = getProcessGatewayPluginMetadataSnapshot();
+  const prepareModelPolicy = (cfg: OpenClawConfig, metadata: typeof modelPolicyMetadata) =>
+    prepareOperatorModelPolicy({
+      cfg,
+      policy: resolveOperatorRolePolicyForAssignment(params.profileId, params.assignedRole, cfg)
+        ?.modelPolicy,
+      manifestPlugins: metadata ?? [],
+    });
+  const originalModelPolicy = prepareModelPolicy(modelPolicyConfig, modelPolicyMetadata);
+  let modelPolicy = originalModelPolicy;
+  return createAdmittedRunOperatorAuthority({
+    profileId: params.profileId,
+    scopes: params.scopes,
+    gatewayAccessGrant: params.gatewayAccessGrant,
+    assertCurrent: params.assertCurrent,
+    readCurrentRoleAssignment: () => {
+      params.assertCurrent();
+      return params.assignedRole;
+    },
+    get modelPolicy() {
+      const cfg = params.getRuntimeConfig();
+      const metadata = getProcessGatewayPluginMetadataSnapshot();
+      if (cfg !== modelPolicyConfig || metadata !== modelPolicyMetadata) {
+        const current = prepareModelPolicy(cfg, metadata);
+        modelPolicy =
+          originalModelPolicy &&
+          current &&
+          readOperatorModelPolicyMembership(originalModelPolicy) !==
+            readOperatorModelPolicyMembership(current)
+            ? Object.freeze({
+                models: Object.freeze(current.models.filter(originalModelPolicy.allows)),
+                allows: (ref: Parameters<typeof originalModelPolicy.allows>[0]) =>
+                  originalModelPolicy.allows(ref) && current.allows(ref),
+              })
+            : (current ?? originalModelPolicy);
+        modelPolicyConfig = cfg;
+        modelPolicyMetadata = metadata;
+      }
+      return modelPolicy;
+    },
+    onModelPolicyChanged: (listener) => {
+      const releaseProfile = onUserProfilesChanged(listener);
+      const releasePolicy = onOperatorRolePolicyChanged((change) => {
+        if (change.kind === "config" || change.profileId === params.profileId) {
+          listener();
+        }
+      });
+      // Recheck through the channel assertion so cancellation keeps its revocation error.
+      params.signal?.addEventListener("abort", listener, { once: true });
+      return () => {
+        releaseProfile();
+        releasePolicy();
+        params.signal?.removeEventListener("abort", listener);
+      };
+    },
+  });
 }
 
 /** Transfers the original operator restriction into accepted work, independently of its request. */

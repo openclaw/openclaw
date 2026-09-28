@@ -55,8 +55,11 @@ snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
 Managed worktree sessions keep their recorded canonical workspace as the skill
-source. A selected nested workspace stays nested: discovery does not walk up to
-its parent repository. Installing OpenClaw from a repository does not make that
+source. The configured agent workspace remains the primary skill source even when
+the session executes in a worktree; only selecting that worktree as the agent's
+workspace gives its skills primary precedence. A selected nested workspace stays
+nested: discovery does not walk up to its parent repository. Installing OpenClaw
+from a repository does not make that
 repository's `.agents/skills/` a global bundled skill source.
 
 Each discovery pass reports one summary per winning/losing discovery root and

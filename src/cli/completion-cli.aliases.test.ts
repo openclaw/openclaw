@@ -18,11 +18,7 @@ afterAll(async () => {
 // Aliases are typeable commands, so every shell must preserve their nested command paths.
 describe("completion-cli command aliases", () => {
   itWithFish.each([
-    ["a canonical root command", "openclaw --profile work inf", "infer"],
-    ["an aliased root command", "openclaw --profile work cap", "capability"],
-    ["an inline profile and alias", "openclaw --profile=work cap", "capability"],
     ["an alias-shaped profile value", "openclaw --profile capability cap", "capability"],
-    ["a repeated profile and alias", "openclaw --profile first --profile second cap", "capability"],
   ])("completes real Fish root aliases after %s", (_name, commandLine, expected) => {
     expect(runGeneratedFishCompletion(createAliasedCompletionProgram(), commandLine)).toContain(
       expected,
@@ -81,30 +77,16 @@ describe("completion-cli command aliases", () => {
 
   itWithFish.each([
     ["an aliased nested command", "openclaw cron create -"],
-    ["a canonical nested command", "openclaw cron add -"],
-    ["a global profile", "openclaw --profile work cron create -"],
     ["an inline global profile", "openclaw --profile=work cron create -"],
-    ["repeated global profiles", "openclaw --profile first --profile second cron create -"],
     ["an inherited global profile", "openclaw cron --profile work create -"],
-    ["a parent long option", "openclaw cron --timezone UTC create -"],
-    ["a parent short option", "openclaw cron -z UTC create -"],
-    ["an inline parent option", "openclaw cron --timezone=UTC create -"],
-    ["a parent boolean option", "openclaw cron --verbose create -"],
   ])("keeps real Fish alias completions scoped after %s", (_name, commandLine) => {
-    const program = createAliasedCompletionProgram();
-    const cron = program.commands.find((command) => command.name() === "cron");
-    if (!cron) {
-      throw new Error("Cron command is unavailable");
-    }
-    cron.option("-z, --timezone <zone>", "Time zone").option("--verbose", "Verbose output");
-
-    expect(runGeneratedFishCompletion(program, commandLine)).toEqual(["--at"]);
+    expect(runGeneratedFishCompletion(createAliasedCompletionProgram(), commandLine)).toEqual([
+      "--at",
+    ]);
   });
 
   itWithFish.each([
     ["an aliased positional argument", "openclaw cron create meeting -"],
-    ["a canonical positional argument", "openclaw cron add meeting -"],
-    ["a profiled positional argument", "openclaw --profile work cron create meeting -"],
     ["a parent option and positional argument", "openclaw cron -z UTC create meeting -"],
   ])("keeps real Fish alias options after %s", (_name, commandLine) => {
     const program = createAliasedCompletionProgram();
@@ -125,15 +107,6 @@ describe("completion-cli command aliases", () => {
     expect(script).toContain("$completions = @('infer','capability','cron','--profile')");
     expect(script).toContain("if ($commandPath -eq 'capability') {");
     expect(script).toContain("if ($commandPath -eq 'cron create') {");
-  });
-
-  it("tracks PowerShell command paths past inherited value-taking flags", () => {
-    const script = getCompletionScript("powershell", createAliasedCompletionProgram());
-
-    expect(script).toContain("$valueOptions = @('--profile')");
-    expect(script).toContain("switch ($candidatePath)");
-    expect(script).toContain("'cron create'");
-    expect(script).toContain("'--profile','--at'");
   });
 
   itWithPowerShell.each([

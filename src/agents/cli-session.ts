@@ -84,44 +84,42 @@ export function setCliSessionBinding(
       ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
       : undefined;
   const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
+  const nextBinding: CliSessionBinding = {
+    sessionId: trimmed,
+    ...(normalizeOptionalString(binding.resumeCheckpointId)
+      ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
+      : {}),
+    ...(binding.forceReuse === true ? { forceReuse: true } : {}),
+    ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
+    ...(normalizeOptionalString(binding.authProfileId)
+      ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
+      : {}),
+    ...(normalizeOptionalString(binding.authEpoch)
+      ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
+      : {}),
+    ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
+      ? { authEpochVersion: binding.authEpochVersion }
+      : {}),
+  };
+  for (const field of [
+    "extraSystemPromptHash",
+    "messageToolPolicyHash",
+    "promptToolNamesHash",
+    "cwdHash",
+    "mcpConfigHash",
+    "mcpResumeHash",
+  ] as const) {
+    const value = normalizeOptionalString(binding[field]);
+    if (value) {
+      nextBinding[field] = value;
+    }
+  }
+  if (reseedReceipt) {
+    nextBinding.reseedReceipt = reseedReceipt;
+  }
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
-    [normalized]: {
-      sessionId: trimmed,
-      ...(normalizeOptionalString(binding.resumeCheckpointId)
-        ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
-        : {}),
-      ...(binding.forceReuse === true ? { forceReuse: true } : {}),
-      ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
-      ...(normalizeOptionalString(binding.authProfileId)
-        ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
-        : {}),
-      ...(normalizeOptionalString(binding.authEpoch)
-        ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
-        : {}),
-      ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
-        ? { authEpochVersion: binding.authEpochVersion }
-        : {}),
-      ...(normalizeOptionalString(binding.extraSystemPromptHash)
-        ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.messageToolPolicyHash)
-        ? { messageToolPolicyHash: normalizeOptionalString(binding.messageToolPolicyHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.promptToolNamesHash)
-        ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.cwdHash)
-        ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.mcpConfigHash)
-        ? { mcpConfigHash: normalizeOptionalString(binding.mcpConfigHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.mcpResumeHash)
-        ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
-        : {}),
-      ...(reseedReceipt ? { reseedReceipt } : {}),
-    },
+    [normalized]: nextBinding,
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
 }

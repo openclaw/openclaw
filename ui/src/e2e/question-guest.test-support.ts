@@ -76,8 +76,13 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     bufferedAmount: 0,
     close() {},
     terminate() {},
-    send(wire: string, callback?: (error?: Error) => void) {
-      const frame: unknown = JSON.parse(wire);
+    send(
+      wire: string | Buffer,
+      options?: { binary: false } | ((error?: Error) => void),
+      onSent?: (error?: Error) => void,
+    ) {
+      const callback = typeof options === "function" ? options : onSent;
+      const frame: unknown = JSON.parse(wire.toString());
       frames.push(frame);
       delivery = delivery
         .then(() => deliver(frame))
@@ -239,6 +244,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       releaseAgentRunDelegatedAuthority(requesterAuthority);
       unregister();
       manager.close();
+      await manager.drain();
       clearAgentRunContext(runId);
       operator.release();
       await flushEvents();

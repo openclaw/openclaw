@@ -1,8 +1,11 @@
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -14,15 +17,13 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
-import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
+import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
-import { makeProxyFetch } from "./proxy.js";
 import {
   bindTelegramRequestAuthority,
   findTelegramRequestAuthorityError,
 } from "./request-authority.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
-import { requireRuntimeConfig, type OpenClawConfig } from "./send.runtime.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
 
@@ -451,7 +452,6 @@ type TelegramRequestWithDiag = <T>(
 
 export function createTelegramRequestWithDiag(params: {
   cfg: OpenClawConfig;
-  account: ResolvedTelegramAccount;
   retry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
@@ -534,18 +534,16 @@ export function createRequestWithChatNotFound(params: {
 
 export function createTelegramNonIdempotentRequestWithDiag(params: {
   cfg: OpenClawConfig;
-  account: ResolvedTelegramAccount;
   retry?: RetryConfig;
   verbose?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
   const request = createTelegramRequestWithDiag({
     cfg: params.cfg,
-    account: params.account,
     retry: params.retry,
     verbose: params.verbose,
     useApiErrorLogging: params.useApiErrorLogging,
-    shouldRetry: shouldRetryTelegramSendError,
+    shouldRetry: isSafeToRetrySendError,
     strictShouldRetry: true,
   });
   return (fn, label, options) => request(fn, label, options).catch(rethrowTelegramSendError);

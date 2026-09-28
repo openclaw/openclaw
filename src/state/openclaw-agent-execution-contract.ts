@@ -1,3 +1,7 @@
+import type {
+  AcpSessionEntryMutationInput,
+  AcpSessionEntryMutationResult,
+} from "../acp/runtime/session-meta-entry.types.js";
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
   TranscriptArchivePublishPlan,
@@ -7,13 +11,18 @@ import type { SessionTranscriptInitializationPublication } from "../config/sessi
 import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
-} from "../config/sessions/session-accessor.sqlite-replacement-state.js";
+} from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type {
   PublishedSessionTranscriptArchive,
   SessionLegacyArchiveRemovalResult,
 } from "../config/sessions/session-history-archive-pruning.types.js";
+import type { SessionPendingInputWithdrawal } from "../config/sessions/session-pending-input-withdrawal.worker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import type {
+  SqliteWalPeriodicRequest,
+  SqliteWalPeriodicResult,
+} from "../infra/sqlite-wal-write-admission.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -50,6 +59,7 @@ export type AgentDatabaseExecutionOpen = {
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
   "trajectory.events.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
   "session.archives.preparePublication": {
     input: {
@@ -68,13 +78,23 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
+  "session.entry.acp": {
+    input: AcpSessionEntryMutationInput;
+    output: AcpSessionEntryMutationResult;
+  };
   "session.entries.replace": {
-    input: SessionEntryReplacementCommit;
+    input: SessionEntryReplacementCommit & {
+      initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
+    };
     output: SessionEntryReplacementCommitted;
   };
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;
+  };
+  "session.pendingInputs.withdraw": {
+    input: SessionPendingInputWithdrawal;
+    output: boolean;
   };
   "session.archivePruning.deletePublished": {
     input: PublishedSessionTranscriptArchive;
@@ -95,6 +115,7 @@ export type AgentDatabaseRequestExecutionSource = {
   assertCurrent(): void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
+    attachment: { kind: "agent-execution"; startupJournal: boolean };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;
     assertCurrent(): void;

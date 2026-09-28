@@ -1,7 +1,11 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCiCheckPlan, type CiCheckPlanInput } from "../../scripts/ci-check-plan.mts";
+import {
+  createExtensionOxlintShards,
+  selectExtensionOxlintStripe,
+} from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowExpression,
@@ -157,6 +161,42 @@ describe("CI check-plan completion count", () => {
           }).length,
         ),
       );
+    },
+  );
+
+  it.each(["hybrid", "github", "blacksmith"])(
+    "preserves complete fallback chunks while reducing only hybrid rows (%s)",
+    async (runnerProfile) => {
+      const cwd = tempDirs.make("ci-full-extension-lint-");
+      for (let index = 0; index < 49; index++) {
+        mkdirSync(join(cwd, "extensions", `plugin-${String(index).padStart(2, "0")}`), {
+          recursive: true,
+        });
+      }
+      writeFileSync(join(cwd, "extensions/root.ts"), "export {};\n");
+      const shards = createExtensionOxlintShards({ cwd, platform: "linux", chunkSize: 8 });
+      const plan = await createCiCheckPlan({
+        changedPaths: ["package.json"],
+        changedCoreTestPaths: null,
+        runnerProfile,
+        checkMatrix: { include: [{ check_name: "check-lint", task: "lint", runner: "unused" }] },
+        coreTypeMatrix: { include: [] },
+        lintCoreMatrix: { include: [] },
+        lintExtensionMatrix: { include: [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })) },
+      });
+      const rows = plan.lint_extension_matrix.include;
+      expect(rows).toHaveLength(runnerProfile === "hybrid" ? 3 : 6);
+      const selected = rows.flatMap((row) =>
+        selectExtensionOxlintStripe(shards, {
+          index: row.stripe,
+          total: row.stripe_count ?? 6,
+        }),
+      );
+      expect(selected.map(({ name, args }) => JSON.stringify({ name, args })).toSorted()).toEqual(
+        shards.map(({ name, args }) => JSON.stringify({ name, args })).toSorted(),
+      );
+      expect(plan.check_job_count).toBe(runnerProfile === "hybrid" ? 4 : 1);
+      expect(plan.central_lint_selection_json).toBe("");
     },
   );
 

@@ -5,6 +5,7 @@ import type {
   ResponseFormatTextConfig,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
@@ -19,7 +20,6 @@ import {
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
@@ -282,7 +282,7 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     const tools = context.tools;
-    const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+    const strict = getAiTransportHost().resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
       transport: "stream",
       supportsStrictMode: compat.supportsStrictMode,
     });

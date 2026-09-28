@@ -11,6 +11,7 @@ type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
 type TestPairedDevice = CatalogInput["pairedDevices"][number];
 type TestPairedNode = NonNullable<CatalogInput["pairedNodes"]>[number];
 type TestPendingNode = NonNullable<CatalogInput["pendingNodes"]>[number];
+type TestConnectedNode = CatalogInput["connectedNodes"][number];
 
 function pairedDevice(overrides: Partial<TestPairedDevice> = {}): TestPairedDevice {
   return {
@@ -58,6 +59,23 @@ function pendingNode(overrides: Partial<TestPendingNode> = {}): TestPendingNode 
     requiredApproveScopes: resolveNodePairApprovalScopes(commands),
     permissions: { camera: true, screen: true },
     ts: 200,
+    ...overrides,
+  };
+}
+
+function connectedNode(overrides: Partial<TestConnectedNode> = {}): TestConnectedNode {
+  return {
+    nodeId: "mac-1",
+    connId: "conn-1",
+    client: {} as never,
+    declaredCaps: [],
+    caps: [],
+    declaredCommands: [],
+    commands: [],
+    declaredNodePluginTools: [],
+    nodePluginTools: [],
+    nodeSkills: [],
+    connectedAtMs: 1,
     ...overrides,
   };
 }
@@ -124,10 +142,7 @@ describe("gateway/node-catalog", () => {
         }),
       ],
       connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
+        connectedNode({
           clientId: "openclaw-macos",
           clientMode: "node",
           displayName: "Mac",
@@ -146,15 +161,12 @@ describe("gateway/node-catalog", () => {
             observations: ["image"],
             features: { recording: false, agentCursor: false, multiDisplay: false },
           },
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
           remoteIp: "100.0.0.11",
           pathEnv: "/usr/bin:/bin",
           connectedAtMs,
           lastActiveAtMs: 120,
           presenceUpdatedAtMs: 125,
-        },
+        }),
       ],
       sessionHostNodeIds: new Set(["mac-1"]),
     });
@@ -186,28 +198,13 @@ describe("gateway/node-catalog", () => {
   });
 
   it("keeps the operator node name across live metadata and reconnects", () => {
-    const connectedNode = (connId: string, displayName: string) => ({
-      nodeId: "mac-1",
-      connId,
-      client: {} as never,
-      displayName,
-      platform: "macos",
-      declaredCaps: [],
-      caps: [],
-      declaredCommands: [],
-      commands: [],
-      declaredNodePluginTools: [],
-      nodePluginTools: [],
-      nodeSkills: [],
-      connectedAtMs: 1,
-    });
     const pairedDevices = [pairedDevice({ displayName: "Device Name" })];
     const pairedNodes = [pairedNode({ displayName: "Operator Name" })];
 
     const connected = createKnownNodeCatalog({
       pairedDevices,
       pairedNodes,
-      connectedNodes: [connectedNode("conn-1", "Live Name")],
+      connectedNodes: [connectedNode({ connId: "conn-1", displayName: "Live Name" })],
     });
     expect(listKnownNodes(connected)[0]?.displayName).toBe("Operator Name");
     expect(getKnownNode(connected, "mac-1")?.displayName).toBe("Operator Name");
@@ -215,14 +212,14 @@ describe("gateway/node-catalog", () => {
     const reconnected = createKnownNodeCatalog({
       pairedDevices,
       pairedNodes,
-      connectedNodes: [connectedNode("conn-2", "Replacement Live Name")],
+      connectedNodes: [connectedNode({ connId: "conn-2", displayName: "Replacement Live Name" })],
     });
     expect(getKnownNode(reconnected, "mac-1")?.displayName).toBe("Operator Name");
 
     const liveFallback = createKnownNodeCatalog({
       pairedDevices,
       pairedNodes: [pairedNode({ displayName: undefined })],
-      connectedNodes: [connectedNode("conn-3", "Live Fallback")],
+      connectedNodes: [connectedNode({ connId: "conn-3", displayName: "Live Fallback" })],
     });
     expect(getKnownNode(liveFallback, "mac-1")?.displayName).toBe("Live Fallback");
   });
@@ -258,23 +255,11 @@ describe("gateway/node-catalog", () => {
   });
 
   it("lets live runner consent override stored session-host history", () => {
-    const connectedNode = {
-      nodeId: "mac-1",
-      connId: "conn-1",
-      client: {} as never,
-      declaredCaps: [],
-      caps: [],
-      declaredCommands: [],
-      commands: [],
-      declaredNodePluginTools: [],
-      nodePluginTools: [],
-      nodeSkills: [],
-      connectedAtMs: 1,
-    };
+    const liveNode = connectedNode();
     const storedHostDisabledLive = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],
       pairedNodes: [pairedNode({ sessionHost: true })],
-      connectedNodes: [connectedNode],
+      connectedNodes: [liveNode],
       sessionHostNodeIds: new Set(),
       workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 0 }]]),
     });
@@ -287,7 +272,7 @@ describe("gateway/node-catalog", () => {
     const storedDisabledLiveHost = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],
       pairedNodes: [pairedNode({ sessionHost: false })],
-      connectedNodes: [connectedNode],
+      connectedNodes: [liveNode],
       sessionHostNodeIds: new Set(["mac-1"]),
       workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 1 }]]),
     });
@@ -344,21 +329,14 @@ describe("gateway/node-catalog", () => {
         }),
       ],
       connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
+        connectedNode({
           displayName: "Mac",
           platform: "macos",
           declaredCaps: ["canvas"],
           caps: ["canvas"],
           declaredCommands: ["canvas.snapshot"],
           commands: ["canvas.snapshot"],
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
-          connectedAtMs: 1,
-        },
+        }),
       ],
     });
 
@@ -440,21 +418,13 @@ describe("gateway/node-catalog", () => {
       pairedNodes: [],
       pendingNodes: [pendingNode({ nodeId: "new-node" })],
       connectedNodes: [
-        {
+        connectedNode({
           nodeId: "new-node",
-          connId: "conn-1",
-          client: {} as never,
           displayName: "New Node",
           platform: "macos",
           declaredCaps: ["camera", "screen"],
-          caps: [],
           declaredCommands: ["screen.snapshot", "system.run"],
-          commands: [],
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
-          connectedAtMs: 1,
-        },
+        }),
       ],
     });
 
@@ -477,23 +447,16 @@ describe("gateway/node-catalog", () => {
       ],
       pendingNodes: [pendingNode()],
       connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
+        connectedNode({
           displayName: "Mac",
           platform: "macos",
           declaredCaps: ["camera", "screen"],
           caps: ["camera"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot"],
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
           declaredPermissions: { camera: true, screen: true },
           permissions: { camera: true },
-          connectedAtMs: 1,
-        },
+        }),
       ],
     });
 
@@ -520,23 +483,16 @@ describe("gateway/node-catalog", () => {
       ],
       pendingNodes: [pendingNode()],
       connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
+        connectedNode({
           displayName: "Mac",
           platform: "macos",
           declaredCaps: ["camera"],
           caps: ["camera"],
           declaredCommands: ["screen.snapshot"],
           commands: ["screen.snapshot"],
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
           declaredPermissions: { camera: true },
           permissions: { camera: true },
-          connectedAtMs: 1,
-        },
+        }),
       ],
     });
 
@@ -620,21 +576,10 @@ describe("gateway/node-catalog", () => {
         pairedNode({ nodeId: "mac-1", displayName: "Node Display", platform: "linux" }),
       ],
       connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
+        connectedNode({
           displayName: 42 as unknown as string,
           platform: {} as unknown as string,
-          declaredCaps: [],
-          caps: [],
-          declaredCommands: [],
-          commands: [],
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
-          connectedAtMs: 1,
-        },
+        }),
       ],
     });
 

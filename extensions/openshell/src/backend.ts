@@ -1,4 +1,3 @@
-// Openshell plugin module implements backend behavior.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -162,10 +161,6 @@ const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "done",
 ].join("\n");
 
-function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
-  return sanitizeEnvVars(process.env).allowed;
-}
-
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
 ): SandboxBackendFactory {
@@ -281,7 +276,7 @@ class OpenShellSandboxBackendImpl {
         const pending = await this.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
-          env: buildOpenShellSshExecEnv(),
+          env: sanitizeEnvVars(process.env).allowed,
           stdinMode: "pipe-open",
           finalizeToken: pending.token,
         };
@@ -459,24 +454,7 @@ class OpenShellSandboxBackendImpl {
 
   private resolveWorkdirValidationRoot(workdir: string): string {
     try {
-      const normalized = normalizeRemotePath(workdir);
-      return (
-        resolveOpenShellWorkspaceRoot(
-          [
-            {
-              remote: normalizeRemotePath(this.params.remoteWorkspaceDir),
-              owner: "workspace",
-              value: undefined,
-            },
-            {
-              remote: normalizeRemotePath(this.params.remoteAgentWorkspaceDir),
-              owner: "agent",
-              value: undefined,
-            },
-          ],
-          normalized,
-        )?.remote ?? this.params.remoteWorkspaceDir
-      );
+      return this.resolveRemoteTarget(workdir).root;
     } catch {
       return this.params.remoteWorkspaceDir;
     }
@@ -1023,14 +1001,12 @@ class OpenShellSandboxBackendImpl {
                 relativeSkillsPath.split("/").filter(Boolean),
               );
             }
-            if (root.owner === "workspace") {
-              await moveLocalShadowAside({
-                workspaceDir: root.local,
-                tmpDir,
-                relativeParts: MATERIALIZED_SKILLS_REMOTE_PARTS,
-                preservedShadows,
-              });
-            }
+            await moveLocalShadowAside({
+              workspaceDir: root.local,
+              tmpDir,
+              relativeParts: MATERIALIZED_SKILLS_REMOTE_PARTS,
+              preservedShadows,
+            });
             await replaceDirectoryContents({
               sourceDir: tmpDir,
               targetDir: root.local,
@@ -1246,11 +1222,7 @@ async function removeDownloadedWorkspacePath(
     if (!stats) {
       return;
     }
-    if (index === parts.length - 1) {
-      await fs.rm(next, { recursive: true, force: true });
-      return;
-    }
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    if (index === parts.length - 1 || stats.isSymbolicLink() || !stats.isDirectory()) {
       await fs.rm(next, { recursive: true, force: true });
       return;
     }

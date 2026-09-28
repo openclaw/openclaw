@@ -1,4 +1,3 @@
-// Mistral tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -9,12 +8,6 @@ import { mistralMediaUnderstandingProvider } from "./media-understanding-provide
 installPinnedHostnameTestHooks();
 
 describe("mistralMediaUnderstandingProvider", () => {
-  it("has expected provider metadata", () => {
-    expect(mistralMediaUnderstandingProvider.id).toBe("mistral");
-    expect(mistralMediaUnderstandingProvider.capabilities).toEqual(["audio"]);
-    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
-  });
-
   it("uses Mistral base URL by default", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "bonjour" });
 

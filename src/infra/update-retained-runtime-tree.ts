@@ -1,28 +1,10 @@
 import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { collectBundledPluginPublicSurfaceArtifacts } from "../plugins/bundled-plugin-scan.js";
-import { isPluginControlUiAssetPath } from "../plugins/control-ui-assets.js";
-import { loadPluginManifest } from "../plugins/manifest.js";
-import { listBuiltRuntimeEntryCandidates } from "../plugins/package-entrypoints.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES } from "../plugins/package-manifest.js";
-import {
-  parsePluginCacheJson,
-  pluginCacheRealpathSync,
-  readPluginCacheFile,
-} from "../plugins/plugin-cache-files.js";
-import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import {
-  isPluginActivityToolName,
-  PLUGIN_ACTIVITY_ICON_PATH,
-  PLUGIN_TOOL_ACTIVITY_ICON_DIR,
-  PORTABLE_PLUGIN_ICON_PATH,
-} from "../plugins/portable-icon-paths.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../plugins/public-surface-runtime.js";
+import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { root as openRoot } from "./fs-safe.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   assertUpdateCandidatePluginLinkTarget,
@@ -32,7 +14,6 @@ import {
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
 import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree.js";
-import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { relocateRuntimeEntry } from "./update-runtime-relocation.js";
 
 // Relocation rewrites these members in place; a hard link would edit the live package.
@@ -59,6 +40,7 @@ export async function linkUpdateCandidatePluginTrees(
   params: {
     targetStateDir: string;
     candidateRoot: string;
+    assertCurrent: () => void;
     onProgress?: () => void | Promise<void>;
   },
 ): Promise<{ linked: number; copied: number }> {
@@ -81,136 +63,63 @@ export async function linkUpdateCandidatePluginTrees(
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
-  const pluginFiles = new Set<string>();
-  const entryKinds = new Map(plan.entries.map((entry) => [entry.path, entry.kind]));
-  const activityScopes: Array<readonly [string, string]> = [];
-  const browserScopes: Array<readonly [string, string]> = [];
-  await withPluginCache(createPluginCache({ kind: "operation" }), async () => {
-    for (const entry of plan.entries) {
-      if (path.basename(entry.path) !== "openclaw.plugin.json") {
-        continue;
-      }
-      await assertEntry(entry);
-      const rootDir = path.dirname(entry.path);
-      const add = (relative: string) => {
-        const file = path.resolve(rootDir, relative);
-        const real = isPathInside(rootDir, file) ? pluginCacheRealpathSync(file) : null;
-        if (real && isPathInside(rootDir, real) && entryKinds.get(real) === "file") {
-          pluginFiles.add(real);
-        }
-      };
-      // Older projections may already have linked these admitted metadata files.
-      // Reading their paths is not plugin admission; loading keeps its strict guard.
-      const loaded = loadPluginManifest(rootDir, false);
-      const manifest = loaded.ok ? loaded.manifest : undefined;
-      const packageFile = readPluginCacheFile({
-        rootDir,
-        relativePath: "package.json",
-        rejectHardlinks: false,
-        maxBytes: 256 * 1024,
-      });
-      const parsed = packageFile.ok ? parsePluginCacheJson(packageFile) : undefined;
-      const metadata =
-        parsed?.ok && isRecord(parsed.value) && isRecord(parsed.value.openclaw)
-          ? parsed.value.openclaw
-          : {};
-      const sources = normalizeTrimmedStringList([
-        ...(Array.isArray(metadata.extensions)
-          ? metadata.extensions
-          : DEFAULT_PLUGIN_ENTRY_CANDIDATES),
-        ...(Array.isArray(metadata.runtimeExtensions) ? metadata.runtimeExtensions : []),
-        metadata.setupEntry,
-        metadata.runtimeSetupEntry,
-        manifest?.providerCatalogEntry,
-        manifest?.capabilityCatalogEntry,
-      ]);
-      for (const directory of new Set([
-        rootDir,
-        path.join(rootDir, "dist"),
-        ...sources.map((source) => path.dirname(path.resolve(rootDir, source))),
-      ])) {
-        if (isPathInside(rootDir, directory) && entryKinds.get(directory) === "directory") {
-          for (const artifact of collectBundledPluginPublicSurfaceArtifacts({
-            pluginDir: directory,
-            sourceEntry: "",
-          }) ?? []) {
-            sources.push(
-              ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((extension) =>
-                path.relative(rootDir, path.join(directory, artifact.replace(/\.js$/u, extension))),
-              ),
-            );
-          }
-        }
-      }
-      [
-        "openclaw.plugin.json",
-        "package.json",
-        PORTABLE_PLUGIN_ICON_PATH,
-        PLUGIN_ACTIVITY_ICON_PATH,
-      ].forEach(add);
-      for (const source of sources) {
-        add(source);
-        listBuiltRuntimeEntryCandidates(source).forEach(add);
-      }
-      for (const theme of manifest?.themes ?? []) {
-        [
-          theme.source,
-          ...Object.values(theme.hats ?? {}),
-          ...Object.values(theme.critters ?? {}).map((critter) => critter.source),
-        ].forEach(add);
-      }
-      const activity = path.join(rootDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR);
-      const browser =
-        manifest?.controlUi && path.resolve(rootDir, path.dirname(manifest.controlUi.entry));
-      activityScopes.push([activity, activity]);
-      if (browser && isPathInside(rootDir, browser)) {
-        browserScopes.push([browser, browser]);
-      }
-    }
-  });
-  // Nested contracts validate paths relative to their own root, not an ancestor.
-  const deepestFirst = ([left]: readonly [string, string], [right]: readonly [string, string]) =>
-    right.length - left.length;
-  const activityScope = createRuntimePathLookup(activityScopes.toSorted(deepestFirst));
-  const browserScope = createRuntimePathLookup(browserScopes.toSorted(deepestFirst));
   for (const entry of plan.entries) {
-    if (entry.kind !== "file") {
-      continue;
-    }
-    const activity = activityScope(entry.path);
-    const browser = browserScope(entry.path);
-    if (
-      (activity &&
-        path.dirname(entry.path) === activity &&
-        entry.path.endsWith(".svg") &&
-        isPluginActivityToolName(path.basename(entry.path, ".svg"))) ||
-      (browser &&
-        isPluginControlUiAssetPath(path.relative(browser, entry.path).split(path.sep).join("/")))
-    ) {
-      pluginFiles.add(entry.path);
+    if (path.basename(entry.path) === "openclaw.plugin.json") {
+      await assertEntry(entry);
     }
   }
+  const pluginFiles = collectPluginSafetyInspectedFiles(plan.entries);
   await targets.assertBindings();
+  params.assertCurrent();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
-  let destinationRoot: Awaited<ReturnType<typeof openRoot>> | undefined;
+  const preparedDirectories = new Set([privateRoot]);
+  const preparingDirectories = new Map<string, Promise<void>>();
+  const prepareDirectory = async (directory: string, mode: number) => {
+    if (preparedDirectories.has(directory)) {
+      return;
+    }
+    let preparing = preparingDirectories.get(directory);
+    if (!preparing) {
+      params.assertCurrent();
+      preparing = fs.mkdir(directory, { recursive: true, mode }).then(() => {
+        preparedDirectories.add(directory);
+        preparingDirectories.delete(directory);
+      });
+      preparingDirectories.set(directory, preparing);
+    }
+    await preparing;
+  };
+  let destinationRoot: ReturnType<typeof openRoot> | undefined;
   const copyEntry = async (
     entry: Extract<UpdateCandidatePluginTreeEntry, { kind: "file" }>,
     destination: string,
   ) => {
-    destinationRoot ??= await openRoot(privateRoot);
+    const root = await (destinationRoot ??= openRoot(privateRoot));
     // copyIn owns portable create-only publication; recheck the inventory before
     // its private stage is published.
-    await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
+    await root.copyIn(path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
+      // The entry loop already prepares each destination parent.
+      mkdir: false,
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",
-      assertBeforeMutation: () =>
-        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
+      assertBeforeMutation: () => {
+        params.assertCurrent();
+        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
+      },
     });
     await assertEntry(entry);
-    await relocateRuntimeEntry(destination, entry.path, destination, "file", relocations);
+    await relocateRuntimeEntry(
+      destination,
+      entry.path,
+      destination,
+      "file",
+      relocations,
+      params.assertCurrent,
+    );
     if ((entry.mode & 0o600) !== 0o600) {
+      params.assertCurrent();
       await fs.chmod(destination, entry.mode);
     }
   };
@@ -230,24 +139,33 @@ export async function linkUpdateCandidatePluginTrees(
   };
   const counts = { linked: 0, copied: 0 };
   const directories: Array<Extract<UpdateCandidatePluginTreeEntry, { kind: "directory" }>> = [];
-  for (const entry of plan.entries) {
+  const materialize = async (entry: UpdateCandidatePluginTreeEntry) => {
     await assertEntry(entry);
     const destination = destinationFor(entry.path);
+    const directory = entry.kind === "directory" ? destination : path.dirname(destination);
+    // A file may precede its parent's inventory entry; reuse only completed creation.
+    await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
     if (entry.kind === "directory") {
-      await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
       directories.push(entry);
-      continue;
+      return;
     }
-    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     if (entry.kind === "symlink") {
+      params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
-      await relocateRuntimeEntry(destination, entry.path, destination, "symlink", relocations);
+      await relocateRuntimeEntry(
+        destination,
+        entry.path,
+        destination,
+        "symlink",
+        relocations,
+        params.assertCurrent,
+      );
       assertUpdateCandidatePluginLinkTarget(
         destination,
         path.resolve(path.dirname(destination), await fs.readlink(destination)),
         { privateRoot, candidateRoot },
       );
-      continue;
+      return;
     }
     if (
       pluginFiles.has(entry.path) ||
@@ -256,8 +174,9 @@ export async function linkUpdateCandidatePluginTrees(
     ) {
       await copyEntry(entry, destination);
       counts.copied += 1;
-      continue;
+      return;
     }
+    params.assertCurrent();
     try {
       await fs.link(entry.path, destination);
     } catch (error) {
@@ -266,7 +185,7 @@ export async function linkUpdateCandidatePluginTrees(
       }
       await copyEntry(entry, destination);
       counts.copied += 1;
-      continue;
+      return;
     }
     // The private name must reference the inventoried inode, never a newer file.
     const linked = await fs.lstat(destination, { bigint: true });
@@ -282,6 +201,38 @@ export async function linkUpdateCandidatePluginTrees(
     assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
     linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
     counts.linked += 1;
+  };
+  const files: Array<Extract<UpdateCandidatePluginTreeEntry, { kind: "file" }>> = [];
+  const inodes = new Set<string>();
+  const drain = async () => {
+    const result = await runTasksWithConcurrency({
+      tasks: files.map((entry) => () => materialize(entry)),
+      limit: 4,
+      errorMode: "stop",
+    });
+    // Cleanup must never race an admitted filesystem write, including on failure.
+    if (result.hasError) {
+      throw result.firstError;
+    }
+    files.length = 0;
+    inodes.clear();
+  };
+  for (const entry of plan.entries) {
+    const inode = `${entry.dev}:${entry.ino}`;
+    // A link changes its inode's ctime even when the next occurrence needs a copy.
+    // Keep shared inodes and directory/symlink barriers in inventory order.
+    if (files.length && (entry.kind !== "file" || files.length === 4 || inodes.has(inode))) {
+      await drain();
+    }
+    if (entry.kind === "file") {
+      files.push(entry);
+      inodes.add(inode);
+    } else {
+      await materialize(entry);
+    }
+  }
+  if (files.length) {
+    await drain();
   }
   await targets.assertBindings();
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({
@@ -289,11 +240,13 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot,
     hostLinks,
     aliases: targets.aliases,
+    assertBeforeMutation: params.assertCurrent,
   });
   for (const alias of privateAliases) {
     await verifyUpdateCandidatePluginTree(alias, { privateRoot, candidateRoot, hostLinks });
   }
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
+    params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
   }
   return counts;

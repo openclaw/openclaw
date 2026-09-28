@@ -1,12 +1,11 @@
-// Migrate Hermes plugin module implements skills behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exists, parseHermesConfig, readText, sanitizeName } from "./helpers.js";
 import type { HermesSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 type PlannedSkill = {
   id: string;
@@ -63,7 +62,7 @@ async function discoverSkillRoots(root: string): Promise<string[]> {
 
 export async function buildSkillItems(params: {
   source: HermesSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   if (!params.source.skillsDir) {

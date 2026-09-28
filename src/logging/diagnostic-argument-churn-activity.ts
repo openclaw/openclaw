@@ -77,13 +77,7 @@ export function resolveArgumentChurnProgress(
   const startedAt = activity.argumentChurnStartedAt;
   const belongsToOwner =
     startedAt !== undefined && currentOwnerRunId === activity.argumentChurnRunId;
-  if (!belongsToOwner) {
-    return {
-      lastProgressAt: activity.lastProgressAt,
-      lastProgressReason: activity.lastProgressReason,
-    };
-  }
-  if (hasArgumentChurnContinuityExpired(activity, now)) {
+  if (!belongsToOwner || hasArgumentChurnContinuityExpired(activity, now)) {
     return {
       lastProgressAt: activity.lastProgressAt,
       lastProgressReason: activity.lastProgressReason,

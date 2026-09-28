@@ -1,7 +1,6 @@
 // Collects and verifies package dist inventory metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import pLimit, { type LimitFunction } from "p-limit";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mts";
@@ -13,10 +12,9 @@ import {
   type PackageDistContentInventoryEntry,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
 import { escapeRegExp } from "../shared/regexp.js";
-import { sha256Hex } from "./crypto-digest.js";
 import { sha256File } from "./directory-durability.js";
 import { isMissingPathError } from "./errno.js";
-import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
+import { root as openFsRoot } from "./fs-safe.js";
 import { readJsonIfExists } from "./json-files.js";
 export {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
@@ -25,7 +23,6 @@ export {
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
-const PACKAGE_DIST_INVENTORY_BUFFER_BYTES = 64 * 1024;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const OMITTED_QA_EXTENSION_PREFIXES = [
@@ -405,34 +402,16 @@ export async function collectPackageDistContentInventory(
   const entries = await Promise.all(
     files.map((relativePath) =>
       fsLimit(async () => {
-        const opened = await packageFs.open(relativePath, {
+        await using opened = await packageFs.open(relativePath, {
           hardlinks: "allow",
           nonBlockingRead: true,
           symlinks: "reject",
         });
-        try {
-          let hash;
-          try {
-            if (opened.stat.size <= PACKAGE_DIST_INVENTORY_BUFFER_BYTES) {
-              const content = await readFileHandleBounded(
-                opened.handle,
-                PACKAGE_DIST_INVENTORY_BUFFER_BYTES,
-              );
-              hash = { bytes: content.byteLength, digest: sha256Hex(content) };
-            } else {
-              hash = await sha256File(opened.handle);
-            }
-          } catch (error) {
-            if (!(error instanceof FsSafeError) || error.code !== "too-large") {
-              throw error;
-            }
-            // A file can grow after admission; positioned hashing restarts at byte zero.
-            hash = await sha256File(opened.handle);
-          }
-          return createPackageDistContentInventoryEntry(relativePath, hash, opened.stat.mode);
-        } finally {
-          await opened[Symbol.asyncDispose]();
-        }
+        return createPackageDistContentInventoryEntry(
+          relativePath,
+          await sha256File(opened.handle),
+          opened.stat.mode,
+        );
       }),
     ),
   );

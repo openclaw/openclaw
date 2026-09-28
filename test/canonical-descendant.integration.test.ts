@@ -12,7 +12,11 @@ import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
 } from "../src/agents/admitted-run-context.js";
-import { retireSessionMcpRuntime } from "../src/agents/agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  retireSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
+} from "../src/agents/agent-bundle-mcp-manager-api.js";
 import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
@@ -26,10 +30,10 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  readClosedTranscriptTurn,
   replaceTranscriptEvents,
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
+import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type {
@@ -41,7 +45,9 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
@@ -76,8 +82,12 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../src/sessions/user-turn-transcript.js";
-import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import { useCanonicalDescendantState } from "./helpers/canonical-descendant-state.js";
 
 // Native transport mocks own the source graph, so discovery must use that graph.
@@ -193,8 +203,10 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
+        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("codex", storeOptions),
+          createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
     });
     const admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }> = [];
@@ -243,14 +255,16 @@ async function withFixture(
         });
         const admittedRunContext = await admission.admit("plugin-harness", runId);
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
-        let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
+        let workerClaim:
+          | Awaited<ReturnType<NonNullable<typeof placements>["claimTurn"]>>
+          | undefined;
         if (placements) {
           seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
             environmentId: "policy-worker",
             sessionId,
             ownerEpoch: 7,
           });
-          let placement = placements.startDispatch(target);
+          let placement = await placements.startDispatch(target);
           placement = placements.transition({
             sessionId,
             from: "requested",
@@ -282,7 +296,7 @@ async function withFixture(
             expectedGeneration: placement.generation,
             patch: { activeOwnerEpoch: 7 },
           });
-          workerClaim = placements.claimTurn({
+          workerClaim = await placements.claimTurn({
             ...target,
             runId,
             claimId: "policy-claim",
@@ -327,7 +341,7 @@ async function withFixture(
           invalidate: async (reason) => {
             if (reason === "claim") {
               if (capturedWorkerClaim) {
-                placements?.releaseTurn(capturedWorkerClaim);
+                await placements?.releaseTurn(capturedWorkerClaim);
               }
               workerClaim = undefined;
             } else if (reason === "aborted") {
@@ -352,10 +366,10 @@ async function withFixture(
             }
           },
           userTurnTranscriptRecorder: recorder,
-          close: () => {
+          close: async () => {
             host.close();
             if (workerClaim) {
-              placements?.releaseTurn(workerClaim);
+              await placements?.releaseTurn(workerClaim);
             }
             admission.close();
             successor?.close();
@@ -363,7 +377,9 @@ async function withFixture(
         };
       },
     });
+    const scheduler = createTestGatewayScheduler();
     try {
+      await setSessionMcpRuntimeScheduler(scheduler);
       config.plugins = {
         allow: ["codex", "openai"],
         entries: {
@@ -537,7 +553,12 @@ async function withFixture(
         markPluginRegistryRetired(registry);
       }
     } finally {
-      await fixture.dispose();
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+        await fixture.dispose();
+      }
     }
   }, options.isolatedState);
 }
@@ -960,11 +981,14 @@ describe("canonical descendant lifecycle through real owners", () => {
           before.slice(0, -1),
         );
         expect(
-          readClosedTranscriptTurn({
-            boundary: { admission, terminal: admission },
-            maxEvents: 100,
-            maxBytes: 100_000,
-          }),
+          readClosedTranscriptTurnInDatabase(
+            openOpenClawAgentDatabase({ agentId: admission.agentId, path: admission.storePath }).db,
+            {
+              boundary: { admission, terminal: admission },
+              maxEvents: 100,
+              maxBytes: 100_000,
+            },
+          ),
         ).toMatchObject({ kind: "ok", messages: [added.message] });
         expect(await fork(source.sessionKey, admission.entryId)).toMatchObject({ ok: true });
       }

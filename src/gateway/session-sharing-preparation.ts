@@ -20,7 +20,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import {
+  isSessionStoreTopologyChange,
+  sessionChanges,
+  type SessionRowChange,
+} from "../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -78,7 +82,7 @@ type SessionFactsRequest = {
   agentId: string;
   storageReady?: Promise<void>;
 };
-type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
+export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
   bindCreation(this: void, operation: SessionEntryCreationOperation): void;
   readCurrent(this: void, cfg: OpenClawConfig): Facts;
@@ -107,6 +111,7 @@ export async function prepareSessionMutationFacts(
   let expectedPlaceholder: SessionEntryPlaceholder | undefined;
   let assertSource: () => void;
   const selectedPaths = new Set<string>();
+  const acquiringPaths = new Set<string>();
   const release = () => {
     if (active) {
       active = false;
@@ -126,7 +131,10 @@ export async function prepareSessionMutationFacts(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       // RAM has its original handle/resource fence; durable discovery waits for writer promotion.
-      if (change.scope === "stores" && (beforeDiscovery || incognito)) {
+      if (isSessionStoreTopologyChange(change)) {
+        if (!beforeDiscovery && !incognito) {
+          invalidate();
+        }
         return;
       }
       if (
@@ -136,9 +144,12 @@ export async function prepareSessionMutationFacts(
           "catalog",
           "acp",
           "agent-runs",
+          "subagent-runs",
           "worker-placements",
           "worker-environments",
           "config",
+          "config-presentation",
+          "config-profiles",
         ].includes(change.scope)
       ) {
         return;
@@ -193,6 +204,15 @@ export async function prepareSessionMutationFacts(
           return;
         }
       }
+    }
+    // A retained acquisition receives this exact source's postimage before this notification.
+    // It still rejects replacements, unknown publications, and stale worker identities.
+    if (
+      !facts &&
+      acquiringPaths.has(path.resolve(change.storePath)) &&
+      isPreparedSessionSharingChange(change)
+    ) {
+      return;
     }
     if (
       !facts ||
@@ -353,16 +373,43 @@ export async function prepareSessionMutationFacts(
               env: inventory.env,
               targetDiscoveryCache,
             },
-            async (reads) => {
+            async (reads, select) => {
               for (const read of reads) {
                 assertActive();
-                const loaded = await readSessionEntriesFromStoreInWorker({
-                  agentId: read.agentId ?? agentId,
-                  storePath: read.storePath,
-                  sessionKeys: read.options.exactKeys!,
-                  projection: "sharing",
-                  env: inventory.env,
-                });
+                const acquisitions = new Set<string>();
+                const loaded = await readSessionEntriesFromStoreInWorker(
+                  {
+                    agentId: read.agentId ?? agentId,
+                    storePath: read.storePath,
+                    sessionKeys: read.options.exactKeys!,
+                    projection: "sharing",
+                    env: inventory.env,
+                  },
+                  (source) => {
+                    assertActive();
+                    const identity = readDatabasePathIdentitySync(source.path);
+                    // Missing stores retain discovery's negative-source fence, not a row acquisition.
+                    if (identity.birthtime === undefined) {
+                      return;
+                    }
+                    const databaseIdentity = identity.key;
+                    acquiringPaths.add(path.resolve(read.storePath));
+                    acquiringPaths.add(path.resolve(source.path));
+                    for (const sessionKey of read.options.exactKeys!) {
+                      const key = `${databaseIdentity}\0${sessionKey}`;
+                      if (!retainedReads.has(key)) {
+                        const retained = retainPreparedSessionSharingFacts({
+                          databaseIdentity,
+                          sessionKey,
+                          acquiring: true,
+                        });
+                        retainedReads.set(key, retained);
+                        acquisitions.add(key);
+                        releases.push(retained.release);
+                      }
+                    }
+                  },
+                );
                 const store = Object.fromEntries(
                   loaded.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
                 );
@@ -372,27 +419,34 @@ export async function prepareSessionMutationFacts(
                   members.set(read.storePath, loaded.sharing);
                   for (const sessionKey of read.options.exactKeys!) {
                     const key = `${loaded.sharing.databaseIdentity}\0${sessionKey}`;
-                    if (retainedReads.has(key)) {
-                      continue;
+                    const retained = retainedReads.get(key);
+                    if (!retained) {
+                      throw new SessionMutationFactsUnavailableError();
                     }
-                    const entry = store[sessionKey];
-                    const retained = retainPreparedSessionSharingFacts({
-                      databaseIdentity: loaded.sharing.databaseIdentity,
-                      sessionKey,
-                      entry: entry ? projectSessionSharingEntry(entry) : undefined,
-                      placeholder: loaded.sharing.placeholders.find(
-                        (row) => row.sessionKey === sessionKey,
-                      ),
-                      membership: new Set(
-                        loaded.sharing.members.find((row) => row.sessionKey === sessionKey)
-                          ?.identityIds,
-                      ),
-                    });
-                    retainedReads.set(key, retained);
-                    releases.push(retained.release);
+                    if (acquisitions.has(key)) {
+                      const entry = store[sessionKey];
+                      retained.initialize({
+                        entry: entry ? projectSessionSharingEntry(entry) : undefined,
+                        placeholder: loaded.sharing.placeholders.find(
+                          (row) => row.sessionKey === sessionKey,
+                        ),
+                        membership: new Set(
+                          loaded.sharing.members.find((row) => row.sessionKey === sessionKey)
+                            ?.identityIds,
+                        ),
+                      });
+                    }
+                    const current = retained.readCurrent();
+                    if (!current) {
+                      throw new SessionMutationFactsUnavailableError();
+                    }
+                    if (current.entry) {
+                      store[sessionKey] = current.entry;
+                    }
                   }
                 }
               }
+              return select();
             },
           );
           discovery.assertCurrent();

@@ -16,8 +16,8 @@ describe("Fireworks onboarding", () => {
     });
   });
 
-  it.each([undefined, "merge"] as const)("leaves ordinary %s catalogs runtime-owned", (mode) => {
-    const config = applyFireworksConfig({ models: { mode } });
+  it("leaves ordinary catalogs runtime-owned", () => {
+    const config = applyFireworksConfig({});
 
     expect(config.models?.providers?.fireworks?.models).toEqual([]);
     expect(config.agents?.defaults?.models?.[FIREWORKS_DEFAULT_MODEL_REF]).toEqual({

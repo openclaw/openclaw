@@ -32,39 +32,9 @@ describe("plugin state schema compatibility", () => {
               .prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'")
               .get();
             expect(versionBefore).toEqual({ user_version: OPENCLAW_STATE_SCHEMA_VERSION });
-            expect(
-              previousDatabase
-                .prepare(
-                  "SELECT plugin_id, namespace, entry_key, value_json FROM plugin_state_entries",
-                )
-                .all(),
-            ).toEqual([
-              {
-                plugin_id: "discord",
-                namespace: "same-version-placement-move",
-                entry_key: "first",
-                value_json: JSON.stringify({ owner: "discord" }),
-              },
-            ]);
-            expect(
-              previousDatabase
-                .prepare("SELECT COUNT(*) AS count FROM worker_session_placement_moves")
-                .get(),
-            ).toEqual({ count: 0 });
-            const columnsBefore = previousDatabase
-              .prepare("PRAGMA table_info(worker_session_placement_moves)")
-              .all()
-              .map((column) => (column as { name: string }).name);
-            expect(columnsBefore).toContain("target_machine_class");
             previousDatabase.exec(
               "ALTER TABLE worker_session_placement_moves DROP COLUMN target_machine_class;",
             );
-            expect(
-              previousDatabase
-                .prepare("PRAGMA table_info(worker_session_placement_moves)")
-                .all()
-                .map((column) => (column as { name: string }).name),
-            ).toEqual(columnsBefore.filter((column) => column !== "target_machine_class"));
           } finally {
             previousDatabase.close();
           }

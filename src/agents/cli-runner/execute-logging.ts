@@ -1,4 +1,5 @@
-import crypto from "node:crypto";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 function buildCliLogArgs(params: {
@@ -92,22 +93,12 @@ export function parseCliBackendPreserveEnv(raw: string | undefined): Set<string>
   }
   if (trimmed.startsWith("[")) {
     try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      return new Set(
-        Array.isArray(parsed)
-          ? parsed.filter((entry): entry is string => typeof entry === "string")
-          : [],
-      );
+      return new Set(filterStringEntries(JSON.parse(trimmed)));
     } catch {
       return new Set();
     }
   }
-  return new Set(
-    trimmed
-      .split(/[,\s]+/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-  );
+  return new Set(trimmed.split(/[,\s]+/).filter(Boolean));
 }
 function listPresentCliEnvKeys(
   env: Record<string, string | undefined>,
@@ -132,7 +123,7 @@ function fingerprintCliSessionId(sessionId?: string): string {
   if (!trimmed) {
     return "none";
   }
-  return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+  return sha256Hex(trimmed).slice(0, 12);
 }
 function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
   switch (reusableSession.mode) {
@@ -149,7 +140,6 @@ function formatCliSessionReuseLogState(reusableSession: CliReusableSession): str
   return exhaustive;
 }
 
-/** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
   model: string;
@@ -174,7 +164,6 @@ export function buildCliExecLogLine(params: {
   ].join(" ");
 }
 
-/** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
 function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_AUTH_LOG_KEYS);
   const childKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_AUTH_LOG_KEYS);

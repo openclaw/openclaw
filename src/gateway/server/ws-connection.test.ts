@@ -22,7 +22,6 @@ import {
 const {
   attachGatewayWsMessageHandlerMock,
   attachWorkerWsMessageHandlerMock,
-  broadcastPresenceSnapshotMock,
   cleanupTalkConnectionMock,
   recordPairedNodeDisconnectionMock,
   touchPresenceMock,
@@ -30,7 +29,6 @@ const {
 } = vi.hoisted(() => ({
   attachGatewayWsMessageHandlerMock: vi.fn(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
-  broadcastPresenceSnapshotMock: vi.fn(),
   cleanupTalkConnectionMock: vi.fn(),
   recordPairedNodeDisconnectionMock: vi.fn(async () => ({ recorded: true })),
   touchPresenceMock: vi.fn(),
@@ -49,9 +47,6 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 vi.mock("../../infra/system-presence.js", () => ({
   touchPresence: touchPresenceMock,
   upsertPresence: upsertPresenceMock,
-}));
-vi.mock("./presence-events.js", () => ({
-  broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
 }));
 vi.mock("../talk/session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalkConnectionMock,
@@ -110,7 +105,6 @@ describe("attachGatewayWsConnectionHandler", () => {
   beforeEach(() => {
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
-    broadcastPresenceSnapshotMock.mockReset();
     cleanupTalkConnectionMock.mockReset();
     recordPairedNodeDisconnectionMock.mockReset();
     recordPairedNodeDisconnectionMock.mockResolvedValue({ recorded: true });
@@ -1067,12 +1061,14 @@ describe("attachGatewayWsConnectionHandler", () => {
   it("skips node presence disconnects for stale reconnected sockets", async () => {
     const unregister = vi.fn(() => null);
     const get = vi.fn(() => undefined);
+    const publishPresence = vi.fn();
     const { socket, passed } = await connectTestWs({
       options: {
         refreshHealthSnapshot: vi.fn(),
         buildRequestContext: () =>
           createGatewayWsTestRequestContext({
             nodeRegistry: { get, unregister } as never,
+            publishPresence,
           }) as never,
       },
     });
@@ -1098,6 +1094,6 @@ describe("attachGatewayWsConnectionHandler", () => {
     await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(1));
     expect(recordPairedNodeDisconnectionMock).not.toHaveBeenCalled();
     expect(upsertPresenceMock).not.toHaveBeenCalled();
-    expect(broadcastPresenceSnapshotMock).not.toHaveBeenCalled();
+    expect(publishPresence).not.toHaveBeenCalled();
   });
 });

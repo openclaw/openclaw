@@ -57,15 +57,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("./state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({ directory: "/synthetic/coordinators" }),
-}));
-vi.mock("./device-identity-coordinator.js", () => ({
-  acquireDeviceIdentityCoordinator: boundary.unexpectedNative,
-}));
-vi.mock("./sqlite-coordinator.js", () => ({
-  createSqliteLifecycleAggregateError: boundary.unexpectedNative,
-}));
 vi.mock("./path-existence.js", () => ({
   pathMayExistSync: (pathname: string) => boundary.legacyPaths.has(pathname),
 }));

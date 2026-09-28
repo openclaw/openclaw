@@ -8,7 +8,8 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -33,6 +34,7 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
 import {
   connectMcpClient,
   disposeMcpClient,
@@ -57,6 +59,11 @@ import {
   summarizeServerCapabilities,
 } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
+import {
+  connectWithMcpStartupBackoff,
+  McpStartupBackoffError,
+  resetMcpStartupBackoff,
+} from "./mcp-startup-backoff.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -83,11 +90,8 @@ const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
 // Tool materialization awaits catalog listing. Bound it for servers without an
 // explicit request timeout, with room for a cold remote (OAuth, HTTP) listing.
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 10_000;
-const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
-const BUNDLE_MCP_MAX_LIST_PAGES = 128;
-const BUNDLE_MCP_MAX_LIST_ITEMS = 16_384;
-const BUNDLE_MCP_MAX_LIST_BYTES = 10 * 1024 * 1024;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
+const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
 type BundleMcpTestState = { disposeTimeoutMs?: number };
 
@@ -103,44 +107,6 @@ type McpServerBackoffState = {
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
 
-async function listAllTools(
-  client: Client,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<Tool[]> {
-  return await collectMcpPaginatedItems({
-    label: "MCP tool listing",
-    itemLabel: "tools",
-    timeoutMs,
-    maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
-    maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
-    maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
-    signal,
-    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-      const requestController = new AbortController();
-      const onAbort = () => requestController.abort(requestSignal.reason);
-      requestSignal.addEventListener("abort", onAbort, { once: true });
-      if (requestSignal.aborted) {
-        onAbort();
-      }
-      try {
-        const page = await client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          ListToolsResultSchema,
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestController.signal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      } finally {
-        requestSignal.removeEventListener("abort", onAbort);
-      }
-    },
-  });
-}
-
 function isMcpMethodNotFoundError(error: unknown): boolean {
   if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
     return true;
@@ -150,17 +116,10 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
 }
 
 function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
-  if (!rawServer || typeof rawServer !== "object") {
-    return false;
-  }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of ["requestTimeoutMs", "timeout"]) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      return true;
-    }
-  }
-  return false;
+  const record = asOptionalObjectRecord(rawServer);
+  return ["requestTimeoutMs", "timeout"].some(
+    (key) => asPositiveFiniteNumber(record?.[key]) !== undefined,
+  );
 }
 
 function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
@@ -199,7 +158,10 @@ function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }
 
-type ServerMcpRuntime = SessionMcpRuntime & { readonly pluginOwned: boolean };
+type ServerMcpRuntime = SessionMcpRuntime & {
+  readonly pluginOwned: boolean;
+  resetStartupBackoff: () => void;
+};
 
 export function createSessionMcpRuntime(
   params: Parameters<CreateSessionMcpRuntime>[0],
@@ -401,6 +363,7 @@ export function createSessionMcpRuntime(
       }
       const retired: SessionMcpRuntime[] = [];
       for (const [serverName, part] of owned) {
+        part.resetStartupBackoff();
         if (
           (reloadPlugins && part.pluginOwned) ||
           !Object.hasOwn(nextConfig.loaded.mcpServers, serverName) ||
@@ -430,6 +393,14 @@ function createServerMcpRuntime(
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
   const configFingerprint = params.configFingerprint ?? computedFingerprint;
+  const startupKey = JSON.stringify([
+    params.workspaceDir,
+    params.agentDir,
+    params.requesterScope,
+    serverName,
+    configFingerprint,
+  ]);
+  let startupRetryAfterMs: number | undefined;
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
@@ -679,9 +650,7 @@ function createServerMcpRuntime(
       label: `MCP ${kind === "resources" ? "resource" : "prompt"} listing`,
       itemLabel: kind,
       timeoutMs: session.requestTimeoutMs,
-      maxPages: BUNDLE_MCP_MAX_LIST_PAGES,
-      maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
-      maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
+      ...MCP_CATALOG_LIST_LIMITS,
       signal: callerSignal
         ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
         : lifecycleAbortController.signal,
@@ -804,12 +773,21 @@ function createServerMcpRuntime(
 
       try {
         failIfDisposed();
-        await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+        if (!session.connected) {
+          const connectingSession = session;
+          await connectWithMcpStartupBackoff(
+            startupKey,
+            lifecycleAbortController.signal,
+            () => ensureSessionConnected(connectingSession, resolved.connectionTimeoutMs),
+            BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS,
+          );
+        }
+        startupRetryAfterMs = undefined;
         failIfDisposed();
         const capabilities = summarizeServerCapabilities(session.client.getServerCapabilities());
         let listedTools: Tool[];
         try {
-          listedTools = await listAllTools(
+          listedTools = await listAllMcpTools(
             session.client,
             getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
             lifecycleAbortController.signal,
@@ -918,7 +896,12 @@ function createServerMcpRuntime(
         };
       } catch (error) {
         const message = redactMcpDiagnosticError(error);
-        if (!retiredCatalog) {
+        startupRetryAfterMs =
+          error instanceof McpStartupBackoffError ? error.retryAfterMs : undefined;
+        if (
+          !retiredCatalog &&
+          (!(error instanceof McpStartupBackoffError) || error.reportFailure)
+        ) {
           const action = reusedSession ? "refresh" : "start";
           logWarn(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
@@ -932,13 +915,14 @@ function createServerMcpRuntime(
             message,
           },
         ];
-        if (!session.connected || isMcpHttpSessionExpired(session, error)) {
-          // A close is terminal for every catalog generation sharing this
-          // session. The identity guard preserves any newer replacement.
-          await retireSessionIfCurrent(session);
-        } else if (!reusedSession && catalogInvalidationGeneration === catalogGeneration) {
-          // An isolated startup failure gets a fresh process on retry. When a
-          // notification superseded this list, the queued generation reuses it.
+        if (
+          !session.connected ||
+          isMcpHttpSessionExpired(session, error) ||
+          (!reusedSession && catalogInvalidationGeneration === catalogGeneration)
+        ) {
+          // Closed, expired, or isolated failed startups need a fresh process.
+          // A superseding catalog may reuse a healthy session; identity guards
+          // preserve any replacement installed before retirement yields.
           await retireSessionIfCurrent(session);
         }
         failIfDisposed();
@@ -952,7 +936,7 @@ function createServerMcpRuntime(
       if (catalogInvalidationGeneration === catalogGeneration) {
         catalog = nextCatalog;
         catalogRetryAfterMs = nextCatalog.diagnostics?.length
-          ? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS
+          ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
           : undefined;
       }
       return nextCatalog;
@@ -999,6 +983,13 @@ function createServerMcpRuntime(
   };
 
   const runtime: ServerMcpRuntime = {
+    resetStartupBackoff() {
+      resetMcpStartupBackoff(startupKey);
+      if (startupRetryAfterMs !== undefined || (catalogInFlight && !currentSession?.connected)) {
+        startupRetryAfterMs = undefined;
+        invalidateCatalog();
+      }
+    },
     // Provenance travels with the transport; a later explicit definition cannot relabel it.
     pluginOwned:
       !Object.hasOwn(params.cfg?.mcp?.servers ?? {}, serverName) ||

@@ -14,13 +14,14 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { hasExplicitSessionName } from "../session-title-state.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DISCUSSION_TITLE_TIMEOUT_MS = 10_000;
 
@@ -100,62 +101,65 @@ function sessionDiscussionHandler(operation: "info" | "open"): GatewayRequestHan
     operation === "info"
       ? validateSessionDiscussionInfoResult
       : validateSessionDiscussionOpenResult;
-  return async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateParams, method, respond)) {
-      return;
-    }
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      params.sessionKey,
-      params.agentId,
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const provider = getSessionDiscussionProvider();
-    if (!provider) {
-      respond(true, { state: "none" }, undefined);
-      return;
-    }
-    try {
-      if (operation === "open") {
-        await maybeGenerateTitleBeforeDiscussionOpen({
-          context,
-          sessionKey: params.sessionKey,
-          agentId: requestedAgent.agentId,
-        });
+  return defineValidatedGatewayHandler(
+    method,
+    validateParams,
+    async ({ params, respond, context }) => {
+      const requestedAgent = resolveRequestedSessionAgentId(
+        context.getRuntimeConfig(),
+        params.sessionKey,
+        params.agentId,
+      );
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
       }
-      const sessionKey = resolveStoredSessionKeyForAgentStore({
-        cfg: context.getRuntimeConfig(),
-        agentId: requestedAgent.agentId,
-        sessionKey: params.sessionKey,
-      });
-      const result = await provider[operation]({ sessionKey, agentId: requestedAgent.agentId });
-      if (!validateResult(result)) {
+      const provider = getSessionDiscussionProvider();
+      if (!provider) {
+        respond(true, { state: "none" }, undefined);
+        return;
+      }
+      try {
+        if (operation === "open") {
+          await maybeGenerateTitleBeforeDiscussionOpen({
+            context,
+            sessionKey: params.sessionKey,
+            agentId: requestedAgent.agentId,
+          });
+        }
+        const sessionKey = resolveStoredSessionKeyForAgentStore({
+          cfg: context.getRuntimeConfig(),
+          agentId: requestedAgent.agentId,
+          sessionKey: params.sessionKey,
+        });
+        const result = await measureSessionCollaborationPhase(`${method}.provider`, () =>
+          provider[operation]({ sessionKey, agentId: requestedAgent.agentId }),
+        );
+        if (!validateResult(result)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `invalid ${method} result: ${formatValidationErrors(validateResult.errors)}`,
+            ),
+          );
+          return;
+        }
+        respond(true, result, undefined);
+      } catch (error) {
+        // Only an absent provider means "none"; hiding a failed provider would suppress retries.
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.UNAVAILABLE,
-            `invalid ${method} result: ${formatValidationErrors(validateResult.errors)}`,
+            error instanceof Error ? error.message : "session discussion provider failed",
           ),
         );
-        return;
       }
-      respond(true, result, undefined);
-    } catch (error) {
-      // Only an absent provider means "none"; hiding a failed provider would suppress retries.
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "session discussion provider failed",
-        ),
-      );
-    }
-  };
+    },
+  );
 }
 
 export const sessionDiscussionHandlers: GatewayRequestHandlers = {

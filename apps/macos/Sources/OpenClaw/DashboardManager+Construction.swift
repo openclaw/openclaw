@@ -130,20 +130,8 @@ extension DashboardManager {
 extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
 
-    nonisolated static let browserSessionRenewalLeadTime: TimeInterval = 15 * 60
-
-    nonisolated static func requiresBrowserSignIn(
-        error: Error?, expiresAt: Date?, userGesture: Bool, now: Date = Date()) -> Bool
-    {
-        if let error { return error as? GatewayBrowserSessionError == .expired }
-        guard userGesture, let expiresAt else { return false }
-        return expiresAt <= now.addingTimeInterval(Self.browserSessionRenewalLeadTime)
-    }
-
-    func canFocusWithoutReload(_ controller: DashboardWindowController, userGesture: Bool) -> Bool {
-        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage &&
-            !Self.requiresBrowserSignIn(
-                error: nil, expiresAt: controller.browserSession?.expiresAt, userGesture: userGesture)
+    func canFocusWithoutReload(_ controller: DashboardWindowController) -> Bool {
+        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage
     }
 
     func loadWindow(
@@ -178,7 +166,7 @@ extension DashboardManager.WindowConfiguration {
             profile = context.profile
             expiry = context.expiresAt
         } else {
-            guard DashboardManager.requiresBrowserSignIn(error: error, expiresAt: nil, userGesture: userGesture),
+            guard error as? GatewayBrowserSessionError == .expired,
                   let endpoint, let session = endpoint.browserSession else { return nil }
             profile = MacGatewayProfile(
                 id: profileID, name: name ?? endpoint.config.url.host ?? "Gateway", url: endpoint.config.url)
@@ -260,10 +248,12 @@ extension DashboardManager {
         displayedRoute: (revision: UInt64?, authority: UInt64?)?,
         comparePrimaryRoute: Bool = true) -> Bool
     {
+        // A saved renewal may reach the catalog before its serialized cookie
+        // write finishes. The existing account lease remains valid throughout.
         !controller.hasTLSParams(configuration.tlsParams) ||
             controller.auth != configuration.auth ||
             !controller.hasCurrentBrowserSession ||
-            controller.browserSession != configuration.browserSession ||
+            controller.browserSession?.browserDataPrincipal != configuration.browserSession?.browserDataPrincipal ||
             (comparePrimaryRoute && (endpoint.routeAuthority != displayedRoute?.authority ||
                     endpoint.revision.map { $0 != displayedRoute?.revision } == true))
     }

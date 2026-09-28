@@ -1,7 +1,7 @@
-// Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
@@ -11,10 +11,10 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { t } from "../../i18n/index.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel, AgentsState } from "../../lib/agents/index.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
@@ -78,6 +78,7 @@ type AgentsProps = {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
+  applicationConfig?: ApplicationConfigCapability;
   identityDraft: AgentIdentityDraft;
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
@@ -281,6 +282,7 @@ export function renderAgents(props: AgentsProps) {
                       ? keyed(
                           selectedAgent.id,
                           renderAgentOverview({
+                            applicationConfig: props.applicationConfig,
                             agent: selectedAgent,
                             basePath: props.basePath,
                             defaultId,

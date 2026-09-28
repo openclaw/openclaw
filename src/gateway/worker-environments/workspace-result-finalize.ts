@@ -25,6 +25,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerWorkspaceReconcileRequest,
@@ -177,15 +178,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
   const priorWorkspaceConflict =
     currentPlacement.workspaceResultConflict ??
     latestDurableWorkspaceConflict(completed.getBranch());
-  const pendingWorkspaceResult = params.placements
-    .listPendingWorkspaceResults(params.turnClaim.sessionId)
-    .some(
-      (pending) =>
-        pending.sessionId === params.turnClaim.sessionId &&
-        pending.claimId === params.turnClaim.claimId &&
-        pending.runId === params.turnClaim.runId,
-    );
-  if (!pendingWorkspaceResult) {
+  const pendingWorkspaceResult = () =>
+    findPendingWorkerWorkspaceResult(params.placements, params.turnClaim);
+  if (!pendingWorkspaceResult()) {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
   const journal = createWorkspaceResultJournal({
@@ -235,14 +230,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
           await params.prepareAcceptedWorkspacePublication(params.turnClaim).catch(() => undefined);
         }
         params.placements.acceptWorkspaceResult(params.turnClaim);
-        const recordedStagedResultRef = params.placements
-          .listPendingWorkspaceResults(params.turnClaim.sessionId)
-          .find(
-            (pending) =>
-              pending.sessionId === params.turnClaim.sessionId &&
-              pending.claimId === params.turnClaim.claimId &&
-              pending.runId === params.turnClaim.runId,
-          )?.stagedResultRef;
+        const recordedStagedResultRef = pendingWorkspaceResult()?.stagedResultRef;
         if (applied?.conflictPaths.length && !recordedStagedResultRef) {
           throw new Error("Cloud workspace conflict has no staged result reference");
         }

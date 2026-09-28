@@ -11,9 +11,9 @@ describe("gateway node plugin tools config", () => {
     }
   });
 
-  it.each([true, false])("accepts enabled=%s", (enabled) => {
+  it("accepts explicitly disabled node plugin tools", () => {
     const result = validateConfigObject({
-      gateway: { nodes: { pluginTools: { enabled } } },
+      gateway: { nodes: { pluginTools: { enabled: false } } },
     });
 
     expect(result.ok).toBe(true);

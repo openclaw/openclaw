@@ -1,6 +1,7 @@
 import { types as utilTypes } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
 import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
@@ -97,15 +98,6 @@ function serializeToolInputSchema(
   };
 }
 
-const schemaMapKeywords = new Set([
-  "$defs",
-  "definitions",
-  "dependencies",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-
 function inspectJsonSchema(
   schema: RuntimeToolInputSchemaJson,
   path: (string | number)[],
@@ -142,7 +134,7 @@ function inspectJsonSchema(
       continue;
     }
     path.push(".", key);
-    if (schemaMapKeywords.has(key) && isJsonObject(value)) {
+    if (SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
       for (const schemaName of Object.keys(value)) {
         const childSchema = value[schemaName];
         if (childSchema === undefined) {

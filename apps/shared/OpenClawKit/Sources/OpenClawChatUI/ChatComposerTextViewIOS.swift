@@ -4,6 +4,7 @@ import UIKit
 
 @MainActor
 struct ChatComposerTextViewIOS: UIViewRepresentable {
+    @Environment(\.isEnabled) private var effectiveEnvironmentEnabled
     @Binding var text: String
     var focusRequested: Bool
     var isEnabled: Bool
@@ -12,6 +13,10 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     var onFocusChange: (Bool) -> Void
     var onHistoryUp: (Bool) -> Bool
     var onHistoryDown: () -> Bool
+
+    private var interactionEnabled: Bool {
+        self.isEnabled && self.effectiveEnvironmentEnabled
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -30,6 +35,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         context.coordinator.scheduleInteractionUpdate(textView)
         self.configureHistoryHandlers(textView)
 
+        // Publishing native input can re-enter SwiftUI with the previous rendered value.
+        guard !context.coordinator.isReportingTextChange else { return }
         let isEcho = context.coordinator.lastReportedText == self.text
         if textView.isFirstResponder, isEcho {
             return
@@ -69,6 +76,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ChatComposerTextViewIOS
         var isProgrammaticUpdate = false
+        private(set) var isReportingTextChange = false
         var lastReportedText: String?
         private var interactionUpdateScheduled = false
 
@@ -87,29 +95,30 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
                 guard let self else { return }
                 self.interactionUpdateScheduled = false
                 guard let textView else { return }
-                if textView.isEditable != self.parent.isEnabled {
-                    textView.isEditable = self.parent.isEnabled
+                let isEnabled = self.parent.interactionEnabled
+                if textView.isEditable != isEnabled {
+                    textView.isEditable = isEnabled
                 }
-                if textView.isSelectable != self.parent.isEnabled {
-                    textView.isSelectable = self.parent.isEnabled
+                if textView.isSelectable != isEnabled {
+                    textView.isSelectable = isEnabled
                 }
                 // UIKit owns user-initiated focus; false is not a blur request.
-                if self.parent.focusRequested, self.parent.isEnabled,
+                if self.parent.focusRequested, isEnabled,
                    !textView.isFirstResponder
                 {
                     textView.becomeFirstResponder()
-                } else if !self.parent.isEnabled, textView.isFirstResponder {
+                } else if !isEnabled, textView.isFirstResponder {
                     textView.resignFirstResponder()
                 }
             }
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
-            self.parent.isEnabled
+            self.parent.interactionEnabled
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            self.parent.isEnabled
+            self.parent.interactionEnabled
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -122,6 +131,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !self.isProgrammaticUpdate, textView.isFirstResponder else { return }
+            self.isReportingTextChange = true
+            defer { self.isReportingTextChange = false }
             self.lastReportedText = textView.text
             self.parent.text = textView.text
             textView.invalidateIntrinsicContentSize()
@@ -133,6 +144,12 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 final class ChatComposerUITextView: UITextView {
     var onHistoryUp: ((Bool) -> Bool)?
     var onHistoryDown: (() -> Bool)?
+
+    override var accessibilityTraits: UIAccessibilityTraits {
+        // Preserve UIKit's dynamic keyboard-focus traits when exposing disabled input.
+        get { self.isEditable ? super.accessibilityTraits : super.accessibilityTraits.union(.notEnabled) }
+        set { super.accessibilityTraits = newValue }
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var unhandledPresses = presses

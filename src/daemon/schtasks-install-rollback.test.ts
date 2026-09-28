@@ -255,6 +255,8 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
     const { args, scriptPath, launcherPath, original, assertRestored, assertBackups } =
       await fixture();
     await fs.chmod(scriptPath, 0o640);
+    // Windows chmod exposes writability, not distinct owner/group permission bits.
+    const originalMode = (await fs.stat(scriptPath)).mode & 0o7777;
     let revoked = false;
     let renamed = false;
     let faulted = false;
@@ -327,7 +329,7 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
       expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
     } else {
       await assertRestored();
-      expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(0o640);
+      expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(originalMode);
     }
     await assertBackups();
     expect(native.run).not.toHaveBeenCalled();

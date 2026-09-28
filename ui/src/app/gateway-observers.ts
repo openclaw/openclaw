@@ -81,6 +81,9 @@ export function createGatewayEventLog() {
     get revision() {
       return revision;
     },
+    clear() {
+      entries = [];
+    },
     resetConnection() {
       recoveryScope = null;
       return retire();

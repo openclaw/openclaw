@@ -126,10 +126,7 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (!isRecord(input)) {
-    throw new Error(`${key} is required`);
-  }
-  const value = input[key];
+  const value = isRecord(input) ? input[key] : undefined;
   if (typeof value !== "string") {
     throw new Error(`${key} is required`);
   }
@@ -157,13 +154,10 @@ function serverAllowsUtilityTool(
   operation: string,
   sessionDeniedOnly: boolean,
 ): boolean {
-  // Two disjoint passes share this gate: the executable pass (sessionDeniedOnly=false)
-  // admits only non-denied utilities; the denied-inventory pass admits only denied ones.
-  // Membership must EQUAL the pass selector, hence the != rejection.
-  if ((server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly) {
-    return false;
-  }
-  return isMcpToolAllowed(server.toolFilter, operation);
+  return (
+    (server.deniedToolNames?.includes(operation) === true) === sessionDeniedOnly &&
+    isMcpToolAllowed(server.toolFilter, operation)
+  );
 }
 
 /**

@@ -2,7 +2,6 @@ import {
   ErrorCodes,
   errorShape,
   validateAgentWaitParams,
-  type AgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
@@ -27,9 +26,7 @@ export const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
     return;
   }
   const gatewayClient = client ?? null;
-  const prepared = createAgentTurnService({ context, isWebchatConnect }).prepareWaitForTurn(
-    params as AgentWaitParams,
-  );
+  const prepared = createAgentTurnService({ context, isWebchatConnect }).prepareWaitForTurn(params);
   const authorizeWait = (run: Readonly<AgentJobSession> | undefined) => {
     if (!gatewayClient?.authenticatedUserProfile || isGatewayAdmin(gatewayClient)) {
       return true;

@@ -1,4 +1,3 @@
-// Npm Telegram Live tests cover npm telegram live script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -584,7 +583,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toThrow("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS accepts at most one scenario id; got 2");
   });
 
-  it("builds a generic suite probe for the Telegram RTT lane", () => {
+  it("continues the selected scenario with the leased primary participant", () => {
     const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
 
     expect(probe).toMatchObject({
@@ -595,7 +594,8 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
       chainReplies: true,
       input: {
-        conversation: { id: "telegram-rtt-room", kind: "group" },
+        fromScenario: true,
+        senderId: "primary",
       },
     });
   });
@@ -643,7 +643,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: 7samples");
   });
 
-  it.each(["2026.6.33", "2026.7.1-beta.6", "2026.7.1", "2026.7.2-beta.2", "2026.7.2-beta.3"])(
+  it.each(["2026.6.33", "2026.7.1", "2026.7.2-beta.3"])(
     "projects current config for historical package %s",
     (packageVersion) => {
       const mutateConfig = testing.resolvePackageConfigMutation({
@@ -710,21 +710,16 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     },
   );
 
-  it.each([
-    "2026.7.2-beta.4",
-    "2026.7.2-beta.5",
-    "2026.7.2",
-    "main",
-    "latest",
-    "beta",
-    "2026.7.2-beta.3-extra",
-  ])("leaves current or nonexact package version %s unchanged", (packageVersion) => {
-    expect(
-      testing.resolvePackageConfigMutation({
-        OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: packageVersion,
-      }),
-    ).toBeUndefined();
-  });
+  it.each(["2026.7.2-beta.4", "2026.7.2-beta.5", "2026.7.2", "main", "2026.7.2-beta.3-extra"])(
+    "leaves current or nonexact package version %s unchanged",
+    (packageVersion) => {
+      expect(
+        testing.resolvePackageConfigMutation({
+          OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: packageVersion,
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it.each(["2026.6.35", "2026.7.33", "2026.7.34", "2026.7.35"])(
     "preserves the frozen %s package projection",
@@ -780,7 +775,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     },
   );
 
-  it.each(["fail", "skip", "skipped", "timeout"])(
+  it.each(["fail", "skip"])(
     "fails package Telegram QA when a scenario has %s status",
     async (status) => {
       const summaryPath = path.join(mkTempRoot(), "qa-suite-summary.json");

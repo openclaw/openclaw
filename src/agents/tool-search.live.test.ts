@@ -25,7 +25,7 @@ const DIRECT_ONLY = "warehouse_service_status";
 const DENIED = "warehouse_release_receipt_admin";
 const CONTROLS = ["tool_search", "tool_describe", "tool_call"];
 const MAX_REQUESTS = 10;
-const LANES = ["direct", "default", "tools", "code", "directory"] as const;
+const LANES = ["direct", "default", "tools", "directory"] as const;
 const TARGET_ORDER_FIELD = "releaseOrderReference";
 
 type Lane = (typeof LANES)[number];
@@ -259,7 +259,7 @@ module.exports = {
                   const expected =
                     lane === "direct"
                       ? definitions.filter((tool) => tool.name !== DENIED).map((tool) => tool.name)
-                      : [DIRECT_ONLY, ...(lane === "code" ? ["tool_search_code"] : CONTROLS)];
+                      : [DIRECT_ONLY, ...CONTROLS];
                   expect(toolNames.toSorted()).toEqual(expected.toSorted());
                   if (requests.length === 1 && lane !== "direct") {
                     expect(

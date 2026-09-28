@@ -50,15 +50,19 @@ export function disconnectDisallowedGatewayPolicyClients(
   clients: Iterable<
     Pick<
       GatewayWsClient,
-      "browserOrigin" | "invalidated" | "invalidatedReason" | "authPolicyGeneration"
+      | "browserOrigin"
+      | "invalidated"
+      | "invalidatedReason"
+      | "authPolicyGeneration"
+      | "authenticatedUserId"
     > & {
       socket: Pick<GatewayWsClient["socket"], "close">;
     }
   >,
   cfg: OpenClawConfig,
 ): void {
-  const generation = resolveGatewayAuthPolicyGeneration(cfg);
   for (const client of clients) {
+    const generation = resolveGatewayAuthPolicyGeneration(cfg, client.authenticatedUserId);
     if (client.authPolicyGeneration !== undefined && client.authPolicyGeneration !== generation) {
       invalidateGatewayPolicyClient(client, {
         reason: "gateway-policy-changed",

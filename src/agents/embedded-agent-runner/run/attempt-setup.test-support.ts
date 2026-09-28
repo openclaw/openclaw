@@ -14,6 +14,7 @@ export function createAttemptSetupFixture(
     sessionPermissionRoot: "/tmp/workspace",
     sessionPermissionPolicy: undefined,
     sandbox: null,
+    sandboxReport: { mode: "off", sandboxed: false },
     sandboxSessionKey: "session",
     sessionAgentId: "main",
     emitCorePluginToolStageSummary: () => {},

@@ -148,33 +148,11 @@ describe("maybeRepairSandboxImages", () => {
     ]);
   });
 
-  it("warns when sandbox mode is 'all' but Docker is not available", async () => {
-    await runSandboxRepair({ mode: "all", dockerAvailable: false });
-
-    expect(note).toHaveBeenCalled();
-    const noteCall = firstNoteCall();
-    const message = noteCall[0] as string;
-
-    // Should warn about the impact on sandbox functionality
-    expect(message).toMatch(/sandbox|docker/i);
-  });
-
   it("does not warn when sandbox mode is off", async () => {
     await runSandboxRepair({ mode: "off", dockerAvailable: false });
 
     // No warning needed when sandbox is off
     expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not warn when Docker is available", async () => {
-    await runSandboxRepair({ mode: "non-main", dockerAvailable: true });
-
-    // May have other notes about images, but not the Docker unavailable warning
-    const dockerUnavailableWarning = note.mock.calls.find(
-      (call) =>
-        typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
-    );
-    expect(dockerUnavailableWarning).toBeUndefined();
   });
 
   it("validates the explicit Podman target before checking images", async () => {

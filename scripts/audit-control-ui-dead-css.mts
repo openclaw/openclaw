@@ -45,13 +45,6 @@ const EXTERNAL_CLASS_FAMILIES: ExternalClassFamily[] = [
     matches: (className) => className.startsWith("ProseMirror"),
     producer: "ProseMirror editor DOM",
   },
-  // markdown-it-task-lists emits these two classes from parsed markdown.
-  {
-    matches: (className) =>
-      className === "task-list-item" || className === "task-list-item-checkbox",
-    producer:
-      "markdown-it-task-lists via ui/src/components/markdown-parser.ts (the contains-task-list class is removed there)",
-  },
 ];
 
 type SourceReferences = {

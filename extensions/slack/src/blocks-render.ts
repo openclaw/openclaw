@@ -156,7 +156,7 @@ function resolveSlackButtonTarget(
   const legacyUrl = normalizeOptionalString(
     button.url ?? button.webApp?.url ?? button.web_app?.url,
   );
-  if (legacyUrl && isWithinSlackLimit(legacyUrl, SLACK_BUTTON_URL_MAX)) {
+  if (legacyUrl && legacyUrl.length <= SLACK_BUTTON_URL_MAX) {
     return { kind: "link", url: legacyUrl };
   }
   const legacyValue = normalizeOptionalString(button.value);
@@ -185,18 +185,6 @@ function resolveSlackOptionTarget(
   }
   const value = normalizeOptionalString(option.value);
   return value ? { kind: "reply", value } : undefined;
-}
-
-function isWithinSlackLimit(value: string, maxLength: number): boolean {
-  return value.length <= maxLength;
-}
-
-function isRenderableSlackOption(option: {
-  kind: "approval" | "callback" | "reply";
-  label: string;
-  value: string;
-}): boolean {
-  return isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX);
 }
 
 function readSlackBlockId(block: SlackBlock): string | undefined {
@@ -372,8 +360,8 @@ function buildSlackPresentationButtonBlock(
       if (
         !target ||
         (target.kind === "link"
-          ? !isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)
-          : !isWithinSlackLimit(target.value, SLACK_BUTTON_VALUE_MAX))
+          ? target.url.length > SLACK_BUTTON_URL_MAX
+          : target.value.length > SLACK_BUTTON_VALUE_MAX)
       ) {
         return [];
       }
@@ -429,7 +417,7 @@ export function canRenderSlackPresentation(
   presentation: MessagePresentation,
   options: SlackBlockRenderOptions = {},
 ): boolean {
-  if (presentation.title && !isWithinSlackLimit(presentation.title.trim(), SLACK_HEADER_TEXT_MAX)) {
+  if (presentation.title && presentation.title.trim().length > SLACK_HEADER_TEXT_MAX) {
     return false;
   }
   if (!canRenderSlackPresentationTables(presentation, options)) {
@@ -448,14 +436,14 @@ export function canRenderSlackPresentation(
             return true;
           }
           nativeButtonCount += 1;
-          if (!isWithinSlackLimit(button.label, SLACK_ACTION_LABEL_MAX)) {
+          if (button.label.length > SLACK_ACTION_LABEL_MAX) {
             return false;
           }
           const target = resolveSlackButtonTarget(button, options.questionOptionIndices);
           return target
             ? target.kind === "link"
-              ? isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)
-              : isWithinSlackLimit(target.value, SLACK_BUTTON_VALUE_MAX)
+              ? target.url.length <= SLACK_BUTTON_URL_MAX
+              : target.value.length <= SLACK_BUTTON_VALUE_MAX
             : false;
         }) && nativeButtonCount <= SLACK_ACTION_BLOCK_ELEMENTS_MAX;
       if (!allButtonsRenderable) {
@@ -466,15 +454,15 @@ export function canRenderSlackPresentation(
     if (block.type === "select") {
       const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
       const allOptionsRenderable =
-        isWithinSlackLimit(placeholder, SLACK_ACTION_LABEL_MAX) &&
+        placeholder.length <= SLACK_ACTION_LABEL_MAX &&
         block.options.length <= SLACK_STATIC_SELECT_OPTIONS_MAX &&
-        (!block.placeholder || isWithinSlackLimit(block.placeholder, SLACK_ACTION_LABEL_MAX)) &&
+        (!block.placeholder || block.placeholder.length <= SLACK_ACTION_LABEL_MAX) &&
         block.options.every((option) => {
-          if (!isWithinSlackLimit(option.label, SLACK_ACTION_LABEL_MAX)) {
+          if (option.label.length > SLACK_ACTION_LABEL_MAX) {
             return false;
           }
           const target = resolveSlackOptionTarget(option);
-          return target ? isRenderableSlackOption({ label: option.label, ...target }) : false;
+          return target ? target.value.length <= SLACK_OPTION_VALUE_MAX : false;
         }) &&
         new Set(block.options.map((option) => resolveSlackOptionTarget(option)?.kind)).size === 1;
       if (!allOptionsRenderable) {
@@ -508,7 +496,7 @@ function buildSlackPresentationSelectBlock(
       const target = resolveSlackOptionTarget(option);
       return target ? [{ label: option.label, ...target }] : [];
     })
-    .filter(isRenderableSlackOption)
+    .filter((option) => option.value.length <= SLACK_OPTION_VALUE_MAX)
     .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
   const optionKinds = new Set(options.map((option) => option.kind));
   return options.length > 0 && optionKinds.size === 1

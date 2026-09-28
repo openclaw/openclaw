@@ -1,4 +1,3 @@
-// Builds read-only, agent-centric Claw update plans from grouped manifests and ownership state.
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -78,12 +77,8 @@ export async function buildClawUpdatePlan(params: {
   packagePreflight?: ClawPackagePreflight;
   diagnostics?: ClawDiagnostic[];
 }): Promise<ClawUpdatePlan> {
-  const ownsDatabase = !params.stateOptions?.database;
-  const database =
-    params.stateOptions?.database ??
-    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
-  if (!database) {
-    return makeEmptyClawUpdatePlan({
+  const notFound = (): ClawUpdatePlan =>
+    makeEmptyClawUpdatePlan({
       agentId: params.agentId,
       source: params.targetSource,
       blockers: [
@@ -96,6 +91,12 @@ export async function buildClawUpdatePlan(params: {
       diagnostics: params.diagnostics,
       digest,
     });
+  const ownsDatabase = !params.stateOptions?.database;
+  const database =
+    params.stateOptions?.database ??
+    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
+  if (!database) {
+    return notFound();
   }
   if (
     !database.db /* sqlite-allow-raw: read-only Claw install table-existence probe. */
@@ -105,19 +106,7 @@ export async function buildClawUpdatePlan(params: {
     if (ownsDatabase) {
       database.walMaintenance.close();
     }
-    return makeEmptyClawUpdatePlan({
-      agentId: params.agentId,
-      source: params.targetSource,
-      blockers: [
-        diagnostic(
-          "claw_not_found",
-          "$",
-          `No installed Claw agent matches ${JSON.stringify(params.agentId)}.`,
-        ),
-      ],
-      diagnostics: params.diagnostics,
-      digest,
-    });
+    return notFound();
   }
   const readOnlyStateOptions: OpenClawStateDatabaseOptions & {
     packageDeps?: PackageRemovalDeps;
@@ -134,19 +123,7 @@ export async function buildClawUpdatePlan(params: {
       ...(params.packagePreflight ? { packagePreflight: params.packagePreflight } : {}),
     });
     if (status.records.length === 0) {
-      return makeEmptyClawUpdatePlan({
-        agentId: params.agentId,
-        source: params.targetSource,
-        blockers: [
-          diagnostic(
-            "claw_not_found",
-            "$",
-            `No installed Claw agent matches ${JSON.stringify(params.agentId)}.`,
-          ),
-        ],
-        diagnostics: params.diagnostics,
-        digest,
-      });
+      return notFound();
     }
     if (status.records.length > 1) {
       return makeEmptyClawUpdatePlan({

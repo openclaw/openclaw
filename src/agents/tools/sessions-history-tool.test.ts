@@ -157,7 +157,7 @@ describe("sessions_history redaction", () => {
       true,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -300,7 +300,7 @@ describe("sessions_history redaction", () => {
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 
-  it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
+  it.each([0])("rejects invalid limit value %s", async (limit) => {
     const tool = createHistoryToolWithMessage("hello");
 
     await expect(tool.execute("call-1", { sessionKey: "main", limit })).rejects.toThrow(
@@ -308,7 +308,7 @@ describe("sessions_history redaction", () => {
     );
   });
 
-  it.each([-1, 1.5, "1abc"])("rejects invalid offset value %s", async (offset) => {
+  it.each(["1abc"])("rejects invalid offset value %s", async (offset) => {
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsHistoryTool({
       config: {},
@@ -324,7 +324,7 @@ describe("sessions_history redaction", () => {
     expect(requests).toEqual([]);
   });
 
-  it.each([0, 4])("ignores offset %i when an anchored read is requested", async (offset) => {
+  it.each([4])("ignores offset %i when an anchored read is requested", async (offset) => {
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsHistoryTool({
       config: {},

@@ -516,6 +516,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       // restores process.env on refusal.
       env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
       supportedVersions: { state: 3, agent: 9 },
+      preserveSourceArtifacts: false,
       configuredAgentDatabaseTargets: [],
       configuredAgentDatabaseCandidatePaths: [
         path.join(profileStateDir(), "agents", "main", "agent", "openclaw-agent.sqlite"),

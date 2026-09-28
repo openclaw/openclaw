@@ -473,7 +473,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         result.score = result.exactPathSpecificity > 0 ? 1 : result.pathScore;
       }
     }
-    return merged.toSorted(compareKeywordSearchHits);
+    return merged;
   }
 
   private limitKeywordSearchHits(

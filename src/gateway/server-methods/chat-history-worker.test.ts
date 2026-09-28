@@ -7,6 +7,7 @@ import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   appendSessionTranscriptReport,
   appendTranscriptMessage,
+  appendTranscriptMessages,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as deltaEvents from "../../config/sessions/session-accessor.sqlite-history-events.js";
@@ -16,7 +17,12 @@ import type {
   SessionHistoryWorkerRequest,
 } from "../../config/sessions/session-history-types.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
+import {
+  onDiagnosticEvent,
+  type DiagnosticPayloadLargeEvent,
+} from "../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { SerializedJsonArray, serializeGatewayFrame } from "../serialized-json.js";
 import {
   createPreparedSessionHistorySubagentProjection,
   prepareSessionHistoryDelta,
@@ -283,4 +289,83 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
   const follower = structuredClone(prepared);
   follower.subagentCoordination.runMessages[0]![2] = true;
   expect(prepared.subagentCoordination.runMessages[0]![2]).toBe(false);
+});
+
+it("forwards large worker history as text JSON while preserving object callers and tiny budgets", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:encoded-history",
+      sessionId: "encoded-history",
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessages(scope, {
+      messages: Array.from({ length: 3 }, (_, index) => ({
+        eventId: `large-${index}`,
+        now: index + 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `Synthetic ${index}: 🦞\n` + "x".repeat(48_000) }],
+        },
+      })),
+    });
+    const context = await createHistoryReadContext();
+    const request = async (
+      acceptsSerializedJson: boolean,
+      maxBytes = 200_000,
+      method = "chat.history",
+    ) => {
+      const respond = vi.fn<RespondFn>();
+      await chatHistoryHandlers["chat.history"]!({
+        params: { sessionKey: scope.sessionKey, maxChars: 50_000, maxBytes },
+        client: null,
+        context,
+        respond,
+        acceptsSerializedJson,
+        req: { type: "req", id: "encoded-history", method },
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "history payload");
+    };
+    const ordinary = await request(false);
+    const encoded = await request(true);
+    expect(encoded.messages).toBeInstanceOf(SerializedJsonArray);
+    const materialize = vi.spyOn(SerializedJsonArray.prototype, "materialize");
+    try {
+      const frame = serializeGatewayFrame({ type: "res", payload: encoded });
+      expect(Buffer.isBuffer(frame)).toBe(true);
+      expect(materialize).not.toHaveBeenCalled();
+      // Compare the durable page fields; session presentation carries a current clock.
+      const decoded = JSON.parse(frame.toString()).payload;
+      expect(decoded.messages).toEqual(ordinary.messages);
+      for (const key of ["hasMore", "totalMessages", "nextOffset", "deltaCursor"]) {
+        expect(decoded[key]).toEqual(ordinary[key]);
+      }
+      expect(Buffer.byteLength(JSON.stringify(decoded.messages))).toBeLessThanOrEqual(200_000);
+    } finally {
+      materialize.mockRestore();
+    }
+    expect(Array.isArray((await request(true, 200_000, "cron.history")).messages)).toBe(true);
+    const omissions: DiagnosticPayloadLargeEvent[] = [];
+    const stop = onDiagnosticEvent((event) => {
+      if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
+        omissions.push(event);
+      }
+    });
+    try {
+      const tiny = await request(true, 1024);
+      expect(tiny.messages).toBeInstanceOf(SerializedJsonArray);
+      expect(
+        JSON.parse(serializeGatewayFrame({ type: "res", payload: tiny }).toString()).payload
+          .messages,
+      ).toHaveLength(1);
+      expect(tiny).not.toHaveProperty("omission");
+      expect(omissions).toHaveLength(1);
+      expect(omissions[0]).toMatchObject({ action: "truncated", count: 2, limitBytes: 1024 });
+    } finally {
+      stop();
+    }
+  });
 });
