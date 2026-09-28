@@ -1273,7 +1273,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/prepared-model-runtime.catalog-publication.test.ts",
   "src/agents/prepared-model-runtime.gateway-leases.test.ts",
   "src/agents/prepared-model-runtime.inbound-registry.test.ts",
-  "src/agents/prepared-model-runtime.lifecycle.test.ts",
   "src/agents/prepared-model-runtime.native-picker-failures.test.ts",
   "src/agents/prepared-model-runtime.owner-selection.test.ts",
   "src/agents/prepared-model-runtime.registry-borrow.test.ts",

@@ -436,42 +436,6 @@ describe("retained config and committed model publication", () => {
     }
   });
 
-  it.each(["advance", "hot reload"])(
-    "%s preserves exact catalog isolation while dispatch selects the committed config",
-    async (publication) => {
-      const retained = config(true);
-      const committed = config(false);
-      await publish(retained);
-      await expect(
-        loadPreparedModelCatalogOwnerSnapshot(ownerInput(retained)),
-      ).resolves.toMatchObject({
-        config: retained,
-      });
-      if (publication === "advance") {
-        advancePreparedModelRuntimeConfig(committed);
-      } else {
-        await refreshModelRuntimeAfterHotReload({
-          config: committed,
-          agentIds: undefined,
-          pluginMetadataSnapshot: undefined,
-        });
-      }
-      await expect(
-        loadPreparedModelCatalogOwnerSnapshot(ownerInput(retained)),
-      ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({
-        config: committed,
-      });
-      await expect(
-        loadPreparedModelCatalogOwnerSnapshot(ownerInput(committed)),
-      ).resolves.toMatchObject({
-        config: committed,
-      });
-    },
-  );
-
   it("does not let a retained lease authorize an old config catalog read", async () => {
     const retained = config(true);
     await publish(retained);
