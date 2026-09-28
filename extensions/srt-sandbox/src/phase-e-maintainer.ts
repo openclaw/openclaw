@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 // Phase E maintainer contract. The Windows implementation is supplied by the
 // plugin-owned native addon; this module keeps all policy decisions testable on
 // every host and refuses mutation before the native boundary is available.
@@ -14,6 +15,22 @@ export type PhaseEManifest = {
   invocationId: string;
   createdAccounts: readonly { name: string; sid: string }[];
   crc32: string;
+};
+export type PhaseEEvidence = {
+  schema: "phase-e-evidence/v1";
+  mode: PhaseEMode;
+  outcome:
+    | "PREFLIGHT_OK"
+    | "SETUP_COMPLETE"
+    | "REPAIR_COMPLETE"
+    | "ROLLBACK_COMPLETE"
+    | "TEARDOWN_COMPLETE"
+    | "BLOCKED";
+  maintainer: { pid: number; creationTime: string };
+  canonicalAccounts: readonly { name: string; sid?: string }[];
+  legacyAccountCount: number;
+  seclogon: "RUNNING" | "SETUP_REQUIRED" | "UNKNOWN";
+  manifestGeneration: number;
 };
 
 export class PhaseEMaintainerError extends Error {}
@@ -53,10 +70,9 @@ export function leaseStoreCrc(generation: number, slots: readonly string[]): str
   return value.toString(16).padStart(8, "0");
 }
 
-export function redactPhaseEEvidence(value: string): string {
-  return value
-    .replace(/(password|secret|token)\s*[=:]\s*[^\s,;]+/gi, "$1=[REDACTED]")
-    .replace(/[A-Za-z0-9+/]{32,}={0,2}/g, "[REDACTED]");
+/** Evidence is schema-checked at its source, never free-form then redacted. */
+export function redactPhaseEEvidence(_: string): never {
+  throw new PhaseEMaintainerError("PHASE_E_EVIDENCE_MUST_BE_TYPED");
 }
 
 /** The maintainer is Windows-only and never falls back to a subprocess. */
@@ -69,12 +85,70 @@ export function assertPhaseEPlatform(platform = process.platform): void {
  * handle-based NTFS security calls. It is intentionally not loaded on non-Windows.
  */
 export type PhaseENativeApi = { run(mode: PhaseEMode, manifestJson?: string): string };
+const validModes = new Set<PhaseEMode>(["preflight", "setup", "repair", "rollback", "teardown"]);
+const allowedEvidence = new Set([
+  "schema",
+  "mode",
+  "outcome",
+  "maintainer",
+  "canonicalAccounts",
+  "legacyAccountCount",
+  "seclogon",
+  "manifestGeneration",
+]);
+
+export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvidence {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Object.keys(parsed).some((key) => !allowedEvidence.has(key))
+  )
+    throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
+  const evidence = parsed as PhaseEEvidence;
+  if (
+    evidence.schema !== "phase-e-evidence/v1" ||
+    evidence.mode !== mode ||
+    !validModes.has(evidence.mode) ||
+    !Number.isInteger(evidence.legacyAccountCount) ||
+    !Number.isInteger(evidence.manifestGeneration) ||
+    !Array.isArray(evidence.canonicalAccounts) ||
+    evidence.canonicalAccounts.some(
+      (a) =>
+        !a ||
+        typeof a.name !== "string" ||
+        !PHASE_E_POOL.includes(a.name) ||
+        (a.sid !== undefined && typeof a.sid !== "string"),
+    ) ||
+    !evidence.maintainer ||
+    !Number.isInteger(evidence.maintainer.pid) ||
+    typeof evidence.maintainer.creationTime !== "string"
+  )
+    throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
+  return evidence;
+}
+
+export function loadPhaseENativeApi(requireFn = createRequire(import.meta.url)): PhaseENativeApi {
+  try {
+    const addon = requireFn("../build/Release/phase_e_maintainer.node") as Partial<PhaseENativeApi>;
+    if (typeof addon.run !== "function") throw new Error("missing run");
+    return addon as PhaseENativeApi;
+  } catch {
+    throw new PhaseEMaintainerError("PHASE_E_NATIVE_ADDON_UNAVAILABLE");
+  }
+}
 
 export function runPhaseEMaintainer(
   mode: PhaseEMode,
-  nativeApi: PhaseENativeApi,
+  nativeApi?: PhaseENativeApi,
   platform = process.platform,
-): string {
+): PhaseEEvidence {
   assertPhaseEPlatform(platform);
-  return nativeApi.run(mode);
+  if (!validModes.has(mode)) throw new PhaseEMaintainerError("PHASE_E_INVALID_MODE");
+  return parsePhaseEEvidence((nativeApi ?? loadPhaseENativeApi()).run(mode), mode);
 }

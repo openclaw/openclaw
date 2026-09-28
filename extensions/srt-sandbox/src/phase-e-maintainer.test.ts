@@ -4,6 +4,7 @@ import {
   inspectCanonicalPool,
   leaseStoreCrc,
   PHASE_E_POOL,
+  parsePhaseEEvidence,
   redactPhaseEEvidence,
   rollbackCandidates,
   runPhaseEMaintainer,
@@ -38,15 +39,35 @@ describe("Phase E maintainer policy", () => {
     expect(rollbackCandidates(manifest, "run-1")).toEqual(["srt-w0-01"]);
     expect(() => rollbackCandidates(manifest, "other")).toThrow("OWNERSHIP");
   });
-  it("has stable CRC, redacts secrets, and fails closed off Windows", () => {
+  it("has stable CRC, rejects free-form evidence, and fails closed off Windows", () => {
     expect(leaseStoreCrc(1, PHASE_E_POOL)).toBe(leaseStoreCrc(1, PHASE_E_POOL));
-    expect(
-      redactPhaseEEvidence("password=hunter2 token=abcdefghijklmnopqrstuvwxyz012345"),
-    ).not.toContain("hunter2");
+    expect(() => redactPhaseEEvidence("password=hunter2")).toThrow("MUST_BE_TYPED");
     expect(() => assertPhaseEPlatform("darwin")).toThrow("UNSUPPORTED_PLATFORM");
     expect(() => runPhaseEMaintainer("preflight", { run: () => "bad" }, "linux")).toThrow(
       "UNSUPPORTED_PLATFORM",
     );
+  });
+  it("accepts only allowlisted typed evidence", () => {
+    const valid = JSON.stringify({
+      schema: "phase-e-evidence/v1",
+      mode: "preflight",
+      outcome: "PREFLIGHT_OK",
+      maintainer: { pid: 42, creationTime: "t" },
+      canonicalAccounts: [],
+      legacyAccountCount: 10,
+      seclogon: "RUNNING",
+      manifestGeneration: 0,
+    });
+    expect(parsePhaseEEvidence(valid, "preflight").legacyAccountCount).toBe(10);
+    expect(() => parsePhaseEEvidence(JSON.stringify({ password: "hunter2" }), "preflight")).toThrow(
+      "INVALID_EVIDENCE",
+    );
+    expect(() =>
+      parsePhaseEEvidence(
+        JSON.stringify({ ...JSON.parse(valid), nested: { token: "x" } }),
+        "preflight",
+      ),
+    ).toThrow("INVALID_EVIDENCE");
   });
   it("proves the maintainer source has no delegated execution surface", async () => {
     const source = await import("node:fs/promises").then((fs) =>
