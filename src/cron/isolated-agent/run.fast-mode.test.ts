@@ -11,12 +11,56 @@ import {
   resolveCronDeliveryPlanMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
+  runCliAgentMock,
+  isCliProviderMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-describe("runCronIsolatedAgentTurn — session cleanup", () => {
+describe("runCronIsolatedAgentTurn — fast mode and session cleanup", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
+
+  it.each([
+    { runner: "embedded", configMode: "auto", sessionMode: undefined, mode: "auto", cutoff: 30 },
+    { runner: "embedded", configMode: true, sessionMode: false, mode: false, cutoff: 60 },
+    { runner: "CLI", configMode: "auto", sessionMode: undefined, mode: "auto", cutoff: 15 },
+    { runner: "CLI", configMode: false, sessionMode: undefined, mode: false, cutoff: 15 },
+  ] as const)(
+    "forwards $mode fast mode and its cutoff to the $runner runner",
+    async ({ runner, configMode, sessionMode, mode, cutoff }) => {
+      const session = makeCronSession();
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({ sessionEntry: { ...session.sessionEntry, fastMode: sessionMode } }),
+      );
+      mockRunCronFallbackPassthrough();
+      if (runner === "CLI") {
+        isCliProviderMock.mockReturnValue(true);
+        runCliAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { agentMeta: {} } });
+      }
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          cfg: {
+            agents: {
+              defaults: {
+                models: {
+                  "openai/gpt-5.4": { params: { fastMode: configMode, fastAutoOnSeconds: cutoff } },
+                },
+              },
+            },
+          },
+          job: makeIsolatedAgentJobFixture({
+            payload: { kind: "agentTurn", message: "test fast mode", model: "openai/gpt-5.4" },
+          }),
+        }),
+      );
+      expect(result.status).toBe("ok");
+      expect(
+        runner === "CLI" ? runCliAgentMock : runEmbeddedAgentMock,
+      ).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ fastMode: mode, fastModeAutoOnSeconds: cutoff }),
+      );
+    },
+  );
 
   it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
     dispatchCronDeliveryMock.mockImplementationOnce(

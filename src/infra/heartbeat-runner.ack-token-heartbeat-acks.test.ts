@@ -4,7 +4,12 @@ import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner/typ
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
 import { dispatchInboundMessageWithDispatcher } from "../auto-reply/dispatch.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildRecoverablePendingFinalDeliveryText,
+  normalizePendingFinalRecoveryPayloads,
+} from "../auto-reply/reply/pending-final-delivery.js";
 import {
   recordReplyOperationAgentTurn,
   resolveReplyOperationRunState,
@@ -67,6 +72,7 @@ async function withHeartbeat<T>(
     showOk?: boolean;
     responsePrefix?: string;
     accountId?: string;
+    threadId?: string;
     isolatedSession?: boolean;
     previousActivity?: boolean;
   } = {},
@@ -95,6 +101,7 @@ async function withHeartbeat<T>(
         lastChannel: channel,
         lastProvider: channel,
         lastTo: options.telegram ? "-1001234567890" : "120363140186826074@g.us",
+        lastThreadId: options.threadId,
       });
       const send = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
       const run: Fixture["run"] = (deps, reason) =>
@@ -333,6 +340,7 @@ async function runCommittedWork(params: {
   showOk?: boolean;
   status?: "ok" | "failed" | "cancelled" | "superseded";
   failAfterSettlement?: boolean;
+  threadId?: string;
 }) {
   return withHeartbeat(
     async ({ cfg, replySpy, send, run }) => {
@@ -370,7 +378,7 @@ async function runCommittedWork(params: {
       const result = await run();
       return { result, event: getLastHeartbeatEvent(), send };
     },
-    { telegram: true },
+    { telegram: true, threadId: params.threadId },
   );
 }
 
@@ -399,9 +407,18 @@ describe("heartbeat committed work bookkeeping", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("does not credit delivery to another recipient", async () => {
+  it.each([
+    { name: "recipient", route: { to: "-1009999999999" } },
+    { name: "account", route: { accountId: "other" } },
+    { name: "topic", route: { threadId: "8" } },
+  ])("does not credit delivery to another $name", async ({ route }) => {
     const { event, send } = await runCommittedWork({
-      result: { messagingToolSentTargets: [{ ...sentTarget, to: "-1009999999999" }] },
+      threadId: "7",
+      result: {
+        messagingToolSentTargets: [
+          { ...sentTarget, accountId: "default", threadId: "7", ...route },
+        ],
+      },
     });
     expect(event).toMatchObject({ status: "ok-token", silent: true });
     expect(send).not.toHaveBeenCalled();
@@ -467,11 +484,21 @@ describe("heartbeat pending-final delivery ownership", () => {
     }
     const intentId = "heartbeat-intent";
     const deliveryId = "heartbeat-delivery";
+    const recoveryText = buildRecoverablePendingFinalDeliveryText(
+      normalizePendingFinalRecoveryPayloads([payload]),
+    );
+    const stripped = stripHeartbeatToken(recoveryText ?? "", {
+      mode: "heartbeat",
+      maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    });
+    const pendingText = stripped.shouldSkip ? "" : stripped.text;
     await patchSessionEntryCore(
       { storePath, sessionKey },
       () => ({
         pendingFinalDelivery: {
-          kind: "transport-only",
+          ...(pendingText
+            ? { kind: "replayable" as const, text: pendingText }
+            : { kind: "transport-only" as const }),
           createdAt: Date.now(),
           intentId,
           deliveries: [{ id: deliveryId, state: "prepared" }],
@@ -490,50 +517,73 @@ describe("heartbeat pending-final delivery ownership", () => {
     });
   }
 
-  it("settles an isolated visible intent without clearing the base user's pending final", async () => {
-    await withHeartbeat(
-      async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run }) => {
-        const unrelatedFinal = {
-          kind: "replayable" as const,
-          text: "User final awaiting confirmation",
-          createdAt: now,
-          intentId: "base-user-intent",
-          deliveries: [{ id: "base-user-delivery", state: "unknown" as const }],
-        };
-        let executionKey = "";
-        replySpy.mockImplementation(async (ctx) => {
-          executionKey = ctx.SessionKey!;
-          await patchSessionEntryCore(
-            { storePath, sessionKey },
-            () => ({ pendingFinalDelivery: unrelatedFinal }),
-            { preserveActivity: true },
-          );
-          return prepareFinal(
-            storePath,
-            executionKey,
-            createHeartbeatToolResponsePayload({
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build blocked.",
-              notificationText: "Build needs credentials.",
-            }),
-          );
-        });
-        expect((await run()).status).toBe("ran");
-        expect(send).toHaveBeenCalledOnce();
-        expect(send.mock.calls[0]?.[1]).toBe("Build needs credentials.");
-        expect(executionKey).not.toBe(sessionKey);
-        expect(readEntry(storePath, executionKey)?.pendingFinalDelivery).toBeUndefined();
-        expect(readEntry(storePath, sessionKey)).toMatchObject({
-          lastHeartbeatText: "Build needs credentials.",
-          lastHeartbeatSentAt: now,
-          updatedAt: previousUpdatedAt,
-          pendingFinalDelivery: unrelatedFinal,
-        });
-      },
-      { telegram: true, previousActivity: true, isolatedSession: true },
-    );
-  });
+  it.each([
+    {
+      name: "plain reply",
+      payload: { text: "Heartbeat update." },
+      visibleText: "Heartbeat update.",
+    },
+    {
+      name: "visible tool reply",
+      payload: createHeartbeatToolResponsePayload({
+        outcome: "needs_attention",
+        notify: true,
+        summary: "Build blocked.",
+        notificationText: "Build needs credentials.",
+      }),
+      visibleText: "Build needs credentials.",
+    },
+    { name: "acknowledgement", payload: { text: "HEARTBEAT_OK" }, visibleText: undefined },
+    {
+      name: "quiet tool reply",
+      payload: createHeartbeatToolResponsePayload({
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      }),
+      visibleText: undefined,
+    },
+  ])(
+    "settles an isolated $name without clearing the base user's pending final",
+    async ({ payload, visibleText }) => {
+      await withHeartbeat(
+        async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run }) => {
+          const unrelatedFinal = {
+            kind: "replayable" as const,
+            text: "User final awaiting confirmation",
+            createdAt: now,
+            intentId: "base-user-intent",
+            deliveries: [{ id: "base-user-delivery", state: "unknown" as const }],
+          };
+          let executionKey = "";
+          replySpy.mockImplementation(async (ctx) => {
+            executionKey = ctx.SessionKey!;
+            await patchSessionEntryCore(
+              { storePath, sessionKey },
+              () => ({ pendingFinalDelivery: unrelatedFinal }),
+              { preserveActivity: true },
+            );
+            return prepareFinal(storePath, executionKey, payload);
+          });
+          expect((await run()).status).toBe("ran");
+          expect(send).toHaveBeenCalledTimes(visibleText ? 1 : 0);
+          if (visibleText) {
+            expect(send.mock.calls[0]?.[1]).toBe(visibleText);
+          }
+          expect(executionKey).not.toBe(sessionKey);
+          expect(readEntry(storePath, executionKey)?.pendingFinalDelivery).toBeUndefined();
+          const baseEntry = readEntry(storePath, sessionKey);
+          expect(baseEntry?.lastHeartbeatText).toBe(visibleText);
+          expect(baseEntry?.lastHeartbeatSentAt).toBe(visibleText ? now : undefined);
+          expect(baseEntry).toMatchObject({
+            updatedAt: previousUpdatedAt,
+            pendingFinalDelivery: unrelatedFinal,
+          });
+        },
+        { telegram: true, previousActivity: true, isolatedSession: true },
+      );
+    },
+  );
 
   it("preserves an unowned duplicate final even when its timestamp matches the run", async () => {
     await withHeartbeat(
@@ -785,76 +835,86 @@ describe("runHeartbeatOnce failure delivery", () => {
 
 describe("heartbeat inbound hook boundary", () => {
   afterEach(resetGlobalHookRunner);
-  it("keeps channel takeover on user turns and outside monitoring policy", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-      cfg.messages = { visibleReplies: "automatic" };
-      cfg.channels = { telegram: { enabled: true, botToken: "test", allowFrom: ["owner"] } };
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "owner",
-      });
-      const registry = getActivePluginRegistry();
-      if (!registry) {
-        throw new Error("Expected channel registry");
-      }
-      const handler = vi.fn(async (_event: unknown, context: PluginHookReplyDispatchContext) => {
-        context.dispatcher.sendFinalReply({ text: "Channel takeover" });
-        return { handled: true, queuedFinal: true, counts: context.dispatcher.getQueuedCounts() };
-      });
-      addTestHook({
-        registry,
-        pluginId: "channel-hook-fixture",
-        hookName: "reply_dispatch",
-        handler,
-      });
-      initializeGlobalHookRunner(registry);
-      replySpy.mockResolvedValue(
-        createHeartbeatToolResponsePayload({
-          outcome: "no_change",
-          notify: false,
-          summary: "Nothing to report",
-        }),
-      );
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "unexpected-monitor-send" });
-      await expect(
-        runHeartbeatOnce({
+  it.each(["before_dispatch", "reply_dispatch"] as const)(
+    "keeps %s takeover on user turns and outside monitoring policy",
+    async (hookName) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
+        cfg.messages = { visibleReplies: "automatic" };
+        cfg.channels = { telegram: { enabled: true, botToken: "test", allowFrom: ["owner"] } };
+        const sessionKey = await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "owner",
+        });
+        const registry = getActivePluginRegistry();
+        if (!registry) {
+          throw new Error("Expected channel registry");
+        }
+        const handler =
+          hookName === "before_dispatch"
+            ? vi.fn(async () => ({ handled: true, text: "Channel takeover" }))
+            : vi.fn(async (_event: unknown, context: PluginHookReplyDispatchContext) => {
+                context.dispatcher.sendFinalReply({ text: "Channel takeover" });
+                return {
+                  handled: true,
+                  queuedFinal: true,
+                  counts: context.dispatcher.getQueuedCounts(),
+                };
+              });
+        addTestHook({
+          registry,
+          pluginId: "channel-hook-fixture",
+          hookName,
+          handler,
+        });
+        initializeGlobalHookRunner(registry);
+        replySpy.mockResolvedValue(
+          createHeartbeatToolResponsePayload({
+            outcome: "no_change",
+            notify: false,
+            summary: "Nothing to report",
+          }),
+        );
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "unexpected-monitor-send" });
+        await expect(
+          runHeartbeatOnce({
+            cfg,
+            deps: { getReplyFromConfig: replySpy, telegram: sendTelegram, getQueueSize: () => 0 },
+          }),
+        ).resolves.toMatchObject({ status: "ran" });
+        expect(handler).not.toHaveBeenCalled();
+        expect(replySpy).toHaveBeenCalledOnce();
+        expect(sendTelegram).not.toHaveBeenCalled();
+        replySpy.mockClear();
+        const deliver = vi.fn(async () => ({ visibleReplySent: true }));
+        await dispatchInboundMessageWithDispatcher({
           cfg,
-          deps: { getReplyFromConfig: replySpy, telegram: sendTelegram, getQueueSize: () => 0 },
-        }),
-      ).resolves.toMatchObject({ status: "ran" });
-      expect(handler).not.toHaveBeenCalled();
-      expect(replySpy).toHaveBeenCalledOnce();
-      expect(sendTelegram).not.toHaveBeenCalled();
-      replySpy.mockClear();
-      const deliver = vi.fn(async () => ({ visibleReplySent: true }));
-      await dispatchInboundMessageWithDispatcher({
-        cfg,
-        ctx: {
-          Body: "User request",
-          Provider: "telegram",
-          Surface: "telegram",
-          From: "owner",
-          To: "owner",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "owner",
-          SessionKey: sessionKey,
-          AgentId: "main",
-          ChatType: "direct",
-          CommandAuthorized: true,
-        },
-        replyResolver: replySpy,
-        dispatcherOptions: { deliver },
+          ctx: {
+            Body: "User request",
+            Provider: "telegram",
+            Surface: "telegram",
+            From: "owner",
+            To: "owner",
+            OriginatingChannel: "telegram",
+            OriginatingTo: "owner",
+            SessionKey: sessionKey,
+            AgentId: "main",
+            ChatType: "direct",
+            CommandAuthorized: true,
+          },
+          replyResolver: replySpy,
+          dispatcherOptions: { deliver },
+        });
+        expect(handler).toHaveBeenCalledOnce();
+        expect(replySpy).not.toHaveBeenCalled();
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "Channel takeover" }),
+          expect.anything(),
+        );
       });
-      expect(handler).toHaveBeenCalledOnce();
-      expect(replySpy).not.toHaveBeenCalled();
-      expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Channel takeover" }),
-        expect.anything(),
-      );
-    });
-  });
+    },
+  );
 });
 
 describe("heartbeat next-user outcomes", () => {

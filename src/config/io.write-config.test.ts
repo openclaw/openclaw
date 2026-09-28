@@ -2472,6 +2472,7 @@ describe("config io write", () => {
 
   it.each([
     { caller: "live-direct", pluginEntry: "authored-empty" },
+    { caller: "live-replacement", pluginEntry: "absent" },
     { caller: "mcp-source", pluginEntry: "absent" },
   ] as const)(
     "preserves $pluginEntry plugin source through two $caller writes and runtime activation",
@@ -2545,6 +2546,8 @@ describe("config io write", () => {
                 if (changed.ok) {
                   expect(changed.config).toEqual(await readPersistedConfig(configPath));
                 }
+              } else if (caller === "live-replacement") {
+                await replaceConfigFile({ nextConfig, afterWrite: { mode: "auto" } });
               } else {
                 await writeConfigFile(nextConfig);
               }

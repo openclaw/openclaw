@@ -135,6 +135,26 @@ describe("prepared model runtime Gateway leases", () => {
     expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).toBe(published);
   });
 
+  it("evicts old idle gateway run owners while reusing recent selections", async () => {
+    const input = await publishGateway();
+    const acquire = async (modelId: string) => {
+      await using lease = await acquireAgentRunPreparedModelRuntime({
+        ...input,
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
+      });
+      return lease.snapshot;
+    };
+
+    const first = await acquire("run-model-0");
+    for (let index = 1; index < 8; index += 1) {
+      await acquire(`run-model-${index}`);
+    }
+    const recent = await acquire("run-model-8");
+    expect(await acquire("run-model-8")).toBe(recent);
+    expect(await acquire("run-model-0")).not.toBe(first);
+  });
+
   it("retains switched-away execution registries for agent-scoped session cleanup", async () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
       createEmptyPluginRegistry(),

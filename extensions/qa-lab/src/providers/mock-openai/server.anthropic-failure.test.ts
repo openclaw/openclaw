@@ -8,6 +8,11 @@ it.each([
   { prompt: "Telegram unsent failure QA check.", stream: true, partialText: "" },
   {
     prompt: "Telegram visible partial failure QA check.",
+    stream: false,
+    partialText: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
+  },
+  {
+    prompt: "Telegram visible partial failure QA check.",
     stream: true,
     partialText: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
   },

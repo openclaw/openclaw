@@ -742,65 +742,68 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       );
     });
 
-    it("keeps a successful isolated turn at status ok when post-run delivery fails", async () => {
-      // #94058 / #95419: delivery failure must not overwrite execution status.
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [
-          { text: "Interim cron report" },
-          { text: "Recoverable tool warning", isError: true, toolName: "exec" },
-        ],
-        meta: { agentMeta: {} },
-      });
-      mockAnnounce();
-      resolveCronPayloadOutcomeMock.mockReturnValue(visibleOutcome("Interim cron report"));
-      const deliveryState = {
-        status: "not-delivered",
-        delivered: false,
-        error: "Message failed",
-        failureNotification: { status: "not-requested" },
-      };
-      dispatchCronDeliveryMock.mockResolvedValueOnce({
-        delivered: false,
-        deliveryAttempted: true,
-        deliveryError: "Message failed",
-        deliveryState,
-        summary: "Final cron report",
-        outputText: "Final cron report",
-        synthesizedText: "Final cron report",
-        deliveryPayloads: [{ text: "Final cron report" }],
-      });
-      const result = await runCronIsolatedAgentTurn(
-        makeParams(
-          makeJob({
-            ...announce,
-            bestEffort: true,
-          }),
-        ),
-      );
-      expectFields(result, {
-        status: "ok",
-        error: undefined,
-        summary: "Final cron report",
-        outputText: "Final cron report",
-        deliveryError: "Message failed",
-        deliveryState,
-        delivered: false,
-        deliveryAttempted: true,
-      });
-      expectFields(result.delivery, {
-        intended: tracedTarget,
-        resolved: { ok: true, ...tracedTarget },
-        fallbackUsed: true,
-        delivered: false,
-      });
-      expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
-        "Recoverable tool warning",
-        "Message failed",
-      ]);
-      expect(result.diagnostics?.entries.at(-1)).toMatchObject({
-        source: "delivery",
-        severity: "error",
-      });
-    });
+    it.each([false, true])(
+      "keeps a successful isolated turn at status ok when post-run delivery fails (bestEffort=%s)",
+      async (bestEffort) => {
+        // #94058 / #95419: delivery failure must not overwrite execution status.
+        runEmbeddedAgentMock.mockResolvedValueOnce({
+          payloads: [
+            { text: "Interim cron report" },
+            { text: "Recoverable tool warning", isError: true, toolName: "exec" },
+          ],
+          meta: { agentMeta: {} },
+        });
+        mockAnnounce();
+        resolveCronPayloadOutcomeMock.mockReturnValue(visibleOutcome("Interim cron report"));
+        const deliveryState = {
+          status: "not-delivered",
+          delivered: false,
+          error: "Message failed",
+          failureNotification: { status: "not-requested" },
+        };
+        dispatchCronDeliveryMock.mockResolvedValueOnce({
+          delivered: false,
+          deliveryAttempted: true,
+          deliveryError: "Message failed",
+          deliveryState,
+          summary: "Final cron report",
+          outputText: "Final cron report",
+          synthesizedText: "Final cron report",
+          deliveryPayloads: [{ text: "Final cron report" }],
+        });
+        const result = await runCronIsolatedAgentTurn(
+          makeParams(
+            makeJob({
+              ...announce,
+              bestEffort,
+            }),
+          ),
+        );
+        expectFields(result, {
+          status: "ok",
+          error: undefined,
+          summary: "Final cron report",
+          outputText: "Final cron report",
+          deliveryError: "Message failed",
+          deliveryState,
+          delivered: false,
+          deliveryAttempted: true,
+        });
+        expectFields(result.delivery, {
+          intended: tracedTarget,
+          resolved: { ok: true, ...tracedTarget },
+          fallbackUsed: true,
+          delivered: false,
+        });
+        expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+          "Recoverable tool warning",
+          "Message failed",
+        ]);
+        expect(result.diagnostics?.entries.at(-1)).toMatchObject({
+          source: "delivery",
+          severity: "error",
+        });
+      },
+    );
   });
 });

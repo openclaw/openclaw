@@ -4348,6 +4348,39 @@ describe("qa mock openai server", () => {
     },
   );
 
+  it("streams successful Anthropic tool-result follow-ups as text deltas", async () => {
+    const server = await startMockServer();
+    const callId = "toolu_mock_spawn_1";
+    const response = await expectAnthropicMessages(server, {
+      stream: true,
+      messages: [
+        makeAnthropicUserText(
+          "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: callId, name: "sessions_spawn", input: {} }],
+        },
+        makeAnthropicToolResult(callId, ACCEPTED_SPAWN_RESULT),
+      ],
+    });
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const events = (await response.text())
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => requireRecord(JSON.parse(line.slice(6)), "Anthropic SSE event"));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: expect.stringContaining(SUBAGENT_WAITING) },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "message_delta", delta: { stop_reason: "end_turn" } }),
+    );
+    expect(events.at(-1)).toEqual({ type: "message_stop" });
+  });
+
   it("replays one signed Anthropic thinking error for each independent scenario", async () => {
     const server = await startMockServer();
     const readCallIds: string[] = [];

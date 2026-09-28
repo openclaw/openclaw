@@ -487,7 +487,14 @@ describe("Heartbeat event routing", () => {
     );
   });
 
-  it("suppresses metadata-only successful exec completions", async () => {
+  it.each([
+    { name: "metadata-only", output: "", reply: "HEARTBEAT_OK" },
+    {
+      name: "output-bearing",
+      output: "review-worker spawn finished",
+      reply: "The review-worker spawn finished successfully.",
+    },
+  ])("routes $name shared-session exec completion after topic drift", async ({ output, reply }) => {
     await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
       await writeTelegramSessionStore(storePath, sessionKey, {
@@ -495,8 +502,8 @@ describe("Heartbeat event routing", () => {
         lastThreadId: 2175,
       });
 
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+      replySpy.mockResolvedValue({ text: reply });
+      enqueueSystemEvent(`Exec completed (review-run, code 0)${output ? ` :: ${output}` : ""}`, {
         sessionKey,
         deliveryContext: {
           channel: "telegram",
@@ -508,8 +515,16 @@ describe("Heartbeat event routing", () => {
       const result = await run({ sessionKey, reason: "exec-event" });
 
       expect(result.status).toBe("ran");
-      expect(getFirstReplyContext(replySpy).Body).toContain("no command output was found");
-      expect(sendTelegram).not.toHaveBeenCalled();
+      if (output) {
+        expectTelegramSend(sendTelegram, {
+          to: "telegram:-1003774691294:topic:47",
+          text: reply,
+          messageThreadId: 47,
+        });
+      } else {
+        expect(getFirstReplyContext(replySpy).Body).toContain("no command output was found");
+        expect(sendTelegram).not.toHaveBeenCalled();
+      }
     }, false);
   });
 });

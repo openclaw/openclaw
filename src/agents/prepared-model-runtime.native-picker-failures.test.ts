@@ -511,53 +511,58 @@ it("keeps a newly selected native model when a queued full refresh partly fails"
   }
 });
 
-it("preserves native auth rejection through provider renewals without a refresh error (__proto__)", async () => {
-  const { owner, a, b, loadA, loadB } = await fixture(true, false, "__proto__");
-  const api = { provider: "api-provider", id: "model", name: "API model" };
-  setProviderCatalog([api], [{ provider: api.provider, status: "ready" }]);
-  loadB.mockResolvedValue({
-    entries: [b],
-    outcomes: [{ provider: b.provider, status: "ready" }],
-  });
-  await owner.loadFullModelCatalog!({ refresh: true });
-  await owner.loadFullModelCatalog!({ refresh: true, providerIds: [a.provider] });
-  const failure = {
-    provider: a.provider,
-    status: "auth-rejected",
-    rejectionScope: "catalog",
-  } as const;
-  const updatedB = { ...b, name: "Updated native B" };
-  loadA.mockResolvedValue({
-    entries: [],
-    outcomes: [{ ...failure, provider: ` ${a.provider.toUpperCase()} ` }],
-  });
-  loadB.mockResolvedValue({
-    entries: [updatedB],
-    outcomes: [{ provider: b.provider, status: "ready" }],
-  });
-  const partial = await owner.loadFullModelCatalog!({ refresh: true });
-  expect(partial.authoritative).toBe(false);
-  expect(partial.refreshFailed).toBeUndefined();
-  expect(partial.providerOutcomes).toContainEqual(failure);
-  expectModels(partial.entries, a, updatedB);
+it.each(["__proto__", "constructor"])(
+  "preserves native auth rejection through provider renewals without a refresh error (%s)",
+  async (runtimeA) => {
+    const { owner, a, b, loadA, loadB } = await fixture(true, false, runtimeA);
+    const api = { provider: "api-provider", id: "model", name: "API model" };
+    setProviderCatalog([api], [{ provider: api.provider, status: "ready" }]);
+    loadB.mockResolvedValue({
+      entries: [b],
+      outcomes: [{ provider: b.provider, status: "ready" }],
+    });
+    await owner.loadFullModelCatalog!({ refresh: true });
+    if (runtimeA === "constructor") {
+      await owner.loadFullModelCatalog!({ refresh: true, providerIds: [a.provider] });
+    }
+    const failure = {
+      provider: a.provider,
+      status: "auth-rejected",
+      rejectionScope: "catalog",
+    } as const;
+    const updatedB = { ...b, name: "Updated native B" };
+    loadA.mockResolvedValue({
+      entries: [],
+      outcomes: [{ ...failure, provider: ` ${a.provider.toUpperCase()} ` }],
+    });
+    loadB.mockResolvedValue({
+      entries: [updatedB],
+      outcomes: [{ provider: b.provider, status: "ready" }],
+    });
+    const partial = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(partial.authoritative).toBe(false);
+    expect(partial.refreshFailed).toBeUndefined();
+    expect(partial.providerOutcomes).toContainEqual(failure);
+    expectModels(partial.entries, a, updatedB);
 
-  const nativeCalls = loadA.mock.calls.length;
-  await renewProvider(owner, api.provider);
-  const renewed = owner.readFullModelCatalog!()!;
-  expect(loadA).toHaveBeenCalledTimes(nativeCalls);
-  expect(renewed.authoritative).toBe(false);
-  expect(renewed.refreshFailed).toBeUndefined();
-  expect(renewed.providerOutcomes).toContainEqual(failure);
-  expect(renewed.entries).toContainEqual(expect.objectContaining(updatedB));
+    const nativeCalls = loadA.mock.calls.length;
+    await renewProvider(owner, api.provider);
+    const renewed = owner.readFullModelCatalog!()!;
+    expect(loadA).toHaveBeenCalledTimes(nativeCalls);
+    expect(renewed.authoritative).toBe(false);
+    expect(renewed.refreshFailed).toBeUndefined();
+    expect(renewed.providerOutcomes).toContainEqual(failure);
+    expect(renewed.entries).toContainEqual(expect.objectContaining(updatedB));
 
-  // An empty successful result also represents disabled or missing optional apps.
-  loadA.mockResolvedValue({ entries: [] });
-  const cleared = await owner.loadFullModelCatalog!({ refresh: true });
-  expect(cleared.refreshFailed).toBeUndefined();
-  expect(cleared.providerOutcomes?.some(({ provider }) => provider === a.provider)).toBe(false);
-  expect(cleared.entries.some(({ provider }) => provider === a.provider)).toBe(false);
-  expect(cleared.entries).toContainEqual(expect.objectContaining(updatedB));
-});
+    // An empty successful result also represents disabled or missing optional apps.
+    loadA.mockResolvedValue({ entries: [] });
+    const cleared = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(cleared.refreshFailed).toBeUndefined();
+    expect(cleared.providerOutcomes?.some(({ provider }) => provider === a.provider)).toBe(false);
+    expect(cleared.entries.some(({ provider }) => provider === a.provider)).toBe(false);
+    expect(cleared.entries).toContainEqual(expect.objectContaining(updatedB));
+  },
+);
 
 it("keeps API provider readiness independent of a failed native runtime for the same provider", async () => {
   const { owner, a, loadA } = await fixture(true);

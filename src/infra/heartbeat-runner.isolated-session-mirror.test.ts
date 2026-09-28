@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { heartbeatRunnerWhatsAppPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -208,28 +207,25 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
 
   it("queues a successful direct alert for the next ordinary target turn", async () => {
     await withMirror(async ({ cfg, target, targetKey, run, awareness }) => {
-      const completionEntered = createDeferred();
-      const releaseCompletion = createDeferred();
+      const observations: Array<{
+        pendingEventEntries: Awaited<
+          ReturnType<typeof resolveHeartbeatPreflight>
+        >["pendingEventEntries"];
+        preflightContext: Awaited<ReturnType<typeof drainFormattedSystemEvents>>;
+        context: Awaited<ReturnType<typeof awareness>>;
+        repeatedContext: Awaited<ReturnType<typeof awareness>>;
+      }> = [];
+      // Observe publication after confirmation, while the transport still owns completion.
       beforeMockDeliveryCompletion.mockImplementationOnce(async () => {
-        completionEntered.resolve();
-        await releaseCompletion.promise;
-      });
-      const heartbeat = run();
-      try {
-        await withTestTimeout(
-          completionEntered.promise,
-          5_000,
-          "heartbeat delivery confirmation was not observed",
-        );
         const nextHeartbeatPreflight = await resolveHeartbeatPreflight({
           cfg,
           agentId: "main",
           sessionKey: targetKey,
           heartbeat: { isolatedSession: true },
         });
-        expect(nextHeartbeatPreflight.pendingEventEntries).toEqual([]);
-        await expect(
-          drainFormattedSystemEvents({
+        observations.push({
+          pendingEventEntries: nextHeartbeatPreflight.pendingEventEntries,
+          preflightContext: await drainFormattedSystemEvents({
             cfg,
             agentId: "main",
             sessionKey: targetKey,
@@ -237,18 +233,21 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
             isNewSession: false,
             events: nextHeartbeatPreflight.pendingEventEntries,
           }),
-        ).resolves.toBeUndefined();
-        const context = await awareness();
-        expect(context).toContain("A heartbeat delivered this message to this channel:");
-        expect(context).toContain("Status needs attention.");
-        await expect(awareness()).resolves.toBeUndefined();
-      } finally {
-        releaseCompletion.resolve();
-        await expect(
-          withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery"),
-        ).resolves.toMatchObject({ status: "ran" });
-      }
-
+          context: await awareness(),
+          repeatedContext: await awareness(),
+        });
+      });
+      await expect(run()).resolves.toMatchObject({ status: "ran" });
+      expect(beforeMockDeliveryCompletion).toHaveBeenCalledOnce();
+      expect(observations).toEqual([
+        {
+          pendingEventEntries: [],
+          preflightContext: undefined,
+          context: expect.stringContaining("A heartbeat delivered this message to this channel:"),
+          repeatedContext: undefined,
+        },
+      ]);
+      expect(observations[0]?.context).toContain("Status needs attention.");
       expect(latestDeliveryRequest()).toMatchObject({ channel: "whatsapp", to: target });
     });
   });
