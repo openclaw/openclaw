@@ -525,8 +525,9 @@ export async function finalizeSetupWizard(
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
       };
-      // Without a service or session Gateway start, observe any already-running
-      // Gateway once instead of waiting for startup.
+      // Nothing started (declined or failed install): probe once. A reused running
+      // Gateway keeps a bounded wait because the config just written can make it
+      // reload; started Gateways use the full startup timing.
       gatewayProbe =
         gateway.status === "failed" || (gateway.status === "skipped" && !sessionGateway)
           ? await probeGatewayReachable(probeOptions)
