@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
+import { createStoppedTunnelManager } from "./environment-access.test-support.js";
 import * as support from "./service.test-support.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
 import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 
 describe("worker environment startup authority", () => {
@@ -18,12 +18,7 @@ describe("worker environment startup authority", () => {
     });
     const environmentId = "worker-revoked-tunnel";
     await support.seedReady(environmentId, undefined, true);
-    const tunnelManager = {
-      status: () => "stopped" as const,
-      start: vi.fn(),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
+    const tunnelManager = createStoppedTunnelManager();
     const workerService = support.createService(support.createProvider(), { tunnelManager });
     let authorized = true;
 
@@ -52,12 +47,7 @@ describe("worker environment startup authority", () => {
   ] as const)(
     "checks $executionMode node ownership beyond worker credential expiry (revoke during preparation: $revokeDuringPreparation)",
     async ({ executionMode, revokeDuringPreparation }) => {
-      const tunnelManager = {
-        status: () => "stopped" as const,
-        start: vi.fn(),
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      } as unknown as WorkerTunnelManager;
+      const tunnelManager = createStoppedTunnelManager();
       support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
       const nodeHandle = {
         environmentId: "pending",

@@ -94,9 +94,8 @@ export function crabboxCommandError(action: string, result: SpawnResult): Error 
       `Crabbox ${action} did not exit normally (${result.termination})${crabboxCommandDetail(result)}`,
     );
   }
-  const exitCode = result.code === null ? "unknown" : String(result.code);
   return new Error(
-    `Crabbox ${action} failed with exit code ${exitCode}${crabboxCommandDetail(result)}`,
+    `Crabbox ${action} failed with exit code ${result.code ?? "unknown"}${crabboxCommandDetail(result)}`,
   );
 }
 
@@ -127,18 +126,17 @@ export function isUnrecognizedLease(result: SpawnResult, identifier: string): bo
     return false;
   }
   return (
-    (result.code === 4 && /\b(?:was\s+)?not found\b/iu.test(output)) ||
-    (result.code === 4 && /\bno longer exists\b/iu.test(output)) ||
     (result.code === 4 &&
-      /\b(?:points to|is bound to) (?:a )?missing (?:instance|sandbox)\b/iu.test(output)) ||
-    (result.code === 4 && /\bdisappeared before release\b/iu.test(output)) ||
-    (result.code === 4 && /\bunknown blacksmith testbox(?:\s|:)/iu.test(output)) ||
-    (result.code === 4 && /\bis not claimed by Crabbox\b/iu.test(output)) ||
-    (result.code === 4 &&
-      /\bwandb sandbox "[^"\r\n]+" has no matching local ownership claim\b/iu.test(output)) ||
+      (/\b(?:was\s+)?not found\b/iu.test(output) ||
+        /\bno longer exists\b/iu.test(output) ||
+        /\b(?:points to|is bound to) (?:a )?missing (?:instance|sandbox)\b/iu.test(output) ||
+        /\bdisappeared before release\b/iu.test(output) ||
+        /\bunknown blacksmith testbox(?:\s|:)/iu.test(output) ||
+        /\bis not claimed by Crabbox\b/iu.test(output) ||
+        /\bwandb sandbox "[^"\r\n]+" has no matching local ownership claim\b/iu.test(output) ||
+        /\bunknown lease(?:\s|:)/iu.test(output))) ||
     (result.code === 5 && /\bcoder workspace "[^"\r\n]+" not found\b/iu.test(output)) ||
-    /\bcoordinator GET \S*\/v1\/leases\/\S+:\s*http 404\b/iu.test(output) ||
-    (result.code === 4 && /\bunknown lease(?:\s|:)/iu.test(output))
+    /\bcoordinator GET \S*\/v1\/leases\/\S+:\s*http 404\b/iu.test(output)
   );
 }
 
