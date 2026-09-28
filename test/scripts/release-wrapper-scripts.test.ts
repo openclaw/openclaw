@@ -63,7 +63,7 @@ describe("release wrapper scripts", () => {
   it("loads the OpenClaw ClawHub plan CLI and validates required arguments before planning", () => {
     const result = runTsxScript("scripts/openclaw-release-clawhub-plan.ts", [
       "--bootstrap-workflow-ref",
-      "main",
+      `release-publish/${"b".repeat(12)}-123`,
       "--bootstrap-workflow-sha",
       "b".repeat(40),
       "--release-tag",

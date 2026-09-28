@@ -8,6 +8,8 @@ const sha = "a".repeat(40);
 const workflowSha = "b".repeat(40);
 const releaseTag = "v2026.8.1";
 const alphaBranch = "tideclaw/alpha/2026-08-30-1200Z";
+const alphaVersion = "2026.8.1-alpha.1";
+const protectedWorkflowRef = `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`;
 const packageDir = "extensions/fixture";
 const packageJson = '{"name":"@openclaw/fixture","version":"2026.8.33"}\n';
 
@@ -17,6 +19,7 @@ type PluginMode =
   | "clawhub-trust"
   | "npm-resolve"
   | "npm-trust"
+  | "npm-alpha-channels"
   | "npm-preflight-read"
   | "npm-publish-read";
 type RunOptions = Partial<Parameters<typeof runCiGitStep>[0]>;
@@ -55,7 +58,7 @@ const modes: Record<
       job: "preview_plugins_clawhub",
       step: "Validate ref is on a trusted publish branch",
     },
-    env: { TRUSTED_PUBLISH_BRANCH: "main" },
+    env: { RELEASE_TAG: "", WORKFLOW_REF: "refs/heads/main" },
   },
   "npm-resolve": {
     workflow: {
@@ -87,6 +90,14 @@ const modes: Record<
       WORKFLOW_REF: "refs/heads/main",
       WORKFLOW_SHA: workflowSha,
     },
+  },
+  "npm-alpha-channels": {
+    workflow: {
+      file: ".github/workflows/plugin-npm-release.yml",
+      job: "preview_plugins_npm",
+      step: "Validate alpha plugin channels",
+    },
+    env: { CANDIDATES: "[]" },
   },
   "npm-preflight-read": {
     workflow: {
@@ -345,43 +356,123 @@ posixIt.each(["clawhub-trust", "npm-trust"] as const)(
   55_000,
 );
 
-posixIt(
-  "npm-trust rejects a Tideclaw alpha publish after main and release misses",
-  async () => {
-    const report = await pluginRun("npm-trust", {
-      env: { WORKFLOW_REF: `refs/heads/${alphaBranch}` },
+posixIt.each(
+  (["npm-trust", "clawhub-trust"] as const).flatMap((mode) =>
+    [
+      {
+        name: "exact alpha tag",
+        version: alphaVersion,
+        tagSha: sha,
+        workflowRef: protectedWorkflowRef,
+        code: 0,
+      },
+      {
+        name: "alpha tag mismatch",
+        version: alphaVersion,
+        tagSha: workflowSha,
+        workflowRef: protectedWorkflowRef,
+        code: 1,
+      },
+      {
+        name: "unprotected Tideclaw branch",
+        version: alphaVersion,
+        tagSha: sha,
+        workflowRef: `refs/heads/${alphaBranch}`,
+        code: 1,
+      },
+      {
+        name: "beta tag",
+        version: "2026.8.1-beta.1",
+        tagSha: sha,
+        workflowRef: protectedWorkflowRef,
+        code: 1,
+      },
+      {
+        name: "stable tag",
+        version: "2026.8.1",
+        tagSha: sha,
+        workflowRef: protectedWorkflowRef,
+        code: 1,
+      },
+      {
+        name: "non-exact alpha suffix",
+        version: "2026.8.1-alpha.1.extra",
+        tagSha: sha,
+        workflowRef: protectedWorkflowRef,
+        code: 1,
+      },
+    ].map((entry) => ({ ...entry, mode })),
+  ),
+)(
+  "$mode alpha tag admission: $name",
+  async ({ mode, version, tagSha, workflowRef, code }) => {
+    const tag = `v${version}`;
+    const report = await pluginRun(mode, {
+      packageVersion: version,
+      env: {
+        RELEASE_TAG: tag,
+        WORKFLOW_REF: workflowRef,
+        // The branch case isolates the fallback's own ref check after environment admission.
+        REQUIRE_NPM_PUBLISH_ENVIRONMENT: workflowRef === protectedWorkflowRef ? "true" : "false",
+      },
+      revisions: { [`refs/tags/${tag}^{commit}`]: tagSha },
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
         "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
       },
     });
-    expect(report.code, report.output).toBe(1);
-    expect(report.output).toContain(
-      "Plugin npm publishes must target a commit reachable from main or release/*.",
-    );
+    expect(report.code, report.output).toBe(code);
+    if (code !== 0) {
+      expect(report.output).toContain(
+        "exact alpha release tag from protected release-publish tooling",
+      );
+    }
     expect(report.fetches.some(({ args }) => args.join(" ").includes(alphaBranch))).toBe(false);
+    if (mode === "npm-trust" && code === 0) {
+      expect(report.fetches.at(-1)?.args).toEqual([
+        "fetch",
+        "--no-tags",
+        "origin",
+        `+refs/tags/${tag}:refs/tags/${tag}`,
+      ]);
+    }
   },
   55_000,
 );
 
-posixIt(
-  "clawhub-trust accepts only the matching Tideclaw alpha branch after main and release misses",
-  async () => {
-    const report = await pluginRun("clawhub-trust", {
-      env: { TRUSTED_PUBLISH_BRANCH: alphaBranch },
-      commandResults: {
-        "merge-base --is-ancestor HEAD origin/main": { code: 1 },
-        "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
-        [`merge-base --is-ancestor HEAD refs/remotes/origin/${alphaBranch}`]: { code: 0 },
+posixIt.each([
+  { name: "alpha candidate", publishTag: "alpha", channel: "alpha", code: 0 },
+  { name: "stable dist-tag", publishTag: "latest", channel: "alpha", code: 1 },
+  { name: "beta channel", publishTag: "alpha", channel: "beta", code: 1 },
+  { name: "missing channel", publishTag: "alpha", channel: undefined, code: 1 },
+  { name: "missing candidate payload", candidates: "", code: 1 },
+  { name: "non-array candidate payload", candidates: "null", code: 1 },
+])(
+  "npm alpha plan guard: $name",
+  async ({ publishTag, channel, candidates, code }) => {
+    const report = await pluginRun("npm-alpha-channels", {
+      packageVersion: alphaVersion,
+      env: {
+        CANDIDATES:
+          candidates ??
+          JSON.stringify([
+            { packageName: "@openclaw/fixture", version: alphaVersion, publishTag, channel },
+          ]),
       },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.fetches.at(-1)?.args).toEqual([
-      "fetch",
-      "--no-tags",
-      "origin",
-      `+refs/heads/${alphaBranch}:refs/remotes/origin/${alphaBranch}`,
-    ]);
+    expect(report.code, report.output).toBe(code);
+    if (code !== 0) {
+      if (candidates !== undefined) {
+        expect(report.output).toContain(
+          "Alpha plugin npm publication requires a candidate array from the resolved plan.",
+        );
+      } else {
+        expect(report.output).toContain(
+          "Alpha plugin npm publishes may only publish alpha plugin versions to the alpha dist-tag.",
+        );
+        expect(report.output).toContain(`@openclaw/fixture@${alphaVersion}`);
+      }
+    }
   },
   55_000,
 );
@@ -532,11 +623,12 @@ posixIt.each([
 );
 
 posixIt(
-  "npm preflight rejects before Tideclaw fallback after main and release misses",
+  "npm preflight rejects the exact alpha tag fallback after main and release misses",
   async () => {
     const report = await pluginRun("npm-trust", {
-      env: { PREFLIGHT_ONLY: "true", SOURCE_REF: sha, WORKFLOW_REF: `refs/heads/${alphaBranch}` },
-      revisions: { [`${sha}^{commit}`]: sha },
+      packageVersion: alphaVersion,
+      env: { PREFLIGHT_ONLY: "true", SOURCE_REF: sha, WORKFLOW_REF: protectedWorkflowRef },
+      revisions: { [`${sha}^{commit}`]: sha, [`refs/tags/v${alphaVersion}^{commit}`]: sha },
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
         "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
@@ -547,7 +639,7 @@ posixIt(
       "Plugin npm preflight target must be reachable from main or release/*.",
     );
     expect(report.fetches).toHaveLength(1);
-    expect(report.output).not.toContain("matching Tideclaw alpha branch");
+    expect(report.output).not.toContain("exact alpha release tag");
   },
   55_000,
 );

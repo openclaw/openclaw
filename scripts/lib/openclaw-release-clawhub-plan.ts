@@ -102,8 +102,8 @@ function requireCommitSha(value: string | undefined, label: string): string {
 
 function requireBootstrapWorkflowRef(value: string | undefined): string {
   const ref = requireArg(value, "--bootstrap-workflow-ref");
-  if (ref !== "main" && !/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(ref)) {
-    throw new Error("--bootstrap-workflow-ref must be main or a SHA-pinned release-publish tag.");
+  if (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(ref)) {
+    throw new Error("--bootstrap-workflow-ref must be a SHA-pinned release-publish tag.");
   }
   return ref;
 }

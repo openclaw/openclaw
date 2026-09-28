@@ -130,6 +130,7 @@ export async function runCiGitStep(options: {
     code: FetchResult | "cancel";
     output?: string;
   }[];
+  packageVersion?: string;
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
@@ -317,7 +318,10 @@ export async function runCiGitStep(options: {
           writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
         if (pluginRelease) {
-          writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
+          writeFileSync(
+            path.join(workspace, "package.json"),
+            JSON.stringify({ version: options.packageVersion ?? "2026.8.33" }) + "\n",
+          );
         }
       }
       if (options.startupDelay?.tree) {

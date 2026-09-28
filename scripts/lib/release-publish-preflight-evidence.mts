@@ -675,6 +675,14 @@ export function verifyPublishSourceLineage(input: {
   releaseTag: string;
   runGh: PublishPreflightGh;
 }) {
+  // Release-owner-only, immutable v* tags (rulesets 22730709 and 13733840) anchor alpha more strongly than unprotected Tideclaw branches.
+  if (
+    /^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-alpha\.[1-9][0-9]*$/u.test(input.releaseTag) &&
+    /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(input.workflowRef) &&
+    resolvePreflightTag(input.runGh, input.repo, input.releaseTag) === input.sourceSha
+  ) {
+    return `refs/tags/${input.releaseTag}`;
+  }
   const branches = ["main"];
   for (const prefix of ["release/", "extended-stable/"]) {
     const refs = preflightApi(input.runGh, input.repo, `git/matching-refs/heads/${prefix}`);
@@ -686,9 +694,6 @@ export function verifyPublishSourceLineage(input: {
         String(requirePreflightRecord(ref, "branch ref").ref).replace(/^refs\/heads\//u, ""),
       ),
     );
-  }
-  if (input.releaseTag.includes("-alpha.") && input.workflowRef.startsWith("tideclaw/alpha/")) {
-    branches.push(input.workflowRef);
   }
   for (const branch of branches) {
     const comparison = requirePreflightRecord(
@@ -704,6 +709,6 @@ export function verifyPublishSourceLineage(input: {
     }
   }
   throw new Error(
-    "Release source is not reachable from main, release/*, extended-stable/* or the matching Tideclaw branch.",
+    "Release source is not reachable from main, release/* or extended-stable/*, or anchored by an exact alpha tag with protected release-publish tooling.",
   );
 }

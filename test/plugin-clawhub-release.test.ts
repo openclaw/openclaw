@@ -1363,7 +1363,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     async (preparedArtifact) => {
       const plan = await buildOpenClawReleaseClawHubPlan(
         {
-          bootstrapWorkflowRef: "main",
+          bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
           bootstrapWorkflowSha: "d".repeat(40),
           releaseTag: "v2026.6.35",
           releaseSha: "a".repeat(40),
@@ -1396,7 +1396,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       expect(
         parseOpenClawReleaseClawHubPlanArgs([
           "--bootstrap-workflow-ref",
-          "main",
+          `release-publish/${"d".repeat(12)}-12345`,
           "--bootstrap-workflow-sha",
           "d".repeat(40),
           "--release-tag",
@@ -1464,6 +1464,32 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       parseOpenClawReleaseClawHubPlanArgs([...baseArgs, "--release-sha", "ABCDEF"]),
     ).toThrow("--release-sha must be a full 40-character lowercase commit SHA.");
   });
+
+  it.each(["main", "tideclaw/alpha/2026-09-03-1200Z", "release-ci/dddddddddddd-12345"])(
+    "rejects unprotected bootstrap workflow ref %s",
+    (bootstrapRef) => {
+      expect(() =>
+        parseOpenClawReleaseClawHubPlanArgs([
+          "--bootstrap-workflow-ref",
+          bootstrapRef,
+          "--bootstrap-workflow-sha",
+          "d".repeat(40),
+          "--release-tag",
+          "v2026.9.1-alpha.1",
+          "--release-sha",
+          "a".repeat(40),
+          "--release-publish-branch",
+          "release-publish/dddddddddddd-12345",
+          "--release-publish-full-ref",
+          "refs/tags/release-publish/dddddddddddd-12345",
+          "--release-publish-run-attempt",
+          "1",
+          "--release-publish-run-id",
+          "12345",
+        ]),
+      ).toThrow("--bootstrap-workflow-ref must be a SHA-pinned release-publish tag.");
+    },
+  );
 
   it("requires an exact parent release run attempt for bootstrap approval binding", () => {
     const args = [

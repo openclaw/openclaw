@@ -5133,13 +5133,76 @@ describe("package acceptance workflow", () => {
     expect(result.stderr).toContain("gh workflow run openclaw-release-publish.yml --ref");
   });
 
-  it("retains the matching Tideclaw alpha parent route", () => {
+  it("rejects the retired Tideclaw alpha parent route", () => {
     const result = runReleasePublishInputValidation({
       WORKFLOW_REF: "refs/heads/tideclaw/alpha/2026-09-03-1200Z",
       RELEASE_TAG: "v2026.9.1-alpha.1",
       RELEASE_NPM_DIST_TAG: "alpha",
     });
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("protected release-publish tag");
+  });
+
+  it.each([
+    { name: "exact alpha tag", allowed: true },
+    { name: "non-alpha dist-tag", distTag: "beta", allowed: false },
+    {
+      name: "Tideclaw workflow branch",
+      workflowRef: "refs/heads/tideclaw/alpha/2026-09-03-1200Z",
+      allowed: false,
+    },
+    { name: "main workflow branch", workflowRef: "refs/heads/main", allowed: false },
+    {
+      name: "other tooling tag",
+      workflowRef: "refs/tags/release-ci/aaaaaaaaaaaa-123",
+      allowed: false,
+    },
+    { name: "different tag commit", tagSha: "b".repeat(40), allowed: false },
+    { name: "unreachable beta tag", tag: "v2026.9.1-beta.1", distTag: "beta", allowed: false },
+    { name: "unreachable stable tag", tag: "v2026.9.1", distTag: "latest", allowed: false },
+    { name: "additional alpha suffix", tag: "v2026.9.1-alpha.1-extra", allowed: false },
+  ])("checks the parent source anchor: $name", ({ allowed, tag, tagSha, distTag, workflowRef }) => {
+    const script = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target"),
+      "Validate release tag is reachable from a trusted release branch",
+    ).run;
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        `
+git() {
+  case "$1" in
+    fetch|for-each-ref) return 0 ;;
+    merge-base) return 1 ;;
+    rev-parse)
+      if [[ "$2" == HEAD ]]; then printf '%s\\n' "$HEAD_SHA";
+      elif [[ "$2" == "refs/tags/$RELEASE_TAG^{commit}" ]]; then printf '%s\\n' "$TAG_SHA";
+      else return 64; fi ;;
+    *) return 64 ;;
+  esac
+}
+${script}`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          EXPECTED_VALIDATION_BRANCH: "release-publish/aaaaaaaaaaaa-123",
+          RELEASE_TAG: tag ?? "v2026.9.1-alpha.1",
+          RELEASE_NPM_DIST_TAG: distTag ?? "alpha",
+          WORKFLOW_REF: workflowRef ?? "refs/tags/release-publish/aaaaaaaaaaaa-123",
+          HEAD_SHA: "a".repeat(40),
+          TAG_SHA: tagSha ?? "a".repeat(40),
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(allowed ? 0 : 1);
+    if (!allowed) {
+      expect(result.stderr).toContain("Release tag must point to a commit reachable");
+    }
   });
 
   it.each([
@@ -5269,7 +5332,7 @@ describe("package acceptance workflow", () => {
     );
   });
 
-  it("keeps publish children on the parent's protected tag or Tideclaw branch", () => {
+  it("keeps publish children on the parent's protected tag and rejects Tideclaw branches", () => {
     const workflowSha = "a".repeat(40);
     const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
 
@@ -5288,8 +5351,8 @@ describe("package acceptance workflow", () => {
     const alpha = runReleasePublishChildWorkflowRef({
       WORKFLOW_FULL_REF: `refs/heads/${alphaRef}`,
     });
-    expect(alpha.status, alpha.stderr).toBe(0);
-    expect(alpha.stdout.trim()).toBe(alphaRef);
+    expect(alpha.status, alpha.stderr).toBe(1);
+    expect(alpha.stderr).toContain("protected release-publish tag");
 
     const plan = workflowStep(
       workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
@@ -5299,11 +5362,53 @@ describe("package acceptance workflow", () => {
     expectTextToIncludeAll(plan.run, [
       'source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"',
       'resolve_child_workflow_ref "${WORKFLOW_FULL_REF}"',
-      'if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]',
-      'BOOTSTRAP_WORKFLOW_REF="main"',
-      'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
       'BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"',
+      'bootstrap_workflow_sha="${GITHUB_SHA}"',
     ]);
+  });
+
+  it.each([
+    { name: "matching protected tooling", allowed: true },
+    { name: "retired main bootstrap", ref: "main", allowed: false },
+    { name: "different tooling tag", ref: "release-publish/aaaaaaaaaaaa-124", allowed: false },
+    { name: "different tooling SHA", sha: "b".repeat(40), allowed: false },
+  ])("binds ClawHub bootstrap to the parent: $name", ({ allowed, ref, sha }) => {
+    const root = tempDirs.make("clawhub-bootstrap-tooling-");
+    const planPath = join(root, "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        bootstrap: { ref: ref ?? "release-publish/aaaaaaaaaaaa-123" },
+        bootstrapWorkflowSha: sha ?? "a".repeat(40),
+      }),
+    );
+    const verify = shellFunctionSource(
+      readFileSync("scripts/lib/release-publish-children.sh", "utf8"),
+      "verify_bootstrap_workflow_sha",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail\ngh_read() { printf '%s\\n' "$PARENT_WORKFLOW_SHA"; }\n${verify}\nverify_bootstrap_workflow_sha`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          CLAWHUB_PLAN_PATH: planPath,
+          CHILD_WORKFLOW_REF: "release-publish/aaaaaaaaaaaa-123",
+          PARENT_WORKFLOW_SHA: "a".repeat(40),
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(allowed ? 0 : 1);
+    if (allowed) {
+      expect(result.stdout.trim()).toBe("a".repeat(40));
+    } else {
+      expect(result.stderr).toContain("does not match");
+    }
   });
 
   it.each([

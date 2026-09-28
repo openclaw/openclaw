@@ -24,8 +24,12 @@ Extended-stable direct npm workflow recovery also uses a protected tooling tag;
 follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
-The Tideclaw alpha branch route is currently blocked by the protected-tag
-publication contract; see its owning skill. Do not widen the environment policy.
+Tideclaw alpha uses the same protected parent route: its tooling tag is minted
+at a trusted `main` SHA while the exact alpha tag names the Tideclaw branch
+commit, which every publisher binds as the source anchor. See the
+[nightly skill](../../release-openclaw-nightly/SKILL.md#release-ci). Never
+dispatch publication from a `tideclaw/alpha/*` branch or widen the environment
+policy.
 
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm

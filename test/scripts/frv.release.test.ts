@@ -1114,15 +1114,10 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each(["main", "foreign"])(
-    "binds a normal ClawHub child to its recorded %s ref, not the alpha publisher ref",
+  it.each([PUBLISH_REF, "foreign"])(
+    "binds a normal ClawHub child to its recorded protected ref: %s",
     async (childRef) => {
       const fixture = publicationFixture();
-      const parentRef = "tideclaw/alpha/fixture";
-      fixture.publisher.head_branch = parentRef;
-      fixture.publisher.path = `${PUBLISH_PATH}@refs/heads/${parentRef}`;
-      fixture.diagnostic.context.suppliedToolingRef = `refs/heads/${parentRef}`;
-      fixture.diagnostic.selection.clawHubWorkflowRef = "main";
       const result = await runPublicationCli(fixture, undefined, async (responses, artifact) => {
         await artifact(4, fixture.publisher, "openclaw-release-children-88-1", "dispatch.json", {
           schemaVersion: 1,
@@ -1130,8 +1125,8 @@ describe("publication status real CLI", () => {
           parentRunId: "88",
           parentRunAttempt: "1",
           parentWorkflow: PUBLISH_PATH,
-          toolingRef: parentRef,
-          toolingFullRef: `refs/heads/${parentRef}`,
+          toolingRef: PUBLISH_REF,
+          toolingFullRef: `refs/tags/${PUBLISH_REF}`,
           toolingSha: PUBLISH_SHA,
           candidateSha: TARGET_SHA,
           normalClawHubRunId: "909",
@@ -1149,13 +1144,13 @@ describe("publication status real CLI", () => {
           path: ".github/workflows/plugin-clawhub-release.yml",
         };
       });
-      expect(result.status).toBe(childRef === "main" ? 0 : 1);
+      expect(result.status).toBe(childRef === PUBLISH_REF ? 0 : 1);
       const publication = JSON.parse(result.stdout).publication;
       expect(publication.relationship.status).toBe("verified");
-      if (childRef === "main") {
+      if (childRef === PUBLISH_REF) {
         expect(publication.surfaces.clawHub.children[0]).toMatchObject({
           runId: "909",
-          workflowRef: "main",
+          workflowRef: PUBLISH_REF,
           workflowSha: PUBLISH_SHA,
           recordedAttempt: 1,
         });

@@ -376,8 +376,9 @@ tooling ref. `pnpm release:candidate`
 invokes this check with its downloaded manifests; do not redownload them or
 replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
-`WARN`. Alpha uses its matching Tideclaw branch; extended-stable retains its
-separate owner workflows and is not admitted by this preflight.
+`WARN`. Alpha uses this preflight with `--npm-dist-tag alpha` and
+`--workflow-sha <tooling-sha>`, targeting the exact alpha tag; extended-stable
+retains its separate owner workflows and is not admitted by this preflight.
 
 Check the report before retrying a failed publication: preserve the verified
 `openclaw_npm_resume_run_id` for already-published core bytes, inspect matching
@@ -482,8 +483,9 @@ use `release_gate=true`.)
 The release branch may advance after the Code SHA is frozen. The helper accepts
 that frozen SHA only while it remains an ancestor of the canonical release
 branch and its package version is either the branch's final version or a
-matching beta prerelease. Alpha remains on the Tideclaw path with a matching
-alpha branch and exact alpha tag. Extended-stable branches and all tags require
+matching beta prerelease. Tideclaw alpha publication validates its exact
+alpha tag as `--target-ref` with a trusted-main `--workflow-sha`, never from
+the alpha branch. Extended-stable branches and all tags require
 an exact package-version match.
 Always pass the previously recorded full Tooling SHA for release-branch runs.
 Never replace it with a fresh `main` lookup. The Tooling SHA must declare the

@@ -100,7 +100,10 @@ export function evaluateReleasePublishGates(input: {
   const blocking =
     consumer === "stable-closeout" ? performance === true : scalar(performance) === "true";
   const blockingRequired =
-    soakRequired || (consumer === "publisher" ? profile !== "beta" : input.npmDistTag !== "beta");
+    soakRequired ||
+    (consumer === "publisher"
+      ? profile !== "beta"
+      : input.npmDistTag !== "beta" && input.npmDistTag !== "alpha");
   add(
     "performance",
     !blockingRequired || blocking,

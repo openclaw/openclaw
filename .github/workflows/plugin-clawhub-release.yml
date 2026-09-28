@@ -241,7 +241,8 @@ jobs:
 
       - name: Validate ref is on a trusted publish branch
         env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
@@ -272,25 +273,22 @@ jobs:
           ).splitlines()
           if any(is_ancestor(ref) for ref in release_refs):
               raise SystemExit(0)
-          trusted_branch = os.environ["TRUSTED_PUBLISH_BRANCH"]
+          release_tag = os.environ["RELEASE_TAG"]
+          # Release-owner-only immutable v* tags (rulesets 22730709/13733840) outrank unprotected Tideclaw branches; branch reachability adds no authority.
           if re.fullmatch(
-              r"tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z",
-              trusted_branch,
+              r"v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-alpha\.[1-9][0-9]*",
+              release_tag,
+          ) and re.fullmatch(
+              r"refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*",
+              os.environ["WORKFLOW_REF"],
           ):
-              run_git(
-                  workspace,
-                  "fetch",
-                  "--no-tags",
-                  "origin",
-                  f"+refs/heads/{trusted_branch}:refs/remotes/origin/{trusted_branch}",
-                  timeout=120,
-                  reclaim_locks=True,
-              )
-              if is_ancestor(f"refs/remotes/origin/{trusted_branch}"):
+              tag_sha = git_output(workspace, "rev-parse", f"refs/tags/{release_tag}^{{commit}}").rstrip("\n")
+              head_sha = git_output(workspace, "rev-parse", "HEAD").rstrip("\n")
+              if tag_sha == head_sha:
                   raise SystemExit(0)
           print(
               "Plugin ClawHub publishes must target a commit reachable from main, release/*, "
-              "or the matching Tideclaw alpha branch.",
+              "or the exact alpha release tag from protected release-publish tooling.",
               file=sys.stderr,
           )
           raise SystemExit(1)
@@ -475,19 +473,19 @@ jobs:
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
 
-      - name: Validate Tideclaw alpha plugin channels
+      - name: Validate alpha plugin channels
         env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-alpha\.[1-9][0-9]*$ ]]; then
             exit 0
           fi
           invalid="$(
             jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
           )"
           if [[ -n "${invalid}" ]]; then
-            echo "Tideclaw alpha ClawHub publishes may only publish alpha plugin versions." >&2
+            echo "Alpha ClawHub publishes may only publish alpha plugin versions to the alpha dist-tag." >&2
             printf '%s\n' "${invalid}" >&2
             exit 1
           fi

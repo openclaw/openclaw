@@ -382,7 +382,34 @@ jobs:
               raise SystemExit(0)
           if preflight:
               fail("Plugin npm preflight target must be reachable from main or release/*.")
-          fail("Plugin npm publishes must target a commit reachable from main or release/*.")
+          with open(os.path.join(workspace, "package.json"), encoding="utf-8") as source:
+              package_version = json.load(source).get("version")
+          # Release-owner-only immutable v* tags (rulesets 22730709/13733840) outrank unprotected Tideclaw branches; branch reachability adds no authority.
+          if (
+              isinstance(package_version, str)
+              and re.fullmatch(r"[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-alpha\.[1-9][0-9]*", package_version)
+              and os.environ["NPM_DIST_TAG"] != "extended-stable"
+              and re.fullmatch(
+                  r"refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*",
+                  os.environ["WORKFLOW_REF"],
+              )
+          ):
+              release_tag = f"v{package_version}"
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/tags/{release_tag}:refs/tags/{release_tag}",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+              if exact_ref_match("HEAD", f"refs/tags/{release_tag}^{{commit}}"):
+                  raise SystemExit(0)
+          fail(
+              "Plugin npm publishes must target a commit reachable from main or release/*, "
+              "or the exact alpha release tag from protected release-publish tooling."
+          )
           PYTHON
 
       - name: Setup trusted Node for prepared publication
@@ -521,6 +548,29 @@ jobs:
 
           echo "Already published / skipped:"
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-npm-release-plan.json
+
+      - name: Validate alpha plugin channels
+        if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only
+        env:
+          CANDIDATES: ${{ steps.prepared_plan.outputs.matrix || steps.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' package.json)"
+          if [[ ! "${version}" =~ ^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-alpha\.[1-9][0-9]*$ ]]; then
+            exit 0
+          fi
+          jq -e 'type == "array"' <<< "${CANDIDATES}" > /dev/null || {
+            echo "Alpha plugin npm publication requires a candidate array from the resolved plan." >&2
+            exit 1
+          }
+          invalid="$(
+            jq -r '.[] | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [tag=\(.publishTag), channel=\(.channel)]"' <<< "${CANDIDATES}"
+          )"
+          if [[ -n "${invalid}" ]]; then
+            echo "Alpha plugin npm publishes may only publish alpha plugin versions to the alpha dist-tag." >&2
+            printf '%s\n' "${invalid}" >&2
+            exit 1
+          fi
 
       - name: Record resolved npm publication plan
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''

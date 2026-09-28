@@ -275,10 +275,6 @@ jobs:
             echo "Docker-only latest recovery requires a regular stable release tag." >&2
             exit 1
           fi
-          tideclaw_alpha_publish=false
-          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            tideclaw_alpha_publish=true
-          fi
           sha_pinned_release_publish=false
           if [[ "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
             if [[ "${WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
@@ -297,9 +293,9 @@ jobs:
             sha_pinned_release_publish=true
           fi
           # Docker-only recovery dispatches no publishing children and may use main.
-          if [[ "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
+          if [[ "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
             publish_tag="release-publish/${WORKFLOW_SHA:0:12}-$(date +%s)"
-            echo "Publishing children requires the parent to run from a protected release-publish tag (or a matching Tideclaw alpha branch), so parent approval and child provenance use the same ref." >&2
+            echo "Publishing children requires the parent to run from a protected release-publish tag, so parent approval and child provenance use the same ref." >&2
             echo "Mint the tooling tag: git tag ${publish_tag} ${WORKFLOW_SHA} && git push origin refs/tags/${publish_tag}" >&2
             echo "Then dispatch: gh workflow run openclaw-release-publish.yml --ref ${publish_tag} (with the same release inputs)." >&2
             exit 1
@@ -908,7 +904,7 @@ jobs:
           EXPECTED_VALIDATION_BRANCH: ${{ steps.inputs.outputs.expected_validation_branch }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
-          WORKFLOW_REF_NAME: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
@@ -937,17 +933,13 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/extended-stable)
-          if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
-            if [[ ! "${WORKFLOW_REF_NAME}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-              echo "Alpha publish tags must be dispatched from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
-              exit 1
-            fi
-            git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
-            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${WORKFLOW_REF_NAME}"; then
+          # Release-owner-only immutable v* tags (rulesets 22730709/13733840) are stronger anchors than unprotected Tideclaw branches.
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-alpha\.[1-9][0-9]*$ && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            if [[ "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" == "$(git rev-parse HEAD)" ]]; then
               exit 0
             fi
           fi
-          echo "Release tag must point to a commit reachable from main, release/*, extended-stable/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
+          echo "Release tag must point to a commit reachable from main, release/*, extended-stable/*, or the exact alpha tag published to alpha from protected release-publish tooling." >&2
           exit 1
 
       - name: Summarize release target
@@ -1414,21 +1406,12 @@ jobs:
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
 
-          # Regular publication binds every child to the exact parent revision.
-          # Tideclaw retains its validated branch child and main bootstrap split.
+          # Every publishing child uses the parent's protected tooling tag and revision.
           CHILD_WORKFLOW_REF="$(
             resolve_child_workflow_ref "${WORKFLOW_FULL_REF}"
           )"
-          if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]; then
-            BOOTSTRAP_WORKFLOW_REF="main"
-            bootstrap_workflow_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-                --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
-            )"
-          else
-            BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"
-            bootstrap_workflow_sha="${GITHUB_SHA}"
-          fi
+          BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"
+          bootstrap_workflow_sha="${GITHUB_SHA}"
           echo "child_workflow_ref=${CHILD_WORKFLOW_REF}" >> "${GITHUB_OUTPUT}"
 
           plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"

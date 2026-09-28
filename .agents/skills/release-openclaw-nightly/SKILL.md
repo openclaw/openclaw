@@ -12,7 +12,7 @@ Use for Tideclaw/OpenClaw alpha/nightly release automation, manual alpha trigger
 - Alpha/nightly runs every 12h or by manual trigger.
 - Beta is human-triggered from Discord from a proven alpha/release branch.
 - Stable/latest always needs explicit human confirmation.
-- Never publish from a dirty checkout or directly from `main`.
+- Never publish from a dirty checkout or publish product source directly from `main`; publication tooling runs from a protected `release-publish/*` tag minted at a trusted `main` SHA.
 - Main can be busy or broken; alpha work must be isolated so transient main failures do not block a usable nightly.
 - Publish only after release-branch proof is green.
 - After a successful alpha, forward-port release-branch commits back to `main` and prove main CI green.
@@ -212,84 +212,96 @@ git push -u origin "$BRANCH"
 
 ## Release CI
 
+Alpha publishes through the same protected route as the other frozen-target
+tracks. The Tideclaw branch carries the product commit and the exact alpha tag
+names it; validation and publication tooling come from one trusted `main` SHA
+(the Tooling SHA) and a protected `release-publish/<tooling-sha12>-<epoch>` tag
+minted there. npm children publish only in the `npm-publish` environment, which
+admits only those protected tags: never widen that policy or its ruleset, and
+never dispatch the publish parent from the alpha branch. The parent and every
+child treat the owner-created, immutable alpha tag as the source anchor and
+refuse a non-alpha dist-tag or a non-alpha plugin version.
+
+On the Tideclaw host, bare `gh` is a read-only Codex sandbox wrapper; use
+`/usr/local/bin/gh-tideclaw-write` for write-capable commands (`workflow run`,
+`run cancel`, publish dispatch). The validation and publication helpers below
+push temporary `release-ci/*` branches, protected tooling tags, and dispatches
+through `gh`, so run them with that write wrapper exposed as `gh` for those
+invocations only. Use GitHub CLI for all GitHub reads and polling, never
+browser/fetch tools; earlier Tideclaw runs failed there after a successful
+preflight.
+
 After local proof:
 
 1. Compute the next `vYYYY.M.PATCH-alpha.N` from existing git tags, npm versions, and GitHub releases. Select `PATCH` from stable/beta trains, not the date or the highest alpha-only patch. Reuse the same alpha train and increment `alpha.N` until that patch has a beta; after a beta exists, use the following patch for new alpha builds.
 2. Make the alpha branch package version and release metadata match that tag, commit it, and push the branch.
-3. Run release validation from the alpha branch, using GitHub CLI, not browser/fetch tools. On the Tideclaw host, bare `gh` is a read-only Codex sandbox wrapper; use `/usr/local/bin/gh-tideclaw-write` for write-capable commands such as `workflow run`, `run cancel`, and publish dispatch:
+3. Freeze the candidate: create and push the annotated alpha tag at that exact
+   commit, and pin the Tooling SHA to the current `origin/main` SHA. Record the
+   branch, SHA, tag, and Tooling SHA in the state file; reuse that Tooling SHA
+   for validation and publication and never refresh it from a moving `main`.
+   Tags are immutable: any later source change needs a new commit and the next
+   `alpha.N` tag, never a moved tag.
 
 ```bash
 GH="/usr/local/bin/gh-tideclaw-write"
+git fetch origin main --prune
 SHA="$(git rev-parse HEAD)"
 TAG="v$(node -p "require('./package.json').version")"
 BRANCH="$(git branch --show-current)"
-PUBLICATION_SELECTION='{"route":"alpha","npmDistTag":"alpha","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
-FRV_ENVELOPE="$(jq -cn --arg ref "$BRANCH" --arg sha "$SHA" \
-  --argjson selection "$PUBLICATION_SELECTION" \
-  '{trustedWorkflow:{ref:$ref,fullRef:("refs/heads/"+$ref),sha:$sha},validationPurpose:"publish",publicationSelection:$selection}')"
-
-"$GH" workflow run full-release-validation.yml --repo openclaw/openclaw --ref "$BRANCH" \
-  -f ref="$BRANCH" \
-  -f expected_sha="$SHA" \
-  -f trusted_workflow_json="$FRV_ENVELOPE" \
-  -f release_profile=beta \
-  -f rerun_group=all
-
-"$GH" workflow run openclaw-npm-release.yml --repo openclaw/openclaw --ref "$BRANCH" \
-  -f tag="$SHA" \
-  -f preflight_only=true \
-  -f npm_dist_tag=alpha
+TOOLING_SHA="$(git rev-parse origin/main)"
+git tag -a "$TAG" "$SHA" -m "openclaw ${TAG#v}"
+git push origin "refs/tags/$TAG"
 ```
 
-4. Watch the exact workflow run IDs and head SHA with `gh run list`, `gh run view`, and `gh api`. Read-only `gh` is fine for polling; use `$GH` only when a command mutates GitHub. Do not use Codex browser/fetch for GitHub API polling; prior Tideclaw runs failed there after successful preflight.
-5. Every selected validation lane blocks alpha publication on failure, including cross-OS, live channel, QA Lab, package acceptance, Docker E2E, and Telegram package E2E. Report actual outcomes and resolve failed selected lanes before publication.
-   - Focused Full Release Validation groups can diagnose or refresh individual lanes for the same exact head and publication selection. A successful focused `install-smoke` run cannot replace failed `rerun_group=all` publication evidence; complete and seal the required all-group validation before publishing.
-6. If a selected gate fails, fix on the alpha branch, push, and rerun the failed or required release CI. If the commit changes, discard old preflight/full-validation run IDs and rerun them for the new head.
-7. After full validation and npm preflight are green on the same branch head,
-   review the npm preflight's `Plugin SDK API diff` summary. If it reports
-   changes, download the
-   `plugin-sdk-api-release-diff-<npm-preflight-run-id>-<run-attempt>` artifact,
-   inspect the changed declarations, and set
-   `PLUGIN_SDK_API_ACKNOWLEDGEMENT` to the first 8 characters of its `digest`.
-   Otherwise set it to an empty string. Then create and push the release tag
-   from that exact commit:
+4. From a clean checkout of `$TOOLING_SHA` (for example a detached worktree),
+   run Full Release Validation through the pinned helper. It targets the exact
+   alpha tag, produces the canonical `release-ci/*` evidence the protected
+   parent requires, seals npm qualification in the same run, and defaults exact
+   alpha tags to the `beta` profile:
 
 ```bash
-NPM_PREFLIGHT_RUN_ATTEMPT="$(gh api \
-  "repos/openclaw/openclaw/actions/runs/${NPM_PREFLIGHT_RUN_ID}" \
-  --jq .run_attempt)"
-plugin_sdk_diff_dir="$(mktemp -d)"
-gh run download "$NPM_PREFLIGHT_RUN_ID" --repo openclaw/openclaw \
-  --name "plugin-sdk-api-release-diff-${NPM_PREFLIGHT_RUN_ID}-${NPM_PREFLIGHT_RUN_ATTEMPT}" \
-  --dir "$plugin_sdk_diff_dir"
-jq '{digest, entrypointsAdded, entrypointsRemoved, exports}' \
-  "$plugin_sdk_diff_dir/plugin-sdk-api-release-diff.json"
-
-PLUGIN_SDK_API_ACKNOWLEDGEMENT=""
-# After reviewing a nonempty diff, use its printed digest:
-# PLUGIN_SDK_API_ACKNOWLEDGEMENT="$(jq -r '.digest[0:8]' \
-#   "$plugin_sdk_diff_dir/plugin-sdk-api-release-diff.json")"
-
-git tag -a "$TAG" "$SHA" -m "openclaw ${TAG#v}"
-git push origin "$TAG"
-rm -rf "$plugin_sdk_diff_dir"
+PUBLICATION_SELECTION='{"route":"alpha","npmDistTag":"alpha","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
+node scripts/full-release-validation-at-sha.mjs \
+  --sha "$SHA" \
+  --target-ref "$TAG" \
+  --workflow-sha "$TOOLING_SHA" \
+  -f validation_purpose=publish \
+  -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
-8. Publication is currently blocked: npm children require a protected
-   `release-publish/*` tooling tag, but alpha branch SHAs are not on `main`, so
-   `ensureReleasePublishToolingTag` cannot mint one for them. The parent's
-   approval receipt `create` also rejects `tideclaw/alpha/*` refs. Keep the
-   candidate and validation evidence, report this tooling blocker, and do not
-   widen the environment policy. The historical dispatch below records the
-   alpha inputs for recovery after that route is repaired; do not run it now:
+5. Watch the exact parent run ID, attempt, and head SHA with `gh run view` and `gh api`. Every selected validation lane blocks alpha publication on failure, including cross-OS, live channel, QA Lab, package acceptance, Docker E2E, and Telegram package E2E. Report actual outcomes and resolve failed selected lanes before publication.
+   - Focused Full Release Validation groups can diagnose or refresh individual lanes for the same exact tag and publication selection. A successful focused `install-smoke` run cannot replace failed `rerun_group=all` publication evidence; complete and seal the required all-group validation before publishing.
+6. If a selected gate fails because of the candidate, fix on the alpha branch, push, and restart from step 1 with the next `alpha.N`; discard validation run IDs for the old tag. Tooling or infrastructure failures keep the candidate and rerun the affected validation.
+7. After validation is green, run the publication preflight from the same
+   Tooling SHA checkout. `--workflow-sha` reuses or mints the protected tooling
+   tag at that trusted `main` SHA and prints the exact parent dispatch. The Full
+   Release Validation run also serves as the npm preflight evidence:
 
 ```bash
 FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
   "repos/openclaw/openclaw/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}" \
   --jq .run_attempt)"
-"$GH" workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref "$BRANCH" \
+pnpm release:publish-preflight -- \
+  --tag "$TAG" \
+  --full-release-validation-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+  --full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
+  --npm-dist-tag alpha \
+  --release-profile beta \
+  --workflow-sha "$TOOLING_SHA"
+```
+
+Resolve every `FAIL` and owner-action `WARN`. If the report requires a
+Plugin SDK API acknowledgement, review the named
+`plugin-sdk-api-release-diff-*` artifact, rerun with
+`--plugin-sdk-api-acknowledgement <first-8-characters-of-its-digest>`, and
+keep that value for dispatch. Record the printed
+`release-publish/<tooling-sha12>-<epoch>` ref in the state file. 8. Dispatch the printed command. It has this shape:
+
+```bash
+PUBLISH_REF="release-publish/<tooling-sha12>-<epoch>"
+"$GH" workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref "$PUBLISH_REF" \
   -f tag="$TAG" \
-  -f preflight_run_id="$NPM_PREFLIGHT_RUN_ID" \
+  -f preflight_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" \
   -f full_release_validation_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" \
   -f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
   -f plugin_sdk_api_acknowledgement="$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
@@ -300,10 +312,18 @@ FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
   -f wait_for_clawhub=false
 ```
 
-9. After the publication route is repaired, watch the publish wrapper plus child runs and verify their outcomes; do not call the release done while publication is blocked.
+9. The parent waits for one `npm-release` environment approval from the
+   release managers; its attested receipt then covers the plugin npm, core npm,
+   and ClawHub children. Report the waiting run instead of approving it
+   yourself. Watch the parent plus child runs to terminal state and verify each
+   outcome. If core npm already published and a later stage failed, resume the
+   parent from the same `$PUBLISH_REF` with the same inputs; the original
+   publisher is recovered automatically.
 10. Do not publish npm directly from the host; use GitHub Actions/OIDC.
 
-Important: `openclaw-npm-release.yml` with `preflight_only=true` only prepares artifacts. It does not publish. A successful alpha requires the later `openclaw-release-publish.yml` wrapper, a pushed git tag, npm `alpha` dist-tag proof, and a GitHub prerelease.
+A successful alpha requires the `openclaw-release-publish.yml` parent from the
+protected tooling tag, the pushed alpha tag, npm `alpha` dist-tag proof, and a
+GitHub prerelease. Validation or preflight success alone publishes nothing.
 
 ## Verify Published Alpha
 
@@ -314,7 +334,7 @@ Release is not done until all are true:
 - Release body links npm version page, registry tarball, integrity, and CI/proof.
 - `npm view openclaw@<version>` shows the exact version, dist-tag `alpha`, tarball, integrity, and publish time.
 - Installed/package smoke follows repo release docs.
-- The Tideclaw state file from `$release-private` records version, tag, base SHA, branch, fix commit SHAs, workflow run IDs, npm integrity, and timestamp.
+- The Tideclaw state file from `$release-private` records version, tag, base SHA, branch, Tooling SHA, protected publish ref, fix commit SHAs, workflow run IDs, npm integrity, and timestamp.
 
 Final Discord summary in `#releases`:
 

@@ -99,25 +99,31 @@ describe("release publication control admission", () => {
     }
   });
 
-  it("does not require deferred performance for beta tags published to beta", () => {
-    const input = {
-      manifest: {
-        ...manifest,
-        releaseProfile: "beta",
-        controls: { performanceBlocking: false },
-        childRuns: {},
-      },
-      releaseTag: "v2026.9.5-beta.1",
-      npmDistTag: "beta",
-    };
-    for (const consumer of ["publisher", "core-npm"] as const) {
-      expect(
-        evaluateReleasePublishGates({ ...input, consumer }).filter(
-          (gate) => gate.status === "FAIL",
-        ),
-      ).toEqual([]);
-    }
-  });
+  it.each([
+    ["beta", "v2026.9.5-beta.1"],
+    ["alpha", "v2026.9.5-alpha.1"],
+  ])(
+    "does not require deferred performance for %s tags published to their channel",
+    (npmDistTag, releaseTag) => {
+      const input = {
+        manifest: {
+          ...manifest,
+          releaseProfile: "beta",
+          controls: { performanceBlocking: false },
+          childRuns: {},
+        },
+        releaseTag,
+        npmDistTag,
+      };
+      for (const consumer of ["publisher", "core-npm"] as const) {
+        expect(
+          evaluateReleasePublishGates({ ...input, consumer }).filter(
+            (gate) => gate.status === "FAIL",
+          ),
+        ).toEqual([]);
+      }
+    },
+  );
 
   it("retains strict stable closeout soak evidence", () => {
     const input = {

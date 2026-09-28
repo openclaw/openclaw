@@ -10,10 +10,22 @@ import {
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
 
 describe("release publish preflight operator interface", () => {
-  it("accepts a full workflow SHA without a workflow ref", () => {
+  it.each([
+    ["v2026.9.5", "latest"],
+    ["v2026.9.5-alpha.1", "alpha"],
+  ])("accepts %s on %s with a full workflow SHA without a workflow ref", (tag, npmDistTag) => {
     expect(
-      parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", "a".repeat(40)])?.options,
+      parsePublishPreflightArgs([
+        "--tag",
+        tag,
+        "--npm-dist-tag",
+        npmDistTag,
+        "--workflow-sha",
+        "a".repeat(40),
+      ])?.options,
     ).toMatchObject({
+      tag,
+      npmDistTag,
       workflowRef: "",
       workflowSha: "a".repeat(40),
     });

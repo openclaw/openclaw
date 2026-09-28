@@ -1027,9 +1027,9 @@ it("accepts a successful completed publisher for finalization without a Linux ch
 });
 
 it.each([null, "move-tooling", "cancel-parent"] as const)(
-  "fences Tideclaw alpha finalization at the live write boundary: %s",
+  "fences protected-tooling alpha finalization at the live write boundary: %s",
   (change) => {
-    const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
+    const f = fixture();
     const alphaTag = "v2026.9.4-alpha.1";
     f.addDraft(alphaTag, true);
     if (change) {
@@ -1053,6 +1053,7 @@ it.each([null, "move-tooling", "cancel-parent"] as const)(
 
 it.each([
   { ref: "unreviewed/branch", tag: "v2026.9.4-alpha.1", latest: "false" },
+  { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: "v2026.9.4-alpha.1", latest: "false" },
   { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: nextTag, latest: "false" },
   { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: "v2026.9.4-alpha.1", latest: "true" },
 ])(

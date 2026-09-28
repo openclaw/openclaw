@@ -12,6 +12,7 @@ import {
   readPublishPreflightRelease,
   validatePublishPreflightNpm,
   verifyPublishedPreflightTarball,
+  verifyPublishSourceLineage,
   type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
@@ -134,6 +135,69 @@ describe("protected tooling tag resolution", () => {
       "Invalid protected tooling tag inventory.",
     );
     expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+  });
+});
+
+describe("publish preflight source lineage", () => {
+  const sourceSha = "a".repeat(40);
+  const releaseTag = "v2026.9.5-alpha.1";
+  const workflowRef = "release-publish/bbbbbbbbbbbb-123";
+  const tideclawBranch = "tideclaw/alpha/2026-09-27-0100Z";
+  const verify = ({
+    tag = releaseTag,
+    ref = workflowRef,
+    tagSha = sourceSha,
+    mainReachable = false,
+  } = {}) =>
+    verifyPublishSourceLineage({
+      repo: "openclaw/openclaw",
+      sourceSha,
+      releaseTag: tag,
+      workflowRef: ref,
+      runGh: (args) => {
+        const endpoint = args[1];
+        if (endpoint === `repos/openclaw/openclaw/git/ref/tags/${tag}`) {
+          return JSON.stringify({ object: { type: "commit", sha: tagSha } });
+        }
+        if (
+          endpoint === "repos/openclaw/openclaw/git/matching-refs/heads/release/" ||
+          endpoint === "repos/openclaw/openclaw/git/matching-refs/heads/extended-stable/"
+        ) {
+          return "[]";
+        }
+        if (endpoint === `repos/openclaw/openclaw/compare/${sourceSha}...main?per_page=1`) {
+          return JSON.stringify({ status: mainReachable ? "ahead" : "diverged" });
+        }
+        if (
+          endpoint ===
+          `repos/openclaw/openclaw/compare/${sourceSha}...${encodeURIComponent(tideclawBranch)}?per_page=1`
+        ) {
+          return JSON.stringify({ status: "identical" });
+        }
+        throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
+      },
+    });
+
+  it("admits the exact alpha tag commit from protected tooling without main ancestry", () => {
+    expect(verify()).toBe(`refs/tags/${releaseTag}`);
+  });
+
+  it.each([
+    ["mismatched tag commit", { tagSha: "c".repeat(40) }],
+    ["unprotected Tideclaw workflow branch", { ref: tideclawBranch }],
+    ["main workflow branch", { ref: "main" }],
+    ["branch named like protected tooling", { ref: `refs/heads/${workflowRef}` }],
+    ["malformed tooling suffix", { ref: "release-publish/bbbbbbbbbbbb-0" }],
+    ["beta release", { tag: "v2026.9.5-beta.1" }],
+    ["stable release", { tag: "v2026.9.5" }],
+    ["extra alpha suffix", { tag: "v2026.9.5-alpha.1-extra" }],
+    ["zero alpha number", { tag: "v2026.9.5-alpha.0" }],
+  ] as const)("rejects %s without trusted branch ancestry", (_name, changes) => {
+    expect(() => verify(changes)).toThrow("Release source is not reachable");
+  });
+
+  it("retains trusted main ancestry when the alpha tag anchor does not match", () => {
+    expect(verify({ tagSha: "c".repeat(40), mainReachable: true })).toBe("main");
   });
 });
 

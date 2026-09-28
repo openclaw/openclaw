@@ -117,7 +117,8 @@ regular beta and stable publishes from a protected lightweight
 release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
 release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
-publishes keep using their matching alpha branch. For current validation runs,
+publishes use the same protected tooling tag and select their exact alpha tag
+commit. For current validation runs,
 set `preflight_run_id` and `full_release_validation_run_id` to the same successful
 Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
@@ -205,8 +206,8 @@ SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuse
 strict exact-target evidence when available, and verifies every child workflow
 `headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
 it from moving `main`. Regular release branches accept only their final package
-version or a matching beta prerelease; Tideclaw alpha validation uses its exact
-alpha tag and matching alpha branch.
+version or a matching beta prerelease; Tideclaw alpha publication evidence
+targets its exact alpha tag from trusted-main tooling.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you

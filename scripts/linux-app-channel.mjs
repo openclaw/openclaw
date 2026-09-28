@@ -25,7 +25,6 @@ import {
   parseReleaseVersion,
 } from "./lib/release-version.mjs";
 import {
-  resolveReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
   verifyReleaseWorkflowRun,
 } from "./release-tooling-identity.mjs";
@@ -83,24 +82,7 @@ function report(message) {
 
 function authorizeWrite(mode, options) {
   const runGh = commandOverride ? (args) => command("gh", args) : undefined;
-  const alphaBranch =
-    mode === "finalize-core" && options["workflow-ref"].startsWith("tideclaw/alpha/");
-  if (alphaBranch) {
-    assert(
-      options.latest === "false" && parseReleaseVersion(options.tag.slice(1))?.channel === "alpha",
-      "Tideclaw branch finalization requires an alpha tag and explicit non-latest intent",
-    );
-    // Reuse the release owner's exact direct-branch grammar before allowing
-    // the validator's live branch/SHA and publisher-attempt checks.
-    resolveReleaseToolingIdentity({
-      workflowContract: "2",
-      workflowRef: options["workflow-ref"],
-      workflowFullRef: options["workflow-full-ref"],
-      workflowSha: options["tooling-sha"],
-    });
-  }
   verifyReleaseToolingIdentity({
-    allowPrevalidatedRef: alphaBranch,
     repository: REPOSITORY,
     workflowRef: options["workflow-ref"],
     workflowFullRef: options["workflow-full-ref"],

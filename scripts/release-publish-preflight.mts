@@ -227,17 +227,6 @@ export async function runReleasePublishPreflight(
           workflowSha: toolingSha,
           runGh,
         });
-      } else if (
-        options.tag.includes("-alpha.") &&
-        options.npmDistTag === "alpha" &&
-        /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(workflowRef)
-      ) {
-        const ref = requirePreflightRecord(api(`git/ref/heads/${workflowRef}`), "Tideclaw ref");
-        const object = requirePreflightRecord(ref.object, "Tideclaw ref object");
-        if (object.type !== "commit" || typeof object.sha !== "string" || !SHA.test(object.sha)) {
-          throw new Error("Invalid Tideclaw workflow commit.");
-        }
-        toolingSha = object.sha;
       } else if (workflowRef === "main") {
         const main = requirePreflightRecord(
           requirePreflightRecord(api("git/ref/heads/main"), "main").object,
@@ -253,7 +242,7 @@ export async function runReleasePublishPreflight(
         warn("publisher.planned-tooling", "Protected tooling tag is still pending.", remediation);
       } else {
         throw new Error(
-          "This preflight supports the regular protected-tag publication route; use the alpha or extended-stable owner workflow for other routes.",
+          "This preflight requires protected release-publish tooling; use the extended-stable owner workflow for extended-stable core publication.",
         );
       }
     },
@@ -271,8 +260,8 @@ export async function runReleasePublishPreflight(
   if (sourceSha) {
     await check(
       "release.source-lineage",
-      "Release source is reachable from a trusted release branch.",
-      "Use the frozen source on its canonical release branch; do not move the release tag.",
+      "Release source has a trusted release branch or exact alpha tag anchor.",
+      "Use the frozen source on its canonical release branch or exact alpha tag with protected release-publish tooling; do not move the release tag.",
       () =>
         verifyPublishSourceLineage({
           repo: options.repo,

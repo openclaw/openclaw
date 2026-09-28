@@ -709,11 +709,6 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       if (state.toolingMissing) process.exit(1);
       console.log(JSON.stringify({ ref: '${TOOLING.fullRef}', object: { type: 'commit', sha: state.toolingSha } }));
     } else if (args[0] === 'api' && method === 'GET' &&
-      endpoint === 'git/ref/heads/' + process.env.GITHUB_REF_NAME &&
-      process.env.GITHUB_REF_NAME.startsWith('tideclaw/alpha/')) {
-      console.log(JSON.stringify({ ref: process.env.GITHUB_REF,
-        object: { type: 'commit', sha: state.toolingSha } }));
-    } else if (args[0] === 'api' && method === 'GET' &&
       endpoint === 'git/ref/tags/' + encodeURIComponent(process.env.FIXTURE_RELEASE_TAG)) {
       console.log(JSON.stringify({ ref: 'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
         object: { type: 'commit', sha: state.sourceSha } }));
@@ -1921,11 +1916,8 @@ process.exitCode = 1;
     },
   );
 
-  it("preserves the validated Tideclaw alpha activation path without Linux carry", () => {
+  it("activates an alpha release from protected tooling without Linux carry", () => {
     const fixture = finalizationFixture();
-    const branch = "tideclaw/alpha/2026-09-13-0100Z";
-    fixture.env.GITHUB_REF_NAME = branch;
-    fixture.env.GITHUB_REF = `refs/heads/${branch}`;
     const result = fixture.run("parent", "v2026.9.2-alpha.1", "alpha");
     expect(result.status, result.stderr).toBe(0);
     expect(fixture.state()).toMatchObject({

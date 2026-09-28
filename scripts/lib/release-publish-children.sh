@@ -68,12 +68,7 @@ resolve_child_workflow_ref() {
     return 0
   fi
 
-  if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
-    return 0
-  fi
-
-  echo "Publish children require the parent to run from a protected release-publish tag or a validated Tideclaw alpha branch." >&2
+  echo "Publish children require the parent to run from a protected release-publish tag." >&2
   return 1
 }
 
@@ -348,30 +343,17 @@ dispatch_workflow() {
 }
 
 verify_bootstrap_workflow_sha() {
-  local approved_ref approved_sha current_main_sha
+  local approved_ref approved_sha
   approved_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
   approved_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
-  if [[ "${approved_ref}" == "main" ]]; then
-    # Tideclaw bootstrap uses separately approved main tooling because the
-    # token-gated bootstrap workflow does not accept alpha branch tooling.
-    current_main_sha="$(
-      gh_read api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-        --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
-    )"
-    [[ "${approved_sha}" == "${current_main_sha}" ]] || {
-      echo "Trusted main moved from approved ClawHub bootstrap workflow SHA ${approved_sha} to ${current_main_sha}; rerun release approval." >&2
-      exit 1
-    }
-  else
-    [[ "${approved_ref}" == "${CHILD_WORKFLOW_REF}" ]] || {
-      echo "Approved ClawHub bootstrap workflow ref ${approved_ref} does not match protected child workflow ref ${CHILD_WORKFLOW_REF}." >&2
-      exit 1
-    }
-    [[ "${approved_sha}" == "${PARENT_WORKFLOW_SHA}" ]] || {
-      echo "Approved ClawHub bootstrap workflow SHA ${approved_sha} does not match parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
-      exit 1
-    }
-  fi
+  [[ "${approved_ref}" == "${CHILD_WORKFLOW_REF}" ]] || {
+    echo "Approved ClawHub bootstrap workflow ref ${approved_ref} does not match protected child workflow ref ${CHILD_WORKFLOW_REF}." >&2
+    exit 1
+  }
+  [[ "${approved_sha}" == "${PARENT_WORKFLOW_SHA}" ]] || {
+    echo "Approved ClawHub bootstrap workflow SHA ${approved_sha} does not match parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
+    exit 1
+  }
   printf '%s\n' "${approved_sha}"
 }
 
