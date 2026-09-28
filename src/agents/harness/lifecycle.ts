@@ -251,7 +251,7 @@ function emitAgentHarnessRunCompleted(params: {
   const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
   const finalAssistantText = contentPolicy.outputMessages
     ? resolveFinalMessageRawText(
-        result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant,
+        result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
       )
     : undefined;
   const finalResponse = finalAssistantText
@@ -396,7 +396,7 @@ export async function runAgentHarnessLifecycleAttempt(
     ...agentRunCompletion(result),
     messageContent: agentRunMessageContent(
       params.prompt,
-      result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant,
+      result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
     ),
   });
   emitAgentHarnessRunCompleted({

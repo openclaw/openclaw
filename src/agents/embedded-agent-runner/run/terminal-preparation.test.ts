@@ -250,48 +250,26 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
-  it.each([
-    { stopReason: "stop", thinking: false, keepAnswer: false },
-    { stopReason: "length", thinking: true, keepAnswer: false },
-    { stopReason: "stop", thinking: false, keepAnswer: true },
-  ] as const)(
-    "keeps pre-tool text out of empty $stopReason terminal metadata (thinking=$thinking, kept=$keepAnswer)",
-    async ({ stopReason, thinking, keepAnswer }) => {
-      const terminal: AssistantMessage = {
-        ...assistantMessage(stopReason),
-        api: "ollama",
-        provider: "ollama",
-        content: thinking ? [{ type: "thinking", thinking: "Considering the file." }] : [],
-      };
-      const keptAnswer = {
-        assistant: {
-          ...assistantMessage(),
-          content: [{ type: "text" as const, text: "Completed answer." }],
-        },
-        messageIndex: 1,
-      };
-      const prepared = await prepareAttempt({
-        attempt: attemptResult({
-          assistantTexts: ["I will read the file."],
-          toolMetas: [{ toolName: "read" }],
-          messagesSnapshot: [terminal],
-          lastAssistant: terminal,
-          currentAttemptAssistant: terminal,
-          currentAttemptCompletedAssistant: terminal,
-          keptAnswer: keepAnswer ? keptAnswer : undefined,
-        }),
-        currentAttemptCompletedAssistant: terminal,
-        terminalState: {
-          outcome: { reason: "completed", status: "ok", stopReason },
-          signalOwnedInterruption: false,
-        },
-      });
-      const expected = keepAnswer ? "Completed answer." : undefined;
-      expect(prepared.finalAssistantVisibleText).toBe(expected);
-      expect(prepared.finalAssistantRawText).toBe(expected);
-      expect(prepared.finalAssistantRawTextIsFallback).toBe(keepAnswer);
-    },
-  );
+  it("marks earlier turn text substituted for an empty final message", async () => {
+    const emptyFinal = { ...assistantMessage("stop"), content: [] };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now"],
+        lastAssistant: emptyFinal,
+        currentAttemptAssistant: emptyFinal,
+        currentAttemptCompletedAssistant: emptyFinal,
+      }),
+      currentAttemptCompletedAssistant: emptyFinal,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantRawText).toBe("Checking now");
+    expect(prepared.finalAssistantMessageRawText).toBe("");
+  });
+
   it("marks narration from a completed tool-call message when the next message never finished", async () => {
     const toolTurn = {
       ...assistantMessage("toolUse"),
@@ -314,7 +292,36 @@ describe("prepareEmbeddedRunTerminal", () => {
       },
     });
 
-    expect(prepared.finalAssistantRawTextIsFallback).toBe(true);
+    expect(prepared.finalAssistantMessageRawText).toBe("");
+  });
+
+  it("prefers a later partial message over an earlier completed tool-call message", async () => {
+    const toolTurn = {
+      ...assistantMessage("toolUse"),
+      content: [
+        { type: "text" as const, text: "Checking now" },
+        { type: "toolCall" as const, id: "tool_1", name: "exec", arguments: {} },
+      ],
+    };
+    const partial = {
+      ...assistantMessage("aborted"),
+      content: [{ type: "text" as const, text: "Here is the partial answer" }],
+    };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now", "Here is the partial answer"],
+        lastAssistant: partial,
+        currentAttemptAssistant: partial,
+        currentAttemptCompletedAssistant: toolTurn,
+      }),
+      currentAttemptCompletedAssistant: toolTurn,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantMessageRawText).toBe("Here is the partial answer");
   });
 
   it("does not mark the model's own final text as a fallback", async () => {
@@ -337,7 +344,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     });
 
     expect(prepared.finalAssistantRawText).toBe("Done");
-    expect(prepared.finalAssistantRawTextIsFallback).toBe(false);
+    expect(prepared.finalAssistantMessageRawText).toBe("Done");
   });
 
   it.each(["error", "aborted"] as const)(

@@ -85,7 +85,7 @@ describe("tool-only turns", () => {
   it("never records earlier turn text the runner substituted for an empty final message", () => {
     expect(
       resolveDiagnosticModelResponse({
-        ...result({ finalAssistantRawText: "Checking now", finalAssistantRawTextIsFallback: true }),
+        ...result({ finalAssistantRawText: "Checking now", finalAssistantMessageRawText: "" }),
         messagingToolSentTargets: sent,
       }),
     ).toBeUndefined();

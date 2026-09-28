@@ -454,8 +454,8 @@ async function runEmbeddedAttemptOwned(
         getRuntimeConfig(),
       ).outputMessages
         ? resolveFinalMessageRawText(
-            executionResult.currentAttemptCompletedAssistant ??
-              executionResult.currentAttemptAssistant,
+            executionResult.currentAttemptAssistant ??
+              executionResult.currentAttemptCompletedAssistant,
           )
         : undefined;
       // Read catalog counters before the finally-phase cleanup clears the

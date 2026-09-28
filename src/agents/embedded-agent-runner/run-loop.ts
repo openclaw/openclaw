@@ -596,9 +596,15 @@ export async function runPreparedEmbeddedLoop(
       // resolution builds the rest of the completed result.
       const { result } = terminalResolution;
       return providerReview.finish(
-        terminalPrepared.finalAssistantRawTextIsFallback
-          ? { ...result, meta: { ...result.meta, finalAssistantRawTextIsFallback: true } }
-          : result,
+        terminalPrepared.finalAssistantMessageRawText === undefined
+          ? result
+          : {
+              ...result,
+              meta: {
+                ...result.meta,
+                finalAssistantMessageRawText: terminalPrepared.finalAssistantMessageRawText,
+              },
+            },
       );
     }
   } finally {
