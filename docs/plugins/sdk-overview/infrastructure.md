@@ -267,20 +267,25 @@ cleanup. Body byte limits and read timeouts remain separate from transport clean
 For a custom error representation after a response-first body read, await
 `sendHttpRequestRejection(req, res, statusCode, body, contentType?)` instead of
 calling `res.end()` and destroying the request. It preserves security headers,
-frames the complete error, then on Node closes the write side while keeping application
+frames the complete error, then on Node and Node-compatible Bun HTTP transports closes the write side while keeping application
 body readers paused. Node's request backpressure bounds residual input buffering;
 cleanup allows at most one second, not another body-read timeout. A disconnected peer, malformed HTTP, or an
 exhausted cleanup budget can prevent delivery. Committed responses are closed
 without appending a replacement error or completing a partial successful body.
 
-On Node, transport-owned rejections emit response `close` without `finish`.
+On these transports, rejections emit response `close` without `finish`.
 Use `close` for terminal cleanup or selected-error diagnostics; it does not prove
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Bun uses its native HTTP response completion because its raw socket operations
-do not flush the HTTP response. Bun can still report client connection resets
-during large outstanding uploads, even after delivering the complete error.
+Older Bun HTTP transports use native response completion because their raw socket
+operations do not flush the HTTP response. OpenClaw detects the native HTTP
+`destroySoon` implementation introduced by Bun's Node compatibility rework rather
+than relying on version labels shared by different canary builds. Queued HEAD
+rejections on newer Bun wait for response socket assignment, including builds
+without HTTP response-finish diagnostics. Older Bun can still report client
+connection resets during large outstanding uploads, even after delivering the
+complete error.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued
