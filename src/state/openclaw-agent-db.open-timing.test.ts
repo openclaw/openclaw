@@ -222,15 +222,20 @@ describe("agent database open timings", () => {
           /integrity_check failed.*idx_agent_session_nodes_updated_at.*openclaw doctor --fix/,
         );
         expect(logger.warn).not.toHaveBeenCalled();
-        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-          "agent database integrity gate",
-          expect.objectContaining({
-            path: pathname,
-            integrityGateOutcome: "failed",
-            integrityGateReason: "revoked",
-            integrityGateMode: "tables",
-          }),
+        const gates = logger.info.mock.calls.filter(
+          ([message]) => message === "agent database integrity gate",
         );
+        expect(gates).toEqual([
+          [
+            "agent database integrity gate",
+            expect.objectContaining({
+              path: pathname,
+              integrityGateOutcome: "failed",
+              integrityGateReason: "revoked",
+              integrityGateMode: "tables",
+            }),
+          ],
+        ]);
         const unchanged = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
         try {
           expect(unchanged.prepare("PRAGMA integrity_check").get()?.integrity_check).toMatch(
