@@ -20,7 +20,12 @@ import {
 import { setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
+import {
+  resolveTheme,
+  resolveThemeMode,
+  syncThemePaletteStylesheet,
+  type ThemeMode,
+} from "./theme.ts";
 import {
   applyChatFontSmoothing,
   applyTypefaceOverrides,
@@ -51,14 +56,17 @@ function subscribeMediaQuery(query: string, onChange: () => void): (() => void) 
   return undefined;
 }
 
-function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
+function applyThemePresentation(
+  settings: UiPreferences,
+  mode: "light" | "dark",
+  catalogTheme?: CatalogTheme,
+): void {
   if (typeof document === "undefined") {
     return;
   }
   const root = document.documentElement;
   const dynamic = settings.theme.includes("/");
   const effectiveTheme = dynamic && !catalogTheme ? "claw" : settings.theme;
-  const mode = catalogTheme?.mode ?? settings.themeMode;
   const resolvedTheme = resolveTheme(effectiveTheme, mode);
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
@@ -114,7 +122,17 @@ export function createApplicationTheme(
   let catalogRequested = false;
   let catalogLoadError: ThemeCatalogSnapshot | undefined;
   let disposed = false;
+  let systemMode = resolveThemeMode("system");
+  const isVisible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
+  const effectiveMode = () =>
+    catalog?.theme(settings.theme)?.mode ??
+    (settings.themeMode === "system" ? systemMode : settings.themeMode);
   const publish = () => {
+    // Keep background observations out of every System presentation path,
+    // including preference/catalog updates and delayed palette completion.
+    if (settings.themeMode === "system" && isVisible()) {
+      systemMode = resolveThemeMode("system");
+    }
     const generation = ++presentationGeneration;
     setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
     syncThemePaletteStylesheet(settings.theme, () => {
@@ -128,7 +146,7 @@ export function createApplicationTheme(
         typeof document === "undefined"
           ? undefined
           : document.documentElement.dataset.themeAvatarHat;
-      applyThemePresentation(settings, catalog?.theme(settings.theme));
+      applyThemePresentation(settings, effectiveMode(), catalog?.theme(settings.theme));
       if (
         typeof document !== "undefined" &&
         (previousMascot !== document.documentElement.dataset.themeMascot ||
@@ -201,11 +219,24 @@ export function createApplicationTheme(
     if (settings.themeMode !== "system") {
       return;
     }
-    systemThemeCleanup = subscribeMediaQuery("(prefers-color-scheme: light)", () => {
-      if (settings.themeMode === "system") {
+    const reconcile = () => {
+      if (isVisible()) {
         publish();
       }
-    });
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        reconcile();
+      }
+    };
+    const stopMediaQuery = subscribeMediaQuery("(prefers-color-scheme: light)", reconcile);
+    globalThis.document?.addEventListener("visibilitychange", reconcile);
+    globalThis.addEventListener?.("pageshow", onPageShow);
+    systemThemeCleanup = () => {
+      stopMediaQuery?.();
+      globalThis.document?.removeEventListener("visibilitychange", reconcile);
+      globalThis.removeEventListener?.("pageshow", onPageShow);
+    };
   };
 
   const chromeBreakpointCleanup = subscribeMediaQuery(
@@ -262,8 +293,7 @@ export function createApplicationTheme(
       return settings.themeMode;
     },
     get resolvedMode() {
-      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
-      return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
+      return effectiveMode();
     },
     get serverSelection() {
       return serverSelection;

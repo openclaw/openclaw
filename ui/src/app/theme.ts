@@ -29,7 +29,7 @@ export function parseThemeSelection(
   return { theme: normalizedTheme, mode: normalizedMode };
 }
 
-function resolveMode(mode: ThemeMode): "light" | "dark" {
+export function resolveThemeMode(mode: ThemeMode): "light" | "dark" {
   if (mode === "system") {
     return prefersLightScheme() ? "light" : "dark";
   }
@@ -37,7 +37,7 @@ function resolveMode(mode: ThemeMode): "light" | "dark" {
 }
 
 export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
-  const resolvedMode = resolveMode(mode);
+  const resolvedMode = resolveThemeMode(mode);
   if (theme === "claw") {
     return resolvedMode;
   }
