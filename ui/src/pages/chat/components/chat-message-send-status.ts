@@ -20,11 +20,10 @@ export function renderChatSendStatus(
   const reconnecting = status.state === "waiting-reconnect";
   const retry = reconnecting ? undefined : (action?.onAction ?? actions.onRetryQueuedMessage);
   const discard =
-    (status.state === "failed" ||
-      status.state === "unconfirmed" ||
-      status.state === "held" ||
-      reconnecting) &&
-    !action
+    status.state === "failed" ||
+    status.state === "unconfirmed" ||
+    status.state === "held" ||
+    reconnecting
       ? actions.onDiscardQueuedMessage
       : undefined;
   return html`<span
