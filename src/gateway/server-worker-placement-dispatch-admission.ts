@@ -34,6 +34,15 @@ export function createGatewayWorkerPlacementDrain(
       identities: [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId],
     };
     signal?.throwIfAborted();
+    // Interrupting by key must never reach a session that replaced this one.
+    if (
+      runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys)
+        ?.sessionId !== sessionId
+    ) {
+      throw new WorkerPlacementAdmissionTargetError(
+        `Session ${sessionKey} changed before cloud worker ${action === "move" ? "placement move" : "dispatch"}. Retry.`,
+      );
+    }
     authorize?.();
     // Fence ingress without a mutex so targeted result recovery can still release the claim.
     const release = closeSessionWorkAdmissions({
