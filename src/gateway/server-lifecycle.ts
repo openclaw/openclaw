@@ -34,7 +34,7 @@ import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
-import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
+import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -135,6 +135,10 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   const { nodeRegistry, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
+  const stopNodeConnectionNotifications = startNodeConnectionNotifications(
+    nodeRegistry,
+    runtime.scheduler,
+  );
   const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
     getConfig: getRuntimeConfig,
     nodeRegistry,
@@ -426,7 +430,7 @@ export async function prepareGatewayLifecycle(params: {
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();
-    disposeNodeConnectionNotifications(nodeRegistry);
+    stopNodeConnectionNotifications();
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
