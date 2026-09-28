@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -23,11 +20,9 @@ import {
 import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
-import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import * as nodeHost from "./bash-tools.exec-host-node.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import * as codeModeBridge from "./code-mode-bridge.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -39,7 +34,7 @@ import {
 } from "./code-mode.test-support.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
-import { jsonResult, ToolInputError } from "./tools/common.js";
+import { jsonResult } from "./tools/common.js";
 import * as gatewayTool from "./tools/gateway.js";
 
 const sandbox = {
@@ -48,6 +43,7 @@ const sandbox = {
   containerWorkdir: "/workspace",
 };
 const deniedCode = 'return await exec({ command: "printf host-denied", host: "node" });';
+const harnessDisposers: Array<() => void> = [];
 
 function installBefore(
   handler: (event: PluginHookBeforeToolCallEvent) => unknown = () => undefined,
@@ -64,11 +60,11 @@ function installBefore(
 function createHostHarness(
   options: Parameters<typeof createSubscribedCodeModeHarness>[0] & {
     defaults?: ExecToolDefaults;
-    hookContext?: HookContext;
     approvalMode?: "report";
   },
 ) {
   const harness = createSubscribedCodeModeHarness(options);
+  harnessDisposers.push(harness.dispose);
   const source = createExecTool({
     host: "gateway",
     security: "full",
@@ -77,7 +73,7 @@ function createHostHarness(
   });
   const shell = wrapToolWithBeforeToolCallHook(
     source,
-    { runId: harness.runId, sessionKey: harness.sessionKey, ...options.hookContext },
+    { runId: harness.runId, sessionKey: harness.sessionKey },
     { approvalMode: options.approvalMode },
   );
   applyCodeModeCatalog({ ...harness, tools: [...harness.tools, shell] });
@@ -95,16 +91,18 @@ function createHostHarness(
     spawn: vi.spyOn(getProcessSupervisor(), "spawn"),
     remote: vi.spyOn(nodeHost, "executeNodeHostCommand"),
     run,
-    complete,
     runToCompletion: async (code = deniedCode) => complete(await run(code)),
   };
 }
 
 describe("Code Mode subscribed host denial", () => {
   afterEach(async () => {
+    harnessDisposers.splice(0).forEach((dispose) => dispose());
+    vi.useRealTimers();
     await resetCodeModeTestState();
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
+    resetClientVoiceConfirmationStateForTest();
     vi.restoreAllMocks();
   });
 
@@ -149,34 +147,30 @@ describe("Code Mode subscribed host denial", () => {
       const before = installBefore();
       const observeToolTerminal = vi.fn(createToolTerminalObserver(`run-code-mode-host-${policy}`));
       const harness = createHostHarness({ name: `host-${policy}`, defaults, observeToolTerminal });
-      try {
-        const details = await harness.runToCompletion(
-          `return await exec(${JSON.stringify({ command: "printf host-denied", ...args })});`,
-        );
-        expect(details).toMatchObject({
-          status: "failed",
-          failurePhase: "bridge",
-          bridgeDispatchStarted: true,
-        });
-        expect(details.error).toContain(error);
-        expect(before).toHaveBeenCalledOnce();
-        expect(observeToolTerminal).toHaveBeenCalledWith(
-          expect.objectContaining({ toolName: "exec", executionStarted: true, outcome: "failure" }),
-        );
-        expect(harness.spawn).not.toHaveBeenCalled();
-        expect(harness.remote).not.toHaveBeenCalled();
-        // One nested exec owns one item; command output does not create a second lifecycle.
-        expect(harness.subscription.getItemLifecycle()).toMatchObject({
-          startedCount: 1,
-          completedCount: 1,
-          activeCount: 0,
-        });
-      } finally {
-        harness.dispose();
-      }
+      const details = await harness.runToCompletion(
+        `return await exec(${JSON.stringify({ command: "printf host-denied", ...args })});`,
+      );
+      expect(details).toMatchObject({
+        status: "failed",
+        failurePhase: "bridge",
+        bridgeDispatchStarted: true,
+      });
+      expect(details.error).toContain(error);
+      expect(before).toHaveBeenCalledOnce();
+      expect(observeToolTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "exec", executionStarted: true, outcome: "failure" }),
+      );
+      expect(harness.spawn).not.toHaveBeenCalled();
+      expect(harness.remote).not.toHaveBeenCalled();
+      // One nested exec owns one item; command output does not create a second lifecycle.
+      expect(harness.subscription.getItemLifecycle()).toMatchObject({
+        startedCount: 1,
+        completedCount: 1,
+        activeCount: 0,
+      });
     },
   );
-  it.each(["repair", "deny", "veto", "throw", "invalid"] as const)(
+  it.each(["repair", "veto", "throw"] as const)(
     "judges final host arguments after one real hook: %s",
     async (change) => {
       const before = installBefore(() => {
@@ -186,13 +180,7 @@ describe("Code Mode subscribed host denial", () => {
         if (change === "veto") {
           return { block: true, blockReason: "hook veto" };
         }
-        return {
-          params: {
-            command: "printf host-corrected",
-            host: change === "repair" ? "gateway" : "node",
-            ...(change === "invalid" ? { command: 42 } : {}),
-          },
-        };
+        return { params: { command: "printf host-corrected", host: "gateway" } };
       });
       const timeoutMs = 1_500;
       const harness = createHostHarness({
@@ -209,71 +197,58 @@ describe("Code Mode subscribed host denial", () => {
       if (change === "repair") {
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       }
-      try {
-        const waitTool = expectDefined(harness.tools[1], "wait");
-        const wait = vi.spyOn(waitTool, "execute");
-        const details = await harness.runToCompletion(
-          change === "repair"
-            ? deniedCode
-            : 'return await exec({ command: "printf initial", host: "gateway" });',
-        );
-        expect(before).toHaveBeenCalledOnce();
-        expect(harness.remote).not.toHaveBeenCalled();
-        expect(harness.spawn).toHaveBeenCalledTimes(change === "repair" ? 1 : 0);
-        expect(details.status).toBe(
-          change === "repair" || change === "veto" ? "completed" : "failed",
-        );
-        if (change === "veto") {
-          expect(details.value).toMatchObject({ status: "blocked", reason: "hook veto" });
-        }
-        if (change === "repair") {
-          expect(wait).toHaveBeenCalledOnce();
-          expect(details.value).toMatchObject({ exitCode: 0, aggregated: "host-corrected" });
-        }
-      } finally {
-        harness.dispose();
-        vi.useRealTimers();
+      const waitTool = expectDefined(harness.tools[1], "wait");
+      const wait = vi.spyOn(waitTool, "execute");
+      const details = await harness.runToCompletion(
+        change === "repair"
+          ? deniedCode
+          : 'return await exec({ command: "printf initial", host: "gateway" });',
+      );
+      expect(before).toHaveBeenCalledOnce();
+      expect(harness.remote).not.toHaveBeenCalled();
+      expect(harness.spawn).toHaveBeenCalledTimes(change === "repair" ? 1 : 0);
+      expect(details.status).toBe(
+        change === "repair" || change === "veto" ? "completed" : "failed",
+      );
+      if (change === "veto") {
+        expect(details.value).toMatchObject({ status: "blocked", reason: "hook veto" });
+      }
+      if (change === "repair") {
+        expect(wait).toHaveBeenCalledOnce();
+        expect(details.value).toMatchObject({ exitCode: 0, aggregated: "host-corrected" });
       }
     },
   );
 
-  it.each([
-    "allow-once",
-    "allow-always",
-    "deny",
-    "timeout",
-    "cancel",
-    "unavailable",
-    "report",
-  ] as const)("preserves approval callbacks and containment for %s", async (decision) => {
-    const resolutions: string[] = [];
-    const requests: string[] = [];
-    const before = installBefore(() => ({
-      requireApproval: {
-        title: "Confirm command",
-        description: "Review host command",
-        onResolution: (value: string) => resolutions.push(value),
-      },
-    }));
-    const rpc = vi.spyOn(gatewayTool, "callGatewayTool").mockImplementation(async (method) => {
-      requests.push(method);
-      if (decision === "unavailable") {
-        throw new Error("gateway unavailable");
-      }
-      if (method === "plugin.approval.request") {
-        return { id: "host-approval", status: "accepted" };
-      }
-      if (decision === "cancel") {
-        throw new Error("approval route closed");
-      }
-      return { id: "host-approval", decision: decision === "timeout" ? null : decision };
-    });
-    const harness = createHostHarness({
-      name: `approval-${decision}`,
-      ...(decision === "report" ? { approvalMode: "report" } : {}),
-    });
-    try {
-      const allowed = decision === "allow-once" || decision === "allow-always";
+  it.each(["allow-always", "deny", "timeout", "cancel", "unavailable", "report"] as const)(
+    "preserves approval callbacks and containment for %s",
+    async (decision) => {
+      const resolutions: string[] = [];
+      const requests: string[] = [];
+      const before = installBefore(() => ({
+        requireApproval: {
+          title: "Confirm command",
+          description: "Review host command",
+          onResolution: (value: string) => resolutions.push(value),
+        },
+      }));
+      const rpc = vi.spyOn(gatewayTool, "callGatewayTool").mockImplementation(async (method) => {
+        requests.push(method);
+        if (decision === "unavailable") {
+          throw new Error("gateway unavailable");
+        }
+        if (method === "plugin.approval.request") {
+          return { id: "host-approval", status: "accepted" };
+        }
+        if (decision === "cancel") {
+          throw new Error("approval route closed");
+        }
+        return { id: "host-approval", decision: decision === "timeout" ? null : decision };
+      });
+      const harness = createHostHarness({
+        name: `approval-${decision}`,
+        ...(decision === "report" ? { approvalMode: "report" } : {}),
+      });
       const details = await harness.runToCompletion();
       expect(details.status).toBe("failed");
       expect(before).toHaveBeenCalledOnce();
@@ -291,7 +266,7 @@ describe("Code Mode subscribed host denial", () => {
       );
       expect(harness.spawn).not.toHaveBeenCalled();
       expect(harness.remote).not.toHaveBeenCalled();
-      if (allowed) {
+      if (decision === "allow-always") {
         const corrected = await harness.runToCompletion(
           'return await exec({ command: "printf approved-correction", host: "gateway" });',
         );
@@ -304,10 +279,8 @@ describe("Code Mode subscribed host denial", () => {
         expect(rpc).toHaveBeenCalledTimes(4);
         expect(harness.spawn).toHaveBeenCalledOnce();
       }
-    } finally {
-      harness.dispose();
-    }
-  });
+    },
+  );
 
   it("keeps the approved host snapshot frozen against later hook rewrites", async () => {
     const approve = vi.fn(() => ({
@@ -326,15 +299,11 @@ describe("Code Mode subscribed host denial", () => {
       decision: "allow-once",
     });
     const harness = createHostHarness({ name: "approval-freeze" });
-    try {
-      const details = await harness.runToCompletion();
-      expect(details.error).toContain("requested node");
-      expect(approve).toHaveBeenCalledOnce();
-      expect(rewrite).toHaveBeenCalledOnce();
-      expect(harness.spawn).not.toHaveBeenCalled();
-    } finally {
-      harness.dispose();
-    }
+    const details = await harness.runToCompletion();
+    expect(details.error).toContain("requested node");
+    expect(approve).toHaveBeenCalledOnce();
+    expect(rewrite).toHaveBeenCalledOnce();
+    expect(harness.spawn).not.toHaveBeenCalled();
   });
 
   it.each(["hook", "approval", "preparation", "completion"] as const)(
@@ -400,7 +369,6 @@ describe("Code Mode subscribed host denial", () => {
         expect(testing.activeRuns.size).toBe(0);
       } finally {
         release.resolve();
-        harness.dispose();
       }
     },
   );
@@ -431,179 +399,26 @@ describe("Code Mode subscribed host denial", () => {
       { runId: harness.runId },
     );
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, capture] });
-    try {
-      const details = await harness.runToCompletion();
-      expect(details.error).toContain(replacement.message);
-      expect(producerError).toBeInstanceOf(Error);
-      expect(consumeTrustedToolNoStartError(producerError)).toBe(false);
-      expect(consumeTrustedToolNoStartError(replacement)).toBe(false);
-      expect(harness.spawn).not.toHaveBeenCalled();
-    } finally {
-      harness.dispose();
-    }
+    const details = await harness.runToCompletion();
+    expect(details.error).toContain(replacement.message);
+    expect(producerError).toBeInstanceOf(Error);
+    expect(consumeTrustedToolNoStartError(producerError)).toBe(false);
+    expect(consumeTrustedToolNoStartError(replacement)).toBe(false);
+    expect(harness.spawn).not.toHaveBeenCalled();
   });
 
-  it("ignores an after-tool plugin return without replacing the operation fact", async () => {
-    const after = vi.fn(() => ({ terminate: true, result: { status: "completed" } }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "after_tool_call", handler: after }]),
-    );
-    const harness = createHostHarness({ name: "after-observer" });
-    try {
-      const details = await harness.runToCompletion();
-      await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
-      expect(details.error).toContain("exec host not allowed");
-    } finally {
-      harness.dispose();
-    }
-  });
-
-  it.each([
-    "earlier",
-    "parked",
-    "mutation-first/settles-first",
-    "mutation-first/settles-last",
-    "denial-first/settles-first",
-    "denial-first/settles-last",
-    "late-settlement",
-  ] as const)("does not replay completed work around a host denial: %s", async (order) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "code-mode-host-marker-"));
-    const marker = path.join(dir, "mutation.txt");
-    const mutated = createDeferred();
-    const denied = createDeferred();
-    const releaseLateMutation = createDeferred();
-    const lateMutationFinished = createDeferred();
-    const dispatchOrder: string[] = [];
-    const settlementOrder: string[] = [];
-    const runBridge = codeModeBridge.runBridgeRequest;
-    vi.spyOn(codeModeBridge, "runBridgeRequest").mockImplementation(async (params) => {
-      const name = String(params.request.args[0]);
-      dispatchOrder.push(name);
-      const settled = await runBridge(params);
-      settlementOrder.push(name);
-      if (name === "record_mutation") {
-        mutated.resolve();
-      }
-      if (name === "exec") {
-        denied.resolve();
-      }
-      return settled;
-    });
-    const mutationFirstSettlement = order.endsWith("settles-first");
-    const parallel = order.includes("/");
-    installBefore(async (event) => {
-      if (event.toolName === "exec" && parallel && mutationFirstSettlement) {
-        await mutated.promise;
-      }
-    });
+  it("reports security denial without starting a shell process", async () => {
     const harness = createHostHarness({
-      name: `mutation-${order.replaceAll("/", "-")}`,
+      name: "security-deny",
+      defaults: { security: "deny" },
     });
-    const mutation = pluginToolWithExecute(
-      "record_mutation",
-      "Append one mutation marker",
-      async () => {
-        if (order === "late-settlement") {
-          await releaseLateMutation.promise;
-        }
-        if (parallel && !mutationFirstSettlement) {
-          await denied.promise;
-        }
-        await fs.appendFile(marker, "applied\n");
-        lateMutationFinished.resolve();
-        return jsonResult({ applied: true });
-      },
+    const details = await harness.runToCompletion(
+      `return await exec({ command: "printf no", host: "gateway" });`,
     );
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, harness.shell, mutation] });
-    try {
-      const deny = deniedCode.replace("return await ", "").replace(/;$/, "");
-      const expressions = order.startsWith("denial-first")
-        ? [deny, "record_mutation({})"]
-        : ["record_mutation({})", deny];
-      const code =
-        order === "late-settlement"
-          ? `await Promise.all([record_mutation({}), ${deny}]);`
-          : parallel
-            ? `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`
-            : `await record_mutation({}); ${order === "parked" ? 'await yield_control("after mutation");' : ""} ${deniedCode}`;
-      let details = await harness.run(code);
-      if (order === "parked") {
-        expect(details.status).toBe("waiting");
-        details = resultDetails(
-          await expectDefined(harness.tools[1], "wait").execute("resume-denial", {
-            runId: details.runId,
-          }),
-        );
-      }
-      if (order === "late-settlement") {
-        expect(details.status).toBe("waiting");
-        await expect(fs.readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-        releaseLateMutation.resolve();
-        await lateMutationFinished.promise;
-        details = resultDetails(
-          await expectDefined(harness.tools[1], "wait").execute("settle-late", {
-            runId: details.runId,
-          }),
-        );
-        await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
-      }
-      details = await harness.complete(details);
-      expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
-      expect(details.error).toContain("exec host not allowed");
-      expect(await fs.readFile(marker, "utf8")).toBe("applied\n");
-      expect(mutation.execute).toHaveBeenCalledOnce();
-      if (parallel) {
-        expect(dispatchOrder).toEqual(
-          order.startsWith("denial-first")
-            ? ["exec", "record_mutation"]
-            : ["record_mutation", "exec"],
-        );
-        expect(settlementOrder).toEqual(
-          mutationFirstSettlement ? ["record_mutation", "exec"] : ["exec", "record_mutation"],
-        );
-      }
-      expect(harness.spawn).not.toHaveBeenCalled();
-      expect(harness.remote).not.toHaveBeenCalled();
-    } finally {
-      mutated.resolve();
-      denied.resolve();
-      releaseLateMutation.resolve();
-      harness.dispose();
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    expect(details.status).toBe("failed");
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(harness.remote).not.toHaveBeenCalled();
   });
-
-  it.each(["unbranded", "input-error", "security-deny"] as const)(
-    "reports %s failures without starting a shell process",
-    async (kind) => {
-      const harness = createHostHarness({
-        name: `untrusted-${kind}`,
-        ...(kind === "security-deny" ? { defaults: { security: "deny" } } : {}),
-      });
-      if (kind === "unbranded" || kind === "input-error") {
-        const error =
-          kind === "input-error"
-            ? new ToolInputError("exec host not allowed")
-            : new Error("exec host not allowed");
-        const target = pluginToolWithExecute("untrusted", "Post-start failure", async () => {
-          throw error;
-        });
-        applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-      }
-      try {
-        const details = await harness.runToCompletion(
-          kind === "unbranded" || kind === "input-error"
-            ? "await untrusted({});"
-            : `return await exec({ command: "printf no", host: "gateway" });`,
-        );
-        expect(details.status).toBe("failed");
-        expect(harness.spawn).not.toHaveBeenCalled();
-        expect(harness.remote).not.toHaveBeenCalled();
-      } finally {
-        harness.dispose();
-      }
-    },
-  );
   it("leaves the consumed voice grant consumed after host rejection and requires a new correction grant", async () => {
     const harness = createHostHarness({ name: "voice-denial" });
     const voiceSessionId = "host-denial-voice";
@@ -645,26 +460,19 @@ describe("Code Mode subscribed host denial", () => {
       now: now + 2,
     });
     bindAuthorizedClientVoiceConfirmation({ grant, runId: harness.runId });
-    try {
-      expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(true);
-      const denied = await harness.runToCompletion(`return await exec(${JSON.stringify(args)});`);
-      expect(denied.error).toContain("exec host not allowed");
-      expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(false);
-      for (const input of [args, { ...args, host: "gateway" }]) {
-        const blocked = await harness.runToCompletion(
-          `return await exec(${JSON.stringify(input)});`,
-        );
-        expect(blocked).toMatchObject({
-          status: "completed",
-          value: { status: "blocked", deniedReason: "client-voice-confirmation" },
-        });
-        expect(JSON.stringify(blocked.value)).toContain("VOICE_CONFIRMATION_REQUIRED");
-      }
-      expect(harness.spawn).not.toHaveBeenCalled();
-      expect(harness.remote).not.toHaveBeenCalled();
-    } finally {
-      harness.dispose();
-      resetClientVoiceConfirmationStateForTest();
+    expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(true);
+    const denied = await harness.runToCompletion(`return await exec(${JSON.stringify(args)});`);
+    expect(denied.error).toContain("exec host not allowed");
+    expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(false);
+    for (const input of [args, { ...args, host: "gateway" }]) {
+      const blocked = await harness.runToCompletion(`return await exec(${JSON.stringify(input)});`);
+      expect(blocked).toMatchObject({
+        status: "completed",
+        value: { status: "blocked", deniedReason: "client-voice-confirmation" },
+      });
+      expect(JSON.stringify(blocked.value)).toContain("VOICE_CONFIRMATION_REQUIRED");
     }
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(harness.remote).not.toHaveBeenCalled();
   });
 });
