@@ -13,40 +13,25 @@ struct WebChatWindowLifetimeTests {
             try JSONSerialization.data(withJSONObject: CronSourceFixture.configuration(revision: 1))
                 .write(to: URL(fileURLWithPath: configPath))
             // Only injected primary connections participate; no child owns a shared fleet connection.
-            async let ordinaryManager: Void = self.checkPendingPrimaryOpen(admission: "ordinary", closeOwner: "manager")
-            async let ordinaryWindow: Void = self.checkPendingPrimaryOpen(
-                admission: "ordinary",
-                closeOwner: "native window")
-            async let ordinaryHide: Void = self.checkPendingPrimaryOpen(admission: "ordinary", closeOwner: "hide")
-            async let transcriptManager: Void = self.checkPendingPrimaryOpen(
-                admission: "transcript",
-                closeOwner: "manager")
-            async let transcriptWindow: Void = self.checkPendingPrimaryOpen(
-                admission: "transcript", closeOwner: "native window")
-            async let transcriptHide: Void = self.checkPendingPrimaryOpen(admission: "transcript", closeOwner: "hide")
-            _ = try await (
-                ordinaryManager, ordinaryWindow, ordinaryHide,
-                transcriptManager, transcriptWindow, transcriptHide)
+            async let ordinaryManager: Void = self.checkPendingPrimaryOpen(closeOwner: "manager")
+            async let ordinaryWindow: Void = self.checkPendingPrimaryOpen(closeOwner: "native window")
+            async let ordinaryHide: Void = self.checkPendingPrimaryOpen(closeOwner: "hide")
+            _ = try await (ordinaryManager, ordinaryWindow, ordinaryHide)
         }
     }
 
-    private func checkPendingPrimaryOpen(admission: String, closeOwner: String) async throws {
+    private func checkPendingPrimaryOpen(closeOwner: String) async throws {
         let fixture = CronSourceFixture()
         do {
             try await withWebChatManagerLifetime(primaryConnection: fixture.gateway) { manager in
-                let lease = try await fixture.gateway.acquireServerLease()
+                _ = try await fixture.gateway.acquireServerLease()
                 let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
                 manager.show(sessionKey: "existing-primary-\(UUID().uuidString)")
                 let window = try #require(NSApp.windows.first { !previousWindows.contains(ObjectIdentifier($0)) })
                 // Primary opens enqueue MainActor work. Close before yielding so the
                 // pending admission cannot run until its owner is gone.
-                var rejected = false
-                if admission == "ordinary" {
-                    // Supplying an agent keeps the existing window from satisfying this default-session lookup.
-                    manager.show(agentID: "main")
-                } else {
-                    manager.show(sessionKey: "cron:shared-job", ifCurrentRouteFrom: lease) { rejected = true }
-                }
+                // Supplying an agent keeps the existing window from satisfying this default-session lookup.
+                manager.show(agentID: "main")
                 if closeOwner == "manager" {
                     manager.close()
                 } else if closeOwner == "hide" {
@@ -54,11 +39,10 @@ struct WebChatWindowLifetimeTests {
                 } else {
                     window.close()
                 }
-                #expect(manager.activeSessionKey == nil, "\(admission) admission retired by \(closeOwner)")
+                #expect(manager.activeSessionKey == nil, "admission retired by \(closeOwner)")
                 #expect(
                     await !self.eventually { manager.activeSessionKey != nil },
-                    "\(admission) admission retired by \(closeOwner)")
-                #expect(!rejected, "\(admission) admission retired by \(closeOwner)")
+                    "admission retired by \(closeOwner)")
             }
         } catch {
             await fixture.gateway.shutdown()

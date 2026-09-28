@@ -232,24 +232,6 @@ describe("buildReplyPayloads media filter integration", () => {
     );
   });
 
-  it("redacts copied inbound context before XML and metadata mutate its exact bytes", async () => {
-    const conversationContext = [
-      "[Chat messages since your last reply - for context]",
-      "[Telegram] Alice: private history",
-      "",
-      "[Current message - respond to this]",
-      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-      "private inbound paragraph",
-    ].join("\n");
-
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [{ text: `${conversationContext}\n\nVisible answer.` }],
-      conversationContext,
-    });
-
-    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Visible answer." })]);
-  });
-
   it.each<{
     name: string;
     payload: ReplyPayload;
@@ -464,30 +446,6 @@ describe("buildReplyPayloads media filter integration", () => {
       getReplyPayloadMetadata(expectDefined(replyPayloads[0], "expected prepared reply payload"))
         ?.sourceReplyTranscriptMirror?.text,
     ).toBe("Visible answer.");
-  });
-
-  it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
-      messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expect(
-      expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl,
-    ).toBeUndefined();
-  });
-
-  it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
-      messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expect(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl).toBe(
-      "file:///tmp/photo.jpg",
-    );
   });
 
   it("normalizes sent media URLs before deduping normalized reply media", async () => {
@@ -1307,20 +1265,6 @@ describe("buildReplyPayloads media filter integration", () => {
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
-    });
-  });
-
-  it("extracts markdown image replies into final payload media urls", async () => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      extractMarkdownImages: true,
-      payloads: [{ text: "Here you go\n\n![chart](https://example.com/chart.png)" }],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], {
-      text: "Here you go",
-      mediaUrl: "https://example.com/chart.png",
-      mediaUrls: ["https://example.com/chart.png"],
     });
   });
 

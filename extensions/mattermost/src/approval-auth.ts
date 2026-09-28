@@ -1,4 +1,3 @@
-// Mattermost plugin module implements approval auth behavior.
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostAccount } from "./mattermost/accounts.js";

@@ -62,17 +62,13 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   const deactivate = () => {
     lifecycleActive = false;
     clearHeartbeat();
-    params.abortSignal?.removeEventListener("abort", onAbort);
-  };
-
-  const onAbort = () => {
-    deactivate();
+    params.abortSignal?.removeEventListener("abort", deactivate);
   };
 
   if (params.abortSignal?.aborted) {
-    onAbort();
+    deactivate();
   } else {
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    params.abortSignal?.addEventListener("abort", deactivate, { once: true });
   }
 
   if (lifecycleActive) {

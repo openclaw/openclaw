@@ -1,11 +1,8 @@
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAccount,
-  createActionGate,
-  type ChannelMessageActionName,
-  type OpenClawConfig,
-  resolveWhatsAppReactionLevel,
-} from "./channel-actions.runtime.js";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { listWhatsAppAccountIds, resolveWhatsAppAccount } from "./accounts.js";
+import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 
 function resolveEnabledWhatsAppAgentReactions(params: { cfg: OpenClawConfig; accountId?: string }) {
   if (!params.cfg.channels?.whatsapp) {

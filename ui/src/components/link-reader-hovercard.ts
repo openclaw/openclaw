@@ -110,7 +110,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     }
     this.invalidatePreviewContext();
     this.readerDescriptors = value;
-    this.seeds = null;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
 

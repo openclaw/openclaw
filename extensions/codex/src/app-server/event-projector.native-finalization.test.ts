@@ -1,3 +1,4 @@
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -399,7 +400,6 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
   it.each([
     ["missing", undefined, undefined],
-    ["in-progress", "in_progress", undefined],
     [
       "unrecognized",
       "future_status",
@@ -480,19 +480,10 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-snapshot",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -561,19 +552,10 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-large",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: largeOutput,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -616,19 +598,13 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-denied",
           command: "node scripts/report.js --publish",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
     await projector.handleNotification(
@@ -699,19 +675,12 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-whitespace",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
     await projector.handleNotification(

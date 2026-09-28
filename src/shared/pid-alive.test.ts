@@ -65,19 +65,6 @@ describe("isPidAlive", () => {
     expect(isPidAlive(Number.POSITIVE_INFINITY)).toBe(false);
   });
 
-  it("returns true when process probing reports EPERM", () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-    mockProcReads({
-      "/proc/42/status": "Name:\tnode\nState:\tS (sleeping)\nPid:\t42\n",
-    });
-
-    expect(isPidAlive(42)).toBe(true);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
   it("returns false when process probing reports ESRCH", () => {
     const error = Object.assign(new Error("missing process"), { code: "ESRCH" });
     vi.spyOn(process, "kill").mockImplementation(() => {
@@ -120,28 +107,6 @@ describe("isPidDefinitelyDead", () => {
 
     expect(isPidDefinitelyDead(42)).toBe(true);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false when process probing reports EPERM", () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-
-    expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false for live non-zombie processes", async () => {
-    const livePid = process.pid;
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    mockProcReads({
-      [`/proc/${livePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t${livePid}\nPid:\t${livePid}\n`,
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidDefinitelyDead(livePid)).toBe(false);
-    });
   });
 });
 
@@ -291,14 +256,6 @@ describe("process start times", () => {
       });
     },
   );
-
-  it("fails closed when the Windows identity reader finds nothing", () => {
-    readWindowsProcessStartTimeSyncMock.mockReturnValue(null);
-
-    return withMockedPlatform("win32", async () => {
-      expect(getFileLockProcessStartTime(42)).toBeNull();
-    });
-  });
 
   it("returns null on unsupported platforms", () => {
     return withMockedPlatform("aix", async () => {

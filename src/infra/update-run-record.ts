@@ -39,12 +39,11 @@ export function updateStepDiagnostics(
     }
     return tail
       .split(/\r?\n/u)
-      .filter((line) => {
-        if (/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line)) {
-          return false;
-        }
-        return !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim());
-      })
+      .filter(
+        (line) =>
+          !/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line) &&
+          !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim()),
+      )
       .join("\n");
   });
   return { tails: filtered, reasonDetails };

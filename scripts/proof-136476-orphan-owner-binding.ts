@@ -22,9 +22,9 @@ import { randomUUID } from "node:crypto";
  *
  * Stubbed, and only at the transport edge: the announce flow, the completion
  * reply capture, the gateway call, the requester settle wake, the browser
- * cleanup and the detached-task lookup. Each is a recorder, so "was the
- * requester notified" and "did cleanup dispatch" are observable facts rather
- * than assumptions. Everything between the helper and those edges is real.
+ * cleanup. Each is a recorder, so "was the requester notified" and "did
+ * cleanup dispatch" are observable facts rather than assumptions. Everything
+ * between the helper and those edges is real.
  *
  * One row is written directly: the crashed predecessor boot, because
  * `recordGatewayBootStart` can only ever record the current pid. It is inserted
@@ -160,10 +160,6 @@ function createController(runs: Map<string, SubagentRunRecord>, edges: EdgeRecor
     getLatestRunForChildSession: (key, matches) =>
       getLatestSubagentRunByChildSessionKeyFromRuns(runs, key, matches) ?? null,
     suppressAnnounceForSteerRestart: () => false,
-    // No detached task backs these runs; the real "unavailable" resolution is
-    // what the production lookup returns for an un-tasked run.
-    resolveSubagentTask: () => ({ lookup: "unavailable" }) as never,
-    resolveSubagentTaskAsync: async () => ({ lookup: "unavailable" }) as never,
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
     emitSubagentProgressEndedForRun: async () => {},

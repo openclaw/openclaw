@@ -42,19 +42,11 @@ export function collectKnownLongFlags(
   allowedBooleanFlags: ReadonlySet<string> = NO_FLAGS,
 ): string[] {
   const known = new Set<string>();
-  for (const flag of allowedValueFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
-    }
-  }
-  for (const flag of allowedBooleanFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
-    }
-  }
-  for (const flag of deniedFlags) {
-    if (flag.startsWith("--")) {
-      known.add(flag);
+  for (const flags of [allowedValueFlags, allowedBooleanFlags, deniedFlags]) {
+    for (const flag of flags) {
+      if (flag.startsWith("--")) {
+        known.add(flag);
+      }
     }
   }
   return Array.from(known);
@@ -105,7 +97,7 @@ function compileSafeBinProfiles(
 ): Record<string, SafeBinProfile> {
   return Object.fromEntries(
     Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
-  ) as Record<string, SafeBinProfile>;
+  );
 }
 
 const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {

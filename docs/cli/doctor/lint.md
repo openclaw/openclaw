@@ -25,6 +25,10 @@ snapshots. A cleanup failure preserves completed findings and check counts;
 updater runs report failed temporary-file removal as a warning. If database
 retirement fails, Doctor reports the error and leaves the private snapshot in place.
 
+Plugin source captures use the original profile's temporary storage, outside these
+database snapshots. Their plugin-cache owner retains them until plugin inspection
+finishes, so later channel setup checks can reuse admitted native files safely.
+
 ```bash
 openclaw doctor --json
 openclaw doctor --lint

@@ -1,4 +1,5 @@
 import { toUSVString } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import {
@@ -11,6 +12,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store-kernel.js";
 import type {
   MaterializedSessionStateDeletePlan,
@@ -25,6 +27,7 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
+import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
@@ -356,15 +359,36 @@ export async function projectSessionEntryLifecycleMutation(
   },
 ): Promise<ProjectedLifecycleMutation> {
   return withSqliteSessionDatabase(databaseOptions, async (removalDatabase) => {
-    const store = readSessionEntryStore(removalDatabase, {
-      allowCanonicalRepair: params.allowCanonicalRepair === true,
-      sessionKeys: [
-        ...params.removals.map((removal) =>
-          removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
-        ),
-        ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
-      ],
-    });
+    const sessionKeys = [
+      ...params.removals.map((removal) =>
+        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+      ),
+      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    ];
+    const snapshot =
+      isMainThread &&
+      !params.allowCanonicalRepair &&
+      !hasPreparedNativeSessionDeletion() &&
+      params.removals.length === 0 &&
+      supportsOpenClawAgentDatabaseExecution(databaseOptions)
+        ? await import("./session-transcript-worker-runtime.js").then(
+            ({ withSessionHistoryWorkerDatabase }) =>
+              withSessionHistoryWorkerDatabase(databaseOptions, (reader) =>
+                reader.readExactEntries({
+                  projection: "lifecycle",
+                  includeAuthorization: true,
+                  sessionKeys,
+                  env: { ...(databaseOptions.env ?? process.env) },
+                }),
+              ),
+          )
+        : undefined;
+    const store = snapshot
+      ? Object.fromEntries(snapshot.entries.map(({ sessionKey, entry }) => [sessionKey, entry]))
+      : readSessionEntryStore(removalDatabase, {
+          allowCanonicalRepair: params.allowCanonicalRepair === true,
+          sessionKeys,
+        });
     const removedKeysToArchive = new Set<string>();
     const changedSessionKeys = new Set<string>();
     const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
@@ -452,7 +476,18 @@ export async function projectSessionEntryLifecycleMutation(
       });
     }
     if (projectedRemovals.length === 0) {
-      return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
+      return {
+        deletePlans: [],
+        removals: projectedRemovals,
+        upsertedEntries,
+        archiveRecovery:
+          snapshot?.databaseIdentity && snapshot.pendingArchives !== undefined
+            ? {
+                pending: snapshot.pendingArchives,
+                databaseIdentity: snapshot.databaseIdentity.identity,
+              }
+            : undefined,
+      };
     }
     // Builders can close the original handle; admit the reference snapshot again.
     return withSqliteSessionDatabase(databaseOptions, (database) => {

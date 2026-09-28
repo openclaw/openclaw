@@ -19,40 +19,27 @@ import { updateCommand } from "./update-command.js";
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
-const cases = [
-  { name: "no restart", restart: false, compatible: false, current: false, refresh: true },
-  { name: "replacement", restart: true, compatible: false, current: false, refresh: true },
-  { name: "compatible", restart: true, compatible: true, current: false, refresh: true },
-  {
-    name: "foreign service",
-    restart: true,
-    compatible: false,
-    current: false,
-    refresh: true,
-    owned: false,
-  },
-  { name: "current replacement", restart: true, compatible: false, current: true, refresh: true },
-  {
-    name: "current sealed service",
-    restart: true,
-    compatible: false,
-    current: true,
-    refresh: false,
-  },
-  { name: "current no restart", restart: false, compatible: false, current: true, refresh: true },
-  {
-    name: "current stopped service",
-    restart: true,
-    compatible: false,
-    current: true,
-    refresh: true,
-    running: false,
-  },
-];
-
-it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, entry, { json }))))(
-  "previews installed package runtime admission without mutation ($name, json=$json)",
-  async ({ restart, compatible, current, refresh, json, owned = true, running = true }) => {
+it.each([
+  { name: "no restart", restart: false },
+  { name: "replacement" },
+  { name: "compatible", compatible: true },
+  { name: "foreign service", owned: false },
+  { name: "current replacement", current: true },
+  { name: "current sealed service", current: true, refresh: false },
+  { name: "current no restart", current: true, restart: false },
+  { name: "current stopped service", current: true, running: false },
+  { name: "text refusal", restart: false, json: false },
+])(
+  "previews installed package runtime admission without mutation ($name)",
+  async ({
+    restart = true,
+    compatible = false,
+    current = false,
+    refresh = true,
+    json = true,
+    owned = true,
+    running = true,
+  }) => {
     fixture.managedServiceNodeRunner = "/service/node";
     const provisionRuntime = vi
       .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")

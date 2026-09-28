@@ -3,7 +3,6 @@ import {
   resolveCorrelatedSubagentDelivery,
   settleCorrelatedSubagentDelivery,
 } from "../agents/subagents/completion/subagent-completion-delivery.js";
-import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
 import { recordInboundSession } from "../channels/session.js";
@@ -12,12 +11,14 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   clearRestartSentinelIfRevision,
@@ -53,10 +54,8 @@ import {
   updateRunReportInputFromSentinel,
 } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
   type DeliveryContext,
   mergeDeliveryContext,
@@ -66,7 +65,11 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
 import {
   buildQueuedRestartContinuation,
+  isRestartContinuationBusyPayload,
+  isRestartContinuationBusyRetry,
+  resolveQueuedRestartContinuationMessageId,
   RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
+  RESTART_CONTINUATION_BUSY_RETRY_ERROR,
 } from "./server-restart-sentinel-continuation-intent.js";
 import {
   deliverRestartSentinelNotice,
@@ -86,10 +89,8 @@ import {
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
-const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
+const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
-const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
-  "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
 
 /** Settles every queue entry through its durable producer before cron cleanup. */
@@ -98,17 +99,9 @@ export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
   outcome,
   queueContext,
 ) => {
-  await settleCorrelatedSubagentDelivery(entry, outcome);
+  await settleCorrelatedSubagentDelivery(entry, outcome, queueContext);
   await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id, queueContext);
 };
-
-type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
-
-function cloneRestartSentinelPayload(
-  payload: RestartSentinelPayload | null,
-): RestartSentinelPayload | null {
-  return payload ? structuredClone(payload) : null;
-}
 
 function enqueueRestartSentinelWake(
   message: string,
@@ -128,30 +121,6 @@ function enqueueRestartSentinelWake(
     agentId,
     sessionKey,
   });
-}
-
-async function waitForRetry(delayMs: number) {
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, delayMs);
-    timer.unref?.();
-  });
-}
-
-function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
-  return (
-    typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
-  );
-}
-
-function isRestartContinuationBusyRetry(entry: QueuedSessionDelivery | null): boolean {
-  return entry?.lastError === RESTART_CONTINUATION_BUSY_RETRY_ERROR;
-}
-
-function resolveQueuedRestartContinuationMessageId(entry: QueuedAgentTurnSessionDelivery): string {
-  if (isRestartContinuationBusyRetry(entry) && entry.retryCount > 0) {
-    return `${entry.messageId}:retry:${entry.retryCount}`;
-  }
-  return entry.messageId;
 }
 
 function resolveQueuedSessionDeliveryContext(
@@ -176,6 +145,16 @@ export async function deliverQueuedSessionDelivery(params: {
 }) {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
+  if (queuedEntry.kind === "agentTurn" && queuedEntry.requesterBinding) {
+    await deliverQueuedGeneratedMediaAgentTurn({
+      ...params,
+      ...queuedEntry.requesterBinding,
+      entry: queuedEntry,
+      runtimeContextFragments: queuedEntry.runtimeContextFragments,
+      canonicalKey: queuedEntry.requesterBinding.sessionKey,
+    });
+    return;
+  }
   const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
     queuedEntry.sessionKey,
     {
@@ -355,7 +334,9 @@ async function drainRestartContinuationQueue(params: {
     params.log.info(
       `restart continuation: entry ${params.entryId} still waiting for the previous run to clear; retrying in ${RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS}ms`,
     );
-    await waitForRetry(RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS).unref();
+    });
   }
 }
 
@@ -384,16 +365,22 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
 }
 
 async function loadRestartSentinelStartupTask(params: {
+  scheduler: GatewayScheduler;
+  signal: AbortSignal;
   deps: CliDeps;
   attempt?: number;
   context: DeliveryQueueStateContext;
   shouldRun?: () => boolean;
   pendingUpdate?: PendingUpdateSentinelIdentity;
+  trackWork?: (work: Promise<unknown>) => void;
 }): Promise<StartupTask | null> {
   const noticeContext = params.context;
   const queueContext = noticeContext.workerContext;
   const env = queueContext.environment;
-  const snapshot = await readRestartSentinelStartupSnapshot(params);
+  const snapshot = await readRestartSentinelStartupSnapshot({
+    ...params,
+    warn: (message) => log.warn(message),
+  });
   if (!snapshot) {
     return null;
   }
@@ -429,7 +416,7 @@ async function loadRestartSentinelStartupTask(params: {
   );
 
   const run = async () => {
-    if (params.shouldRun?.() === false) {
+    if (params.signal.aborted || params.shouldRun?.() === false) {
       return { status: "skipped" as const, reason: "gateway-stopped" };
     }
     let routedSessionKey = sessionKey;
@@ -437,21 +424,36 @@ async function loadRestartSentinelStartupTask(params: {
     if (isPendingControlPlaneUpdateRestartSentinel(payload) && !pendingSnapshotSuperseded) {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
-        const timer = setTimeout(() => {
-          if (params.shouldRun?.() === false) {
-            return;
-          }
-          void runWithGatewayIndependentRootWorkAdmission(async () => {
-            await scheduleRestartSentinelWakeAttempt({
-              ...params,
-              attempt: attempt + 1,
-              ...(pendingUpdate ? { pendingUpdate } : {}),
+        const cancel = () => retry.cancel();
+        const retry = params.scheduler.schedule({
+          id: "restart-sentinel:pending-update",
+          delayMs: CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS,
+          run: () => {
+            params.signal.removeEventListener("abort", cancel);
+            if (params.signal.aborted || params.shouldRun?.() === false) {
+              return undefined;
+            }
+            const work = runWithGatewayIndependentRootWorkAdmission(
+              () =>
+                scheduleRestartSentinelWake({
+                  ...params,
+                  attempt: attempt + 1,
+                  ...(pendingUpdate ? { pendingUpdate } : {}),
+                }),
+              "restart-sentinel:wake",
+              params.signal,
+            ).catch((err: unknown) => {
+              if (!params.signal.aborted) {
+                log.warn(
+                  `restart sentinel pending update retry failed: ${formatErrorMessage(err)}`,
+                );
+              }
             });
-          }, "restart-sentinel:wake").catch((err: unknown) => {
-            log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
-          });
-        }, CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS);
-        timer.unref?.();
+            params.trackWork?.(work);
+            return work;
+          },
+        });
+        params.signal.addEventListener("abort", cancel, { once: true });
         return { status: "skipped" as const, reason: "update-restart-pending" };
       }
       log.warn(`${summary}: update restart sentinel remained pending after retry window`, {
@@ -696,33 +698,27 @@ async function loadRestartSentinelStartupTask(params: {
   };
 }
 
-async function scheduleRestartSentinelWakeAttempt(params: {
+export async function scheduleRestartSentinelWake(params: {
+  scheduler: GatewayScheduler;
+  signal: AbortSignal;
   deps: CliDeps;
-  attempt: number;
-  context: DeliveryQueueStateContext;
+  attempt?: number;
+  context?: DeliveryQueueStateContext;
   shouldRun?: () => boolean;
   pendingUpdate?: PendingUpdateSentinelIdentity;
+  trackWork?: (work: Promise<unknown>) => void;
 }) {
-  if (params.shouldRun?.() === false) {
+  if (params.signal.aborted || params.shouldRun?.() === false) {
     return;
   }
-  const task = await loadRestartSentinelStartupTask(params);
+  const task = await loadRestartSentinelStartupTask({
+    ...params,
+    context: params.context ?? captureDeliveryQueueStateContext(),
+  });
   if (!task) {
     return;
   }
   await runStartupTasks({ tasks: [task], log });
-}
-
-export async function scheduleRestartSentinelWake(params: {
-  deps: CliDeps;
-  context?: DeliveryQueueStateContext;
-  shouldRun?: () => boolean;
-}) {
-  await scheduleRestartSentinelWakeAttempt({
-    ...params,
-    context: params.context ?? captureDeliveryQueueStateContext(),
-    attempt: 0,
-  });
 }
 
 export async function refreshLatestUpdateRestartSentinel(
@@ -733,21 +729,21 @@ export async function refreshLatestUpdateRestartSentinel(
     current?.payload.kind === "update" &&
     isPendingControlPlaneUpdateRestartSentinel(current.payload)
   ) {
-    latestUpdateRestartSentinel = cloneRestartSentinelPayload(current.payload);
-    return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+    latestUpdateRestartSentinel = structuredClone(current.payload);
+    return structuredClone(latestUpdateRestartSentinel);
   }
   const finalized = await finalizeUpdateRestartSentinelRunningVersion(undefined, env);
   const sentinel = finalized ?? current;
   if (sentinel?.payload.kind === "update") {
-    latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
+    latestUpdateRestartSentinel = structuredClone(sentinel.payload);
   }
-  return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+  return structuredClone(latestUpdateRestartSentinel);
 }
 
 export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null {
-  return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+  return structuredClone(latestUpdateRestartSentinel);
 }
 
 export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
-  latestUpdateRestartSentinel = cloneRestartSentinelPayload(payload);
+  latestUpdateRestartSentinel = structuredClone(payload);
 }

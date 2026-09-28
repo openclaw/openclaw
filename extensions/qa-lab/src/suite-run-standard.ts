@@ -266,11 +266,15 @@ export async function runQaFlowSuiteStandard(
       let scenarioExecutionFinishedAt = scenarioBootstrapFinishedAt;
       let previousAttempt = recording.invocation.previousFailure(index);
       const recorded: { selected?: QaSuiteScenarioResult } = {};
+      let roundTripStartCursor: number | undefined;
       const runObservedScenario = async () => {
         // Retry backoff and unsuccessful attempts are not part of the final
         // runtime turn, and they must not be relabeled as gateway bootstrap.
         scenarioExecutionStartedAt = new Date();
         const id = recording.invocation.begin(index, previousAttempt);
+        if (params?.roundTripProbe?.scenarioId === scenario.id) {
+          roundTripStartCursor = transport.state.getSnapshot().cursor;
+        }
         let result: QaSuiteScenarioResult;
         try {
           result = await runScenarioDefinition(activeEnv, scenario);
@@ -326,6 +330,7 @@ export async function runQaFlowSuiteStandard(
           probeResult = await runQaSuiteRoundTripProbe({
             probe: params.roundTripProbe,
             transport,
+            scenarioStartCursor: roundTripStartCursor,
           });
         } catch (error) {
           await recording.record(
@@ -478,15 +483,14 @@ export async function runQaFlowSuiteStandard(
     throw error;
   } finally {
     const activeEnv = env;
-    const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
-    const activeGateway = gateway;
+    const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
     const activeMock = mock;
     const cleanupFailures = await runQaFlowSuiteCleanupPlan({
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
       stopGateway: () =>
-        activeGateway.stop({
+        gateway.stop({
           keepTemp,
           preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
           beforeTempCleanup: transport.captureBeforeGatewayCleanup,

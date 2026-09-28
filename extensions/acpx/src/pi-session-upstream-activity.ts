@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import process from "node:process";
 import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isExternalUserText,
   type SessionCatalogContinueProviderResult,
@@ -8,8 +9,7 @@ import {
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readPiSessionFileBaseline } from "./pi-session-store.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
+import { piMessageText, readPiSessionFileBaseline } from "./pi-session-store.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
@@ -40,21 +40,6 @@ function parseCompletePiRows(tail: Buffer): {
     lineStart = index + 1;
   }
   return { entries, classifiedBytes };
-}
-
-function textFromContent(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
-    )
-    .join("\n");
-  return text || undefined;
 }
 
 function readFilePath(probe: SessionUpstreamProbe): string | undefined {
@@ -135,15 +120,15 @@ async function checkPiSessionUpstreamActivity(
       if (entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user") {
         continue;
       }
-      const text = textFromContent(entry.message.content);
+      const text = piMessageText(entry.message.content);
       if (!isExternalUserText(probe, text)) {
         continue;
       }
       humanTurns += 1;
       occurredAt = Math.max(
         occurredAt ?? 0,
-        parsePiSessionTimestampMs(entry.message.timestamp) ??
-          parsePiSessionTimestampMs(entry.timestamp) ??
+        parseDateFirstTimestampMs(entry.message.timestamp) ??
+          parseDateFirstTimestampMs(entry.timestamp) ??
           stat.mtimeMs,
       );
     }

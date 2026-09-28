@@ -448,14 +448,6 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
   if (!state.closeout.runId) {
     await ensureCapabilities(ctx);
     const inputs = [`tag=${state.tag}`];
-    if (!state.capabilities?.closeoutResolvesWaivers) {
-      inputs.push(
-        `stable_soak_waiver=${required(state.validate.stableSoakWaiver, "stable soak waiver")}`,
-      );
-      if (state.validate.laneWaiver) {
-        inputs.push(`lane_waiver=${state.validate.laneWaiver}`);
-      }
-    }
     const dispatched = await dispatchReleaseWorkflow(ctx, {
       phase: "closeout",
       workflow: "openclaw-stable-main-closeout.yml",

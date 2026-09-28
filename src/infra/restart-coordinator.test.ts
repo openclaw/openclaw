@@ -15,38 +15,44 @@ vi.mock("./restart.js", () => ({
   scheduleGatewayRestart: (opts: unknown) => scheduleGatewayRestart(opts),
 }));
 
+const restart = {
+  ok: true,
+  pid: 123,
+  signal: "SIGUSR2",
+  delayMs: 0,
+  mode: "emit",
+  coalesced: false,
+  cooldownMsApplied: 0,
+};
+
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  scheduleGatewayRestart.mockReset().mockReturnValue({
-    ok: true,
-    pid: 123,
-    signal: "SIGUSR2",
-    delayMs: 0,
-    mode: "emit",
-    coalesced: false,
-    cooldownMsApplied: 0,
-  });
+  scheduleGatewayRestart.mockReset().mockReturnValue(restart);
 });
 
 afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
+const idleInspect = {
+  getQueueSize: () => 0,
+  getPendingReplies: () => 0,
+  getEmbeddedRuns: () => 0,
+  getCronRuns: () => 0,
+  getAgentRuns: () => 0,
+  getAcpRuns: () => 0,
+  getMediaRuns: () => 0,
+};
+
 describe("safe gateway restart coordinator", () => {
   const requestPreflight = (
     inspect: NonNullable<Parameters<typeof scheduleSafeGatewayRestart>[0]>["inspect"],
-  ) => createSafeGatewayRestartPreflight(inspect);
+  ) => createSafeGatewayRestartPreflight({ ...idleInspect, ...inspect });
 
   it("reports safe when no restart blockers are active", () => {
     const preflight = requestPreflight({
-      getQueueSize: () => 0,
-      getPendingReplies: () => 0,
-      getEmbeddedRuns: () => 0,
-      getCronRuns: () => 0,
       getBackgroundExecSessions: () => 0,
       getRootRequests: () => 0,
-      getActiveTasks: () => 0,
-      getTaskBlockers: () => [],
     });
 
     expect(preflight).toEqual({
@@ -58,7 +64,9 @@ describe("safe gateway restart coordinator", () => {
         cronRuns: 0,
         backgroundExecSessions: 0,
         rootRequests: 0,
-        activeTasks: 0,
+        agentRuns: 0,
+        acpRuns: 0,
+        mediaRuns: 0,
         totalActive: 0,
       },
       blockers: [],
@@ -74,43 +82,31 @@ describe("safe gateway restart coordinator", () => {
       getCronRuns: () => 1,
       getBackgroundExecSessions: () => 0,
       getRootRequests: () => 1,
-      getActiveTasks: () => 1,
-      getTaskBlockers: () => [
-        {
-          taskId: "task-1",
-          runId: "run-1",
-          status: "running",
-          runtime: "acp",
-          label: "build",
-          title: "Build branch",
-        },
-      ],
+      getAgentRuns: () => 1,
+      getAcpRuns: () => 2,
+      getMediaRuns: () => 3,
     });
 
     expect(preflight.safe).toBe(false);
-    expect(preflight.counts.totalActive).toBe(7);
+    expect(preflight.counts.totalActive).toBe(12);
     expect(preflight.blockers.map((blocker) => blocker.kind)).toEqual([
       "queue",
       "reply",
       "embedded-run",
       "cron-run",
+      "agent-run",
+      "acp-run",
+      "media-generation",
       "root-request",
-      "task",
     ]);
     expect(preflight.summary).toContain("restart deferred");
-    expect(preflight.summary).toContain("taskId=task-1");
+    expect(preflight.summary).toContain("1 admitted agent run(s)");
   });
 
   it("defers restart for aggregate background exec sessions", () => {
     const preflight = requestPreflight({
-      getQueueSize: () => 0,
-      getPendingReplies: () => 0,
-      getEmbeddedRuns: () => 0,
-      getCronRuns: () => 0,
       getBackgroundExecSessions: () => 2,
       getRootRequests: () => 0,
-      getActiveTasks: () => 0,
-      getTaskBlockers: () => [],
     });
 
     expect(preflight.safe).toBe(false);
@@ -136,15 +132,7 @@ describe("safe gateway restart coordinator", () => {
 
     try {
       await request?.run(async () => {
-        const preflight = requestPreflight({
-          getQueueSize: () => 0,
-          getPendingReplies: () => 0,
-          getEmbeddedRuns: () => 0,
-          getCronRuns: () => 0,
-          getBackgroundExecSessions: () => 0,
-          getActiveTasks: () => 0,
-          getTaskBlockers: () => [],
-        });
+        const preflight = requestPreflight({ getBackgroundExecSessions: () => 0 });
 
         expect(preflight.counts).toMatchObject({ rootRequests: 1, totalActive: 1 });
         expect(preflight.blockers).toEqual([
@@ -161,48 +149,12 @@ describe("safe gateway restart coordinator", () => {
     }
   });
 
-  it("keeps truncated task titles on complete UTF-16 code points", () => {
-    const preflight = requestPreflight({
-      getQueueSize: () => 0,
-      getPendingReplies: () => 0,
-      getEmbeddedRuns: () => 0,
-      getCronRuns: () => 0,
-      getActiveTasks: () => 1,
-      getTaskBlockers: () => [
-        {
-          taskId: "task-emoji",
-          status: "running",
-          runtime: "acp",
-          title: `${"t".repeat(79)}🚀`,
-        },
-      ],
-    });
-
-    expect(preflight.blockers[0]?.message).toBe(
-      `taskId=task-emoji status=running runtime=acp title=${"t".repeat(79)}`,
-    );
-  });
-
   it("schedules one restart request and marks active work as deferred", () => {
-    scheduleGatewayRestart.mockReturnValueOnce({
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR2",
-      delayMs: 0,
-      mode: "emit",
-      coalesced: false,
-      cooldownMsApplied: 0,
-    });
-
     const result = scheduleSafeGatewayRestart({
       reason: "test.safe",
       inspect: {
+        ...idleInspect,
         getQueueSize: () => 1,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getCronRuns: () => 0,
-        getActiveTasks: () => 0,
-        getTaskBlockers: () => [],
       },
     });
 
@@ -215,23 +167,14 @@ describe("safe gateway restart coordinator", () => {
 
   it("surfaces coalesced restart requests", () => {
     scheduleGatewayRestart.mockReturnValueOnce({
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR2",
+      ...restart,
       delayMs: 500,
-      mode: "emit",
       coalesced: true,
-      cooldownMsApplied: 0,
     });
 
     const result = scheduleSafeGatewayRestart({
       inspect: {
-        getQueueSize: () => 0,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getCronRuns: () => 0,
-        getActiveTasks: () => 0,
-        getTaskBlockers: () => [],
+        ...idleInspect,
       },
     });
 
@@ -239,26 +182,12 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("forwards skipDeferral to scheduleGatewayRestart and marks status scheduled", () => {
-    scheduleGatewayRestart.mockReturnValueOnce({
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR2",
-      delayMs: 0,
-      mode: "emit",
-      coalesced: false,
-      cooldownMsApplied: 0,
-    });
-
     const result = scheduleSafeGatewayRestart({
       reason: "test.skip-deferral",
       skipDeferral: true,
       inspect: {
+        ...idleInspect,
         getQueueSize: () => 1,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getCronRuns: () => 0,
-        getActiveTasks: () => 0,
-        getTaskBlockers: () => [],
       },
     });
 
@@ -269,35 +198,6 @@ describe("safe gateway restart coordinator", () => {
       preservePendingEmitHooksOnDeferralBypass: true,
       reason: "test.skip-deferral",
       skipDeferral: true,
-    });
-  });
-
-  it("omits skipDeferral when not requested", () => {
-    scheduleGatewayRestart.mockReturnValueOnce({
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR2",
-      delayMs: 0,
-      mode: "emit",
-      coalesced: false,
-      cooldownMsApplied: 0,
-    });
-
-    scheduleSafeGatewayRestart({
-      reason: "test.no-skip",
-      inspect: {
-        getQueueSize: () => 0,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getCronRuns: () => 0,
-        getActiveTasks: () => 0,
-        getTaskBlockers: () => [],
-      },
-    });
-
-    expect(scheduleGatewayRestart).toHaveBeenCalledWith({
-      delayMs: 0,
-      reason: "test.no-skip",
     });
   });
 });

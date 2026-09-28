@@ -8,7 +8,7 @@ import { validatePreviousConnectParams } from "../../gateway-protocol/src/connec
 import { GATEWAY_SERVER_CAPS, validateConnectParams } from "../../gateway-protocol/src/index.js";
 import { GatewayClient } from "./client.js";
 import { rawDataToString } from "./websocket-data.js";
-import { WebSocketServer, type WebSocket } from "./websocket.test-support.js";
+import { WebSocketServer } from "./websocket.test-support.js";
 
 describe("GatewayClient websocket opening handshakeTimeout", () => {
   const servers: net.Server[] = [];
@@ -127,9 +127,9 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     const onHelloOk = vi.fn();
     const onConnectError = vi.fn();
     const onClose = vi.fn();
-    let peer: WebSocket;
-    let markerReceived = false;
+    const onEvent = vi.fn();
     const closed = createDeferred();
+    const lateFramesWritten = createDeferred();
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
       deviceIdentity: null,
@@ -139,16 +139,10 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
         onClose(...args);
         closed.resolve();
       },
-      onEvent: (event) => {
-        if (event.event === "late-hello-marker") {
-          markerReceived = true;
-          peer.resume();
-        }
-      },
+      onEvent,
     });
     clients.push(client);
     wss.on("connection", (socket) => {
-      peer = socket;
       socket.send(
         JSON.stringify({
           type: "event",
@@ -158,20 +152,27 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
       );
       socket.once("message", (raw) => {
         const frame = JSON.parse(rawDataToString(raw)) as { id: string };
-        // Hold the peer's close reply until the real client has received both
-        // frames. updateNodeManifest starts closing through the public API.
+        // Write both frames before admitting the peer's close reply, preserving
+        // their wire order without waiting for retired application callbacks.
         socket.pause();
         client.updateNodeManifest({ caps: [], commands: [] });
         socket.send(
           JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok" } }),
         );
-        socket.send(JSON.stringify({ type: "event", event: "late-hello-marker" }));
+        socket.send(JSON.stringify({ type: "event", event: "late-hello-marker" }), (error) => {
+          socket.resume();
+          if (error) {
+            lateFramesWritten.reject(error);
+          } else {
+            lateFramesWritten.resolve();
+          }
+        });
       });
     });
     try {
       client.start();
-      await closed.promise;
-      expect(markerReceived).toBe(true);
+      await Promise.all([lateFramesWritten.promise, closed.promise]);
+      expect(onEvent).not.toHaveBeenCalled();
       expect(onHelloOk).not.toHaveBeenCalled();
       expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
         new Error("gateway closed (1012): node manifest changed"),

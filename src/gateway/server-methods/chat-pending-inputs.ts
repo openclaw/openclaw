@@ -25,6 +25,16 @@ export function projectPendingInputMessage(
   projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
   resolveCronJobName?: (jobId: string) => string | undefined,
 ) {
+  if (input.state === "cancelled" && input.message.display === false) {
+    // Retire retained client copies without returning a withdrawn prompt's content.
+    return {
+      role: "user",
+      content: [],
+      display: false,
+      timestamp: input.acceptedAt,
+      __openclaw: { id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}` },
+    };
+  }
   const projected = projectChatDisplayMessage(input.message, { maxChars, resolveCronJobName });
   const message = projected ? projectProfile(projected) : undefined;
   if (!message) {

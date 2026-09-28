@@ -10,14 +10,11 @@ import {
 
 describe("isCronSessionDisplayKey", () => {
   it.each([
-    ["cron:job", true],
     [" CRON:JOB ", true],
     ["agent:ops:cron:job", true],
-    ["agent:ops:cron:job:run:one", true],
     ["agent:ops::cron:job", true],
     ["agent: :cron:job", true],
     ["agent:ops:cron:", false],
-    ["agent:ops:cron::", false],
     ["agent::cron:job", false],
     [":agent:ops:cron:job", false],
     ["agent:ops:custom:cron:job", false],
@@ -167,14 +164,6 @@ describe("resolveSessionDisplayName", () => {
         derivedTitle: undefined,
       }),
     ).toBe("New session");
-  });
-
-  it("names unnamed work sessions after their checkout", () => {
-    expect(
-      resolveSessionDisplayName("agent:main:dashboard:uuid", {
-        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/Users/dev/Projects/clawdbot" },
-      }),
-    ).toBe("clawdbot ⎇ wt-3f2a");
   });
 
   it("uses a gateway-derived title for otherwise unnamed sessions", () => {

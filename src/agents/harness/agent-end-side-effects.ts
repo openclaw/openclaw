@@ -1,9 +1,3 @@
-/**
- * Agent-end side effect runner.
- *
- * Harnesses use this to trigger skill experience review and plugin agent_end hooks
- * either fire-and-forget or awaited during tests/shutdown.
- */
 import { getRuntimeConfig } from "../../config/config.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";

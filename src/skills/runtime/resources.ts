@@ -15,10 +15,14 @@ import {
   getAgentWorkspaceAccess,
   WorkspaceAccessUnavailableError,
 } from "../../agents/workspace-access.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isMissingPathError } from "../../infra/errors.js";
+import { acquireFileLock } from "../../infra/file-lock.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   prepareSkillBundle,
   readSkillBundleTree,
@@ -284,7 +288,7 @@ export async function prepareSkillResourceDelivery(
       modelVisible:
         (snapshot.resolvedSkills?.some((selected) => selected.filePath === skill.filePath) ??
           false) ||
-        explicitSelections.some((selected) => selected.path === skill.filePath),
+        explicitlySelected,
       ...(skill.displayName ? { displayName: skill.displayName } : {}),
       description: skill.description,
       revision: bundle.revision,
@@ -302,19 +306,18 @@ export async function prepareSkillResourceDelivery(
 export async function materializeSkillResources(
   delivery: SkillResourceDelivery,
   assertCurrent: () => void,
-): Promise<{
-  directory: string;
-  snapshot: SkillSnapshot;
-  rewriteReferences: (text: string) => string;
-  cleanup: () => Promise<void>;
-}> {
+  scope?: { sessionId: string; workspaceDir: string },
+) {
   if (!Value.Check(SkillResourceDeliverySchema, delivery)) {
     throw new Error("Invalid skill resource delivery.");
   }
-  const bundles = delivery.skills.map((skill) => ({
-    skill,
-    bundle: prepareSkillBundle(skill.files),
-  }));
+  const bundles = delivery.skills
+    .map((skill) => ({ skill, bundle: prepareSkillBundle(skill.files) }))
+    .toSorted((left, right) => {
+      const a = JSON.stringify([left.skill.name, left.skill.sourcePath, left.bundle.revision]);
+      const b = JSON.stringify([right.skill.name, right.skill.sourcePath, right.bundle.revision]);
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
   if (
     bundles.some(({ skill, bundle }) => skill.revision !== bundle.revision) ||
     bundles.reduce(
@@ -325,13 +328,45 @@ export async function materializeSkillResources(
     throw new Error("Skill resource integrity or delivery limit check failed.");
   }
   assertCurrent();
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-resources-"));
-  const cleanup = () => removeTemporaryArtifacts(directory, "Materialized skill");
+  const directory = scope
+    ? path.join(
+        resolvePreferredOpenClawTmpDir(),
+        `skill-resources-${sha256Hex(JSON.stringify([scope.sessionId, scope.workspaceDir])).slice(0, 16)}`,
+      )
+    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-resources-"));
+  // The lock covers deletion as well as use. Only a definitely dead process may
+  // surrender a crashed turn's path; elapsed time never evicts a live reader.
+  const lock = scope
+    ? await acquireFileLock(directory, {
+        retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
+        stale: 0,
+        staleRecovery: "remove-if-definitely-stale",
+      })
+    : undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      try {
+        await removeTemporaryArtifacts(directory, "Materialized skill");
+      } finally {
+        await lock?.release();
+      }
+    })());
   try {
+    if (scope) {
+      assertCurrent();
+      await fs.rm(directory, { recursive: true, force: true });
+      assertCurrent();
+      await fs.mkdir(directory, { mode: 0o700 });
+    }
     const pathMappings: Array<[string, string]> = [];
     const resolvedSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
-    for (const [index, { skill, bundle }] of bundles.entries()) {
-      const baseDir = path.join(directory, String(index));
+    for (const { skill, bundle } of bundles) {
+      const name = normalizeSkillIndexName(skill.name).slice(0, 40) || "skill";
+      const baseDir = path.join(
+        directory,
+        `${name}-${sha256Hex(JSON.stringify([skill.name, skill.sourcePath, bundle.revision])).slice(0, 12)}`,
+      );
       for (const file of bundle.files) {
         assertCurrent();
         const target = path.join(baseDir, file.path);
@@ -371,7 +406,7 @@ export async function materializeSkillResources(
           preserveOrder: true,
         }),
       },
-      rewriteReferences: (text) =>
+      rewriteReferences: (text: string) =>
         pathMappings.reduce(
           (rewritten, [source, target]) => rewritten.replaceAll(source, target),
           text,

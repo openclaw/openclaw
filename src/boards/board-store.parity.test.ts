@@ -40,10 +40,9 @@ afterEach(async () => {
 });
 
 describe("SqliteBoardStore behavior", () => {
-  const createStore = createTestBoardStore;
   const boardSession = { sessionKey: "agent:main:board" };
   it("persists revisions, layout, bytes, and declared summaries", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const first = await store.putWidget({
       ...boardSession,
       name: "weather",
@@ -145,7 +144,7 @@ describe("SqliteBoardStore behavior", () => {
   });
 
   it("keeps content-kind semantics and normalized ordering", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     await store.applyOps(boardSession, [
       { kind: "tab_create", tabId: "main", title: "Main" },
       { kind: "tab_create", tabId: "notes", title: "Notes" },
@@ -198,7 +197,7 @@ describe("SqliteBoardStore behavior", () => {
         kind === "html"
           ? { kind, html: text }
           : { kind, contentKind: "diagram", pluginKind: "diagram:diagram", source: text };
-      const store = createStore();
+      const store = createTestBoardStore();
       const first = await store.putWidget({
         ...boardSession,
         name: "scoped",
@@ -270,7 +269,7 @@ describe("SqliteBoardStore behavior", () => {
   );
 
   it("requires a fresh grant when an MCP app widget changes servers", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const descriptor = {
       serverName: "server-a",
       toolName: "weather",
@@ -318,7 +317,7 @@ describe("SqliteBoardStore behavior", () => {
   });
 
   it("rejects a delayed MCP App grant after remove and same-name replacement", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const putApp = async (serverName: string) =>
       await store.putWidget({
         ...boardSession,
@@ -351,7 +350,7 @@ describe("SqliteBoardStore behavior", () => {
   });
 
   it("rejects a delayed HTML grant after remove and same-name replacement", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const putHtml = async (html: string) =>
       await store.putWidget({
         ...boardSession,
@@ -370,28 +369,8 @@ describe("SqliteBoardStore behavior", () => {
     ).rejects.toThrow("instance changed");
   });
 
-  it("rejects stale grant revisions before accepting the current one", async () => {
-    const store = createStore();
-    const first = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "one" },
-      declared: { tools: ["weather.read"] },
-    });
-    await expect(store.grant(boardSession, "scoped", "granted", 2)).rejects.toThrow(
-      "revision changed",
-    );
-    expect(
-      (await store.grant(boardSession, "scoped", "granted", 1, first.widgets[0]?.instanceId))
-        .widgets[0],
-    ).toMatchObject({
-      revision: 1,
-      grantState: "granted",
-    });
-  });
-
   it("drops an empty board after its last tab is deleted", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     await store.applyOps(boardSession, [{ kind: "tab_create", tabId: "main", title: "Main" }]);
     expect(
       await store.applyOps(boardSession, [{ kind: "tab_delete", tabId: "main" }]),

@@ -1,11 +1,68 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expect } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "../infra/deferred-plugin-migrations.js";
+import { recordLegacyMigrationRun } from "../infra/state-migrations.receipts.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
-export function seedDeferredPluginSessionSource(
+export async function editAndDeleteImportedSessions(
+  scope: Awaited<ReturnType<typeof seedDeferredPluginSessionSource>>["scope"],
+  keptLabel: string,
+) {
+  // Retention of the fixture's old timestamps must not race its intended deletion.
+  await expect(
+    patchSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:kept" },
+      () => ({ label: keptLabel }),
+      { skipMaintenance: true },
+    ),
+  ).resolves.toMatchObject({ label: keptLabel });
+  await expect(
+    deleteSessionEntryLifecycle({
+      ...scope,
+      target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+    }),
+  ).resolves.toMatchObject({ deleted: true });
+}
+
+/** Inject competing work inside synchronous publication callbacks. */
+export function seedConcurrentDeferredPluginMigration(state: OpenClawTestState, pluginId: string) {
+  const previous = readDeferredPluginMigrations({ env: state.env }).find(
+    (pending) => pending.pluginId === pluginId,
+  );
+  runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      recordLegacyMigrationRun(db, {
+        runId: `deferred-plugin-migration:${pluginId}`,
+        startedAt: 1,
+        finishedAt: null,
+        status: "pending",
+        reportJson: JSON.stringify({
+          ...previous,
+          pluginId,
+          reason: "A concurrent Doctor found additional migration work.",
+          command: "openclaw doctor --fix",
+          requiresStateMigration: true,
+        }),
+        upsert: true,
+      }),
+    { env: state.env },
+  );
+}
+
+export async function seedDeferredPluginSessionSource(
   state: OpenClawTestState,
   layout: "external" | "default" | "legacy-root" = "external",
   pluginId = "fixture-plugin",
@@ -70,7 +127,7 @@ export function seedDeferredPluginSessionSource(
     agents: { entries: { main: { default: true } } },
     ...(layout === "external" ? { session: { store: storePath } } : {}),
   };
-  recordDeferredPluginMigrations({
+  await recordDeferredPluginMigrations({
     env: state.env,
     pending: [
       {

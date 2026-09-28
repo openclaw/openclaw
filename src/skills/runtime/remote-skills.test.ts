@@ -307,6 +307,7 @@ metadata:
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
       connId: "conn-1",
+      displayName: "Build Mac",
       commands: ["system.run"],
     });
     replaceRemoteNodeSkills({
@@ -316,6 +317,7 @@ metadata:
     const firstVersion = getSkillsSnapshotVersion();
     const firstSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
     expect(firstSkill.contentHash).toEqual(expect.any(String));
+    expect(firstSkill.locationNote).toContain("Build Mac (node-1)");
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",

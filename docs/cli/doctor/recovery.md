@@ -30,9 +30,12 @@ Gateway stopped for maintenance. Doctor reports changed keys and backup paths;
 supported custom settings survive the rewrite. Automatic native-policy repair
 preserves unknown operator edits and uncertain definitions for operator review.
 Other command or credential changes still require interactive confirmation.
-Services already stopped keep their definitions and stop state; run the reported
-profile-aware `openclaw gateway install --force` command from the intended
-installation to reconcile them (installation may start the service).
+After successful standalone `openclaw doctor --fix`, an already stopped managed
+Gateway starts and verifies readiness when its service targets the current
+installation. Update-time Doctor leaves activation with the updater. A stopped
+service targeting another installation keeps its definition and stop state; run
+the reported profile-aware `openclaw gateway install --force` command from the
+intended installation to reconcile it (installation may start the service).
 It preserves the service's profile and an explicit service port when no port is
 configured. Source checkouts, deployment-owned overrides, and unavailable native
 inspection do not grant automatic installation repair authority; Doctor reports
@@ -120,6 +123,12 @@ maintenance inspection and service mutations; it retains Gateway/state
 coordinators and agent-database lease checks. Shutdown and restart remain with
 the deployment owner. A failed native probe is never treated as proof that the
 Gateway is stopped.
+
+Health diagnostics also leave native service inspection to that external owner.
+They still check the selected port, live Gateway ownership, and startup migration
+activity. With none present, Doctor reports the unavailable Gateway promptly
+instead of waiting for an unrelated native service manager. A live or starting
+Gateway retains the shared readiness budget.
 
 For a system template such as `openclaw@.service` with `User=%i`, inspection
 follows the current account's instance (`openclaw@<user>.service`) while

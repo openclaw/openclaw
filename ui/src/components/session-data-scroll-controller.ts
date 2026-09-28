@@ -9,12 +9,10 @@ export class SessionDataScrollController {
   private resizeObserver: ResizeObserver | null = null;
   private frame: number | null = null;
 
-  /** Creates a scroll owner that notifies its reactive host on state changes. */
   constructor(private readonly notify: () => void) {}
 
-  /** Rebinds observation to the sidebar's current scroll container. */
   synchronize(host: Pick<HTMLElement, "querySelector">): void {
-    const element = host.querySelector(".sidebar-shell__body") as HTMLElement | null;
+    const element = host.querySelector<HTMLElement>(".sidebar-shell__body");
     if (element !== this.element) {
       this.resizeObserver?.disconnect();
       this.element = element;
@@ -35,7 +33,6 @@ export class SessionDataScrollController {
     }
   }
 
-  /** Publishes the scroll affordance state observed from an element. */
   update(element: HTMLElement): void {
     const nextState = resolveSidebarSessionsScrollState(element);
     if (nextState !== this.state) {
@@ -44,7 +41,6 @@ export class SessionDataScrollController {
     }
   }
 
-  /** Releases DOM observers and pending animation-frame work. */
   dispose(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;

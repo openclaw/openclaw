@@ -31,12 +31,6 @@ function capacityAbortReason(signal: AbortSignal): Error {
     : new Error("node worker admission aborted");
 }
 
-function resolveDefaultWorkerCapacity(): number {
-  const availableParallelism =
-    typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
-  return Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, availableParallelism));
-}
-
 export class NodeWorkerCapacityExhaustedError extends Error {
   readonly code = NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE;
 
@@ -62,7 +56,9 @@ export class NodeWorkerCapacity {
     private readonly store: NodeWorkerLaunchStore,
     options: NodeWorkerCapacityOptions = {},
   ) {
-    this.capacity = options.capacity ?? resolveDefaultWorkerCapacity();
+    this.capacity =
+      options.capacity ??
+      Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, os.availableParallelism()));
     this.waitMs = options.capacityWaitMs ?? DEFAULT_CAPACITY_WAIT_MS;
     this.onCapacityChanged = options.onCapacityChanged;
     if (

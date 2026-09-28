@@ -46,6 +46,7 @@ import {
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
 } from "../reply-blocks.js";
+import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "../send.js";
 import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
@@ -53,7 +54,6 @@ import {
   SlackResponseAlreadyReportedError,
   type SlackResponseUrlBudget as ResponseUrlBudget,
 } from "./response-url-budget.js";
-import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 // Receipt-tracked Web API fallbacks stay at 4k, but response_url gets only five calls.
 // Repack its complete fallback parts up to Slack's hard text and block limits.
@@ -98,10 +98,6 @@ function compactSlackResponseUrlFallback(
   }
   flush();
   return compacted;
-}
-
-export function readSlackReplyBlocks(payload: ReplyPayload) {
-  return resolveSlackReplyBlocks(payload);
 }
 
 export function sanitizeSlackMonitorReplyPayload(payload: ReplyPayload): ReplyPayload | null {
@@ -336,49 +332,11 @@ type SlackRespondFn = (payload: {
 
 type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
-/**
- * Compute effective threadTs for a Slack reply based on replyToMode.
- * - "off": stay in thread if already in one, otherwise main channel
- * - "first": first reply goes to thread, subsequent replies to main channel
- * - "all": all replies go to thread
- */
-export function resolveSlackThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  incomingThreadTs: string | undefined;
-  messageTs: string | undefined;
-  hasReplied: boolean;
-  isThreadReply?: boolean;
-}): string | undefined {
-  return createSlackReplyReferencePlanner(params).use();
-}
-
 type SlackReplyDeliveryPlan = {
   peekThreadTs: () => string | undefined;
   nextThreadTs: () => string | undefined;
   markSent: () => void;
 };
-
-function createSlackReplyReferencePlanner(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  incomingThreadTs: string | undefined;
-  messageTs: string | undefined;
-  hasReplied?: boolean;
-  isThreadReply?: boolean;
-}) {
-  // Older/internal callers may not pass explicit thread classification. Keep
-  // genuine thread replies sticky, but do not let Slack's auto-populated
-  // top-level thread_ts override the configured replyToMode.
-  const effectiveIsThreadReply =
-    params.isThreadReply ??
-    Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
-  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
-  return createReplyReferencePlanner({
-    replyToMode: effectiveMode,
-    existingId: params.incomingThreadTs,
-    startId: params.messageTs,
-    hasReplied: params.hasReplied,
-  });
-}
 
 export function createSlackReplyDeliveryPlan(params: {
   replyToMode: "off" | "first" | "all" | "batched";
@@ -387,8 +345,17 @@ export function createSlackReplyDeliveryPlan(params: {
   hasRepliedRef: { value: boolean };
   isThreadReply?: boolean;
 }): SlackReplyDeliveryPlan {
-  const replyReference = createSlackReplyReferencePlanner({
-    ...params,
+  // Older/internal callers may not pass explicit thread classification. Keep
+  // genuine thread replies sticky, but do not let Slack's auto-populated
+  // top-level thread_ts override the configured replyToMode.
+  const effectiveIsThreadReply =
+    params.isThreadReply ??
+    Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
+  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
+  const replyReference = createReplyReferencePlanner({
+    replyToMode: effectiveMode,
+    existingId: params.incomingThreadTs,
+    startId: params.messageTs,
     hasReplied: params.hasRepliedRef.value,
   });
   return {
@@ -439,7 +406,7 @@ export async function deliverSlackSlashReplies(params: {
   const responseBudget = params.responseBudget ?? createSlackResponseUrlBudget(params.respond);
   const chunkLimit = Math.max(1, Math.min(params.textLimit, SLACK_TEXT_LIMIT));
   const createBlockMessagePlan = (input: {
-    blocks: NonNullable<ReturnType<typeof readSlackReplyBlocks>>;
+    blocks: NonNullable<ReturnType<typeof resolveSlackReplyBlocks>>;
     baseText?: string;
   }): PlannedSlashReplyMessage => {
     const plan = buildSlackNativeDataDeliveryPlan({

@@ -1,9 +1,3 @@
-/**
- * Strict numeric parsers for browser route input.
- *
- * Converts query/body values into finite integer/timeout numbers while
- * preserving route-specific error messages for JSON responses.
- */
 import {
   parseStrictFiniteNumber,
   parseStrictInteger,
@@ -12,14 +6,10 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 
-function hasRouteInputValue(value: unknown): boolean {
-  return value != null;
-}
-
 /** Read an optional finite number route field. */
 export function readRouteFiniteNumber(value: unknown, fieldName: string): number | undefined {
   const parsed = parseStrictFiniteNumber(value);
-  if (parsed === undefined && hasRouteInputValue(value)) {
+  if (parsed === undefined && value != null) {
     throw new Error(`${fieldName} must be a finite number.`);
   }
   return parsed;
@@ -43,7 +33,7 @@ export function readRouteInteger(
   options?: { invalidMessage?: string },
 ): number | undefined {
   const parsed = parseStrictInteger(value);
-  if (parsed === undefined && hasRouteInputValue(value)) {
+  if (parsed === undefined && value != null) {
     throw new Error(options?.invalidMessage ?? `${fieldName} must be an integer.`);
   }
   return parsed;
@@ -56,7 +46,7 @@ export function readRoutePositiveInteger(
   options?: { invalidMessage?: string },
 ): number | undefined {
   const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined && hasRouteInputValue(value)) {
+  if (parsed === undefined && value != null) {
     throw new Error(options?.invalidMessage ?? `${fieldName} must be a positive integer.`);
   }
   return parsed;
@@ -79,7 +69,7 @@ export function readRouteNonNegativeInteger(
   options?: { invalidMessage?: string },
 ): number | undefined {
   const parsed = parseStrictNonNegativeInteger(value);
-  if (parsed === undefined && hasRouteInputValue(value)) {
+  if (parsed === undefined && value != null) {
     throw new Error(options?.invalidMessage ?? `${fieldName} must be a non-negative integer.`);
   }
   return parsed;

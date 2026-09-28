@@ -10,12 +10,18 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { getCommandArgsWithRootOptions } from "../src/infra/cli-root-options.ts";
+import { applyCliProfileEnv, parseCliProfileArgs } from "../src/cli/profile.ts";
+import {
+  getCommandArgsWithRootOptions,
+  getRootOptionAwareCommandPath,
+} from "../src/infra/cli-root-options.ts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -31,7 +37,6 @@ import {
   runtimePostBuildWatchedPaths,
   type BundledPluginBuildEntry,
 } from "./lib/run-node-input-state.mts";
-import { sleep } from "./lib/sleep.mjs";
 import {
   discoverStaticExtensionAssets,
   resolveStaticExtensionAssetSource,
@@ -47,7 +52,7 @@ import {
 import { listCoreRuntimePostBuildOutputs, runRuntimePostBuild } from "./runtime-postbuild.mts";
 import { listTsdownOutputRoots } from "./tsdown-build.mts";
 
-type RunNodeInjectedChild = {
+type RunNodeChild = {
   kill?: (signal?: NodeJS.Signals) => boolean | void;
   on(event: string, callback: (...args: never[]) => void): unknown;
   off?(event: string, callback: (...args: never[]) => void): unknown;
@@ -56,7 +61,6 @@ type RunNodeInjectedChild = {
   stdout?: Pick<NodeJS.ReadableStream, "on">;
 };
 
-type RunNodeChild = RunNodeInjectedChild;
 type RunNodeSpawn = (command: string, args: string[], options: SpawnOptions) => unknown;
 type RunNodeSpawnSync = (
   command: string,
@@ -645,7 +649,7 @@ const formatBuildReason = (reason: BuildRequirement["reason"]) => BUILD_REASON_L
 const formatRuntimePostBuildReason = (reason: RuntimePostBuildRequirement["reason"]) =>
   RUNTIME_POSTBUILD_REASON_LABELS[reason];
 
-const refuseImmutableDeploymentMutation = async (
+const refuseImmutableDeploymentMutation = (
   deps: RunNodeDeps,
   artifactKind: "build" | "runtime",
   reason: string,
@@ -655,7 +659,7 @@ const refuseImmutableDeploymentMutation = async (
     "Replace this deployment with a complete release, then use its installed `openclaw` command or run `node openclaw.mjs ...` from that release.\n";
   deps.stderr.write(message);
   deps.outputTee?.write(message);
-  return await closeRunNodeOutputTee(deps, 1);
+  return 1;
 };
 
 const SIGNAL_EXIT_CODES = {
@@ -689,14 +693,8 @@ const hasErrorCode = (error: unknown, code: string) =>
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "unknown error";
 
-const parsePositiveIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
-  const raw = env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-};
+const parsePositiveIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) =>
+  parsePositiveInteger(env[name]) ?? fallback;
 
 const resolveRunNodeOutputLogPath = (deps: RunNodeDeps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -1082,6 +1080,7 @@ const getInterruptedSpawnOutcome = (
 };
 
 const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
+  deps.cancellation.signal.throwIfAborted();
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
   // The parent route grants lifecycle IPC; generic children must not extend
   // the launcher's five-second force-kill boundary with a shaped message.
@@ -1256,7 +1255,10 @@ const removeStaleBuildLock = (deps: RunNodeLockDeps, lockDir: string, staleMs: n
 };
 
 /** Acquires the dev-build lock used to serialize local rebuilds. */
-export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<() => void> => {
+export const acquireRunNodeBuildLock = async (
+  deps: RunNodeLockDeps,
+  signal?: AbortSignal,
+): Promise<() => void> => {
   const lockRoot = path.join(deps.cwd, ".artifacts");
   const lockDir = path.join(lockRoot, "run-node-build.lock");
   const timeoutMs = parsePositiveIntegerEnv(
@@ -1279,6 +1281,7 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
   const consumeWaitLog = () => waitLogBudget-- > 0;
 
   while (Date.now() - startedAt < timeoutMs) {
+    signal?.throwIfAborted();
     try {
       deps.fs.mkdirSync(lockRoot, { recursive: true });
       deps.fs.mkdirSync(lockDir);
@@ -1312,16 +1315,9 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
           // detection if the directory is still present.
         }
       };
-      const onSignal = () => removeLockDir();
       const onExit = () => removeLockDir();
-      for (const signal of FORWARDED_SIGNALS) {
-        deps.process.on(signal, onSignal);
-      }
       deps.process.on("exit", onExit);
       return () => {
-        for (const signal of FORWARDED_SIGNALS) {
-          deps.process.off(signal, onSignal);
-        }
         deps.process.off("exit", onExit);
         removeLockDir();
       };
@@ -1335,7 +1331,8 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
       if (consumeWaitLog()) {
         logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
       }
-      await sleep(pollMs);
+      // Cancellation must wake a contended wait, not only the next poll.
+      await delay(pollMs, undefined, signal ? { signal } : undefined);
     }
   }
 
@@ -1343,8 +1340,9 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
 };
 
 const withRunNodeBuildLock = async <T,>(deps: RunNodeDeps, callback: () => Promise<T>) => {
-  const release = await acquireRunNodeBuildLock(deps);
+  const release = await acquireRunNodeBuildLock(deps, deps.cancellation.signal);
   try {
+    deps.cancellation.signal.throwIfAborted();
     return await callback();
   } finally {
     release();
@@ -1352,11 +1350,10 @@ const withRunNodeBuildLock = async <T,>(deps: RunNodeDeps, callback: () => Promi
 };
 
 const withRunNodeRuntimePublication = async <T,>(deps: RunNodeDeps, publish: () => Promise<T>) => {
-  const [{ withGatewayRuntimeArtifactPublication }, { parseCliProfileArgs, applyCliProfileEnv }] =
-    await Promise.all([
-      import("../src/cli/update-cli/update-command-service-publication.ts"),
-      import("../src/cli/profile.ts"),
-    ]);
+  deps.cancellation.signal.throwIfAborted();
+  const { withGatewayRuntimeArtifactPublication } =
+    await import("../src/cli/update-cli/update-command-service-publication.ts");
+  deps.cancellation.signal.throwIfAborted();
   const selected = parseCliProfileArgs([deps.execPath, "openclaw.mjs", ...deps.args]);
   if (!selected.ok) {
     throw new Error(selected.error);
@@ -1373,7 +1370,10 @@ const withRunNodeRuntimePublication = async <T,>(deps: RunNodeDeps, publish: () 
       outputPaths: listTsdownOutputRoots(),
       assertCurrent() {},
     },
-    publish,
+    async () => {
+      deps.cancellation.signal.throwIfAborted();
+      return await publish();
+    },
   );
 };
 
@@ -1400,19 +1400,40 @@ const writeRuntimePostBuildStamp = (deps: RunNodeDeps) => {
   }
 };
 
+const refuseLiveDistMutation = async (deps: RunNodeDeps) => {
+  const fence = await resolveLiveManagedGatewayDistFence(deps.cwd, { env: deps.env });
+  if (!fence.refuse) {
+    return false;
+  }
+  const message = `${fence.message}\n`;
+  deps.stderr.write(message);
+  deps.outputTee?.write(message);
+  return true;
+};
+
 const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
-  withDistArtifactOwnership(deps.cwd, async () => {
-    if (!resolveRuntimePostBuildRequirement(deps).shouldSync) {
-      return true;
-    }
-    return await withRunNodeRuntimePublication(deps, async () => {
-      const synced = await syncRuntimeArtifacts(deps);
-      if (synced) {
-        writeRuntimePostBuildStamp(deps);
+  withDistArtifactOwnership(
+    deps.cwd,
+    async () => {
+      deps.cancellation.signal.throwIfAborted();
+      if (!resolveRuntimePostBuildRequirement(deps).shouldSync) {
+        return true;
       }
-      return synced;
-    });
-  });
+      return await withRunNodeRuntimePublication(deps, async () => {
+        if (await refuseLiveDistMutation(deps)) {
+          return false;
+        }
+        deps.cancellation.signal.throwIfAborted();
+        const synced = await syncRuntimeArtifacts(deps);
+        deps.cancellation.signal.throwIfAborted();
+        if (synced) {
+          writeRuntimePostBuildStamp(deps);
+        }
+        return synced;
+      });
+    },
+    deps.cancellation.signal,
+  );
 
 const shouldSkipWatchRuntimeSync = (deps: RunNodeDeps, requirement: RuntimePostBuildRequirement) =>
   deps.env.OPENCLAW_WATCH_MODE === "1" &&
@@ -1420,16 +1441,44 @@ const shouldSkipWatchRuntimeSync = (deps: RunNodeDeps, requirement: RuntimePostB
   hasDirtyRuntimePostBuildInputs(deps) !== true &&
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
-const isGatewayClientCommand = (args: string[]) =>
-  args[0] === "dashboard" ||
-  (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
-  (args[0] === "agent" && !args.includes("--local"));
+const resolveRunNodeCommandPath = (args: string[], depth: number) =>
+  getRootOptionAwareCommandPath(["node", "openclaw", ...args], depth);
+
+const isGatewayClientCommand = (args: string[]) => {
+  const [primary, secondary] = resolveRunNodeCommandPath(args, 2);
+  return (
+    primary === "dashboard" ||
+    (primary === "gateway" && (secondary === "call" || secondary === "status")) ||
+    (primary === "agent" && !args.includes("--local"))
+  );
+};
+
+const isGatewayRecoveryCommand = (args: string[]) => {
+  const [primary, secondary] = resolveRunNodeCommandPath(args, 2);
+  return primary === "gateway" && (secondary === "stop" || secondary === "restart");
+};
+
+const shouldFastPathExistingDistForGatewayRecovery = (deps: RunNodeDeps) =>
+  isGatewayRecoveryCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(deps.distEntry, deps.fs) != null;
 
 const shouldFastPathExistingDistForGatewayClient = (deps: RunNodeDeps) =>
   isGatewayClientCommand(deps.args) &&
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
   statMtime(deps.distEntry, deps.fs) != null &&
   canUseStampedGatewayClientDist(deps);
+
+const shouldFastPathExistingDist = (deps: RunNodeDeps) =>
+  shouldFastPathExistingDistForGatewayRecovery(deps) ||
+  shouldFastPathExistingDistForGatewayClient(deps);
+
+const applyRunNodeCliProfile = (args: string[], env: NodeJS.ProcessEnv, execPath: string) => {
+  const parsed = parseCliProfileArgs([execPath, "openclaw", ...args]);
+  if (parsed.ok && parsed.profile) {
+    applyCliProfileEnv({ profile: parsed.profile, env });
+  }
+};
 
 const canUseStampedGatewayClientDist = (deps: RunNodeDeps) => {
   const currentHead = resolveGitHead(deps);
@@ -1490,9 +1539,12 @@ const runQaReportFromSource = (deps: RunNodeDeps, script: QaReportScript) => {
 function createRunNodeDeps(params: RunNodeMainParams) {
   const cwd = params.cwd ?? process.cwd();
   const distRoot = path.join(cwd, "dist");
+  const args = params.args ?? process.argv.slice(2);
+  const execPath = params.execPath ?? process.execPath;
   const env = params.env ? { ...params.env } : { ...process.env };
   // Select this checkout's plugins over tracked installs without changing source/dist loading.
   env.OPENCLAW_DEV_SOURCE_ROOT ??= cwd;
+  applyRunNodeCliProfile(args, env, execPath);
   const mutableState: RunNodeMutableState = {
     outputTee: null,
     runNodeProgress: undefined,
@@ -1504,15 +1556,16 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     stderr: params.stderr ?? process.stderr,
     stdout: params.stdout ?? process.stdout,
     process: params.process ?? process,
-    execPath: params.execPath ?? process.execPath,
+    execPath,
     cwd,
-    args: params.args ?? process.argv.slice(2),
+    args,
     env,
     platform: params.platform ?? process.platform,
     signalProcess:
       params.signalProcess ??
       ((pid: number, signal?: NodeJS.Signals | number) => process.kill(pid, signal)),
     runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
+    cancellation: new AbortController(),
     distRoot,
     distEntry: path.join(distRoot, "/entry.js"),
     buildStampPath: path.join(distRoot, BUILD_STAMP_FILE),
@@ -1524,6 +1577,14 @@ function createRunNodeDeps(params: RunNodeMainParams) {
   };
 }
 
+/** Read-only build admission shared by explicit test preparation and the source runner. */
+export function resolveRunNodePreparation(cwd: string, env: NodeJS.ProcessEnv) {
+  const deps = createRunNodeDeps({ cwd, env, args: [] });
+  const build = resolveBuildRequirement(deps).shouldBuild;
+  const runtime = !build && resolveRuntimePostBuildRequirement(deps).shouldSync;
+  return { build, runtime, immutable: (build || runtime) && isImmutableGitDeployment(deps) };
+}
+
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
 export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
@@ -1533,20 +1594,44 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     deps.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "0";
   }
   deps.outputTee = createRunNodeOutputTee(deps);
+  // Children own signal forwarding; retain cancellation across in-process steps
+  // and join active work before releasing its locks.
+  let interruptedSignal: NodeJS.Signals | undefined;
+  const signalHandlers = FORWARDED_SIGNALS.map(
+    (signal) =>
+      [
+        signal,
+        () => {
+          interruptedSignal ??= signal;
+          deps.cancellation.abort(new Error(`Source runner interrupted by ${signal}`));
+        },
+      ] as const,
+  );
+  for (const [signal, handler] of signalHandlers) {
+    deps.process.on(signal, handler);
+  }
+  const finishRun = async (exitCode: RunNodeExit): Promise<RunNodeExit> => {
+    const outcome = await closeRunNodeOutputTee(deps, exitCode);
+    return interruptedSignal && typeof outcome !== "string"
+      ? getSignalExitCode(interruptedSignal)
+      : outcome;
+  };
 
   try {
     let exitCode: RunNodeExit = 1;
-    if (shouldFastPathExistingDistForGatewayClient(deps)) {
+    if (shouldFastPathExistingDist(deps)) {
       exitCode = await runOpenClaw(deps);
-      return await closeRunNodeOutputTee(deps, exitCode);
+      return await finishRun(exitCode);
     }
     const buildRequirement = resolveBuildRequirement(deps);
     const immutableDeployment = isImmutableGitDeployment(deps);
     if (immutableDeployment && buildRequirement.shouldBuild) {
-      return await refuseImmutableDeploymentMutation(
-        deps,
-        "build",
-        formatBuildReason(buildRequirement.reason),
+      return await finishRun(
+        refuseImmutableDeploymentMutation(
+          deps,
+          "build",
+          formatBuildReason(buildRequirement.reason),
+        ),
       );
     }
     const qaReportScript = resolveQaReportSourceScript(deps, buildRequirement);
@@ -1557,15 +1642,17 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
         deps,
       );
       exitCode = await runQaReportFromSource(deps, qaReportScript);
-      return await closeRunNodeOutputTee(deps, exitCode);
+      return await finishRun(exitCode);
     }
     if (!buildRequirement.shouldBuild) {
       const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
       if (immutableDeployment && runtimePostBuildRequirement.shouldSync) {
-        return await refuseImmutableDeploymentMutation(
-          deps,
-          "runtime",
-          formatRuntimePostBuildReason(runtimePostBuildRequirement.reason),
+        return await finishRun(
+          refuseImmutableDeploymentMutation(
+            deps,
+            "runtime",
+            formatRuntimePostBuildReason(runtimePostBuildRequirement.reason),
+          ),
         );
       }
       if (
@@ -1584,15 +1671,15 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
           return await syncRuntimeArtifactsAndStamp(deps);
         });
         if (!synced) {
-          return await closeRunNodeOutputTee(deps, 1);
+          return await finishRun(1);
         }
       }
       exitCode = await runOpenClaw(deps);
-      return await closeRunNodeOutputTee(deps, exitCode);
+      return await finishRun(exitCode);
     }
 
     const buildExitCode = await withRunNodeBuildLock(deps, async () => {
-      if (shouldFastPathExistingDistForGatewayClient(deps)) {
+      if (shouldFastPathExistingDist(deps)) {
         return 0;
       }
       const lockedBuildRequirement = resolveBuildRequirement(deps);
@@ -1608,43 +1695,59 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
         return (await syncRuntimeArtifactsAndStamp(deps)) ? 0 : 1;
       }
 
-      logRunner(
-        `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
-        deps,
-      );
-      return await withDistArtifactOwnership(deps.cwd, () =>
-        withRunNodeRuntimePublication(deps, () =>
-          withRunNodeProgress(deps, "Building local CLI artifacts", async () => {
-            const build = asRunNodeChild(
-              deps.spawn(
-                deps.execPath,
-                distArtifactEntryArgs(path.join(deps.cwd, "scripts/build-all.mts"), ["qaRuntime"]),
-                {
-                  cwd: deps.cwd,
-                  detached: shouldUseRunNodeChildProcessGroup(deps),
-                  env: {
-                    ...deps.env,
-                    [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
-                  },
-                  stdio: ["inherit", "pipe", "pipe"],
-                },
-              ),
+      return await withDistArtifactOwnership(
+        deps.cwd,
+        () =>
+          withRunNodeRuntimePublication(deps, async () => {
+            if (await refuseLiveDistMutation(deps)) {
+              return 1;
+            }
+            logRunner(
+              `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
+              deps,
             );
-            pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
-            const result = await waitForSpawnedProcess(build, deps);
-            return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
+            return await withRunNodeProgress(deps, "Building local CLI artifacts", async () => {
+              deps.cancellation.signal.throwIfAborted();
+              const build = asRunNodeChild(
+                deps.spawn(
+                  deps.execPath,
+                  distArtifactEntryArgs(path.join(deps.cwd, "scripts/build-all.mts"), [
+                    "qaRuntime",
+                  ]),
+                  {
+                    cwd: deps.cwd,
+                    detached: shouldUseRunNodeChildProcessGroup(deps),
+                    env: {
+                      ...deps.env,
+                      [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
+                    },
+                    stdio: ["inherit", "pipe", "pipe"],
+                  },
+                ),
+              );
+              pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
+              const result = await waitForSpawnedProcess(build, deps);
+              return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
+            });
           }),
-        ),
+        deps.cancellation.signal,
       );
     });
     if (buildExitCode !== 0) {
-      return await closeRunNodeOutputTee(deps, buildExitCode);
+      return await finishRun(buildExitCode);
     }
     exitCode = await runOpenClaw(deps);
-    return await closeRunNodeOutputTee(deps, exitCode);
+    return await finishRun(exitCode);
   } catch (error) {
-    await closeRunNodeOutputTee(deps, 1);
+    const outcome = await finishRun(1);
+    if (interruptedSignal) {
+      return outcome;
+    }
     throw error;
+  } finally {
+    for (const [signal, handler] of signalHandlers) {
+      deps.process.off(signal, handler);
+    }
   }
 }
 

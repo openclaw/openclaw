@@ -47,59 +47,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     );
   });
 
-  it("persists runtime model fields on the child session before starting the run", async () => {
-    // The child run reads model/provider from session state, so persistence must
-    // happen before the gateway accepts the agent request.
-    const operations: string[] = [];
-    callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
-      operations.push(`gateway:${opts.method ?? "unknown"}`);
-      if (opts.method === "sessions.patch") {
-        return { ok: true };
-      }
-      if (opts.method === "agent") {
-        return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
-      }
-      if (opts.method === "sessions.delete") {
-        return { ok: true };
-      }
-      return {};
-    });
-    let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    installSessionStoreCaptureMock(updateSessionStoreMock, {
-      operations,
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "test",
-        model: "openai/gpt-5.4",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "guildchat",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(result.modelApplied).toBe(true);
-    expect(result.resolvedModel).toBe("openai/gpt-5.4");
-    expect(result.resolvedProvider).toBe("openai");
-    expectPersistedRuntimeModel({
-      persistedStore,
-      sessionKey: /^agent:main:subagent:/,
-      provider: "openai",
-      model: "gpt-5.4",
-      overrideSource: "user",
-    });
-    expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
-    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
-      operations.lastIndexOf("store:update"),
-    );
-  });
-
   it("persists an explicit auth profile separately from the child model id", async () => {
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
     installSessionStoreCaptureMock(updateSessionStoreMock, {

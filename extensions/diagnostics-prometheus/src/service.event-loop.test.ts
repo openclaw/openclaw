@@ -1,6 +1,11 @@
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { baseEvent, createMetricsHarness, trusted, untrusted } from "./service.test-helpers.js";
+import {
+  baseEvent,
+  createMetricsHarness,
+  trusted,
+  untrusted,
+  withMetricsServer,
+} from "./service.test-helpers.js";
 
 // HTTP scrapes in this file exercise an authorized operator; the exporter's scope guard is
 // covered in service.http-scope.test.ts.
@@ -129,29 +134,24 @@ describe("diagnostics-prometheus runtime metrics", () => {
     (preseed) => {
       const metrics = createMetricsHarness();
       const sample = {
-        ...baseEvent(),
         type: "gateway.event_loop.sample",
         intervalMs: 1_000,
         delayMaxMs: 20,
       } as const;
       try {
         if (preseed) {
-          metrics.record(sample, trusted);
-          metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 20 }, trusted);
+          metrics.record(sample);
+          metrics.record({ type: "diagnostic.gc", durationMs: 20 });
         }
         for (let index = 0; index < 2100; index += 1) {
-          metrics.record(
-            {
-              ...baseEvent(),
-              type: "model.call.completed",
-              runId: `run-${index}`,
-              callId: `call-${index}`,
-              provider: "openai",
-              model: `model.${index}`,
-              durationMs: 10,
-            },
-            trusted,
-          );
+          metrics.record({
+            type: "model.call.completed",
+            runId: `run-${index}`,
+            callId: `call-${index}`,
+            provider: "openai",
+            model: `model.${index}`,
+            durationMs: 10,
+          });
         }
         const drops = () =>
           Number(
@@ -164,8 +164,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
           );
         const before = drops();
         expect(before).toBeGreaterThan(0);
-        metrics.record(sample, trusted);
-        metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 20 }, trusted);
+        metrics.record(sample);
+        metrics.record({ type: "diagnostic.gc", durationMs: 20 });
         expect(drops()).toBe(before + (preseed ? 0 : 3));
         const rendered = metrics.render();
         if (preseed) {
@@ -184,45 +184,30 @@ describe("diagnostics-prometheus runtime metrics", () => {
 
   it("retains runtime durations across repeated HTTP scrapes without labels", async () => {
     const metrics = createMetricsHarness();
-    const server = createServer((req, res) => {
-      void metrics.handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP server address");
-      }
+    await withMetricsServer(metrics, async (url) => {
       const scrape = async () => {
-        const response = await fetch(`http://127.0.0.1:${address.port}/api/diagnostics/prometheus`);
+        const response = await fetch(url);
         expect(response.status).toBe(200);
         return await response.text();
       };
-      metrics.record(
-        { ...baseEvent(), type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 },
-        trusted,
-      );
-      metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 1_250 }, trusted);
+      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
+      metrics.record({ type: "diagnostic.gc", durationMs: 1_250 });
       const first = await scrape();
       expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
       expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
       expect(first).toContain("openclaw_gc_duration_seconds_count 1");
       expect(await scrape()).toBe(first);
       metrics.record(
-        { ...baseEvent(), type: "gateway.event_loop.sample", intervalMs: 8_000, delayMaxMs: 20 },
+        { type: "gateway.event_loop.sample", intervalMs: 8_000, delayMaxMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
       metrics.record(
-        { ...baseEvent(), type: "diagnostic.gc", durationMs: 20 },
+        { type: "diagnostic.gc", durationMs: 20 },
         Object.freeze({ trusted: false, internal: true }),
       );
-      metrics.record({ ...baseEvent(), type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
+      metrics.record({ type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
       metrics.record(
         {
-          ...baseEvent(),
           type: "gateway.event_loop.sample",
           intervalMs: 99_000,
           delayMaxMs: 99_000,
@@ -245,17 +230,6 @@ describe("diagnostics-prometheus runtime metrics", () => {
       }
       expect(await scrape()).toBe(second);
       expect(second).not.toMatch(/\{(?!le=)/);
-    } finally {
-      try {
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-            server.closeIdleConnections();
-          });
-        }
-      } finally {
-        metrics.stop();
-      }
-    }
+    });
   });
 });

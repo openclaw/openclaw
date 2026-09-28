@@ -183,6 +183,17 @@ function sessionDataFromHtml(html: string): Record<string, unknown> {
   );
 }
 
+function userTranscript() {
+  return [
+    {
+      type: "message",
+      id: "entry-1",
+      timestamp: "2026-05-16T00:00:00.000Z",
+      message: { role: "user", content: "hello" },
+    },
+  ];
+}
+
 describe("buildExportSessionReply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -698,14 +709,7 @@ describe("buildExportSessionReply", () => {
       state: "idle",
       lastActivityAt: 1,
     });
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 
@@ -724,14 +728,7 @@ describe("buildExportSessionReply", () => {
     hoisted.readAcpSessionMetaForEntryMock.mockImplementation(() => {
       throw new Error("state database unavailable");
     });
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 
@@ -741,14 +738,7 @@ describe("buildExportSessionReply", () => {
   });
 
   it("does not warn for a normal user-only transcript without backend session metadata", async () => {
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 
@@ -770,14 +760,7 @@ describe("buildExportSessionReply", () => {
         },
       },
     } as never);
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 

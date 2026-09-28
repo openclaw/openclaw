@@ -5,7 +5,6 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
-import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -56,32 +55,6 @@ export type { ChatEventPayload } from "./chat-history.ts";
 
 function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
   return state.chatQueue.some((item) => item.sendRunId === runId && item.sendState === "sending");
-}
-
-function resolveDeltaChatStreamText(
-  currentStream: string | null,
-  payload: ChatEventPayload,
-): string | null {
-  const snapshot = payload.message == null ? null : extractText(payload.message);
-  if (typeof payload.deltaText === "string") {
-    if (payload.replace === true) {
-      return payload.deltaText;
-    }
-    if (currentStream === null) {
-      return typeof snapshot === "string" ? snapshot : payload.deltaText;
-    }
-    if (typeof snapshot === "string") {
-      const prefixLength = snapshot.length - payload.deltaText.length;
-      if (
-        prefixLength !== currentStream.length ||
-        snapshot.slice(0, prefixLength) !== currentStream
-      ) {
-        return snapshot;
-      }
-    }
-    return `${currentStream}${payload.deltaText}`;
-  }
-  return typeof snapshot === "string" ? snapshot : null;
 }
 
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
@@ -339,6 +312,21 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   const materializeVisibleStream = (
     materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
   ) => materializeVisibleAssistantStreamMessages(state.chatMessages, state, materializeOpts);
+  const publishInterruptedStream = () => {
+    publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
+    // Message-less terminal events still own the retained partial's outcome
+    // until saved history replaces this live projection.
+    rememberLiveTerminalRun(
+      state.chatMessages.findLast((message) => transcriptRunId(message) === terminalRunId),
+      terminalRunId,
+      terminalAfterBoundaryRunId,
+      payload.state === "aborted"
+        ? "aborted"
+        : projectedRun?.currentRun?.status === "timeout"
+          ? "timeout"
+          : "error",
+    );
+  };
   if (payload.state === "status") {
     if (!payload.runId || payload.runId !== state.chatRunId) {
       return null;
@@ -370,9 +358,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     if (payload.runId && payload.runId === state.chatRunId) {
       reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
-    const cumulativeText =
-      state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
-    const next = resolveDeltaChatStreamText(cumulativeText, payload);
+    const next = payload.message == null ? null : (extractText(payload.message) ?? "");
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&
@@ -450,7 +436,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         terminalRunId,
       );
     } else {
-      publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
+      publishInterruptedStream();
     }
     if (payload.errorMessage?.trim()) {
       setChatRunError(
@@ -498,20 +484,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           terminalRunId,
         );
       } else {
-        publishChatSessionProjectionMessages(
-          state,
-          materializeVisibleStream({ includeCurrent: true }),
-          { scope },
-        );
-        const materialized = state.chatMessages.findLast(
-          (message) => transcriptRunId(message) === terminalRunId,
-        );
-        rememberLiveTerminalRun(
-          materialized,
-          terminalRunId,
-          terminalAfterBoundaryRunId,
-          projectedRun?.currentRun?.status === "timeout" ? "timeout" : "error",
-        );
+        publishInterruptedStream();
       }
     }
     // The shared Gateway projection owns timeout classification; preserve it

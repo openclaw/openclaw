@@ -383,25 +383,17 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
 }): Promise<ModelCatalogSnapshot> {
-  const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(params.input);
+  const { input, ...catalogParams } = params;
+  const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(input);
   return augmentModelCatalogWithAgentHarness({
+    ...catalogParams,
     cfg: config,
     agentId,
     agentDir,
     workspaceDir,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveNativeModelPrimary(params.input.config, agentId),
-    nativeSelection: params.nativeSelection,
-    snapshot: params.snapshot,
-    preparedSnapshot: params.preparedSnapshot,
+    defaultModel: resolveNativeModelPrimary(input.config, agentId),
     includePickerRuntimes: params.nativeSelection === undefined,
-    pluginRegistry: params.pluginRegistry,
-    isCurrent: params.isCurrent,
-    observationConfig: params.input.config,
-    includesProvider: params.includesProvider,
-    normalizeProvider: params.normalizeProvider,
-    onDiscoveryStarted: params.onDiscoveryStarted,
-    onDiscoveryCompleted: params.onDiscoveryCompleted,
-    onError: params.onError,
+    observationConfig: input.config,
   });
 }

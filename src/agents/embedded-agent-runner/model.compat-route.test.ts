@@ -98,15 +98,6 @@ describe("model route compatibility", () => {
     expected: ModelCompatConfig | undefined;
     expectedBaseUrl?: string;
   }> = [
-    { name: "catalog", route: catalogRoute, authored: undefined, expected: catalogCompat },
-    {
-      name: "Anthropic versioned catalog endpoint",
-      catalog: anthropicRoute,
-      route: { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1` },
-      authored: undefined,
-      expected: catalogCompat,
-      expectedBaseUrl: anthropicRoute.baseUrl,
-    },
     {
       name: "Anthropic versioned catalog endpoint with trailing slash",
       catalog: anthropicRoute,

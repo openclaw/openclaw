@@ -1,5 +1,4 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
@@ -11,11 +10,12 @@ import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
-  UpdatePreMutationError,
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
@@ -26,7 +26,11 @@ import { admitUpdateRequesterContinuation } from "./update-command-managed-conte
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+  withUpdateAdmissionReporting,
+} from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   assertUpdatePackageActivationAdmission,
@@ -51,16 +55,20 @@ import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
 
-export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
+export async function updateCommand(
+  inputOpts: UpdateCommandOptions,
+  executorOptions?: UpdateCommandExecutorOptions,
+): Promise<void> {
   const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
   return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
-    updateCommandWithRuntime(inputOpts, retainRuntime),
+    updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
   );
 }
 
 async function updateCommandWithRuntime(
   inputOpts: UpdateCommandOptions,
   retainRuntime: RetainUpdateRuntime,
+  executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const invocationCwd = tryProcessCwd();
   const recoveryState: UpdateCommandRecoveryState = {
@@ -94,7 +102,18 @@ async function updateCommandWithRuntime(
     });
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
     assertUpdatePackageActivationAdmission(root, { serviceRoot });
-    if (await updateStateNeedsInitialization(env)) {
+    const needsInitialization = await updateStateNeedsInitialization(env);
+    const execute = (initialization?: InitializedUpdate) =>
+      runAdmittedUpdate(
+        inputOpts,
+        prepared,
+        recoveryState,
+        invocationCwd,
+        retainRuntime,
+        initialization,
+        executorOptions,
+      );
+    if (needsInitialization) {
       const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
       return await initializeAndRunUpdate(
         inputOpts,
@@ -102,24 +121,11 @@ async function updateCommandWithRuntime(
         recoveryState,
         invocationCwd,
         env,
-        (initialization) =>
-          runAdmittedUpdate(
-            inputOpts,
-            prepared,
-            recoveryState,
-            invocationCwd,
-            retainRuntime,
-            initialization,
-          ),
+        execute,
+        executorOptions,
       );
     }
-    return await runAdmittedUpdate(
-      inputOpts,
-      prepared,
-      recoveryState,
-      invocationCwd,
-      retainRuntime,
-    );
+    return await execute();
   });
 }
 
@@ -130,6 +136,7 @@ async function runAdmittedUpdate(
   invocationCwd: string | undefined,
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
+  executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const run = await admitUpdateCommandRun({
     opts: inputOpts,
@@ -217,7 +224,7 @@ async function runAdmittedUpdate(
             withUpdateInProgressEnv(invocationCwd, () =>
               withUpdateCommandTerminalResult((registerRun) => {
                 registerRun(run);
-                return withUpdateCommandExecutor(run.runId, executeWith);
+                return withUpdateCommandExecutor(run.runId, executeWith, executorOptions);
               }, opts),
             ),
           );
@@ -261,49 +268,31 @@ async function updateCommandInternal(
   if (!target) {
     return;
   }
-  try {
-    return await withUpdateCandidateAdmission(
-      {
-        target,
-        prepared,
-        opts,
-        timeoutMs: updateStepTimeoutMs,
-        invocationCwd,
-        presentation,
-        stagedPackage: initialization?.stagedPackage,
-        candidateAdmission: initialization?.candidateAdmission,
-      },
-      (stagedPackage) =>
-        runResolvedUpdate(
-          opts,
-          recoveryState,
-          invocationCwd,
-          prepared,
-          presentation,
-          executor,
-          retainRuntime,
-          target,
-          stagedPackage,
-          initialization,
-        ),
-    );
-  } catch (error) {
-    if (!(error instanceof UpdatePreMutationError)) {
-      throw error;
-    }
-    return await reportPreMutationUpdateResult({
-      root: target.root,
-      mode: target.mode,
-      installKind: target.updateInstallKind,
+  return await withUpdateCandidateAdmission(
+    {
+      target,
+      prepared,
       opts,
-      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-      reason: error.reason,
-      message: error.message,
-      nextAction: error.nextAction,
-      failureFacts: error.failureFacts,
-      recoverySteps: error.recoverySteps,
-    });
-  }
+      timeoutMs: updateStepTimeoutMs,
+      invocationCwd,
+      presentation,
+      stagedPackage: initialization?.stagedPackage,
+      candidateAdmission: initialization?.candidateAdmission,
+    },
+    (stagedPackage) =>
+      runResolvedUpdate(
+        opts,
+        recoveryState,
+        invocationCwd,
+        prepared,
+        presentation,
+        executor,
+        retainRuntime,
+        target,
+        stagedPackage,
+        initialization,
+      ),
+  );
 }
 
 async function runResolvedUpdate(
@@ -344,7 +333,6 @@ async function runResolvedUpdate(
     currentVersion,
     targetVersion,
     downgradeRisk,
-    packageInstallSpec,
     packageInstallTarget,
     packageAlreadyCurrent,
     packageRuntimeTarget,
@@ -393,13 +381,8 @@ async function runResolvedUpdate(
     !legacyConfigPlan &&
     !run.candidateAdmissionChecks?.includes("config")
   ) {
-    return await refuseUpdate(
-      "invalid-config",
-      [
-        "Config is invalid; cannot set update channel.",
-        ...formatConfigIssueLines(configSnapshot.issues, "-"),
-      ].join("\n"),
-    );
+    const failure = createUpdateConfigFailure(configSnapshot);
+    return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
   }
   const schemaPreflight = await preflightUpdateCommandSchemas({
     ...target,
@@ -440,7 +423,6 @@ async function runResolvedUpdate(
     startedAt,
     controlPlaneUpdateSentinelMeta,
     packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-    packageInstallSpec,
     runtimeTarget: packageRuntimeTarget,
     managedServiceRootRedirect,
     managedServiceRoot,
@@ -525,6 +507,8 @@ async function runResolvedUpdate(
     finishAlreadyCurrentUpdate,
     continueMigratedUpdateInFreshProcess,
     inspectActivatedUpdateState,
+    restoreFailedUpdateDatabases,
+    createUpdateCommandFinalizationFence,
   } = await import("./update-execution.runtime.js");
 
   const progress = createUpdateRunProgress(run, presentation.progress);
@@ -664,10 +648,32 @@ async function runResolvedUpdate(
   if (opts.recovery || rollbackBlockedReason) {
     // Only candidate code may reopen migrated state, including during reporting and cleanup.
     recoveryState.ledgerHandoffOwned = true;
+    const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
     const continued = await continueMigratedUpdateInFreshProcess(
       { ...finalization, rollbackBlockedReason },
       progress.pendingSteps,
     );
+    if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
+      const restored = await restoreFailedUpdateDatabases({
+        backup: finalization.databaseBackup,
+        result: continued.result,
+        runId: run.runId,
+        env: ownedManagedUpdateContext?.env ?? run.env,
+        assertCurrent: assertRollbackCurrent,
+        progress,
+      });
+      if (!restored) {
+        throw new UpdateCommandPendingRecoveryFailure(
+          continued.result,
+          continued.result.steps.at(-1)?.stderrTail ?? undefined,
+        );
+      }
+      progress.flushLedgerWrites();
+      recoveryState.ledgerHandoffOwned = false;
+      presentation.resume();
+      await finishUpdate({ ...finalization, result: continued.result });
+      return;
+    }
     recoveryState.ledgerHandoffCompleted = true;
     opts.onResult?.(continued.result);
     if (continued.exitCode !== 0) {

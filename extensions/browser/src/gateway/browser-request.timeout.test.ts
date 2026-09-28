@@ -1,13 +1,11 @@
 // Browser tests cover browser request.timeout plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import { createBrowserRouteContext, type BrowserRouteContext } from "../browser/server-context.js";
 import { makeBrowserServerState } from "../browser/server-context.test-harness.js";
-import type { GatewayRequestHandlers } from "../core-api.js";
-import { withTimeout } from "../sdk-node-runtime.js";
 
 const {
   createBrowserControlContextMock,
@@ -23,17 +21,26 @@ const {
   withTimeoutMock: vi.fn(),
 }));
 
-vi.mock("../core-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../core-api.js")>("../core-api.js");
-  return {
-    ...actual,
-    createBrowserControlContext: createBrowserControlContextMock,
-    createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
-    loadConfig: loadConfigMock,
-    startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
-    withTimeout: withTimeoutMock,
-  };
-});
+vi.mock("../browser-control-state.js", () => ({
+  createBrowserControlContext: createBrowserControlContextMock,
+}));
+vi.mock("../browser/routes/dispatcher.js", () => ({
+  createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfig: loadConfigMock,
+}));
+vi.mock("../control-service.js", () => ({
+  startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
+}));
+vi.mock("../sdk-node-runtime.js", () => ({ withTimeout: withTimeoutMock }));
+
+const { createBrowserRouteDispatcher } = await vi.importActual<
+  typeof import("../browser/routes/dispatcher.js")
+>("../browser/routes/dispatcher.js");
+const { withTimeout } =
+  await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
 
 import { browserHandlers } from "./browser-request.js";
 

@@ -22,7 +22,6 @@ import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
   buildAlreadyDeliveredToolResult,
   scheduleForcedAgentConsult,
-  submitForcedConsultProviderResult,
   submitRealtimeAgentConsultWorkingResponse,
 } from "./forced-consults.js";
 import {
@@ -39,7 +38,7 @@ import {
   resetTalkRealtimeRelayContinuity,
   prepareTalkRealtimeRelayAgentControl,
 } from "./operations.js";
-import { suppressedToolResultOptions } from "./provider-results.js";
+import { submitFinalProviderToolResult, suppressedToolResultOptions } from "./provider-results.js";
 import {
   RELAY_SESSION_TTL_MS,
   RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
@@ -496,12 +495,12 @@ export function createTalkRealtimeRelaySession(
                   "OpenClaw cancelled this consult before completion. Do not restart it.",
                 )
               : buildAlreadyDeliveredToolResult();
-            return submitForcedConsultProviderResult(
-              relay,
-              providerCallId,
+            return submitFinalProviderToolResult({
+              session: relay,
+              callId: providerCallId,
               result,
-              suppressedToolResultOptions(relay),
-            );
+              options: suppressedToolResultOptions(relay),
+            });
           }
           if (relay.forcedTerminalProviderResults.has(forcedConsult.handle.id)) {
             return relay.pendingFinalToolResults.get(forcedConsult.handle.id);

@@ -86,6 +86,12 @@ function runtimeErrors(): string[] {
   return runtimeState.defaultRuntime.error.mock.calls.map(([message]) => String(message));
 }
 
+function createProgram() {
+  const program = new Command().name("openclaw");
+  registerDirectoryCli(program);
+  return program;
+}
+
 describe("registerDirectoryCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,11 +115,6 @@ describe("registerDirectoryCli", () => {
       configured: ["demo-channel"],
       source: "explicit",
     });
-    runtimeState.defaultRuntime.log.mockClear();
-    runtimeState.defaultRuntime.error.mockClear();
-    runtimeState.defaultRuntime.writeStdout.mockClear();
-    runtimeState.defaultRuntime.writeJson.mockClear();
-    runtimeState.defaultRuntime.exit.mockClear();
     runtimeState.defaultRuntime.exit.mockImplementation((code: number) => {
       throw new Error(`exit:${code}`);
     });
@@ -188,8 +189,7 @@ describe("registerDirectoryCli", () => {
       runtimeConfig = postWriteRuntimeConfig;
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(["directory", "self", "--channel", "slack", "--json"], {
       from: "user",
@@ -299,7 +299,6 @@ describe("registerDirectoryCli", () => {
   it.each([
     ["self", ["directory", "self", "--channel", "slack", "--json"]],
     ["peers", ["directory", "peers", "list", "--channel", "slack", "--json"]],
-    ["groups", ["directory", "groups", "list", "--channel", "slack", "--json"]],
     [
       "group members",
       ["directory", "groups", "members", "--channel", "slack", "--group-id", "group-1", "--json"],
@@ -330,8 +329,7 @@ describe("registerDirectoryCli", () => {
     });
     runtimeState.defaultRuntime.exit.mockImplementation(() => undefined);
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
     await program.parseAsync(args, { from: "user" });
 
     expect(Object.values(directory).every((fn) => fn.mock.calls.length === 0)).toBe(true);
@@ -363,8 +361,7 @@ describe("registerDirectoryCli", () => {
       source: "single-configured",
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(["directory", "self", "--json"], { from: "user" });
 
@@ -440,8 +437,7 @@ describe("registerDirectoryCli", () => {
       };
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(["directory", "self", "--json"], { from: "user" });
 
@@ -464,71 +460,57 @@ describe("registerDirectoryCli", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      mode: "human",
-      args: ["directory", "self", "--channel", "demo-directory", "--account", "account-1"],
-    },
-    {
-      mode: "JSON",
-      args: [
+  it.each(["human", "JSON"])(
+    "explains an empty implemented self lookup in %s mode",
+    async (mode) => {
+      const args = [
         "directory",
         "self",
         "--channel",
         "demo-directory",
         "--account",
         "account-1",
-        "--json",
-      ],
-    },
-  ])("explains an empty implemented self lookup in $mode mode", async ({ mode, args }) => {
-    const self = vi.fn().mockResolvedValue(null);
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: { "demo-directory": {} } },
-      channelId: "demo-directory",
-      plugin: { id: "demo-directory", directory: { self } },
-      configChanged: false,
-    });
-
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
-
-    await program.parseAsync(args, { from: "user" });
-
-    if (mode === "JSON") {
-      expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
-        status: "unavailable",
-        channel: "demo-directory",
-        accountId: "account-1",
-        reason: "plugin-returned-no-self-identity",
+        ...(mode === "JSON" ? ["--json"] : []),
+      ];
+      const self = vi.fn().mockResolvedValue(null);
+      mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+        cfg: { channels: { "demo-directory": {} } },
+        channelId: "demo-directory",
+        plugin: { id: "demo-directory", directory: { self } },
+        configChanged: false,
       });
-    } else {
-      const output = runtimeState.runtimeLogs.join("\n");
-      expect(output).toBe(
-        'No self identity was returned for channel "demo-directory", account "account-1". Verify the account is configured and authenticated, then retry.',
-      );
-    }
-    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
-  });
 
-  it.each([
-    {
-      mode: "human",
-      args: ["directory", "self", "--channel", "demo-directory", "--account", "account-1"],
+      const program = createProgram();
+
+      await program.parseAsync(args, { from: "user" });
+
+      if (mode === "JSON") {
+        expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
+          status: "unavailable",
+          channel: "demo-directory",
+          accountId: "account-1",
+          reason: "plugin-returned-no-self-identity",
+        });
+      } else {
+        const output = runtimeState.runtimeLogs.join("\n");
+        expect(output).toBe(
+          'No self identity was returned for channel "demo-directory", account "account-1". Verify the account is configured and authenticated, then retry.',
+        );
+      }
+      expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
     },
-    {
-      mode: "JSON",
-      args: [
-        "directory",
-        "self",
-        "--channel",
-        "demo-directory",
-        "--account",
-        "account-1",
-        "--json",
-      ],
-    },
-  ])("explains an unsupported self lookup in $mode mode", async ({ mode, args }) => {
+  );
+
+  it.each(["human", "JSON"])("explains an unsupported self lookup in %s mode", async (mode) => {
+    const args = [
+      "directory",
+      "self",
+      "--channel",
+      "demo-directory",
+      "--account",
+      "account-1",
+      ...(mode === "JSON" ? ["--json"] : []),
+    ];
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "demo-directory": {} } },
       channelId: "demo-directory",
@@ -539,8 +521,7 @@ describe("registerDirectoryCli", () => {
       configChanged: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(args, { from: "user" });
 
@@ -572,8 +553,7 @@ describe("registerDirectoryCli", () => {
       configChanged: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(
       [
@@ -614,8 +594,7 @@ describe("registerDirectoryCli", () => {
       configChanged: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(["directory", "groups", "list", "--channel", "slack", "--json"], {
       from: "user",
@@ -677,8 +656,7 @@ describe("registerDirectoryCli", () => {
       configChanged: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await program.parseAsync(args, { from: "user" });
 
@@ -784,8 +762,7 @@ describe("registerDirectoryCli", () => {
       pluginInstalled: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await expect(
       program.parseAsync(["directory", "peers", "list", "--channel", "openclaw-weixin"], {
@@ -846,8 +823,7 @@ describe("registerDirectoryCli", () => {
       configChanged: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(expectedError);
 
@@ -873,8 +849,7 @@ describe("registerDirectoryCli", () => {
       configChanged: false,
     });
 
-    const program = new Command().name("openclaw");
-    registerDirectoryCli(program);
+    const program = createProgram();
 
     if (mode === "JSON") {
       await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(error.message);

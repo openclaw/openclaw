@@ -1,4 +1,3 @@
-// Google plugin module implements vertex adc behavior.
 import { gunzipSync } from "node:zlib";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {

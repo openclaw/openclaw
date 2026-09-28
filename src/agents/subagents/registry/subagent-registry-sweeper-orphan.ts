@@ -26,7 +26,7 @@ const ORPHAN_COMPLETION_SOURCE = "sweeper-orphaned-by-gateway-death";
 
 /**
  * Settles one stale active run through the canonical completion owner.
- * The caller stops processing this run; cleanup never bypasses task settlement.
+ * The caller stops processing this run; cleanup never bypasses canonical completion.
  */
 export async function reconcileStaleActiveSubagentRun(params: {
   runId: string;
@@ -86,8 +86,8 @@ export async function reconcileStaleActiveSubagentRun(params: {
   const attributedError = attribution ? formatSubagentOrphanErrorMessage(attribution) : undefined;
 
   const orphanReason = resolveSubagentRunOrphanReason({ entry });
-  // Main now requires canonical task settlement for every orphan; missing
-  // session metadata no longer permits direct row or attachment pruning.
+  // Every orphan settles through canonical completion; missing session
+  // metadata never permits direct row or attachment pruning.
 
   await params.completeSubagentRunWithRecovery(
     {

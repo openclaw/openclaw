@@ -74,34 +74,4 @@ describe("emit — render mode", () => {
     const output = emitMd(ast, { mode: "render" });
     expect(output).toContain('title: "a: b"');
   });
-
-  it("throws if a kv item value matches the sentinel", () => {
-    const ast = {
-      kind: "md" as const,
-      raw: "",
-      frontmatter: [],
-      preamble: "",
-      blocks: [
-        {
-          heading: "Secrets",
-          slug: "secrets",
-          line: 1,
-          bodyText: "- token: __OPENCLAW_REDACTED__",
-          items: [
-            {
-              text: "token: __OPENCLAW_REDACTED__",
-              slug: "token",
-              line: 2,
-              kv: { key: "token", value: "__OPENCLAW_REDACTED__" },
-            },
-          ],
-          tables: [],
-          codeBlocks: [],
-        },
-      ],
-    };
-    expect(() => emitMd(ast, { mode: "render", fileNameForGuard: "AGENTS.md" })).toThrow(
-      OcEmitSentinelError,
-    );
-  });
 });

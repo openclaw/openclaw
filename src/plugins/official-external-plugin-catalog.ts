@@ -4,7 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resolvePluginInstallSources, type PluginInstallSource } from "./install-channel-specs.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES } from "./official-external-plugin-bundled-catalogs.js";
@@ -209,10 +209,8 @@ function normalizeNpmExpectedIntegrity(value: unknown): string | undefined {
 export function resolveOfficialExternalPluginLegacyIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
-  return uniqueStrings(
-    (getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds ?? [])
-      .map((pluginId) => normalizeOptionalString(pluginId))
-      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  return normalizeUniqueTrimmedStringList(
+    getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds,
   );
 }
 
@@ -220,10 +218,8 @@ export function resolveOfficialExternalPluginLegacyIds(
 export function resolveOfficialExternalPluginLegacyNpmPackageNames(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
-  return uniqueStrings(
-    (getOfficialExternalPluginCatalogManifest(entry)?.legacyNpmPackageNames ?? [])
-      .map((packageName) => normalizeOptionalString(packageName))
-      .filter((packageName): packageName is string => Boolean(packageName)),
+  return normalizeUniqueTrimmedStringList(
+    getOfficialExternalPluginCatalogManifest(entry)?.legacyNpmPackageNames,
   );
 }
 
@@ -242,17 +238,11 @@ export function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  const lookupIds = [
-    normalizeOptionalString(manifest?.plugin?.id),
-    normalizeOptionalString(manifest?.channel?.id),
-  ];
+  const ids = [manifest?.plugin?.id, manifest?.channel?.id];
   for (const provider of manifest?.providers ?? []) {
-    lookupIds.push(normalizeOptionalString(provider.id));
-    for (const alias of provider.aliases ?? []) {
-      lookupIds.push(normalizeOptionalString(alias));
-    }
+    ids.push(provider.id, ...(provider.aliases ?? []));
   }
-  return uniqueStrings(lookupIds.filter((value): value is string => Boolean(value)));
+  return normalizeUniqueTrimmedStringList(ids);
 }
 
 export function resolveOfficialExternalPluginLabel(
@@ -447,21 +437,27 @@ export function listOfficialExternalChannelEnvVars(): Array<{
   return listOfficialExternalChannelCatalogEntries().flatMap((entry) => {
     const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
     const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
-    const envVars = uniqueStrings(
-      [
-        ...(channel?.envVars ?? []),
-        ...(channel?.configuredState?.env?.allOf ?? []),
-        ...(channel?.configuredState?.env?.anyOf ?? []),
-      ]
-        .map((envVar) => normalizeOptionalString(envVar))
-        .filter((envVar): envVar is string => Boolean(envVar)),
-    );
+    const envVars = normalizeUniqueTrimmedStringList([
+      ...(channel?.envVars ?? []),
+      ...(channel?.configuredState?.env?.allOf ?? []),
+      ...(channel?.configuredState?.env?.anyOf ?? []),
+    ]);
     return channelId && envVars.length > 0 ? [{ channelId, envVars }] : [];
   });
 }
 
 const CHANNEL_SECRET_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
 const CHANNEL_SECRET_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+function findOfficialExternalChannelManifest(channelId: string) {
+  const entry = listOfficialExternalChannelCatalogEntries().find(
+    (candidate) =>
+      normalizeOptionalLowercaseString(
+        getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
+      ) === channelId,
+  );
+  return getOfficialExternalPluginCatalogManifest(entry ?? {});
+}
 
 /** Returns a validated host fallback secret contract for one external channel. */
 export function getOfficialExternalChannelSecretContract(
@@ -471,13 +467,7 @@ export function getOfficialExternalChannelSecretContract(
   if (!normalizedChannelId) {
     return undefined;
   }
-  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
-    const id = normalizeOptionalString(
-      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
-    )?.toLowerCase();
-    return id === normalizedChannelId;
-  });
-  const fields = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelSecrets?.fields;
+  const fields = findOfficialExternalChannelManifest(normalizedChannelId)?.channelSecrets?.fields;
   if (!fields) {
     return undefined;
   }
@@ -514,14 +504,8 @@ export function getOfficialExternalChannelHostSchemaAllOf(
   if (!normalizedChannelId) {
     return [];
   }
-  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
-    const id = normalizeOptionalString(
-      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
-    )?.toLowerCase();
-    return id === normalizedChannelId;
-  });
-  const clauses = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelHostConfig
-    ?.schemaAllOf;
+  const clauses =
+    findOfficialExternalChannelManifest(normalizedChannelId)?.channelHostConfig?.schemaAllOf;
   return Array.isArray(clauses) ? clauses.filter(isRecord) : [];
 }
 
@@ -561,6 +545,10 @@ export function isExternallyDistributedPlugin(plugin: {
   packageName?: string;
   packageBuild?: { bundledDist?: boolean };
 }): boolean {
+  // Staged publication metadata must not transfer bundled repair ownership.
+  if (plugin.packageBuild?.bundledDist === true) {
+    return false;
+  }
   const entry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
   return (
     plugin.packageBuild?.bundledDist === false ||

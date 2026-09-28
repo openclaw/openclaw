@@ -191,6 +191,9 @@ describe("sessions_search tool", () => {
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
+    expect(tool.parameters).toMatchObject({
+      properties: { limit: { description: expect.stringContaining("Maximum search results: 25") } },
+    });
     await expect(tool.execute("call-1", { query: "   " })).rejects.toThrow(
       "query must not be empty",
     );

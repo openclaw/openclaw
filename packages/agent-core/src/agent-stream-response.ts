@@ -1,5 +1,8 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import {
+  createEmptyTransportUsage,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
 import { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } from "@openclaw/llm-core";
 import type {
   AssistantMessage,
@@ -332,14 +335,7 @@ export async function streamAgentResponse(
                       ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                       stopReason: "toolUse",
                       // Usage belongs to the terminal fragment, once per provider response.
-                      usage: {
-                        input: 0,
-                        output: 0,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                        totalTokens: 0,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                      },
+                      usage: createEmptyTransportUsage(),
                     }),
                   );
                   streamedTurnId ??= prefix.turnId;

@@ -1,9 +1,12 @@
 import type { z } from "zod";
+import type { TeamReportsConfig } from "./config.js";
 import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
 
 export type { Period, PeriodDescriptor } from "./periods.js";
 
 export type ActivityWindow = { sinceMs: number; untilMs: number };
+
+export type ActivityEntry<T> = { key: string; value: T };
 
 /** Identity map entry supplied by the operator (config `people` or `peopleFile`) or derived from a GitHub team roster. */
 export type Person = {
@@ -81,43 +84,39 @@ export type SourceRuntime = {
 };
 
 /** Resolved (secret already materialized) GitHub source configuration. */
-export type GithubSourceConfig = {
+export type GithubSourceConfig = Omit<
+  TeamReportsConfig["github"],
+  "token" | "ignoreCommentPatterns"
+> & {
   token: string;
-  orgs: string[];
-  teams: Array<{ org: string; slug: string }>;
-  includeDirectCollaborators: boolean;
-  /** "owner/name" entries to skip. */
-  excludeRepos: string[];
-  apiBaseUrl: string;
   /** Compiled from config `github.ignoreCommentPatterns`. */
   ignoreCommentPatterns: RegExp[];
 };
 
 /** Resolved (secret already materialized) Discord source configuration. */
-export type DiscordSourceConfig = {
+export type DiscordSourceConfig = Omit<NonNullable<TeamReportsConfig["discord"]>, "token"> & {
   token: string;
-  guildId: string;
-  channels: Array<{ id: string; excerpts: boolean }>;
-  excerptMaxChars: number;
   apiBaseUrl: string;
 };
 
 export interface GithubSource {
   /** Roster from configured org teams (and direct collaborators when enabled). Returns people with `github: [login]`. */
   loadRoster(config: GithubSourceConfig): Promise<{ people: Person[]; status: SourceStatus }>;
-  /** All GitHub items in the window across configured orgs; attribution rules live in aggregate, not here, except merged_by lookup. */
+  /** Emits bounded batches with stable event keys; attribution rules live in aggregate, except merged_by lookup. */
   collect(
     config: GithubSourceConfig,
     window: ActivityWindow,
     roster: Roster,
-  ): Promise<{ items: GithubItem[]; status: SourceStatus }>;
+    emit: (entries: ActivityEntry<GithubItem>[]) => Promise<void>,
+  ): Promise<SourceStatus>;
 }
 
 export interface DiscordSource {
-  /** Messages in the window from configured channels and their threads. */
+  /** Emits bounded message batches keyed by snowflake from configured channels and their threads. */
   collect(
     config: DiscordSourceConfig,
     window: ActivityWindow,
     roster: Roster,
-  ): Promise<{ messages: DiscordMessage[]; status: SourceStatus }>;
+    emit: (entries: ActivityEntry<DiscordMessage>[]) => Promise<void>,
+  ): Promise<SourceStatus>;
 }

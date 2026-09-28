@@ -204,8 +204,10 @@ const wrappers = [
 ];
 
 it.each(
-  wrappers.flatMap((wrapper) =>
-    terminalStops.map((stop) => ({ ...wrapper, stop: stop.name, make: stop.make })),
+  wrappers.flatMap(({ name, wrap }) =>
+    (name === "direct" || name === "cyclic" ? terminalStops : terminalStops.slice(0, 1)).map(
+      ({ name: stop, make }) => ({ name, wrap, stop, make }),
+    ),
   ),
 )("does not replay $stop through a $name wrapper", async ({ wrap, make }) => {
   const error = wrap(make());

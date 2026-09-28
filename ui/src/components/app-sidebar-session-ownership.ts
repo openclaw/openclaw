@@ -1,6 +1,6 @@
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionsListResult } from "../api/types.ts";
-import { someSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
+import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
@@ -49,26 +49,28 @@ function hasMultipleSidebarSessionIdentities(
   if (identities.size >= 2) {
     return true;
   }
-  return someSidebarSessionInTree(rows, (row) => {
-    const participants = row.participants ?? [];
-    for (const participant of participants) {
-      const identity = participant.identity;
-      if (
-        humansOnly &&
-        identity.type !== "profile" &&
-        !(identity.type === "observation" && identity.senderKind === "human") &&
-        !(identity.type === "legacy" && identity.actorType === "human")
-      ) {
-        continue;
+  return Boolean(
+    findSidebarSessionInTree(rows, (row) => {
+      const participants = row.participants ?? [];
+      for (const participant of participants) {
+        const identity = participant.identity;
+        if (
+          humansOnly &&
+          identity.type !== "profile" &&
+          !(identity.type === "observation" && identity.senderKind === "human") &&
+          !(identity.type === "legacy" && identity.actorType === "human")
+        ) {
+          continue;
+        }
+        identities.add(sessionParticipantIdentityKey(identity));
+        if (identities.size >= 2) {
+          return true;
+        }
       }
-      identities.add(sessionParticipantIdentityKey(identity));
-      if (identities.size >= 2) {
-        return true;
-      }
-    }
-    // Unshown participants may all be agents; only known humans enable attribution.
-    return !humansOnly && (row.participantCount ?? participants.length) > participants.length;
-  });
+      // Unshown participants may all be agents; only known humans enable attribution.
+      return !humansOnly && (row.participantCount ?? participants.length) > participants.length;
+    }),
+  );
 }
 
 export function applySidebarSessionOwnerFilter(input: {
@@ -103,16 +105,6 @@ export function applySidebarSessionOwnerFilter(input: {
     (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
       ? selectedOwnerId
       : null;
-  if (!activeOwnerId) {
-    // Involving-me is evaluated by the Gateway against the complete participant table.
-    // The bounded display projection cannot safely repeat that predicate client-side.
-    return {
-      rows: input.projected,
-      ownerOptions,
-      ownershipVisibility,
-      activeOwnerId,
-    };
-  }
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
@@ -129,7 +121,8 @@ export function applySidebarSessionOwnerFilter(input: {
     return filtered;
   };
   return {
-    rows: filterTree(input.projected),
+    // Involving-me membership is Gateway-owned; only an explicit owner filters this tree.
+    rows: activeOwnerId ? filterTree(input.projected) : input.projected,
     ownerOptions,
     ownershipVisibility,
     activeOwnerId,

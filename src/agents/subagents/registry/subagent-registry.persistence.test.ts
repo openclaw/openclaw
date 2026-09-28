@@ -7,11 +7,7 @@ import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  announceSpy,
-  createSubagentPersistenceRuntime,
-  useSubagentPersistenceFixture,
-} from "./subagent-registry.persistence-fixture.test-support.js";
+import { announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   patchSessionEntryCore,
@@ -28,6 +24,7 @@ import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
+import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   canonicalSubagentRunFixtures,
   expectDeferredSubagentAnnouncement,
@@ -36,13 +33,11 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import {
-  testing,
   activateSubagentRegistry,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -51,6 +46,7 @@ import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
   resumeSubagentRun,
+  testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -793,10 +789,8 @@ describe("subagent registry persistence", () => {
     flushQueuedRegistryWork,
     readPersistedRegistry,
     writePersistedRegistry,
-    writeChildSessionEntry,
     restartRegistry,
     waitForRegistryWork,
-    settle: fixture.settle,
   });
 
   it("finalizes restored interrupted runs without replay", async () => {

@@ -24,6 +24,7 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import { waitForSubagentRetirementPublication } from "./subagent-registry-memory.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
@@ -242,6 +243,7 @@ export function createSubagentRegistryRestorer(config: {
         );
         const currentSwarmConfig = resolveSwarmConfig(cfg, entry.requesterAgentId);
         let launchTerminationConfirmed = false;
+        let pendingLaunchTermination: { gatewayRunId: string; error: unknown } | undefined;
         let launchLifecycleGeneration: string | undefined;
         enqueueSwarmRun({
           // Global session keys repeat across agent stores, including restored queues.
@@ -256,6 +258,11 @@ export function createSubagentRegistryRestorer(config: {
             )
             .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
           start: async () => {
+            // Once accepted, retries settle this launch rather than dispatching a
+            // second agent against a provisional session that cleanup may remove.
+            if (pendingLaunchTermination) {
+              throw pendingLaunchTermination.error;
+            }
             await runWithGatewayIndependentRootWorkAdmission(async () => {
               launchLifecycleGeneration = getAgentEventLifecycleGeneration();
               const request = {
@@ -281,21 +288,33 @@ export function createSubagentRegistryRestorer(config: {
                   );
                 }
               } catch (error) {
-                await terminateAcceptedRestoredCollectorRun({
-                  entry,
-                  gatewayRunId,
-                  timeoutMs: launch.timeoutMs,
-                  expectedSessionId: cleanupSessionEntry?.sessionId,
-                  expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
-                });
-                launchTerminationConfirmed = true;
+                // Keep accepted rollback in failure settlement, where retirement
+                // publication can finish before provisional-session deletion.
+                pendingLaunchTermination = { gatewayRunId, error };
                 throw error;
               }
             }, "subagents:restore-launch");
           },
-          onStartFailure: (error) => {
+          onStartFailure: async (error) => {
             if (error instanceof GatewayDrainingError) {
               return false;
+            }
+            for (
+              let publication = waitForSubagentRetirementPublication(entry);
+              publication;
+              publication = waitForSubagentRetirementPublication(entry)
+            ) {
+              await publication;
+            }
+            if (pendingLaunchTermination && !launchTerminationConfirmed) {
+              await terminateAcceptedRestoredCollectorRun({
+                entry,
+                gatewayRunId: pendingLaunchTermination.gatewayRunId,
+                timeoutMs: launch.timeoutMs,
+                expectedSessionId: cleanupSessionEntry?.sessionId,
+                expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
+              });
+              launchTerminationConfirmed = true;
             }
             return failAndCleanupRestoredQueuedRun(
               runId,
@@ -397,6 +416,15 @@ export function createSubagentRegistryRestorer(config: {
     expectedSessionId?: string,
     expectedLifecycleRevision?: string,
   ): Promise<boolean> {
+    // Descriptorless restore failures enter here without onStartFailure; their
+    // provisional session must survive the same pending cancellation receipt.
+    for (
+      let publication = waitForSubagentRetirementPublication(entry);
+      publication;
+      publication = waitForSubagentRetirementPublication(entry)
+    ) {
+      await publication;
+    }
     if (runs.get(runId) !== entry || entry.execution.status !== "queued") {
       return true;
     }

@@ -87,28 +87,34 @@ describe("resolveOutboundAttachmentFromUrl", () => {
 });
 
 describe("resolveOutboundAttachmentFromBuffer", () => {
-  it("stages outbound buffers with filename and content type metadata", async () => {
-    const buffer = Buffer.from("hello");
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/media/outbound/note---uuid.txt",
-      contentType: "text/plain",
-    });
+  it.each([undefined, () => {}])(
+    "stages outbound buffers with metadata and an optional publication guard (%s)",
+    async (assertCommitAllowed) => {
+      const buffer = Buffer.from("hello");
+      saveMediaBuffer.mockResolvedValueOnce({
+        path: "/tmp/media/outbound/note---uuid.txt",
+        contentType: "text/plain",
+      });
 
-    const result = await resolveOutboundAttachmentFromBuffer(buffer, 1024, {
-      contentType: "text/plain",
-      filename: "note.txt",
-    });
+      const result = await resolveOutboundAttachmentFromBuffer(buffer, 1024, {
+        contentType: "text/plain",
+        filename: "note.txt",
+        assertCommitAllowed,
+      });
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      buffer,
-      "text/plain",
-      "outbound",
-      1024,
-      "note.txt",
-    );
-    expect(result).toEqual({
-      path: "/tmp/media/outbound/note---uuid.txt",
-      contentType: "text/plain",
-    });
-  });
+      expect(saveMediaBuffer).toHaveBeenCalledWith(
+        buffer,
+        "text/plain",
+        "outbound",
+        1024,
+        "note.txt",
+        undefined,
+        assertCommitAllowed ? { assertCommitAllowed } : undefined,
+      );
+      expect(result).toEqual({
+        path: "/tmp/media/outbound/note---uuid.txt",
+        contentType: "text/plain",
+      });
+    },
+  );
 });

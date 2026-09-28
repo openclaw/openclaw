@@ -118,6 +118,7 @@ export async function withPromptFixture(
           resolvedWorkspace: workspaceDir,
           sessionPermissionRoot: workspaceDir,
           sandboxSessionKey: sessionKey,
+          sandboxReport: { mode: "all", sandboxed: true },
           sandbox: createSandboxTestContext({
             overrides: {
               sessionKey,

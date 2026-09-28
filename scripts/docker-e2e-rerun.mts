@@ -110,12 +110,15 @@ function maybeGhcrImage(value: unknown): string {
   return typeof value === "string" && value.startsWith("ghcr.io/") ? value : "";
 }
 
-const TRUSTED_WORKFLOW_INPUTS = new Map<string, ReuseInputKey>([
-  ["docker_e2e_bare_image", "bareImage"],
-  ["docker_e2e_functional_image", "functionalImage"],
+const SURVIVOR_WORKFLOW_INPUTS = [
   ["published_upgrade_survivor_baseline", "publishedUpgradeSurvivorBaseline"],
   ["published_upgrade_survivor_baselines", "publishedUpgradeSurvivorBaselines"],
   ["published_upgrade_survivor_scenarios", "publishedUpgradeSurvivorScenarios"],
+] as const;
+const TRUSTED_WORKFLOW_INPUTS = new Map<string, ReuseInputKey>([
+  ["docker_e2e_bare_image", "bareImage"],
+  ["docker_e2e_functional_image", "functionalImage"],
+  ...SURVIVOR_WORKFLOW_INPUTS,
   ["allow_unreleased_changelog", "allowUnreleasedChangelog"],
 ]);
 
@@ -200,17 +203,8 @@ function discardMismatchedPreparedImages(entry: FailedEntry, explicitRef: string
   return { ...entry, reuseInputs };
 }
 
-function sameReuseInputs(left: ReuseInputs | undefined, right: ReuseInputs | undefined): boolean {
-  return REUSE_INPUT_KEYS.every((key) => (left?.[key] || "") === (right?.[key] || ""));
-}
-
 function reuseInputsKey(inputs: ReuseInputs | undefined): string {
   return JSON.stringify(REUSE_INPUT_KEYS.map((key) => inputs?.[key] || ""));
-}
-
-function commonReuseInputs(entries: FailedEntry[]): ReuseInputs {
-  const first = entries[0]?.reuseInputs;
-  return first && entries.every((entry) => sameReuseInputs(first, entry.reuseInputs)) ? first : {};
 }
 
 function groupByReuseInputs(entries: FailedEntry[]): FailedEntry[][] {
@@ -266,29 +260,11 @@ function ghWorkflowCommand(
   if (reuseInputs.allowUnreleasedChangelog === "true") {
     fields.push("-f", "allow_unreleased_changelog=true");
   }
-  if (reuseInputs.publishedUpgradeSurvivorBaseline) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(
-        reuseInputs.publishedUpgradeSurvivorBaseline,
-      )}`,
-    );
-  }
-  if (reuseInputs.publishedUpgradeSurvivorBaselines) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(
-        reuseInputs.publishedUpgradeSurvivorBaselines,
-      )}`,
-    );
-  }
-  if (reuseInputs.publishedUpgradeSurvivorScenarios) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(
-        reuseInputs.publishedUpgradeSurvivorScenarios,
-      )}`,
-    );
+  for (const [input, key] of SURVIVOR_WORKFLOW_INPUTS) {
+    const value = reuseInputs[key];
+    if (value) {
+      fields.push("-f", `${input}=${shellQuote(value)}`);
+    }
   }
   return fields.join(" ");
 }
@@ -522,7 +498,7 @@ function printEntries(
           workflowEntries.map((entry) => entry.lane),
           ref,
           workflow,
-          commonReuseInputs(workflowEntries),
+          workflowEntries[0]?.reuseInputs,
         ),
       );
     } else {

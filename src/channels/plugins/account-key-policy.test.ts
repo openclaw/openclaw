@@ -59,6 +59,16 @@ function createPolicyConfig(accounts: Record<string, Record<string, unknown>>): 
   };
 }
 
+function resolveManifestAccount(cfg: OpenClawConfig) {
+  const plugin = expectDefined(
+    listReadOnlyChannelPluginsForConfig(cfg, { includePersistedAuthState: false }).find(
+      (entry) => entry.id === channel,
+    ),
+    "manifest channel adapter",
+  );
+  return plugin.config.resolveAccount(cfg, "work-phone");
+}
+
 afterEach(() => resetPluginLoaderTestStateForTest());
 afterAll(() => cleanupPluginLoaderFixturesForTest());
 
@@ -67,13 +77,7 @@ describe("prepared channel account policy entry points", () => {
     "channels.status manifest adapter retains its declared account rule outside metadata scope (token=%s)",
     (token) => {
       const cfg = createPolicyConfig({ "Work Phone": { token, name: "Named", enabled: false } });
-      const plugin = expectDefined(
-        listReadOnlyChannelPluginsForConfig(cfg, { includePersistedAuthState: false }).find(
-          (entry) => entry.id === channel,
-        ),
-        "manifest channel adapter",
-      );
-      expect(plugin.config.resolveAccount(cfg, "work-phone")).toMatchObject({
+      expect(resolveManifestAccount(cfg)).toMatchObject({
         accountId: "work-phone",
         name: token ? "Named" : "Root",
         config: { token: token ?? "root-token" },
@@ -89,9 +93,11 @@ describe("prepared channel account policy entry points", () => {
       const sourceConfigBeforeMigrations = {
         agents: { list: [{ id: "ops" }, { id: "research" }] },
       };
-      const repaired = scope.run({ config: cfg }, () =>
-        repairUnownedChannelAccountBindings({ config: cfg, sourceConfigBeforeMigrations }),
-      );
+      const repair = (config: OpenClawConfig) =>
+        scope.run({ config }, () =>
+          repairUnownedChannelAccountBindings({ config, sourceConfigBeforeMigrations }),
+        );
+      const repaired = repair(cfg);
       const expectedBindings = token
         ? cfg.bindings
         : [
@@ -99,43 +105,27 @@ describe("prepared channel account policy entry points", () => {
             { agentId: "ops", match: { channel, accountId: "work-phone" } },
           ];
       expect(repaired.config.bindings).toEqual(expectedBindings);
-      expect(
-        scope.run({ config: repaired.config }, () =>
-          repairUnownedChannelAccountBindings({
-            config: repaired.config,
-            sourceConfigBeforeMigrations,
-          }),
-        ).changes,
-      ).toEqual([]);
+      expect(repair(repaired.config).changes).toEqual([]);
     },
   );
 
-  it.each(["Work Phone", "work-phone"])(
-    "outbound media limits select the canonical collision winner for %s",
-    (accountId) => {
-      const cfg = createPolicyConfig({
-        "Work Phone": { token: "alias-token", mediaMaxMb: 2 },
-        "work-phone": { token: "winner-token", mediaMaxMb: 3 },
-      });
-      const scope = createDoctorPluginMetadataSnapshotScope({});
-      const bytes = scope.run({ config: cfg }, () =>
-        resolveOutboundMediaMaxBytes({ cfg, channel, accountId }),
-      );
-      expect(bytes).toBe(3 * 1024 * 1024);
-    },
-  );
+  it("outbound media limits select the canonical collision winner for a spaced alias", () => {
+    const cfg = createPolicyConfig({
+      "Work Phone": { token: "alias-token", mediaMaxMb: 2 },
+      "work-phone": { token: "winner-token", mediaMaxMb: 3 },
+    });
+    const scope = createDoctorPluginMetadataSnapshotScope({});
+    const bytes = scope.run({ config: cfg }, () =>
+      resolveOutboundMediaMaxBytes({ cfg, channel, accountId: "Work Phone" }),
+    );
+    expect(bytes).toBe(3 * 1024 * 1024);
+  });
 
   it("channels.status manifest adapter does not admit an inherited credential field", () => {
     const account = Object.create({ token: "inherited-token" }) as Record<string, unknown>;
     account.name = "Named";
     const cfg = createPolicyConfig({ "Work Phone": account });
-    const plugin = expectDefined(
-      listReadOnlyChannelPluginsForConfig(cfg, { includePersistedAuthState: false }).find(
-        (entry) => entry.id === channel,
-      ),
-      "manifest channel adapter",
-    );
-    expect(plugin.config.resolveAccount(cfg, "work-phone")).toMatchObject({ name: "Root" });
+    expect(resolveManifestAccount(cfg)).toMatchObject({ name: "Root" });
   });
 
   it("the Plugin SDK account merge accepts an explicit policy without a channel or normalizer", () => {

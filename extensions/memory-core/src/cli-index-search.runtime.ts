@@ -1,6 +1,16 @@
 import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  defaultRuntime,
+  formatErrorMessage,
+  setVerbose,
+  shortenHomeInString,
+  shortenHomePath,
+  theme,
+  withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
@@ -15,16 +25,6 @@ import {
   scanMemoryManagerSources,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
-import {
-  defaultRuntime,
-  formatErrorMessage,
-  getRuntimeConfig,
-  setVerbose,
-  shortenHomeInString,
-  shortenHomePath,
-  theme,
-  withProgressTotals,
-} from "./cli.host.runtime.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,

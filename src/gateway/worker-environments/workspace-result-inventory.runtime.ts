@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "../server-methods/workspace-fs.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
