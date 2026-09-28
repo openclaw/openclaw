@@ -16,7 +16,6 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
@@ -31,6 +30,7 @@ import {
   resolveNpmJsonEntries,
 } from "./npm-registry-spec.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { fetchRegistryPackageDocument } from "./update-check-package-target.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 export function formatNpmCommandFailureOutput(result: SpawnResult): string {
@@ -265,26 +265,13 @@ export async function fetchRegistryPackageManifest(params: {
 }): Promise<
   { ok: true; metadata: NpmSpecResolution & { tarball: string } } | { ok: false; error: string }
 > {
-  const timeoutMs = Math.max(1, params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS);
-  const { signal, cleanup } = buildTimeoutAbortSignal({
-    timeoutMs,
-    signal: params.signal,
-    operation: "npm-registry-package-manifest",
-  });
-  let response: Response | undefined;
   try {
-    const base = params.registryUrl.endsWith("/") ? params.registryUrl : `${params.registryUrl}/`;
-    const url = new URL(
-      `${encodeURIComponent(params.packageName)}/${encodeURIComponent(params.version)}`,
-      base,
-    );
-    response = await fetch(url.toString(), { signal });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const json = await readProviderJsonResponse<unknown>(response, "npm package manifest", {
-      signal,
-      chunkTimeoutMs: timeoutMs,
+    const json = await fetchRegistryPackageDocument({
+      ...params,
+      target: params.version,
+      label: "npm package manifest",
+      operation: "npm-registry-package-manifest",
+      bodyTimeoutMs: Math.max(1, params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS),
     });
     const metadata = normalizeNpmViewMetadata(json, `${params.packageName}@${params.version}`);
     const tarball = normalizeOptionalString(asRecord(asRecord(json).dist).tarball);
@@ -294,9 +281,6 @@ export async function fetchRegistryPackageManifest(params: {
     return { ok: true, metadata: { ...metadata, tarball } };
   } catch (error) {
     return { ok: false, error: `Registry package manifest failed: ${String(error)}` };
-  } finally {
-    await cancelUnreadResponseBody(response);
-    cleanup();
   }
 }
 
