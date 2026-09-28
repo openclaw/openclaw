@@ -17,6 +17,7 @@ import type {
 import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
 import type {
   ApprovalRequestInput,
+  ApprovalResolved,
   ChannelApprovalKind,
   NormalizedApprovalRequest,
 } from "./approval-types.js";
@@ -25,12 +26,8 @@ import {
   type ExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.js";
-import type { ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalResolved } from "./plugin-approvals.js";
-import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 
 type ApprovalRequest = ApprovalRequestInput;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved;
 
 export type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
 

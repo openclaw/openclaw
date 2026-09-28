@@ -10,6 +10,12 @@ export const runInPluginSourceCaptureContext = resolveGlobalSingleton(
   () => AsyncLocalStorage.snapshot(),
 );
 
+/** Capture custody can outlive a caller's disposable database inspection state. */
+export const pluginSourceCaptureStateDir = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginSourceCaptureStateDir"),
+  () => new AsyncLocalStorage<string>(),
+);
+
 /** Executable CLI ownership follows profile selection to each acquired capture root. */
 export const pluginSourceCaptureMaintenance = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceCaptureMaintenance"),

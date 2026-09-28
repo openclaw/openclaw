@@ -3,23 +3,32 @@ import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,
+  resolveNodeWorkerLaunchToolNames,
 } from "../infra/node-runner-inventory.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
+import { WORKER_TOOL_NAMES } from "../worker/tool-authority.js";
 import { startNodeHostConnection } from "./connection.js";
 import * as hostStats from "./host-stats.js";
 
 const stats = { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 };
 const gateway = { url: "wss://gateway.example.test", protocol: 4, capabilities: [] };
 
-it("negotiates captured exec policy per connection without widening older inventory", async () => {
+it("negotiates optional worker capabilities per connection without widening older inventory", async () => {
   const { connection, request, start, prepared } = startConnectionFixture(true);
   try {
     start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 2, available: 2 });
     for (const supported of [false, true, false]) {
       connection.connect({
         ...gateway,
-        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY] : [],
+        capabilities: supported
+          ? [
+              GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+              GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
+              GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
+            ]
+          : [],
       });
       await vi.advanceTimersByTimeAsync(0);
       const declaration = request.mock.calls.findLast(
@@ -31,7 +40,9 @@ it("negotiates captured exec policy per connection without widening older invent
           enabled: true,
           capacity: { total: 2, available: 2 },
           bundlePrewarm: 1,
-          ...(supported ? { capturedExecPolicy: true } : {}),
+          ...(supported
+            ? { capturedExecPolicy: true, launchToolNames: [...WORKER_TOOL_NAMES], statusWait: 1 }
+            : {}),
         },
       });
       expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
@@ -40,6 +51,89 @@ it("negotiates captured exec policy per connection without widening older invent
   } finally {
     await connection.close();
   }
+});
+
+it("keeps the published 2026.9.6 supervisor launch vocabulary when no names are declared", () => {
+  const declaration = parseNodeRunnerInventoryDeclaration({
+    protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+    workerHost: {
+      enabled: true,
+      capacity: { total: 2, available: 2 },
+      environmentSession: 1,
+      capturedExecPolicy: true,
+    },
+  });
+  if (!declaration || !("workerHost" in declaration)) {
+    throw new Error("Expected the published supervisor declaration to parse");
+  }
+  const names = resolveNodeWorkerLaunchToolNames(declaration.workerHost);
+  expect(names).toEqual([
+    "read",
+    "write",
+    "edit",
+    "apply_patch",
+    "exec",
+    "process",
+    "browser",
+    "computer",
+    "skill_workshop",
+    "sessions_spawn",
+    "sessions_send",
+    "portal",
+  ]);
+  expect(names).not.toContain("presence");
+  expect(resolveNodeWorkerLaunchToolNames(undefined)).toEqual(names);
+  expect(resolveNodeWorkerLaunchToolNames({ enabled: false })).toEqual(names);
+});
+
+it.each([
+  {
+    declared: ["presence", "future_tool", "portal", "read"],
+    expected: ["read", "portal", "presence"],
+  },
+  { declared: ["future_tool"], expected: [] },
+  { declared: [], expected: [] },
+])(
+  "normalizes declared launch names $declared without rejecting future tools",
+  ({ declared, expected }) => {
+    const declaration = parseNodeRunnerInventoryDeclaration({
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: {
+        enabled: true,
+        capacity: { total: 2, available: 2 },
+        bundlePrewarm: 1,
+        bundleRetention: 1,
+        bundleStatus: 1,
+        portalStream: 1,
+        environmentSession: 1,
+        preparedWorkspace: 1,
+        capturedExecPolicy: true,
+        launchToolNames: declared,
+      },
+    });
+    if (!declaration || !("workerHost" in declaration)) {
+      throw new Error("Expected the declared launch names to parse");
+    }
+    expect(declaration.workerHost).toMatchObject({ launchToolNames: expected });
+    expect(resolveNodeWorkerLaunchToolNames(declaration.workerHost)).toEqual(expected);
+  },
+);
+
+it.each([
+  { reason: "non-array", value: "read" },
+  { reason: "duplicate", value: ["read", "read"] },
+  { reason: "duplicate unknown", value: ["future_tool", "future_tool"] },
+  { reason: "non-string", value: [1] },
+  { reason: "empty name", value: [""] },
+  { reason: "oversized name", value: ["x".repeat(65)] },
+  { reason: "oversized array", value: Array.from({ length: 65 }, (_, index) => `tool_${index}`) },
+])("rejects the whole worker declaration for $reason launch names", ({ value }) => {
+  expect(
+    parseNodeRunnerInventoryDeclaration({
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: true, capacity: { total: 2, available: 2 }, launchToolNames: value },
+    }),
+  ).toBeNull();
 });
 
 function startConnectionFixture(workerHostingEnabled = false, preparedWorkspacesEnabled = false) {

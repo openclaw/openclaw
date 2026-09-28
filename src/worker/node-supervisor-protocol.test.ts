@@ -5,6 +5,8 @@ import {
   parseNodeWorkerConnectionFailureMessage,
   parseNodeWorkerEnvironmentStopInput,
   parseNodeWorkerLaunchInput,
+  parseNodeWorkerLookupInput,
+  NODE_WORKER_STATUS_WAIT_MAX_MS,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorIdentity,
 } from "./node-supervisor-protocol.js";
@@ -21,6 +23,25 @@ const identity: NodeWorkerSupervisorIdentity = {
   placementGeneration: 4,
   runId: "run-1",
 };
+
+describe("node worker status wait request", () => {
+  it.each([undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS])(
+    "accepts bounded optional wait %s",
+    (waitMs) => {
+      const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };
+      expect(parseNodeWorkerLookupInput(JSON.stringify(input))).toEqual(input);
+    },
+  );
+
+  it.each([0, -1, 1.5, "100", null, NODE_WORKER_STATUS_WAIT_MAX_MS + 1])(
+    "rejects invalid wait %s",
+    (waitMs) => {
+      expect(() =>
+        parseNodeWorkerLookupInput(JSON.stringify({ launchId: identity.launchId, waitMs })),
+      ).toThrow("INVALID_REQUEST");
+    },
+  );
+});
 
 describe("node worker supervisor launch request", () => {
   it.each([undefined, 2])(

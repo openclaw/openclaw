@@ -368,6 +368,7 @@ src/config/backup-rotation.ts
 src/config/bundled-channel-config-metadata.generated.ts
 src/config/byte-size.ts
 src/config/channel-config-metadata.ts
+src/config/channel-config-activation.ts
 src/config/channel-configured-shared.ts
 src/config/channel-configured.ts
 src/config/channel-schema-selection.ts
@@ -1395,6 +1396,8 @@ src/utils/timer-delay.ts
 src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
+src/worker/protocol-record.ts
+src/worker/tool-authority.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
 test/test-home-policy.mts

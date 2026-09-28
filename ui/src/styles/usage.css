@@ -1624,7 +1624,7 @@
 .session-bar-row:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
+  box-shadow: var(--shadow-md);
 }
 
 .session-bar-row.selected {

@@ -55,6 +55,18 @@ describe("release preparation arguments", () => {
   });
 });
 
+it("rejects alpha preparation before constructing write steps", () => {
+  expect(() =>
+    createReleasePrepareSteps({
+      android: false,
+      version: "2026.9.24-alpha.1",
+      rootDir: "/repo",
+      mode: "write",
+      jobs: 2,
+    }),
+  ).toThrow("Alpha releases are retired;");
+});
+
 describe("release preparation plan", () => {
   it("builds the write cutover from atomic versioning and scoped preflight", () => {
     const steps = createReleasePrepareSteps({

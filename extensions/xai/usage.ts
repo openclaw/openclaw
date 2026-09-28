@@ -1,4 +1,3 @@
-// xAI plugin module implements SuperGrok provider usage behavior.
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {

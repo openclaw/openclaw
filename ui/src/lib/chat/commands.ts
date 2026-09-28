@@ -1,5 +1,4 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-// Control UI chat domain owns pure slash command rules.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
@@ -516,7 +515,6 @@ export function getSlashCommandCompletions(
       )
     : commands;
 
-  // When no filter text and not explicitly showing all, hide "power" tier commands
   if (!lower && !showAll) {
     commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
   }

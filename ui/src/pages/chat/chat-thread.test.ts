@@ -1512,9 +1512,8 @@ describe("buildCachedChatItems row identity", () => {
     };
     expect(messageGroups({ messages: [first, second] })).toHaveLength(1);
 
-    first.senderLabel = "different";
-    first.timestamp = 3;
-    const regrouped = messageGroups({ messages: [first, second] });
+    const replacement = { ...first, senderLabel: "different", timestamp: 3 };
+    const regrouped = messageGroups({ messages: [replacement, second] });
 
     expect(regrouped).toHaveLength(2);
     expect(new Set(regrouped.map((group) => group.key)).size).toBe(regrouped.length);

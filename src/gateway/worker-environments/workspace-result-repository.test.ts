@@ -743,6 +743,8 @@ describe("repository workspace result ownership", () => {
       changed: true,
       verifyStable: async () => {},
       verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
     });
     await expect(
       f.mutations.mutate({

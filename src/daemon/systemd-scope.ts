@@ -37,6 +37,7 @@ import {
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
+import { resolveSystemdUnitLoadPaths } from "./systemd-unit-load-paths.js";
 
 const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/etc/systemd/system",
@@ -89,43 +90,32 @@ export async function isSystemdServiceAbsent(
     return false;
   }
   const home = resolveDaemonHomeDir(env);
-  const runtimeDirs = new Set(
-    [`/run/user/${process.geteuid()}`, env.XDG_RUNTIME_DIR].filter((value): value is string =>
-      Boolean(value),
-    ),
+  const { runtimeRoots, userRoots, systemRoots } = resolveSystemdUnitLoadPaths(
+    env,
+    home,
+    process.geteuid(),
   );
-  const configHome = env.XDG_CONFIG_HOME || path.posix.join(home, ".config");
-  const dataHome = env.XDG_DATA_HOME || path.posix.join(home, ".local/share");
-  const userRoots = [
-    path.posix.join(home, ".config"),
-    configHome,
-    dataHome,
-    ...(env.XDG_CONFIG_DIRS || "/etc/xdg").split(":"),
-    ...(env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":"),
-    "/etc",
-    "/usr/local/lib",
-    "/usr/lib",
-    "/lib",
-  ];
   const unitName = `${resolveSystemdServiceName(env)}.service`;
-  if (![...runtimeDirs, ...userRoots].every((dir) => path.posix.isAbsolute(dir))) {
+  if (![...runtimeRoots, ...userRoots].every((dir) => path.posix.isAbsolute(dir))) {
     return false;
   }
   // sd_booted() uses /run/systemd/system; user managers own runtime/systemd/private.
   // Require the complete runtime directory absent so transient/generated units cannot hide.
   const absentPaths = [
     "/run/systemd",
-    ...[...runtimeDirs].map((dir) => path.posix.join(dir, "systemd")),
+    ...runtimeRoots.map((dir) => path.posix.join(dir, "systemd")),
     ...userRoots.flatMap((dir) =>
       ["user", "user.control", "user.attached"].map((scope) =>
         path.posix.join(dir, "systemd", scope, unitName),
       ),
     ),
-    ...["/etc", "/usr/local/lib", "/usr/lib", "/lib"].flatMap((dir) =>
-      ["system", "system.control", "system.attached"].map((scope) =>
-        path.posix.join(dir, "systemd", scope, unitName),
+    ...systemRoots
+      .filter((dir) => dir !== "/run")
+      .flatMap((dir) =>
+        ["system", "system.control", "system.attached"].map((scope) =>
+          path.posix.join(dir, "systemd", scope, unitName),
+        ),
       ),
-    ),
   ];
   for (const candidate of absentPaths) {
     try {
