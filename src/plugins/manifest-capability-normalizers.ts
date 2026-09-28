@@ -205,43 +205,28 @@ export function normalizeManifestTranscriptSources(
   });
 }
 
-const MEDIA_UNDERSTANDING_CAPABILITIES = new Set(["image", "audio", "video"]);
-
-function normalizeMediaUnderstandingCapabilityRecord(
-  value: unknown,
-): Partial<Record<PluginManifestMediaUnderstandingCapability, string>> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: Partial<Record<PluginManifestMediaUnderstandingCapability, string>> = {};
-  for (const [rawKey, rawValue] of Object.entries(value)) {
-    if (!MEDIA_UNDERSTANDING_CAPABILITIES.has(rawKey)) {
-      continue;
-    }
-    const model = normalizeOptionalString(rawValue);
-    if (model) {
-      normalized[rawKey as PluginManifestMediaUnderstandingCapability] = model;
-    }
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+function isMediaUnderstandingCapability(
+  value: string,
+): value is PluginManifestMediaUnderstandingCapability {
+  return value === "image" || value === "audio" || value === "video";
 }
 
-function normalizeMediaUnderstandingPriorityRecord(
+function normalizeMediaUnderstandingRecord<T>(
   value: unknown,
-): Partial<Record<PluginManifestMediaUnderstandingCapability, number>> | undefined {
+  normalizeValue: (value: unknown) => T | undefined,
+): Partial<Record<PluginManifestMediaUnderstandingCapability, T>> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const normalized: Partial<Record<PluginManifestMediaUnderstandingCapability, number>> = {};
+  const normalized: Partial<Record<PluginManifestMediaUnderstandingCapability, T>> = {};
   for (const [rawKey, rawValue] of Object.entries(value)) {
-    if (
-      !MEDIA_UNDERSTANDING_CAPABILITIES.has(rawKey) ||
-      typeof rawValue !== "number" ||
-      !Number.isFinite(rawValue)
-    ) {
+    if (!isMediaUnderstandingCapability(rawKey)) {
       continue;
     }
-    normalized[rawKey as PluginManifestMediaUnderstandingCapability] = rawValue;
+    const entry = normalizeValue(rawValue);
+    if (entry !== undefined) {
+      normalized[rawKey] = entry;
+    }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -249,9 +234,7 @@ function normalizeMediaUnderstandingPriorityRecord(
 function normalizeMediaUnderstandingCapabilities(
   value: unknown,
 ): PluginManifestMediaUnderstandingCapability[] | undefined {
-  const values = normalizeTrimmedStringList(value).filter((entry) =>
-    MEDIA_UNDERSTANDING_CAPABILITIES.has(entry),
-  ) as PluginManifestMediaUnderstandingCapability[];
+  const values = normalizeTrimmedStringList(value).filter(isMediaUnderstandingCapability);
   return values.length > 0 ? values : undefined;
 }
 
@@ -285,8 +268,13 @@ export function normalizeMediaUnderstandingProviderMetadata(
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
   return normalizeNamedMetadataRecord(value, (rawMetadata) => {
     const capabilities = normalizeMediaUnderstandingCapabilities(rawMetadata.capabilities);
-    const defaultModels = normalizeMediaUnderstandingCapabilityRecord(rawMetadata.defaultModels);
-    const autoPriority = normalizeMediaUnderstandingPriorityRecord(rawMetadata.autoPriority);
+    const defaultModels = normalizeMediaUnderstandingRecord(
+      rawMetadata.defaultModels,
+      normalizeOptionalString,
+    );
+    const autoPriority = normalizeMediaUnderstandingRecord(rawMetadata.autoPriority, (priority) =>
+      typeof priority === "number" && Number.isFinite(priority) ? priority : undefined,
+    );
     const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
       rawMetadata.nativeDocumentInputs,
     );

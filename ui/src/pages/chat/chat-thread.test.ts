@@ -16,7 +16,6 @@ import * as threadItems from "./chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
-  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpansionStateVersion,
@@ -85,10 +84,6 @@ type ChatQueueItem = NonNullable<CachedChatItemsProps["queue"]>[number];
 type WorkGroupItem = Extract<
   ReturnType<typeof collapseCompletedTurnWork>[number],
   { kind: "work-group" }
->;
-type ActivityRunItem = Extract<
-  ReturnType<typeof coalesceActivityRuns>[number],
-  { kind: "activity-run" }
 >;
 
 // Inbound context blocks are stamped with the provenance marker; strippers key
@@ -1359,185 +1354,6 @@ describe("collapseCompletedTurnWork", () => {
     expect(prependedWork.key).toBe(initialWork.key);
     expect(initialWork.durationMs).toBeNull();
     expect(prependedWork.durationMs).toBeNull();
-  });
-});
-
-describe("coalesceActivityRuns", () => {
-  const toolResult = (id: string, timestamp: number, overrides: Record<string, unknown> = {}) =>
-    toolResultMessage(id, "bash", "ok", timestamp, overrides);
-
-  const projectedToolGroups = () =>
-    buildCachedChatItems(
-      createProps({
-        paneId: "activity-run-projection",
-        messages: [
-          toolResult("call-1", 1_000, {
-            __openclaw: { id: "tool-1", seq: 1, turnBoundary: true },
-          }),
-          toolResult("call-2", 2_000, {
-            __openclaw: { id: "tool-2", seq: 2, turnBoundary: true },
-          }),
-          toolResult("call-3", 3_000, {
-            __openclaw: { id: "tool-3", seq: 3, turnBoundary: true },
-          }),
-        ],
-      }),
-    ).filter((item): item is MessageGroup => item.kind === "group");
-
-  function requireActivityRun(value: unknown): ActivityRunItem {
-    expect(requireRecord(value).kind).toBe("activity-run");
-    return value as ActivityRunItem;
-  }
-
-  it("combines projected-turn tool groups without rewriting their order or messages", () => {
-    const groups = projectedToolGroups();
-    const projected = coalesceActivityRuns(groups.slice(0, 2));
-    const run = requireActivityRun(projected[0]);
-
-    expect(projected).toHaveLength(1);
-    expect(run.groups).toEqual([groups[0], groups[1]]);
-    expect(run.groups[0]).toBe(groups[0]);
-    expect(run.groups[1]).toBe(groups[1]);
-    expect(run.groups.flatMap((group) => group.messages.map((entry) => entry.key))).toEqual(
-      groups.slice(0, 2).flatMap((group) => group.messages.map((entry) => entry.key)),
-    );
-  });
-
-  it("keeps the first-group key stable when live tool groups append", () => {
-    const groups = projectedToolGroups();
-    const initial = requireActivityRun(coalesceActivityRuns(groups.slice(0, 2))[0]);
-    const appended = requireActivityRun(coalesceActivityRuns(groups)[0]);
-
-    expect(initial.key).toBe(`activity:${groups[0]?.key}`);
-    expect(appended.key).toBe(initial.key);
-  });
-
-  it("keeps adjacent tool activity separate when a run has a visible reply", () => {
-    const groups = projectedToolGroups();
-    const first = { ...groups[0]!, runId: "run-1" };
-    const second = { ...groups[1]!, runId: "run-2" };
-    const reply: MessageGroup = {
-      kind: "group",
-      key: "group:assistant:reply",
-      role: "assistant",
-      messages: [messageEntry("assistant:reply", assistantMessage("Done.", 3_500))],
-      visibleContent: "text",
-      timestamp: 3_500,
-      isStreaming: false,
-      runId: "run-2",
-    };
-
-    expect(coalesceActivityRuns([first, second, reply])).toEqual([first, second, reply]);
-  });
-
-  it("pools consecutive reply-less runs' activity into one rollup", () => {
-    const groups = projectedToolGroups();
-    const runs = groups.map((group, index) =>
-      Object.assign({}, group, { runId: `run-${index + 1}` }),
-    );
-    const prompt = groupAt(
-      messageGroups({
-        messages: [
-          userMessage("Start", 500, {
-            __openclaw: { idempotencyKey: "run-1:user" },
-          }),
-        ],
-      }),
-      0,
-    );
-    const projected = coalesceActivityRuns([prompt, ...runs]);
-    const run = requireActivityRun(projected[1]);
-
-    expect(projected).toHaveLength(2);
-    expect(projected[0]).toBe(prompt);
-    expect(run.groups).toEqual(runs);
-  });
-
-  it("pools reply-less assistant tool activity like heartbeat wakes", () => {
-    const heartbeatGroup = (index: number): MessageGroup => ({
-      kind: "group",
-      key: `group:assistant:hb-${index}`,
-      role: "assistant",
-      messages: [
-        messageEntry(
-          `hb-${index}`,
-          assistantMessage(
-            [
-              {
-                type: "toolCall",
-                id: `hb-call-${index}`,
-                name: "heartbeat_respond",
-                arguments: {},
-              },
-              { type: "toolResult", id: `hb-call-${index}`, name: "heartbeat_respond", text: "ok" },
-            ],
-            1_000 * index,
-            { runId: `hb-run-${index}` },
-          ),
-        ),
-      ],
-      visibleContent: "none",
-      timestamp: 1_000 * index,
-      isStreaming: false,
-      runId: `hb-run-${index}`,
-    });
-    const beats = [heartbeatGroup(1), heartbeatGroup(2), heartbeatGroup(3)];
-    const projected = coalesceActivityRuns(beats);
-    const run = requireActivityRun(projected[0]);
-
-    expect(projected).toHaveLength(1);
-    expect(run.groups).toEqual(beats);
-  });
-
-  it("keeps a live run's activity out of the reply-less pool", () => {
-    const groups = projectedToolGroups();
-    const first = { ...groups[0]!, runId: "run-1" };
-    const live = { ...groups[1]!, runId: "run-2" };
-    const streamRun = {
-      kind: "stream-run" as const,
-      key: "stream-run:live",
-      runId: "run-2",
-      parts: [],
-    };
-
-    expect(coalesceActivityRuns([first, live, streamRun])).toEqual([first, live, streamRun]);
-  });
-
-  it("treats every non-tool item as a hard presentation boundary", () => {
-    const groups = projectedToolGroups();
-    const userBoundary: MessageGroup = {
-      kind: "group",
-      key: "group:user:boundary",
-      role: "user",
-      messages: [messageEntry("user:boundary", userMessage("stop", 4_000))],
-      visibleContent: "text",
-      timestamp: 4_000,
-      isStreaming: false,
-    };
-    const divider = {
-      kind: "divider" as const,
-      key: "divider:boundary",
-      label: "Boundary",
-      timestamp: 5_000,
-    };
-    const projected = coalesceActivityRuns([
-      groups[0]!,
-      userBoundary,
-      groups[1]!,
-      divider,
-      groups[2]!,
-    ]);
-
-    expect(projected).toEqual([groups[0], userBoundary, groups[1], divider, groups[2]]);
-  });
-
-  it("leaves a single tool group unchanged and disables projection during search", () => {
-    const groups = projectedToolGroups();
-    const singleton = coalesceActivityRuns([groups[0]!]);
-    const searchInput = groups.slice(0, 2);
-
-    expect(singleton[0]).toBe(groups[0]);
-    expect(coalesceActivityRuns(searchInput, { searchActive: true })).toBe(searchInput);
   });
 });
 

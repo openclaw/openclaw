@@ -32,25 +32,6 @@ import {
   type PackageManagerIdentity,
 } from "./vitest-pair-benchmark-contract.mts";
 
-export {
-  analyzeBenchmark,
-  assertEquivalentInventories,
-  assertExecutionDigest,
-  assertInventoryAvailable,
-  assertSingleWorkflowAttempt,
-  buildBenchmarkSchedule,
-  loadBenchmarkManifest,
-  parseVitestExecutionReport,
-  validateBenchmarkManifest,
-  withTerminalManifest,
-  writeJsonAtomic,
-} from "./vitest-pair-benchmark-contract.mts";
-export type {
-  BenchmarkManifest,
-  BenchmarkRunRecord,
-  PackageManagerIdentity,
-} from "./vitest-pair-benchmark-contract.mts";
-
 const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
 export const VITEST_PAIR_HARNESS_DEADLINE_MS = 165 * 60 * 1000;
 
@@ -319,6 +300,23 @@ async function runBenchmarkCommand(
   let result: RunCommandResult | undefined;
   let timing: ReturnType<typeof parseGnuTime> | undefined;
   let execution: BenchmarkExecutionSummary | null = null;
+  const createRecord = (): BenchmarkRunRecord => ({
+    id: plan.id,
+    phase: plan.phase,
+    side: plan.side,
+    lane: plan.lane.id,
+    round: plan.round,
+    pair: plan.pair,
+    cacheMode: plan.cacheMode,
+    command,
+    packageManager,
+    startedAt,
+    durationMs: result?.durationMs ?? 0,
+    userCpuMs: timing?.userCpuMs ?? 0,
+    systemCpuMs: timing?.systemCpuMs ?? 0,
+    execution,
+    exitCode: result?.exitCode ?? null,
+  });
   try {
     result = await runOwnedCommand({
       bin: command[0]!,
@@ -336,42 +334,12 @@ async function runBenchmarkCommand(
     if (expectedExecutionDigest !== undefined) {
       assertExecutionDigest(execution, expectedExecutionDigest, plan.id);
     }
-    const record: BenchmarkRunRecord = {
-      id: plan.id,
-      phase: plan.phase,
-      side: plan.side,
-      lane: plan.lane.id,
-      round: plan.round,
-      pair: plan.pair,
-      cacheMode: plan.cacheMode,
-      command,
-      packageManager,
-      startedAt,
-      durationMs: result.durationMs,
-      userCpuMs: timing.userCpuMs,
-      systemCpuMs: timing.systemCpuMs,
-      execution,
-      exitCode: result.exitCode,
-    };
+    const record = createRecord();
     writeJsonAtomic(path.join(runRoot, "record.json"), record);
     return record;
   } catch (error) {
     const record: BenchmarkRunRecord = {
-      id: plan.id,
-      phase: plan.phase,
-      side: plan.side,
-      lane: plan.lane.id,
-      round: plan.round,
-      pair: plan.pair,
-      cacheMode: plan.cacheMode,
-      command,
-      packageManager,
-      startedAt,
-      durationMs: result?.durationMs ?? 0,
-      userCpuMs: timing?.userCpuMs ?? 0,
-      systemCpuMs: timing?.systemCpuMs ?? 0,
-      execution,
-      exitCode: result?.exitCode ?? null,
+      ...createRecord(),
       error: error instanceof Error ? error.message : String(error),
     };
     const recordPath = path.join(runRoot, "record.json");

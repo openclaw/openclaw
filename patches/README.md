@@ -8,7 +8,9 @@ agent to retain per-request `NO_PROXY` routing even when every configured proxy
 route is invalid. The patch changes only the package entrypoint and regenerated
 entrypoint declarations; proxy behavior and the package version are unchanged.
 The root package bundles the dependency so npm installations retain the export.
-Remove this patch, its registration, and the bundle entry when an upstream release
+Its pinned Undici peer is bundled too: npm infers that bundled peers are already
+present and otherwise skips installing Undici, even though the root requires it.
+Remove this patch, its registration, and both bundle entries when an upstream release
 exports the standalone agent and passes `extensions/whatsapp/src/session.media-upload.test.ts`
 and `src/infra/net/node-proxy-agent.test.ts` without the patch.
 

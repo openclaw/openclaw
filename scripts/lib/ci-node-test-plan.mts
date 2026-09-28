@@ -1667,10 +1667,6 @@ function listToolingGroupFiles(configs: readonly string[]): string[] | undefined
   return files.length > 0 ? files : undefined;
 }
 
-function listTestFiles(rootDir: string): string[] {
-  return listTrackedTestFiles(rootDir);
-}
-
 function resolveTestFilesBuildMode(files: readonly string[]): NodeTestPretestBuildMode | undefined {
   // Planner inventories contain resolved paths. Preserve their exact membership
   // instead of reparsing every file as a glob against the runtime consumers.
@@ -1679,7 +1675,7 @@ function resolveTestFilesBuildMode(files: readonly string[]): NodeTestPretestBui
 }
 
 function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
-  const files = listTestFiles("src/auto-reply/reply");
+  const files = listTrackedTestFiles("src/auto-reply/reply");
   const groups = {
     "auto-reply-reply-agent-runner": [] as string[],
     "auto-reply-reply-commands": [] as string[],
@@ -1757,9 +1753,7 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
 function resolveAgentCoreShardName(file: string): string {
   const name = relative("src/agents", file).replaceAll("\\", "/");
   if (
-    name.startsWith("auth") ||
     name.includes("auth") ||
-    name.includes("oauth") ||
     name.includes("credential") ||
     name.includes("api-key") ||
     name.includes("token")
@@ -1823,7 +1817,7 @@ function resolveAgentCoreShardName(file: string): string {
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
   const excludedTests = new Set(agentVitestProjectOwners.core.exclude);
   const groups = new Map<string, string[]>();
-  for (const file of listTestFiles("src/agents")) {
+  for (const file of listTrackedTestFiles("src/agents")) {
     const name = relative("src/agents", file).replaceAll("\\", "/");
     if (name.includes("/") || excludedTests.has(file)) {
       continue;
@@ -1977,7 +1971,7 @@ function resolveGatewayServerShardName(file: string): string {
 
 function createGatewayServerSplitShards(): NodeTestSplitShard[] {
   const groups = new Map<string, string[]>();
-  for (const file of listTestFiles("src/gateway").filter(isGatewayServerTestFile)) {
+  for (const file of listTrackedTestFiles("src/gateway").filter(isGatewayServerTestFile)) {
     const shardName = resolveGatewayServerShardName(file);
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }
@@ -2028,7 +2022,7 @@ function resolveCronShardName(file: string): string {
 
 function createCronSplitShards(): NodeTestSplitShard[] {
   const groups = new Map<string, string[]>();
-  for (const file of listTestFiles("src/cron")) {
+  for (const file of listTrackedTestFiles("src/cron")) {
     const shardName = resolveCronShardName(file);
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }
@@ -2047,205 +2041,121 @@ function createCronSplitShards(): NodeTestSplitShard[] {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
+// Keep precedence: specific owners such as heartbeat-runner precede their broad prefixes.
+const INFRA_SHARD_PREFIXES = [
+  ["approval-exec", ["approval", "exec"]],
+  ["heartbeat-runner", ["heartbeat-runner"]],
+  ["heartbeat-core", ["heartbeat"]],
+  ["outbound-actions", ["outbound/message-action"]],
+  ["outbound-core", ["outbound/"]],
+  ["net-install", ["net/", "install", "npm", "brew", "binaries"]],
+  ["device", ["device"]],
+  ["gateway-lock-argv", ["gateway-lock", "gateway-process-argv"]],
+  ["gateway-processes", ["gateway-processes"]],
+  ["gateway-watch", ["gateway-watch"]],
+  ["network-node", ["node", "bonjour", "network"]],
+  ["diagnostics-state", ["archive", "backup", "diagnostic"]],
+  [
+    "files-commands",
+    [
+      "command-analysis/",
+      "command-explainer/",
+      "file-",
+      "fs-",
+      "json",
+      "path",
+      "shell",
+      "tmp-openclaw-dir",
+    ],
+  ],
+  ["provider-push", ["provider-usage", "push-"]],
+  ["storage-state", ["kysely", "session", "sqlite", "stale-lock", "state-migrations"]],
+  ["channel-plugin", ["channel", "plugin", "pairing", "voicewake"]],
+  [
+    "system-runtime",
+    ["package", "ports", "process", "restart", "runtime", "run-node", "system", "update"],
+  ],
+  [
+    "env-auth",
+    [
+      "dotenv",
+      "env",
+      "gemini-auth",
+      "google-api",
+      "home-dir",
+      "host-env",
+      "openclaw-exec-env",
+      "secret",
+      "secure-random",
+    ],
+  ],
+  [
+    "repo-tooling",
+    [
+      "build-stamp",
+      "changelog",
+      "clawhub",
+      "detect-package-manager",
+      "git-",
+      "openclaw-root",
+      "tsdown",
+      "vitest",
+    ],
+  ],
+  [
+    "network-platform",
+    ["scp", "ssh", "tailnet", "tailscale", "tcp", "tls/", "transport", "widearea", "windows", "ws"],
+  ],
+  [
+    "core-utils",
+    [
+      "abort",
+      "backoff",
+      "errors",
+      "fatal-error",
+      "fetch",
+      "fixed-window",
+      "format-time/",
+      "http-body",
+      "plain-object",
+      "prototype-keys",
+      "retry",
+      "warning-filter",
+    ],
+  ],
+  ["cli-ui", ["browser", "cli-", "clipboard", "control-ui", "embedded", "is-main"]],
+  [
+    "events-runtime",
+    ["agent-events", "event-session", "infra-", "non-fatal", "supervisor", "unhandled"],
+  ],
+  [
+    "file-safety",
+    [
+      "boundary",
+      "hardlink",
+      "replace-file",
+      "resolve-system-bin",
+      "safe-package-install",
+      "stable-node-path",
+      "watch-node",
+    ],
+  ],
+  ["misc-dedupe-disk", ["dedupe", "disk-space"]],
+  ["misc-values", ["inline-option-token", "map-size", "machine-name"]],
+  ["misc-os", ["os-summary"]],
+] as const;
+
 function resolveInfraShardName(file: string): string {
   const name = relative("src/infra", file).replaceAll("\\", "/");
-  if (name.startsWith("approval") || name.startsWith("exec")) {
-    return "core-runtime-infra-approval-exec";
-  }
-  if (name.startsWith("heartbeat-runner")) {
-    return "core-runtime-infra-heartbeat-runner";
-  }
-  if (name.startsWith("heartbeat")) {
-    return "core-runtime-infra-heartbeat-core";
-  }
-  if (name.startsWith("outbound/message-action")) {
-    return "core-runtime-infra-outbound-actions";
-  }
-  if (name.startsWith("outbound/")) {
-    return "core-runtime-infra-outbound-core";
-  }
-  if (
-    name.startsWith("net/") ||
-    name.startsWith("install") ||
-    name.startsWith("npm") ||
-    name.startsWith("brew") ||
-    name.startsWith("binaries")
-  ) {
-    return "core-runtime-infra-net-install";
-  }
-  if (name.startsWith("device")) {
-    return "core-runtime-infra-device";
-  }
-  if (name.startsWith("gateway-lock") || name.startsWith("gateway-process-argv")) {
-    return "core-runtime-infra-gateway-lock-argv";
-  }
-  if (name.startsWith("gateway-processes")) {
-    return "core-runtime-infra-gateway-processes";
-  }
-  if (name.startsWith("gateway-watch")) {
-    return "core-runtime-infra-gateway-watch";
-  }
-  if (name.startsWith("node") || name.startsWith("bonjour") || name.startsWith("network")) {
-    return "core-runtime-infra-network-node";
-  }
-  if (
-    name.startsWith("archive") ||
-    name.startsWith("backup") ||
-    name.startsWith("diagnostic") ||
-    name.startsWith("diagnostics")
-  ) {
-    return "core-runtime-infra-diagnostics-state";
-  }
-  if (
-    name.startsWith("command-analysis/") ||
-    name.startsWith("command-explainer/") ||
-    name.startsWith("file-") ||
-    name.startsWith("fs-") ||
-    name.startsWith("json") ||
-    name.startsWith("path") ||
-    name.startsWith("shell") ||
-    name.startsWith("tmp-openclaw-dir")
-  ) {
-    return "core-runtime-infra-files-commands";
-  }
-  if (name.startsWith("provider-usage") || name.startsWith("push-")) {
-    return "core-runtime-infra-provider-push";
-  }
-  if (
-    name.startsWith("kysely") ||
-    name.startsWith("session") ||
-    name.startsWith("sqlite") ||
-    name.startsWith("stale-lock") ||
-    name.startsWith("state-migrations")
-  ) {
-    return "core-runtime-infra-storage-state";
-  }
-  if (
-    name.startsWith("channel") ||
-    name.startsWith("plugin") ||
-    name.startsWith("pairing") ||
-    name.startsWith("voicewake")
-  ) {
-    return "core-runtime-infra-channel-plugin";
-  }
-  if (
-    name.startsWith("package") ||
-    name.startsWith("ports") ||
-    name.startsWith("process") ||
-    name.startsWith("restart") ||
-    name.startsWith("runtime") ||
-    name.startsWith("run-node") ||
-    name.startsWith("system") ||
-    name.startsWith("update")
-  ) {
-    return "core-runtime-infra-system-runtime";
-  }
-  if (
-    name.startsWith("dotenv") ||
-    name.startsWith("env") ||
-    name.startsWith("gemini-auth") ||
-    name.startsWith("google-api") ||
-    name.startsWith("home-dir") ||
-    name.startsWith("host-env") ||
-    name.startsWith("openclaw-exec-env") ||
-    name.startsWith("secret") ||
-    name.startsWith("secure-random")
-  ) {
-    return "core-runtime-infra-env-auth";
-  }
-  if (
-    name.startsWith("build-stamp") ||
-    name.startsWith("changelog") ||
-    name.startsWith("clawhub") ||
-    name.startsWith("detect-package-manager") ||
-    name.startsWith("git-") ||
-    name.startsWith("openclaw-root") ||
-    name.startsWith("tsdown") ||
-    name.startsWith("vitest")
-  ) {
-    return "core-runtime-infra-repo-tooling";
-  }
-  if (
-    name.startsWith("scp") ||
-    name.startsWith("ssh") ||
-    name.startsWith("tailnet") ||
-    name.startsWith("tailscale") ||
-    name.startsWith("tcp") ||
-    name.startsWith("tls/") ||
-    name.startsWith("transport") ||
-    name.startsWith("widearea") ||
-    name.startsWith("windows") ||
-    name.startsWith("ws") ||
-    name.startsWith("wsl")
-  ) {
-    return "core-runtime-infra-network-platform";
-  }
-  if (
-    name.startsWith("abort") ||
-    name.startsWith("backoff") ||
-    name.startsWith("errors") ||
-    name.startsWith("fatal-error") ||
-    name.startsWith("fetch") ||
-    name.startsWith("fixed-window") ||
-    name.startsWith("format-time/") ||
-    name.startsWith("http-body") ||
-    name.startsWith("plain-object") ||
-    name.startsWith("prototype-keys") ||
-    name.startsWith("retry") ||
-    name.startsWith("warning-filter")
-  ) {
-    return "core-runtime-infra-core-utils";
-  }
-  if (
-    name.startsWith("browser") ||
-    name.startsWith("cli-") ||
-    name.startsWith("clipboard") ||
-    name.startsWith("control-ui") ||
-    name.startsWith("embedded") ||
-    name.startsWith("is-main")
-  ) {
-    return "core-runtime-infra-cli-ui";
-  }
-  if (
-    name.startsWith("agent-events") ||
-    name.startsWith("event-session") ||
-    name.startsWith("infra-") ||
-    name.startsWith("non-fatal") ||
-    name.startsWith("supervisor") ||
-    name.startsWith("unhandled")
-  ) {
-    return "core-runtime-infra-events-runtime";
-  }
-  if (
-    name.startsWith("boundary") ||
-    name.startsWith("hardlink") ||
-    name.startsWith("replace-file") ||
-    name.startsWith("resolve-system-bin") ||
-    name.startsWith("safe-package-install") ||
-    name.startsWith("stable-node-path") ||
-    name.startsWith("watch-node")
-  ) {
-    return "core-runtime-infra-file-safety";
-  }
-  if (name.startsWith("dedupe") || name.startsWith("disk-space")) {
-    return "core-runtime-infra-misc-dedupe-disk";
-  }
-  if (
-    name.startsWith("inline-option-token") ||
-    name.startsWith("map-size") ||
-    name.startsWith("machine-name")
-  ) {
-    return "core-runtime-infra-misc-values";
-  }
-  if (name.startsWith("os-summary")) {
-    return "core-runtime-infra-misc-os";
-  }
-  return "core-runtime-infra-misc";
+  const owner = INFRA_SHARD_PREFIXES.find(([, prefixes]) =>
+    prefixes.some((prefix) => name.startsWith(prefix)),
+  );
+  return `core-runtime-infra-${owner?.[0] ?? "misc"}`;
 }
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
   const groups = new Map<string, string[]>();
-  for (const file of listTestFiles("src/infra")) {
+  for (const file of listTrackedTestFiles("src/infra")) {
     if (isDatabaseWorkerCoreTestFile(file)) {
       continue;
     }
@@ -2386,7 +2296,7 @@ function createStripedSplitShards(params: {
 function createCoreUnitSrcSecuritySplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const files = filterUnitConfigTestFiles(
-    listTestFiles("src").filter(
+    listTrackedTestFiles("src").filter(
       (file) =>
         isStripeEligibleTestFile(file, unitFastFiles) &&
         !file.startsWith("src/acp/") &&
@@ -2413,8 +2323,8 @@ function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const separateUiFiles = new Set([...uiIsolatedTestFiles, ...uiTimingTestFiles]);
   const files = [
-    ...listTestFiles("ui/src"),
-    ...listTestFiles("extensions").filter(isPluginControlUiPath),
+    ...listTrackedTestFiles("ui/src"),
+    ...listTrackedTestFiles("extensions").filter(isPluginControlUiPath),
   ].filter(
     (file) =>
       isStripeEligibleTestFile(file, unitFastFiles) &&
@@ -2464,7 +2374,7 @@ function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
     ...gatewayServerExcludedTestFiles,
     ...gatewayServerIsolatedTestFiles,
   ]);
-  const gatewayFiles = listTestFiles("src/gateway").filter(
+  const gatewayFiles = listTrackedTestFiles("src/gateway").filter(
     (file) =>
       isStripeEligibleTestFile(file, unitFastFiles) &&
       !file.startsWith("src/gateway/server-methods/") &&
@@ -2472,7 +2382,7 @@ function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
       !excludedGatewayFiles.has(file),
   );
   const packageFiles = ["packages/gateway-client/src", "packages/gateway-protocol/src"]
-    .flatMap((rootDir) => listTestFiles(rootDir))
+    .flatMap((rootDir) => listTrackedTestFiles(rootDir))
     .filter((file) => isStripeEligibleTestFile(file, unitFastFiles));
   const configs = GATEWAY_CORE_NODE_TEST_CONFIGS;
   // The pretest runtime build is charged per job, so a stripe holding one of
@@ -3248,7 +3158,7 @@ function listCompactToolingTestFiles(): string[] {
     ...toolingIsolatedTestFiles,
     ...databaseWorkerCoreTestFiles,
   ]);
-  return [...listTestFiles("test"), ...listTestFiles("src/scripts")].filter(
+  return [...listTrackedTestFiles("test"), ...listTrackedTestFiles("src/scripts")].filter(
     (file) =>
       !file.startsWith("test/fixtures/") &&
       !file.endsWith(".e2e.test.ts") &&

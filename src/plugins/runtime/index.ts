@@ -1,5 +1,4 @@
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
-// Plugin runtime entrypoint assembles runtime helpers available to activated plugins.
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   listImageGenerationProviders,
@@ -28,7 +27,7 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
-const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("./runtime-tts-request.js"));
+const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -98,7 +97,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       }),
   );
   return {
-    acquireLocalService: (...args) => loadAcquireLocalService(...args),
+    acquireLocalService: loadAcquireLocalService,
     complete: async (params) => {
       const llm = await loadLlm();
       return llm.complete(params);
@@ -201,8 +200,6 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   let modelAuth = _options.modelAuth;
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
-    // Sourced from the shared OpenClaw version resolver (#52899) so plugins
-    // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     decisions: {
       evaluate: async (...args) =>

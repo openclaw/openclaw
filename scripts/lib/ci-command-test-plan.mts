@@ -173,7 +173,7 @@ function resolveCommandShardName(file: string): string {
     return "agentic-commands-doctor-auth";
   }
   if (name.startsWith("doctor")) {
-    if (name.startsWith("doctor/shared/") || name.startsWith("doctor/")) {
+    if (name.startsWith("doctor/")) {
       return "agentic-commands-doctor-shared";
     }
     if (name.startsWith("doctor-auth")) {

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Channel streaming config normalization and progress-draft formatting helpers.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -415,20 +414,15 @@ function buildCommandOutputProgressLine(
 }
 
 export function formatChannelProgressDraftLine(
-  /** Structured progress event to render as one draft line. */
   input: ChannelProgressDraftLineInput,
-  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): string | undefined {
   return buildChannelProgressDraftLine(input, options)?.text;
 }
 
 export function buildChannelProgressDraftLineForEntry(
-  /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
-  /** Structured progress event to render as one draft line. */
   input: ChannelProgressDraftLineInput,
-  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
   return buildChannelProgressDraftLine(input, {
@@ -438,11 +432,8 @@ export function buildChannelProgressDraftLineForEntry(
 }
 
 export function formatChannelProgressDraftLineForEntry(
-  /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
-  /** Structured progress event to render as one draft line. */
   input: ChannelProgressDraftLineInput,
-  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): string | undefined {
   const line = buildChannelProgressDraftLineForEntry(entry, input, options);
@@ -450,9 +441,7 @@ export function formatChannelProgressDraftLineForEntry(
 }
 
 export function buildChannelProgressDraftLine(
-  /** Structured progress event to normalize into draft-line metadata. */
   input: ChannelProgressDraftLineInput,
-  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
   switch (input.event) {
@@ -589,15 +578,12 @@ export function buildChannelProgressDraftLine(
 }
 
 export function createChannelProgressDraftGate(params: {
-  /** Callback that starts the channel progress draft. */
   onStart: () => void | Promise<void>;
   /** Delay after the first work event before a draft starts. */
   initialDelayMs?: number;
   /** Reports timer-fired startup failures, which have no awaiting caller. */
   onStartError?: (error: unknown) => void;
-  /** Timer implementation, injectable for tests. */
   setTimeoutFn?: typeof setTimeout;
-  /** Timer clearer, injectable for tests. */
   clearTimeoutFn?: typeof clearTimeout;
 }) {
   const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
@@ -1073,7 +1059,6 @@ export function formatPlanChecklistLines(
 }
 
 export function normalizeChannelProgressDraftLineIdentity(
-  /** Progress line whose duplicate/update identity should be normalized. */
   line: string | ChannelProgressDraftLine | undefined,
 ): string {
   const text = typeof line === "string" ? line : line ? getProgressDraftLineText(line) : undefined;
@@ -1086,11 +1071,8 @@ export function normalizeChannelProgressDraftLineIdentity(
 }
 
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
-  /** Existing progress draft lines in display order. */
   lines: TLine[],
-  /** New or updated progress line. */
   line: TLine,
-  /** Merge limits for rolling progress drafts. */
   params: { maxLines: number },
 ): TLine[] {
   // The shipped SDK lacks the compositor's effective preview mode and keeps its attention policy.

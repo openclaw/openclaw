@@ -130,15 +130,22 @@ Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
 failures or additional skips stay on Node, and the compatible remainder runs on
 Bun. Those Node files still execute; they are not excluded from CI.
+The process lane runs `terminal-pty-bun.test.ts` on Bun and retains its other
+files on Node. Its native real-PTY block skips when the pinned Bun build lacks
+`Bun.Terminal.pause()` and `resume()`, as the current pin does. macOS and Linux
+select the native PTY without Node only on builds with that capability, such as
+the OpenClaw Bun fork builds that also carry the macOS child-exit fix. Other Bun
+releases keep the Node helper, which requires an installed Node runtime and
+skips Bun's `node` shim when selecting it. Windows keeps `node-pty`.
 TypeScript compiler analysis suites also stay on Node because the synchronous
 native compiler API requires Node child-process pipe handles. This includes
 compiler assertions in mixed runtime suites; their cases remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
-The complete fake-timer lane also supports Bun. Control UI retains the GC-sensitive
-`usage-page-details.test.ts` on Node and runs the remaining files on Bun, including
-chat presentation retirement checks.
+The complete fake-timer lane also supports Bun. Control UI keeps its GC-sensitive
+retention proofs (`chat-pane-retained-presentation.test.ts`, `chat-thread.test.ts`,
+and `usage-page-details.test.ts`) on Node and runs the remaining files on Bun.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -831,3 +838,5 @@ artifacts remain errors in report-only mode.
 
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
+
+When exactly one non-control workload remains, the PR failure monitor exits successfully. The aggregate still waits for and validates that workload; retiring the observer does not admit a failed or unfinished job.

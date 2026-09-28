@@ -16,7 +16,7 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-function buildQuery(params: {
+export function buildQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
   config: ResolvedActiveRecallPluginConfig;
@@ -93,7 +93,7 @@ function clampSearchQuery(text: string): string {
     : normalized;
 }
 
-function buildSearchQuery(params: {
+export function buildSearchQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
 }): string {
@@ -124,7 +124,7 @@ function buildSearchQuery(params: {
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
-function extractTextContentParts(content: unknown): string[] {
+export function extractTextContentParts(content: unknown): string[] {
   if (typeof content === "string") {
     return content.trim() ? [content] : [];
   }
@@ -152,7 +152,7 @@ function extractTextContentParts(content: unknown): string[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function extractTextContent(content: unknown): string {
+export function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
@@ -197,7 +197,7 @@ function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): st
   return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
 }
 
-function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
+export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -218,7 +218,7 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   return turns;
 }
 
-function getModelRef(
+export function getModelRef(
   runtimeConfig: OpenClawConfig,
   agentId: string,
   config: ResolvedActiveRecallPluginConfig,
@@ -250,12 +250,3 @@ function getModelRef(
   }
   return undefined;
 }
-
-export {
-  buildQuery,
-  buildSearchQuery,
-  extractRecentTurns,
-  extractTextContent,
-  extractTextContentParts,
-  getModelRef,
-};

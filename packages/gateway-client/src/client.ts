@@ -74,7 +74,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
-import { WebSocket } from "./websocket.js";
+import { WebSocket, type GatewayWebSocketTargetOptions } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -159,8 +159,7 @@ export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTime
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
-export type GatewayClientOptions = {
-  url?: string; // ws://127.0.0.1:18789
+export type GatewayClientOptions = GatewayWebSocketTargetOptions & {
   origin?: string;
   /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
   edgeAuthHeaders?: Readonly<Record<string, string>>;
@@ -205,7 +204,6 @@ export type GatewayClientOptions = {
   hostDeps?: GatewayClientHostDeps;
   minProtocol?: number;
   maxProtocol?: number;
-  tlsFingerprint?: string;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -451,6 +449,7 @@ export class GatewayClient {
     const transport = resolveGatewayWebSocketTransport({
       url,
       tlsFingerprint: this.opts.tlsFingerprint,
+      tlsServerName: this.opts.tlsServerName,
       env: this.opts.env,
       normalizeTlsFingerprint: this.deps.normalizeTlsFingerprint,
       options: {

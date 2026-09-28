@@ -52,8 +52,8 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
       const client = createTestGatewayClient(request);
       const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
       const frames: unknown[] = [];
-      const send = vi.fn((frame: string) => {
-        const decoded = JSON.parse(frame);
+      const send = vi.fn((frame: string | Buffer) => {
+        const decoded = JSON.parse(frame.toString());
         frames.push(decoded);
         emitEvent(decoded);
       });

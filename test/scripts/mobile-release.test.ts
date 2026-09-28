@@ -97,6 +97,7 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       "scripts/android-version.ts",
       "scripts/lib/android-version.ts",
       "scripts/lib/mobile-changelog.ts",
+      "scripts/lib/mobile-version.ts",
       "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
       "scripts/lib/arg-utils.mts",

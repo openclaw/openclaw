@@ -64,12 +64,9 @@ export function createReplyPrefixContext(params: {
 /**
  * Creates the reply-prefix options object expected by `getReply` call sites.
  */
-export function createReplyPrefixOptions(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel?: string;
-  accountId?: string;
-}): ReplyPrefixOptions {
+export function createReplyPrefixOptions(
+  params: Parameters<typeof createReplyPrefixContext>[0],
+): ReplyPrefixOptions {
   const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
     createReplyPrefixContext(params);
   return {

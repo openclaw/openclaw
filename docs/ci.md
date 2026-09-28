@@ -15,6 +15,8 @@ for runs already deferred by older workflow revisions.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
+
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
@@ -29,6 +31,8 @@ For the published-upgrade regression gate, see [selection and routing](/ci/scope
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. Windows retains its complete inventory across five measured file shards.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+
+iOS release qualification uses [larger hosted capacity](/ci/runners) for its stock simulator and isolated Gateway. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
@@ -192,8 +196,8 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 | [Watch a CI run](/ci/watching-runs)                            | Wait on one pull request head, recover a stuck run, and pass the evidence gate.                                     |
 | [CI checkout ownership](/ci/checkout)                          | Shared checkout anchors, fetch retry budgets, and trusted action policy.                                            |
 | [CI scope and routing](/ci/scope-and-routing)                  | Why a job did or did not run: changed-scope detection and manual dispatch.                                          |
-| [CI runner classes](/ci/runners)                               | Trust-based runner routing, preflight queue recovery, Blacksmith classes, and runner backend modes.                 |
-| [CI capacity and shard weights](/ci/capacity)                  | The runner registration budget and the measured timings behind shard packing.                                       |
+| [CI runner classes](/ci/runners)                               | Trust-based runner routing, preflight and ratchet admission, Blacksmith classes, and runner backend modes.          |
+| [CI capacity and shard weights](/ci/capacity)                  | Runner registration, bounded PR concurrency, and measured shard packing.                                            |
 | [Release validation workflows](/ci/release-validation)         | Full Release Validation, live and E2E shards, Package Acceptance, install smoke, Docker E2E, and Plugin Prerelease. |
 | [Scheduled and maintenance workflows](/ci/scheduled-workflows) | OpenClaw Performance, QA Lab, CodeQL, the maintenance jobs, and ClawSweeper activity forwarding.                    |
 | [Local checks and Testbox](/ci/local-proof)                    | Reproduce a lane locally, keep the shrink-only ratchets, and run Crabbox or Testbox proof.                          |

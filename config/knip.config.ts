@@ -62,6 +62,8 @@ const repositoryScriptEntries = [
   "scripts/doctor-config-upgrade-replay.mjs!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
   "scripts/docker-e2e.mts!",
+  // Its inline Node bootstrap imports the shared watchdog by a shell-computed path.
+  "scripts/lib/docker-e2e-container.sh!",
   // Docker and package-install harnesses invoke this verifier by path.
   "scripts/docker/verify-fs-safe-native.mjs!",
   // Reusable Docker workflows invoke this selector from a trusted sparse checkout.
@@ -306,6 +308,15 @@ function compileFrvWorkflowConsumers(source: string, filePath: string): string {
 }
 
 function compileShellConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("scripts/lib/docker-e2e-container.sh")) {
+    const helper = source.match(
+      /local helper_source="\$DOCKER_E2E_CONTAINER_LIB_DIR\/([^"\r\n]+\.mjs)"/u,
+    )?.[1];
+    const names = source.match(
+      /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(pathToFileURL\(\\?"\$helper_source\\?"\)\.href\)/u,
+    )?.[1];
+    return helper && names ? `import {${names}} from ${JSON.stringify(`./${helper}`)};` : "";
+  }
   if (path.resolve(filePath) === path.resolve("scripts/lib/frozen-target-compat.sh")) {
     // These URLs resolve beside this shell file; keep the export edges tied to its actual imports.
     return [

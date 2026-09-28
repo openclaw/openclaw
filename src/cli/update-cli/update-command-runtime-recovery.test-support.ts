@@ -16,31 +16,6 @@ export const alreadyCurrentConvergenceCases = [
   { restart: true, running: true, failure: "changed owner" },
 ];
 
-export function alreadyCurrentHandoffCases(version: string) {
-  return [
-    {
-      packageInstallSpec: "file:/owned/candidate.tgz",
-      channel: "stable" as const,
-      expectedTag: "file:/owned/candidate.tgz",
-    },
-    {
-      packageInstallSpec: "https://example.invalid/candidate.tgz",
-      channel: "stable" as const,
-      expectedTag: "https://example.invalid/candidate.tgz",
-    },
-    {
-      packageInstallSpec: `openclaw@${version}`,
-      channel: "stable" as const,
-      expectedTag: version,
-    },
-    {
-      packageInstallSpec: `openclaw@${version}`,
-      channel: "extended-stable" as const,
-      expectedTag: undefined,
-    },
-  ];
-}
-
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
   return process.platform === "win32"
     ? `${manager} install ${version}; if ($LASTEXITCODE -eq 0) { ${manager} use ${version} }`

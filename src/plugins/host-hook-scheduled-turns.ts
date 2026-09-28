@@ -33,16 +33,7 @@ const PLUGIN_CRON_CLEANUP_PAGE_SIZE = 200;
 const PLUGIN_CRON_CLEANUP_MAX_PAGES = 50;
 const PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS = 3;
 
-type ResolvedSessionTurnSchedule =
-  | {
-      kind: "cron";
-      expr: string;
-      tz?: string;
-    }
-  | {
-      kind: "at";
-      at: string;
-    };
+type ResolvedSessionTurnSchedule = Extract<CronJob["schedule"], { kind: "cron" | "at" }>;
 
 function resolveSchedule(
   params: PluginSessionTurnScheduleParams,

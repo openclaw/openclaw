@@ -1,5 +1,5 @@
 ---
-summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT"
+summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT (Beta)"
 read_when:
   - You are connecting OpenAI to OpenClaw for the first time
   - You want Codex subscription auth instead of API keys
@@ -427,7 +427,9 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
 <a id="chatgpt-token-sharing-preview" />
 
-## Sign in with ChatGPT (preview)
+<a id="sign-in-with-chatgpt-preview" />
+
+## Sign in with ChatGPT (Beta)
 
 Use Sign in with ChatGPT (SIWC) for app-specific permissions, usage tracking,
 and token limits per OpenClaw instance while eligible Responses API requests use

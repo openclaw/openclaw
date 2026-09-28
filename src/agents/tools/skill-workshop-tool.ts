@@ -1,9 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-/**
- * Skill Workshop built-in tool.
- *
- * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { AUTONOMOUS_SKILL_MAX_CHARS } from "../../skills/workshop/collection-contracts.js";
@@ -142,7 +137,6 @@ type SkillWorkshopToolOptions = {
   proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
-/** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   if (options.libraryAuthoring) {
     return createLibrarySkillWorkshopTool(
@@ -230,7 +224,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           throw new ToolInputError("this Skill Workshop session cannot prepare live skill patches");
         }
         return await executePrepareSkillPatch({
-          workspaceDir: options.workspaceDir,
           config: options.config,
           agentId: options.agentId,
           env: options.env,
@@ -315,9 +308,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       });
 
       if (action === "evaluate") {
-        const evaluated = await evaluateSkillProposal({
-          ...lifecycleParams(),
-        });
+        const evaluated = await evaluateSkillProposal(lifecycleParams());
         return textResult(formatProposalEvaluation(evaluated.evaluation, evaluated.record.id), {
           id: evaluated.record.id,
           proposedVersion: evaluated.evaluation.proposedVersion,
@@ -369,7 +360,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
       let expectedCurrentContentHash: string | undefined;
       let currentSkillContent: string | undefined;
-      const patchOldString = action === "patch" ? readSkillPatchText(params).oldString : undefined;
+      let patchedSkillContent: string | undefined;
+      const patch = action === "patch" ? readSkillPatchText(params) : undefined;
       const requiresRead = action === "patch" || (action === "update" && options.updateProposals);
       if (requiresRead) {
         // Full rewrites require a complete model read. A targeted patch may instead
@@ -381,15 +373,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const readHash = readSkillHashes.get(target.skillKey);
         const contentHash = sha256Hex(target.content);
         currentSkillContent = target.content;
-        const preparedHash =
-          action === "patch"
-            ? resolveSkillPatchAuthorization({
-                skill: target,
-                oldString: patchOldString ?? "",
-                readHash,
-                preparedSkillPatches,
-              })
-            : undefined;
+        const preparedHash = patch
+          ? resolveSkillPatchAuthorization({
+              skill: target,
+              oldString: patch.oldString,
+              readHash,
+              preparedSkillPatches,
+            })
+          : undefined;
         if (
           !readHash &&
           !preparedHash &&
@@ -414,16 +405,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           );
         }
         expectedCurrentContentHash = readHash ?? preparedHash ?? contentHash;
-        if (action === "patch") {
+        if (patch) {
           assertSkillPatchRunUsage({
             skill: target,
             foregroundRepair,
             runId: options.origin?.runId,
           });
           try {
-            composeSkillBodyPatch(
+            patchedSkillContent = composeSkillBodyPatch(
               stripProposalFrontmatterForSkill(target.content),
-              readSkillPatchText(params),
+              patch,
             );
           } catch (error) {
             throw new ToolInputError(error instanceof Error ? error.message : String(error));
@@ -439,17 +430,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           action === "create"
             ? readToolStringParam(params, "name", { required: true })
             : readToolStringParam(params, "skill_name", { required: true, label: "skill_name" });
-        const content =
-          action === "patch"
-            ? composeSkillBodyPatch(
-                stripProposalFrontmatterForSkill(currentSkillContent ?? ""),
-                readSkillPatchText(params),
-              )
-            : requireProposalContent(proposalContent);
         assertAutonomousSkillSize(
           name,
           readToolStringParam(params, "description"),
-          content,
+          patchedSkillContent ?? requireProposalContent(proposalContent),
           currentSkillContent,
           workshopConfig.maxSkillBytes,
         );
@@ -495,8 +479,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             }),
             expectedCurrentContentHash,
             // A patch may only change its exact span, never description or support files.
-            ...(action === "patch"
-              ? { composePatch: readSkillPatchText(params) }
+            ...(patch
+              ? { composePatch: patch }
               : {
                   description: readToolStringParam(params, "description"),
                   content: requireProposalContent(proposalContent),

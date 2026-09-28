@@ -53,6 +53,12 @@ export const SkillsLibrarySaveParamsSchema = Type.Object(
     files: Type.Optional(
       Type.Array(SkillLibraryFileSchema, { maxItems: SKILL_LIBRARY_MAX_FILES - 1 }),
     ),
+    /** Existing support files from this skill's exact expectedRevision; no uploaded bytes. */
+    retainFiles: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 512 }), {
+        maxItems: SKILL_LIBRARY_MAX_FILES - 1,
+      }),
+    ),
   },
   closed,
 );
