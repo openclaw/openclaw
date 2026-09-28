@@ -199,7 +199,8 @@ agent switcher. This enables **team mode**, a browser preference that is off by
 default. The top row becomes a workspace header with the configured Gateway display
 name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
 **Agent settings**, and the existing documentation, help, community, and changelog
-links. Sessions appear under collapsible agent headers in configured roster order,
+links. Pinned sessions stay in **Pages**, using their agent's avatar as the icon.
+Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
 The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in

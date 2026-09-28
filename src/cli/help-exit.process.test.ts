@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -471,7 +472,11 @@ await runCliWithExitFinalization({
       const spawned: { child?: ChildProcess } = {};
       const child = await lifetime.track(
         runNodeScript(
-          [...resolveRuntimeWorkerArgv(helpersUrl).slice(0, -1), entryPath],
+          [
+            ...resolveVitestNodeArgs(),
+            ...resolveRuntimeWorkerArgv(helpersUrl).slice(0, -1),
+            entryPath,
+          ],
           {
             PATH: process.env.PATH,
             SystemRoot: process.env.SystemRoot,

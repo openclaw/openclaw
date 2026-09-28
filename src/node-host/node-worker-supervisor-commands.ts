@@ -4,11 +4,12 @@ import { boundedWorkerErrorWithCode } from "../gateway/worker-environments/worke
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+  NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PORTAL_STREAM_COMMAND,
-  NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+  NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -140,19 +141,10 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
 }): Promise<NodeWorkerSupervisorCommandResult> {
-  const recognized =
-    params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
-    params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
-    params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND ||
-    params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND ||
-    params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND ||
-    params.command === NODE_WORKER_PORTAL_STREAM_COMMAND;
-  if (!recognized) {
+  if (
+    params.command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND ||
+    !NODE_WORKER_PRIVATE_COMMANDS.some((command) => command === params.command)
+  ) {
     return { handled: false };
   }
   const runtime =
@@ -270,6 +262,13 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         parseNodeWorkerEnvironmentStopInput(params.paramsJSON),
       );
       payload = null;
+    } else if (params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND) {
+      const input = parseNodeWorkerLookupInput(params.paramsJSON);
+      const receipt = await params.supervisor!.status(
+        input.launchId,
+        ...(input.waitMs === undefined ? [] : [{ waitMs: input.waitMs, signal: params.signal }]),
+      );
+      payload = receipt ? projectNodeWorkerSupervisorReceipt(receipt) : null;
     } else {
       const receipt =
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
@@ -278,11 +277,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
               resolveWorkerConnectionEndpoint(params),
               params.signal,
             )
-          : params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND
-            ? await params.supervisor!.status(
-                parseNodeWorkerLookupInput(params.paramsJSON).launchId,
-              )
-            : await params.supervisor!.cancel(parseNodeWorkerCancelInput(params.paramsJSON));
+          : await params.supervisor!.cancel(parseNodeWorkerCancelInput(params.paramsJSON));
       payload = receipt ? projectNodeWorkerSupervisorReceipt(receipt) : null;
     }
     return { handled: true, ok: true, payload };

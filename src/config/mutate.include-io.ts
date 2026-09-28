@@ -8,6 +8,7 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import {
@@ -168,7 +169,7 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
   committedRaw: string | null;
   pathProof: IncludePublicationProof;
 }): Promise<boolean> {
-  return await rollbackConfigFileWriteIfUnchanged({
+  const restored = await rollbackConfigFileWriteIfUnchanged({
     configPath: params.target.absolutePath,
     previousSnapshot: {
       path: params.target.absolutePath,
@@ -182,6 +183,14 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
     durable: true,
     destinationHardlinks: "reject",
   });
+  if (restored) {
+    recordUpdateDoctorConfigFileWrite(
+      params.target.absolutePath,
+      hashConfigRaw(params.committedRaw),
+      hashConfigRaw(params.previousRaw),
+    );
+  }
+  return restored;
 }
 
 export async function writeRootBoundJsonFile(params: {
@@ -283,6 +292,11 @@ export async function writeRootBoundJsonFile(params: {
       () => {
         preparedFile.publish();
         publication.phase = "published";
+        recordUpdateDoctorConfigFileWrite(
+          targetAtCommit.absolutePath,
+          hashConfigRaw(currentRaw),
+          hashConfigRaw(content),
+        );
       },
     );
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
