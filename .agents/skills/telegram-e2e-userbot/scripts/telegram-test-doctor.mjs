@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetchWithLease, runCommand, sanitizeChildEnvironment } from "./run-mock-sut-user-e2e.mjs";
 import { selectChatTarget } from "./scenario.mjs";
 import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
+import { telegramPythonArgs } from "./telegram-runtime.mjs";
 import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 import { prepareTelegramTestGroup } from "./telegram-test-group.mjs";
@@ -12,6 +13,12 @@ import { prepareTelegramTestGroup } from "./telegram-test-group.mjs";
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const USER_DRIVER_PATH = path.join(SKILL_DIR, "scripts", "user-driver.py");
 const MISSING_GROUP_DIAGNOSTIC = "[credential_state_missing_group]";
+
+function readinessFailure(message, diagnostic) {
+  return Object.assign(new Error(`${message} Diagnostics: ${JSON.stringify(diagnostic)}`), {
+    diagnostic,
+  });
+}
 
 export async function runTelegramTestDoctor({
   acquireCredential = acquireTelegramTestCredential,
@@ -47,29 +54,78 @@ export async function checkTelegramTestCredential({
     lease.assertHealthy();
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
     const requiredChat = dm || chat ? "" : credential.groupId;
-    const statusArgs = ["run", USER_DRIVER_PATH, "status", "--json", "--timeout-ms", "25000"];
+    const statusArgs = telegramPythonArgs(
+      USER_DRIVER_PATH,
+      "status",
+      "--json",
+      "--timeout-ms",
+      "25000",
+    );
     if (requiredChat) statusArgs.push("--require-chat", requiredChat);
-    const status = await runCommandImpl("uv", statusArgs, {
-      cwd: process.cwd(),
-      env: driverEnv,
-      timeoutMs: 30_000,
-    });
+    const started = performance.now();
+    const diagnostic = {
+      phase: "tdlib-status",
+      exitCode: null,
+      timedOut: false,
+      durationMs: 0,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      signals: [],
+    };
+    credential.readinessDiagnostic = diagnostic;
+    let status;
+    try {
+      status = await runCommandImpl("uv", statusArgs, {
+        cwd: process.cwd(),
+        env: driverEnv,
+        timeoutMs: 30_000,
+      });
+    } catch {
+      diagnostic.signals.push(scope.signal.aborted ? "cancelled" : "launcher-error");
+      throw readinessFailure("TDLib readiness did not complete.", diagnostic);
+    } finally {
+      diagnostic.durationMs = Math.round(performance.now() - started);
+    }
+    diagnostic.exitCode = Number.isInteger(status.status) ? status.status : null;
+    diagnostic.timedOut = status.timedOut === true;
+    diagnostic.stdoutBytes = Buffer.byteLength(status.stdout || "");
+    diagnostic.stderrBytes = Buffer.byteLength(status.stderr || "");
+    // Only fixed categories cross the private process boundary. Raw output can
+    // contain credentials, identities, paths, or unfamiliar sensitive values.
+    for (const [name, pattern] of [
+      ["permission-denied", /Operation not permitted|Permission denied|EACCES|EPERM/iu],
+      ["path-resolution", /realpath/iu],
+      ["launcher-missing", /spawn uv ENOENT/iu],
+      ["configured-group-missing", /\[credential_state_missing_group\]/u],
+    ]) {
+      if (pattern.test(status.stderr || "")) {
+        diagnostic.signals.push(name);
+      }
+    }
     lease.assertHealthy();
     if (
       status.status !== 0 &&
       !status.timedOut &&
-      status.stderr.includes(MISSING_GROUP_DIAGNOSTIC)
+      status.stderr?.includes(MISSING_GROUP_DIAGNOSTIC)
     ) {
-      throw new Error(
+      throw readinessFailure(
         "TDLib Test Server configured group is missing from cold-restored state. Disable and republish this credential.",
+        diagnostic,
       );
     }
     if (status.status !== 0 || status.timedOut) {
-      throw new Error(
+      throw readinessFailure(
         "TDLib readiness failed. Check the existing uv launcher and TDLib runtime before requesting session repair.",
+        diagnostic,
       );
     }
-    const driver = JSON.parse(status.stdout);
+    let driver;
+    try {
+      driver = JSON.parse(status.stdout);
+    } catch {
+      diagnostic.signals.push("invalid-json");
+      throw readinessFailure("TDLib readiness returned invalid JSON.", diagnostic);
+    }
     if (
       driver.ok !== true ||
       driver.authorized !== true ||
@@ -129,7 +185,7 @@ export async function checkTelegramTestCredential({
     if (chat) {
       const resolved = await runCommandImpl(
         "uv",
-        ["run", USER_DRIVER_PATH, "resolve-chat", "--chat", chat, "--json"],
+        telegramPythonArgs(USER_DRIVER_PATH, "resolve-chat", "--chat", chat, "--json"),
         {
           cwd: process.cwd(),
           env: driverEnv,
@@ -221,7 +277,7 @@ export async function checkTelegramTestCredential({
     }
     const testerAccess = await runCommandImpl(
       "uv",
-      ["run", USER_DRIVER_PATH, "status", "--check-chat", credential.groupId, "--json"],
+      telegramPythonArgs(USER_DRIVER_PATH, "status", "--check-chat", credential.groupId, "--json"),
       { cwd: process.cwd(), env: driverEnv, timeoutMs: 30_000 },
     );
     lease.assertHealthy();

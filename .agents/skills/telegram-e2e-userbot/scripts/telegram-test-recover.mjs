@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { resumeQaLease } from "./qa-credential-lease.mjs";
 import { runCommand, sanitizeChildEnvironment } from "./run-mock-sut-user-e2e.mjs";
 import { runTelegramCli, withTelegramRun } from "./telegram-run-scope.mjs";
+import { createTelegramRuntimeEnvironment, telegramPythonArgs } from "./telegram-runtime.mjs";
 
 const [directory, command, ...args] = process.argv.slice(2);
 if (!directory || !["status", "cleanup-group", "release"].includes(command)) {
@@ -44,8 +45,12 @@ function validateRetainedLayout() {
   if (!fs.existsSync(stateRoot) && !fs.lstatSync(stateRoot, { throwIfNoEntry: false })) return;
   requireOwnedPath(stateRoot, true);
   requireOwnedPath(path.join(stateRoot, "user-driver"), true);
+  const runtimeRoot = path.join(stateRoot, "runtime");
+  if (fs.lstatSync(runtimeRoot, { throwIfNoEntry: false })) {
+    requireOwnedPath(runtimeRoot, true);
+  }
   const layout = [
-    [stateRoot, new Set(["credentials.local.json", "user-driver"])],
+    [stateRoot, new Set(["credentials.local.json", "user-driver", "runtime"])],
     [
       path.join(stateRoot, "user-driver"),
       new Set(["config.local.json", "owned-test-group.json", "db", "files"]),
@@ -63,8 +68,13 @@ function validateRetainedLayout() {
     for (const name of fs.readdirSync(directory)) {
       const file = path.join(directory, name);
       const stat = fs.lstatSync(file);
-      // Private enclosing roots protect ordinary archive directory modes.
-      requireOwnedPath(file, stat.isDirectory(), !stat.isDirectory());
+      // Private enclosing roots protect archive directories and runtime caches;
+      // the runtime owner can contain ordinary tool-created file modes.
+      requireOwnedPath(
+        file,
+        stat.isDirectory(),
+        !stat.isDirectory() && !file.startsWith(path.join(stateRoot, "runtime") + path.sep),
+      );
       if (stat.isDirectory()) pending.push(file);
     }
   }
@@ -103,17 +113,22 @@ runTelegramCli(async (signal) => {
         fs.readFileSync(path.join(stateRoot, "credentials.local.json"), "utf8"),
       );
       const driver = path.join(path.dirname(fileURLToPath(import.meta.url)), "user-driver.py");
-      const result = await runCommand("uv", ["run", driver, command, "--json", ...args], {
-        cwd: process.cwd(),
-        env: {
-          ...sanitizeChildEnvironment(),
-          TELEGRAM_E2E_STATE_DIR: stateRoot,
-          TELEGRAM_USER_DRIVER_STATE_DIR: path.join(stateRoot, "user-driver"),
-          TELEGRAM_USER_DRIVER_SUT_ID: credential.sutBotId,
-          TELEGRAM_USER_DRIVER_SUT_USERNAME: credential.sutUsername,
+      const result = await runCommand(
+        "uv",
+        telegramPythonArgs(driver, command, "--json", ...args),
+        {
+          cwd: process.cwd(),
+          env: {
+            ...sanitizeChildEnvironment(),
+            ...createTelegramRuntimeEnvironment(stateRoot),
+            TELEGRAM_E2E_STATE_DIR: stateRoot,
+            TELEGRAM_USER_DRIVER_STATE_DIR: path.join(stateRoot, "user-driver"),
+            TELEGRAM_USER_DRIVER_SUT_ID: credential.sutBotId,
+            TELEGRAM_USER_DRIVER_SUT_USERNAME: credential.sutUsername,
+          },
+          timeoutMs: 60_000,
         },
-        timeoutMs: 60_000,
-      });
+      );
       scope.assertActive();
       if (result.status !== 0 || result.timedOut)
         throw new Error(result.stderr || "Retained Telegram state recovery failed.");

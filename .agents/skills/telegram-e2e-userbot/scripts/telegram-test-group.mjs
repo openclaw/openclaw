@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand, sanitizeChildEnvironment } from "./run-mock-sut-user-e2e.mjs";
 import { withTelegramRun } from "./telegram-run-scope.mjs";
+import { telegramPythonArgs } from "./telegram-runtime.mjs";
 
 const USER_DRIVER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "user-driver.py");
 
@@ -15,7 +16,7 @@ export async function prepareTelegramTestGroup(
   let releasing;
   const run = async (command) => {
     credential.assertLeaseHealthy();
-    const args = ["run", USER_DRIVER_PATH, command, "--json"];
+    const args = telegramPythonArgs(USER_DRIVER_PATH, command, "--json");
     if (command === "prepare-group" && chatId) args.push("--chat", chatId);
     const result = await runCommandImpl("uv", args, {
       cwd: process.cwd(),

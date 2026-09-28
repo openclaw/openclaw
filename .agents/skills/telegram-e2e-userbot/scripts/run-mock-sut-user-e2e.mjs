@@ -7,6 +7,7 @@ import path from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseRecorderReady, readScenarioFile, resolveChatTarget } from "./scenario.mjs";
+import { telegramPythonArgs } from "./telegram-runtime.mjs";
 import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
@@ -305,7 +306,7 @@ export async function applyScenarioConfigPatch({
 async function readTester(driverEnv, repoRoot) {
   let result;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    result = await runCommand("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
+    result = await runCommand("uv", telegramPythonArgs(USER_DRIVER_PATH, "status", "--json"), {
       cwd: repoRoot,
       env: driverEnv,
       timeoutMs: 30_000,
@@ -351,7 +352,9 @@ export function assertSutMatchesLease(sut, credential) {
 const PROVIDER_API = process.env.E2E_TELEGRAM_PROVIDER_API || "openai-responses";
 
 export function writeConfig(params) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-user-mock-sut-"));
+  const root = fs.mkdtempSync(
+    path.join(params.driverEnv?.TMPDIR || os.tmpdir(), "openclaw-tg-user-mock-sut-"),
+  );
   currentTelegramRun().ownScratch(root, removeRunnerScratch);
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
@@ -587,15 +590,16 @@ export async function runCommand(command, args, options) {
     const finish = (status) => {
       if (settled) return;
       settled = true;
-      resolveRun({ status, stdout, stderr, timedOut: false });
+      resolveRun({ status: child.spawnError ? null : status, stdout, stderr, timedOut: false });
     };
-    child.once("exit", finish);
+    // Exit may precede the last stderr bytes. Readiness evidence must include
+    // everything drained from the child's pipes before cleanup removes state.
+    child.once("close", finish);
     child.once("error", (error) => {
       child.spawnError = error;
       stderr = `${stderr}${error instanceof Error ? error.message : String(error)}`.slice(
         -1024 * 1024,
       );
-      finish(null);
     });
   });
   let timeout;
@@ -981,6 +985,12 @@ export async function runTelegramTestScenario({
       { signal },
     );
   } finally {
+    if (args?.output && credential?.readinessDiagnostic) {
+      writePrivateJson(
+        path.join(dirname(resolve(args.output)), "readiness.json"),
+        credential.readinessDiagnostic,
+      );
+    }
     if (args?.output && credential?.testGroup) {
       const evidenceDir = dirname(resolve(args.output));
       fs.mkdirSync(evidenceDir, { recursive: true });
@@ -1110,7 +1120,12 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       await waitForOutput(mock, /QA mock OpenAI:/u, "QA mock OpenAI", 30_000);
     }
 
+    const runtimeEnv = {
+      ...driverEnv,
+      ...(args.backend === "claude-cli" ? { HOME: process.env.HOME } : {}),
+    };
     const gatewayEnv = createGatewayEnvironment({
+      baseEnv: runtimeEnv,
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
@@ -1148,6 +1163,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       gatewayEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     }
     const controlEnv = createControlEnvironment({
+      baseEnv: runtimeEnv,
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
@@ -1183,11 +1199,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
 
     for (const text of args.preSend) {
       leaseHealth.assertHealthy();
-      const sent = await runCommand("uv", ["run", USER_DRIVER_PATH, "send", "--text", text], {
-        cwd: repoRoot,
-        env: driverEnv,
-        timeoutMs: args.timeoutMs,
-      });
+      const sent = await runCommand(
+        "uv",
+        telegramPythonArgs(USER_DRIVER_PATH, "send", "--text", text),
+        {
+          cwd: repoRoot,
+          env: driverEnv,
+          timeoutMs: args.timeoutMs,
+        },
+      );
       if (sent.status !== 0 || sent.timedOut) {
         throw new Error(`pre-send failed: ${sent.stderr || sent.stdout}`);
       }
@@ -1197,7 +1217,9 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     const recording = Boolean(args.record);
     leaseHealth.assertHealthy();
     const recorderReadyPath = path.join(temp.root, "recorder-ready.json");
-    const probeArgs = recording ? ["run", USER_RECORD_PATH] : ["run", USER_DRIVER_PATH, "probe"];
+    const probeArgs = recording
+      ? telegramPythonArgs(USER_RECORD_PATH)
+      : telegramPythonArgs(USER_DRIVER_PATH, "probe");
     if (recording) {
       if (args.scenario) {
         probeArgs.push(
