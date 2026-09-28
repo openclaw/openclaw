@@ -8,7 +8,8 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../infra/update-npm-prefix.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
-const SNAPSHOT_NAME = /^\.openclaw\.package-backup-.*\.databases$/u;
+// Cleanup I/O failures retire snapshots under npm's dashed disposable-name form.
+const SNAPSHOT_NAME = /^\.openclaw[.-]package-backup-.*\.databases$/u;
 const MAX_ROOT_ENTRIES = 1024;
 const MAX_SIZE_ENTRIES = 4096;
 const MAX_DEPTH = 32;
@@ -60,7 +61,7 @@ export async function collectUpdateSnapshotHealthFindings(
           {
             checkId: "core/doctor/update-snapshots",
             severity: "warning",
-            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list the npm global root ${layout.globalRoot}, including hidden entries, and check for .openclaw.package-backup-*.databases directories.`,
+            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list the npm global root ${layout.globalRoot}, including hidden entries, and check for .openclaw.package-backup-*.databases and .openclaw-package-backup-*.databases directories.`,
           },
         ]
       : [];

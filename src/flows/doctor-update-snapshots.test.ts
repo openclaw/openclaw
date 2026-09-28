@@ -55,6 +55,19 @@ async function snapshot(name: string, bytes: number) {
   return directory;
 }
 
+it("reports snapshots retired under the dashed name after a cleanup I/O failure", async () => {
+  const retired = path.join(globalRoot, ".openclaw-package-backup-3-300.databases");
+  await fs.mkdir(retired);
+  await fs.writeFile(path.join(retired, "state.sqlite"), Buffer.alloc(512));
+
+  const findings = (await check()?.detect(context)) ?? [];
+  expect(findings).toHaveLength(1);
+  expect(findings[0]?.message).toContain(
+    "1 retained pre-migration database snapshot directory: 512 bytes",
+  );
+  expect(findings[0]?.message).toContain(path.basename(retired));
+});
+
 it("reports snapshot sizes and quoted removal commands without offering or performing repair", async () => {
   const first = await snapshot("1-100", 1024);
   const second = await snapshot("2-200", 2048);
