@@ -803,7 +803,7 @@ describe("Google speech provider", () => {
           sample_rate: 24_000,
         },
         generation_config: {
-          speech_config: { speakers: [{ speaker: "Alex", voice: "Kore" }] },
+          speech_config: [{ voice: "Kore" }],
         },
       },
     });

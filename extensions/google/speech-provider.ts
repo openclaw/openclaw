@@ -461,10 +461,10 @@ function buildGoogleInteractionsTtsBody(params: {
       sample_rate: GOOGLE_TTS_SAMPLE_RATE,
     },
     generation_config: {
-      // A speaker label binds the voice through the structured speakers map instead of style text.
-      speech_config: speaker
-        ? { speakers: [{ speaker, voice: params.voiceName }] }
-        : [{ voice: params.voiceName }],
+      // Single-voice requests keep the array form. Google only accepts a per-speaker voice map
+      // for two-speaker dialogue (live probe 2026-09-28: one entry is rejected with HTTP 400), so
+      // the speaker label travels in speech_metadata.speaker and the voice stays the selected one.
+      speech_config: [{ voice: params.voiceName }],
     },
   };
 }

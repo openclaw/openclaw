@@ -360,8 +360,8 @@ Gemini API TTS uses natural-language prompting for style control. Set
 `speech_metadata.style` and is not read aloud. On Gemini 3.1 and 2.5 preview
 models it is still prepended to the spoken text. Set `speakerName` when the
 performance needs a named speaker; 3.8 sends it as the structured
-`speech_metadata.speaker` label bound to the selected voice, never as style
-text.
+`speech_metadata.speaker` label, never as style text, and the selected voice
+stays the single configured voice.
 
 Gemini 3.1 and 2.5 preview TTS accept expressive square-bracket audio tags in
 the text, such as `[whispers]` or `[laughs]`. Gemini 3.8 uses angle-bracket
