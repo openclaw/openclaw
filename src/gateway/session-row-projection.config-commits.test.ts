@@ -15,6 +15,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
@@ -74,6 +75,7 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       return "applied";
     };
     const reloader = startGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       initialConfig: cfg,
       initialCompareConfig: initial.sourceConfig,
       initialSnapshotRawHash: initial.hash ?? null,
