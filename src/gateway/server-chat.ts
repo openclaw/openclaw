@@ -3,6 +3,7 @@
 import { performance } from "node:perf_hooks";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   ChatStatusEventSchema,
   projectChatErrorDetail,
@@ -983,6 +984,13 @@ export function createAgentEventHandler({
     const liveText = opts?.liveText ?? liveTextDelivery(chatRunState, payload.runId);
     const broadcastOpts: GatewayBroadcastOpts = {
       dropIfSlow: event === "agent" && visible ? undefined : opts?.dropIfSlow,
+      excludeClientCapability:
+        event === "agent" &&
+        "stream" in payload &&
+        payload.stream === "assistant" &&
+        (typeof payload.data.text === "string" || typeof payload.data.delta === "string")
+          ? GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT
+          : undefined,
       sessionKeys: deliverySessionKeys,
       liveText:
         liveText &&

@@ -146,6 +146,8 @@ const WINDOWS_AGENT_HOME_PATH_SCOPE_RE =
   /^src\/(?:infra\/home-dir(?:\.test)?|agents\/(?:agent-tools\.read(?:\.host-operations|\.windows)?\.test|agent-tools\.read|sessions\/tools\/path-utils(?:\.test)?))\.ts$/;
 const WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE =
   /^(?:packages\/memory-host-sdk\/src\/host\/(?:(?:internal|read-file)(?:\.test)?|explicit-extra-markdown)|extensions\/memory-core\/src\/(?:cli-runtime-common|memory-extra-file-path\.windows\.test))\.ts$/;
+const WINDOWS_BROWSER_VERSION_PROBE_SCOPE_RE =
+  /^extensions\/browser\/src\/browser\/chrome\.executable-probe\.ts$/;
 const WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE =
   /^src\/gateway\/worker-environments\/workspace-quiescence(?:-scripts|(?:\.windows)?\.test)?\.ts$/;
 const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
@@ -178,7 +180,7 @@ const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$/;
 const NODE_FAST_CI_ROUTING_SCOPE_RE =
-  /^(scripts\/ci-changed-scope\.mjs$|scripts\/(?:check-changed|run-vitest)\.(?:mjs|mts)$|scripts\/test-projects(?:\.test-support)?\.mts$|scripts\/lib\/changed-path-facts\.mjs$|scripts\/lib\/(?:ci-changed-node-test-plan|ci-docker-seed-plan)\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope(?:\.[^/]+)?\.test\.ts$|test\/scripts\/(?:changed-lanes|changed-path-facts|ci-changed-node-test-plan|ci-docker-seed-plan|run-vitest|test-projects)\.test\.ts$)/;
+  /^(scripts\/ci-changed-scope\.mjs$|scripts\/(?:check-changed|run-vitest)\.(?:mjs|mts)$|scripts\/test-projects(?:\.test-support)?\.mts$|scripts\/lib\/changed-path-facts\.mjs$|scripts\/lib\/(?:ci-changed-node-test-plan|ci-docker-seed-plan)\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope(?:\.[^/]+)?\.test\.ts$|test\/scripts\/(?:changed-lanes|changed-path-facts|ci-changed-node-test-plan(?:\.(?:config-fallback|dependency-hubs|dependency-inputs|policy|process-owners|source-owners))?|ci-docker-seed-plan|run-vitest|test-projects)\.test\.ts$|test\/scripts\/ci-changed-node-test-plan\.test-support\.ts$)/;
 const NODE_FAST_SCOPE_RE = new RegExp(
   `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
 );
@@ -306,6 +308,7 @@ export function detectChangedScope(changedPaths) {
       WINDOWS_TEST_INSTANCE_SCOPE_RE.test(path) ||
       WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE.test(path) ||
       WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path) ||
+      WINDOWS_BROWSER_VERSION_PROBE_SCOPE_RE.test(path) ||
       WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path) ||

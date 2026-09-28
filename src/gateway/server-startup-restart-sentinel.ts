@@ -24,8 +24,9 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
   shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
   const context = params.context ?? captureDeliveryQueueStateContext();
-  let stopped = false;
-  const imports = new Set<Promise<unknown>>();
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, params.scheduler.signal]);
+  const pending = new Set<Promise<unknown>>();
   const timer = scheduleGatewayGenerationTimer({
     scheduler: params.scheduler,
     delayMs: 750,
@@ -37,14 +38,16 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
         return;
       }
       await scheduleRestartSentinelWake({
+        scheduler: params.scheduler,
+        signal,
         deps: params.deps,
         context,
-        shouldRun: () => !stopped && !isStopped(),
-        trackImport: (work) => {
-          imports.add(work);
+        shouldRun: () => !signal.aborted && !isStopped(),
+        trackWork: (work) => {
+          pending.add(work);
           void work.then(
-            () => imports.delete(work),
-            () => imports.delete(work),
+            () => pending.delete(work),
+            () => pending.delete(work),
           );
         },
       });
@@ -53,9 +56,9 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
   });
   return {
     async stop() {
-      stopped = true;
+      controller.abort();
       await timer.stop();
-      await Promise.all(imports);
+      await Promise.all(pending);
     },
   };
 }

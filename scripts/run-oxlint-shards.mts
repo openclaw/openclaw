@@ -12,6 +12,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   CI_PARALLEL_MIN_MEMORY_BYTES,
   isConstrainedCiCheckHost,
+  resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
 import {
@@ -141,7 +142,7 @@ export function createOxlintShards({
   splitExtensions = false,
 }: PlatformShardOptions = {}) {
   const constrainedSerial =
-    hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
+    resolveCheckMemoryCapacityBytes(hostResources) < CI_PARALLEL_MIN_MEMORY_BYTES &&
     shouldRunOxlintShardsSerial({ env, platform, hostResources });
   const coreGroups =
     splitCore || constrainedSerial ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
@@ -270,7 +271,7 @@ export function shouldRunOxlintShardsSerial({
     return isConstrainedCiCheckHost(resources);
   }
   return (
-    resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+    resolveCheckMemoryCapacityBytes(resources) < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
   );
 }

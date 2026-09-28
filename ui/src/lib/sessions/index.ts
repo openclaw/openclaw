@@ -200,6 +200,7 @@ export function createSessionCapability(
       sessionEventSubscriptionError = error;
       if (error !== null) {
         roster.retireWarmLists();
+        roster.observations.descriptions.clear();
       }
       const observerOwnsVisibleError = publishedErrorSource === "session-observer";
       if (error !== null && (state.error === null || observerOwnsVisibleError)) {
@@ -296,6 +297,7 @@ export function createSessionCapability(
     // A local mutation can complete without an event or successful refresh.
     // Retire inactive windows before exposing its publication to selection.
     roster.retireWarmLists();
+    roster.observations.descriptions.clear();
     publish(next, errorSource);
   };
 
@@ -525,6 +527,9 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+      roster.observations.descriptions.clear();
+    }
     if (event.event === "config.changed") {
       // Config can change configured-agent membership even with no chat pane mounted.
       roster.scheduleEvent();
@@ -533,6 +538,7 @@ export function createSessionCapability(
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
       return;
     }
+    roster.observations.descriptions.invalidateEvent(event.payload);
     const payload = event.payload as {
       agentId?: unknown;
       reason?: unknown;
@@ -618,6 +624,7 @@ export function createSessionCapability(
     whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
+    describe: roster.observations.descriptions.describe,
     list: roster.list,
     observeList: roster.observeList,
     listSnapshot: roster.listSnapshot,

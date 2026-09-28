@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -163,6 +164,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     });
     const complete = vi.fn(defaultCompleteModel);
     const recaps = createSessionActivitySummaries({
+      scheduler: createTestGatewayScheduler(),
       getConfig: () => config,
       onChanged: vi.fn(),
       completeModel: complete,

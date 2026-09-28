@@ -1,6 +1,5 @@
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-// Zalouser plugin module implements message sid behavior.
 function parseZalouserMessageSidFull(
   value?: string | number | null,
 ): { msgId: string; cliMsgId: string } | null {

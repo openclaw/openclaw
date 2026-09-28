@@ -1,3 +1,4 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -151,7 +152,7 @@ async function promptBaseUrlAndKey(params: {
     initialValue: params.initialBaseUrl,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      return URL.canParse(val) ? undefined : t("wizard.customProvider.validUrl");
+      return isHttpUrl(val) ? undefined : t("wizard.customProvider.validUrl");
     },
   });
   const baseUrl = baseUrlInput.trim();

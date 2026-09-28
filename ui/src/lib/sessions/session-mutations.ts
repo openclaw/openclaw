@@ -155,6 +155,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const patchSnapshot = host.snapshot();
     const pendingConversation =
       hasSettingsPatch ||
+      patchParams.label !== undefined ||
       patchParams.category !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
@@ -375,7 +376,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // Commit and list reconciliation are separate outcomes. Callers must not
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
-      if (!options.deferListRefresh) {
+      // Read receipts settle their row fields; events still invalidate roster membership.
+      const confirmedRead =
+        rowPatchConfirmed && patchParams.unread === false && Object.keys(patchParams).length === 1;
+      if (!options.deferListRefresh && !confirmedRead) {
         if (Object.hasOwn(patchParams, "permissionMode")) {
           refreshOutcome = await host.reconcileMutation(
             options.agentId,

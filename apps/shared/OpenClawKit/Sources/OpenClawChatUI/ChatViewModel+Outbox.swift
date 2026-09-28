@@ -535,6 +535,7 @@ extension OpenClawChatViewModel {
     /// Re-adopts or re-appends queued bubbles for the visible session after
     /// cold open, session switches, and wholesale history replacement.
     func restoreOutboxMessages(session: SessionSnapshot) {
+        guard !self.usesWebConversation else { return }
         guard let outbox else { return }
         Task { [weak self] in
             guard let self else { return }
@@ -637,6 +638,9 @@ extension OpenClawChatViewModel {
     /// that already carry the command's user idempotency key from an earlier
     /// restore, and refreshes their display states.
     private func presentOutboxCommands(_ commands: [OpenClawChatOutboxCommand]) {
+        // Queue custody is Gateway-wide; a web pane only retires this window's
+        // native transcript projection, not delivery for other conversations.
+        guard !self.usesWebConversation else { return }
         self.pruneOutboxMappings()
         guard !commands.isEmpty else { return }
         var next = self.messages
@@ -1238,9 +1242,10 @@ extension OpenClawChatViewModel {
             self.clearOutboxState(forCommandID: commandID)
         case let .invalidated(_, scope):
             let session = self.currentSessionSnapshot()
-            guard self.outboxBranchScope(for: session) == scope else { return }
+            guard self.usesWebConversation || self.outboxBranchScope(for: session) == scope else { return }
             self.reconciledOutboxBranchScopes.remove(scope)
             self.restoreOutboxMessages(session: session)
+            if self.usesWebConversation { self.reconcilePendingOutboxBranchScopes() }
         }
     }
 

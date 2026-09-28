@@ -73,7 +73,10 @@ describe("retained package backup retirement", () => {
         }
         expect(transaction).toBeDefined();
         expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
+        const snapshots = `${transaction!.backupRoot}.databases`;
+        await fs.mkdir(snapshots);
         const completion = await transaction!.complete({ activationVerified }, () => {});
+        await expect(fs.stat(snapshots)).resolves.toBeDefined();
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export {};\n",
         );
@@ -89,36 +92,92 @@ describe("retained package backup retirement", () => {
     },
   );
 
-  it.each(["unverified activation", "verified activation", "verified rollback"] as const)(
-    "retires backups only after a proven outcome: %s",
-    async (outcome) => {
-      await withTestDir({ prefix: "openclaw-retained-outcome-" }, async (base) => {
-        const { result, transaction, packageRoot } = await createRetainedPackageSwap(base);
-        expect(result.status).toBe("committed");
-        if (outcome === "verified rollback") {
-          expect(await transaction.rollback(() => {})).toMatchObject({
-            exitCode: 0,
-            activePackageRoot: packageRoot,
-          });
-        }
-        const completion = await transaction.complete(
-          {
-            activationVerified: outcome === "verified activation",
-          },
-          () => {},
+  it.each([
+    "unverified activation",
+    "verified activation",
+    "verified rollback",
+    "refused rollback",
+  ] as const)("retires backups only after a proven outcome: %s", async (outcome) => {
+    await withTestDir({ prefix: "openclaw-retained-outcome-" }, async (base) => {
+      const { result, transaction, packageRoot, globalRoot } =
+        await createRetainedPackageSwap(base);
+      const snapshots = `${transaction.backupRoot}.databases`;
+      const olderSnapshots = path.join(globalRoot, ".openclaw.package-backup-older.databases");
+      for (const directory of [snapshots, olderSnapshots]) {
+        await fs.mkdir(directory);
+        await fs.writeFile(path.join(directory, "snapshot.sqlite"), "pre-migration bytes");
+      }
+      expect(result.status).toBe("committed");
+      if (outcome === "refused rollback") {
+        await fs.writeFile(path.join(transaction.backupRoot, "dist", "index.js"), "changed");
+        expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 1 });
+      }
+      if (outcome === "verified rollback") {
+        expect(await transaction.rollback(() => {})).toMatchObject({
+          exitCode: 0,
+          activePackageRoot: packageRoot,
+        });
+      }
+      const completion = await transaction.complete(
+        {
+          activationVerified: outcome === "verified activation",
+        },
+        () => {},
+      );
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        `"version":"${outcome === "verified rollback" ? "1.0.0" : "2.0.0"}"`,
+      );
+      if (outcome === "unverified activation" || outcome === "refused rollback") {
+        expect(completion).toMatchObject({ exitCode: 1 });
+        await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
+      } else {
+        expect(completion).toBeUndefined();
+        await expect(fs.stat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      if (outcome === "verified activation") {
+        await expect(fs.stat(snapshots)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(fs.readFile(path.join(snapshots, "snapshot.sqlite"), "utf8")).resolves.toBe(
+          "pre-migration bytes",
         );
-        await expect(
-          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ).resolves.toContain(`"version":"${outcome === "verified rollback" ? "1.0.0" : "2.0.0"}"`);
-        if (outcome === "unverified activation") {
-          await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
-        } else {
-          expect(completion).toBeUndefined();
-          await expect(fs.stat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      });
-    },
-  );
+      }
+      await expect(fs.readFile(path.join(olderSnapshots, "snapshot.sqlite"), "utf8")).resolves.toBe(
+        "pre-migration bytes",
+      );
+    });
+  });
+
+  it("reports database cleanup failure as recoverable maintenance after verified activation", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-database-retirement-"));
+    const { transaction } = await createRetainedPackageSwap(base);
+    const snapshots = `${transaction.backupRoot}.databases`;
+    await fs.mkdir(snapshots);
+    await fs.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
+    const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted Root receiver for unrelated cleanup.
+    const removeEntry = prototype.remove;
+    vi.spyOn(prototype, "remove").mockImplementation(async function (
+      this: Root,
+      relativePath,
+      options,
+    ) {
+      const target = path.resolve(this.rootReal, relativePath);
+      if (target === snapshots || target.startsWith(`${snapshots}${path.sep}`)) {
+        throw Object.assign(new Error("snapshot cleanup denied"), { code: "EACCES" });
+      }
+      return removeEntry.call(this, relativePath, options);
+    });
+    const completion = await transaction.complete({ activationVerified: true }, () => {});
+    const retained = snapshots.replace(".openclaw.package-backup-", ".openclaw-package-backup-");
+    expect(completion).toMatchObject({
+      exitCode: 1,
+      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(retained) },
+    });
+    expect(await fs.readFile(path.join(retained, "snapshot.sqlite"), "utf8")).toBe(
+      "pre-migration bytes",
+    );
+    expect(await transaction.complete({ activationVerified: true }, () => {})).toBe(completion);
+  });
 });
 
 describe("launcher backup capture", () => {

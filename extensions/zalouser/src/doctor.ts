@@ -1,4 +1,3 @@
-// Zalouser plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";

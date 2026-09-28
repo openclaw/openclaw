@@ -12,6 +12,14 @@ import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contrac
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };
 
+export function createTestConfigRevisionProjector(): ManagedGatewayConfigReloaderParams["configRevisionProjector"] {
+  return {
+    projectRawHash: (hash) => hash,
+    projectResolvedHash: (hash) => hash,
+    hashResponseSessionBearer: () => "unused-test-scope",
+  };
+}
+
 export function createCronRestartPlan(): GatewayReloadPlan {
   return createHotTailPlan({
     changedPaths: ["cron"],
@@ -164,6 +172,31 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
     reconcileSystemJobs: vi.fn<GatewayCronState["reconcileSystemJobs"]>(async () => "converged"),
     ...overrides,
   };
+}
+
+export function createManagedReloadAuthFixture(params: {
+  sharedAuthRotation?: boolean;
+  resolvedProviderRotation?: "channel" | "agent";
+}) {
+  const providerConfig = (apiKey: string | { source: "env"; provider: string; id: string }) => ({
+    models: {
+      providers: { fixture: { baseUrl: "https://provider.example.test/v1", apiKey, models: [] } },
+    },
+  });
+  const providerSource = params.resolvedProviderRotation
+    ? {
+        ...providerConfig({ source: "env", provider: "default", id: "FIXTURE_PROVIDER_KEY" }),
+        agents: { entries: { main: { model: "fixture/first" }, other: {} } },
+        channels: { slack: { streaming: { mode: "off" as const } } },
+      }
+    : {};
+  const auth = params.sharedAuthRotation
+    ? {
+        mode: "token" as const,
+        token: { source: "file" as const, provider: "default", id: "/token" },
+      }
+    : undefined;
+  return { auth, providerConfig, providerSource };
 }
 
 export function createManagedRestartSequenceConfigs() {

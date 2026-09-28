@@ -4,6 +4,7 @@ import type {
   SessionOwner,
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
+  SessionsDescribeParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
@@ -215,6 +216,11 @@ export type SessionCapability = {
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
+  /** Shares exact descriptor reads until the session changes; refresh supersedes earlier reads. */
+  describe: (
+    params: SessionsDescribeParams,
+    options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
+  ) => Promise<{ session?: GatewaySessionRow | null }>;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (
@@ -335,7 +341,7 @@ export type SessionCapability = {
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
-    options?: { agentId?: string | null; includeApprovals?: boolean },
+    options?: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
   rewind: (

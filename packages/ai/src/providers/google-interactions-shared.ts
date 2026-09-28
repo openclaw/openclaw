@@ -233,6 +233,29 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       return type;
     };
 
+    const startToolCallBlock = (
+      source: Record<string, unknown> | undefined,
+      args: Record<string, unknown> = {},
+    ) => {
+      endCurrentBlock();
+      currentBlockIndex = output.content.length;
+      const name = readStringField(source, "name") ?? "tool";
+      const toolCall: ToolCall = {
+        type: "toolCall",
+        id: readStringField(source, "id") ?? nextToolCallId(name),
+        name,
+        arguments: args,
+      };
+      currentToolArgs = Object.keys(args).length > 0 ? JSON.stringify(args) : "";
+      output.content.push(toolCall);
+      stream.push({
+        type: "toolcall_start",
+        contentIndex: currentBlockIndex,
+        partial: output,
+      });
+      return toolCall;
+    };
+
     let streamDone = false;
     let sawCompletion = false;
     while (!streamDone) {
@@ -363,24 +386,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             const argText =
               readStringField(delta, "arguments") ?? readStringField(delta, "text") ?? "";
             if (currentBlockType !== "toolCall") {
-              endCurrentBlock();
+              currentToolCall = startToolCallBlock(delta);
               currentBlockType = "toolCall";
-              currentBlockIndex = output.content.length;
-              const toolName = readStringField(delta, "name") ?? "tool";
-              const toolCallId = readStringField(delta, "id") ?? nextToolCallId(toolName);
-              currentToolCall = {
-                type: "toolCall",
-                id: toolCallId,
-                name: toolName,
-                arguments: {},
-              };
-              currentToolArgs = "";
-              output.content.push(currentToolCall);
-              stream.push({
-                type: "toolcall_start",
-                contentIndex: currentBlockIndex,
-                partial: output,
-              });
             }
             const streamedToolName = readStringField(delta, "name");
             if (
@@ -426,26 +433,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
               : "";
             currentBlockType = startTextBlock("text", initialText);
           } else if (step?.type === "function_call") {
-            endCurrentBlock();
+            currentToolCall = startToolCallBlock(step, asRecord(step.arguments));
             currentBlockType = "toolCall";
-            currentBlockIndex = output.content.length;
-            const toolName = readStringField(step, "name") ?? "tool";
-            const toolCallId = readStringField(step, "id") ?? nextToolCallId(toolName);
-            const stepArgs = asRecord(step.arguments);
-            const initialArgs = Object.keys(stepArgs).length > 0 ? JSON.stringify(stepArgs) : "";
-            currentToolCall = {
-              type: "toolCall",
-              id: toolCallId,
-              name: toolName,
-              arguments: stepArgs,
-            };
-            currentToolArgs = initialArgs;
-            output.content.push(currentToolCall);
-            stream.push({
-              type: "toolcall_start",
-              contentIndex: currentBlockIndex,
-              partial: output,
-            });
           }
         } else if (eventType === "step.stop") {
           latestUsage = asOptionalRecord(event.usage) ?? latestUsage;

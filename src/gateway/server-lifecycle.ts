@@ -10,7 +10,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
-import { upsertPresence } from "../infra/system-presence.js";
+import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import {
   startGatewayDiagnosticHeartbeat,
   stopGatewayDiagnosticHeartbeat,
@@ -34,7 +34,7 @@ import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
-import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
+import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -127,6 +127,7 @@ export async function prepareGatewayLifecycle(params: {
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
+      commitPresence(nodeId, connId);
       runtime.publishPresence();
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
@@ -135,6 +136,10 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   const { nodeRegistry, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
+  const stopNodeConnectionNotifications = startNodeConnectionNotifications(
+    nodeRegistry,
+    runtime.scheduler,
+  );
   const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
     getConfig: getRuntimeConfig,
     nodeRegistry,
@@ -162,21 +167,26 @@ export async function prepareGatewayLifecycle(params: {
       retireDeviceTokenClients(context, deviceId, roles, "device-token-rotated");
     },
     onNodeConnected: (session) => {
-      upsertPresence(session.nodeId, {
-        host: session.displayName ?? session.clientId ?? session.nodeId,
-        clientId: session.clientId,
-        ip: session.remoteIp,
-        version: session.version,
-        platform: session.platform,
-        deviceFamily: session.deviceFamily,
-        modelIdentifier: session.modelIdentifier,
-        mode: session.clientMode,
-        deviceId: session.nodeId,
-        roles: ["node"],
-        scopes: [],
-        instanceId: session.nodeId,
-        reason: "connect",
-      });
+      upsertPresence(
+        session.nodeId,
+        {
+          connectionId: session.connId,
+          host: session.displayName ?? session.clientId ?? session.nodeId,
+          clientId: session.clientId,
+          ip: session.remoteIp,
+          version: session.version,
+          platform: session.platform,
+          deviceFamily: session.deviceFamily,
+          modelIdentifier: session.modelIdentifier,
+          mode: session.clientMode,
+          deviceId: session.nodeId,
+          roles: ["node"],
+          scopes: [],
+          instanceId: session.nodeId,
+          reason: "connect",
+        },
+        { pending: false },
+      );
       runtime.publishPresence();
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
@@ -426,17 +436,10 @@ export async function prepareGatewayLifecycle(params: {
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();
-    disposeNodeConnectionNotifications(nodeRegistry);
+    stopNodeConnectionNotifications();
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      clearSkillsRefreshTimer: () => {
-        if (!runtimeState?.skillsRefreshTimer) {
-          return;
-        }
-        clearTimeout(runtimeState.skillsRefreshTimer);
-        runtimeState.skillsRefreshTimer = null;
-      },
       skillsChangeUnsub: runtimeState.skillsChangeUnsub,
       disposeAuthRateLimiter: () => {
         authRateLimiter.dispose();

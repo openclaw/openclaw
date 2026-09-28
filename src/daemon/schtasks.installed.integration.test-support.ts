@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
 import {
@@ -41,6 +42,11 @@ import {
   samePath,
   verifyPreparedInstall,
 } from "./schtasks.installed-package.test-support.js";
+import {
+  inspectInstalledSelectedStartupFallback,
+  inspectInstalledStartupAliasBuildRefusal,
+  inspectInstalledStartupSiblings,
+} from "./schtasks.installed-startup.test-support.js";
 
 type Lifetime = ReturnType<typeof createFixtureLifetime>;
 type Owners = {
@@ -166,24 +172,26 @@ export async function runInstalledLifecycle(
     await recordProgress(`${phase}:ready`);
   };
   const doctor = async (task: Task, expectedExit = 1) =>
-    doctorReportSchema.parse(
-      JSON.parse(
-        await cli(
-          task,
-          [
-            "doctor",
-            "--lint",
-            "--deep",
-            "--only",
-            "core/doctor/gateway-services/extra",
-            "--severity-min",
-            "info",
-            "--json",
-          ],
-          expectedExit,
+    doctorReportSchema
+      .extend({ ok: z.literal(expectedExit === 0) })
+      .parse(
+        JSON.parse(
+          await cli(
+            task,
+            [
+              "doctor",
+              "--lint",
+              "--deep",
+              "--only",
+              "core/doctor/gateway-services/extra",
+              "--severity-min",
+              "info",
+              "--json",
+            ],
+            expectedExit,
+          ),
         ),
-      ),
-    );
+      );
   const cleanupTask = (
     task: Pick<Task, "rootDir" | "stateDir" | "scriptPath" | "taskName">,
     probePath: string,
@@ -319,6 +327,7 @@ export async function runInstalledLifecycle(
     const before = await status(selected, beforeIdentity);
     observations.before = before;
     await recordProgress("selected-status-verified");
+    let candidateStatus = before;
     const configBefore = await fs.readFile(selected.configPath);
     if (key !== "fresh") {
       const peer = await createTask("peer");
@@ -376,6 +385,7 @@ export async function runInstalledLifecycle(
       const after = await status(selected, candidateIdentity);
       assert.notEqual(after.service.runtime.pid, before.service.runtime.pid);
       observations.after = after;
+      candidateStatus = after;
       assert.deepEqual(
         JSON.parse(await fs.readFile(selected.configPath, "utf8")).gateway,
         JSON.parse(configBefore.toString()).gateway,
@@ -400,6 +410,34 @@ export async function runInstalledLifecycle(
       assert.deepEqual(await hashInstall(peer.installRoot), peerInstallBefore);
       await recordProgress("peer-after-update:hash-verified");
       observations.peerPreserved = true;
+      observations.startupSiblings = await inspectInstalledStartupSiblings({
+        selected,
+        launcher: peer,
+        expectedStatus: after,
+        doctor,
+        deepStatus: async (task) =>
+          JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
+        lifetime,
+        admissions,
+        admissionPath,
+      });
+      if (key === "2026.9.4") {
+        observations.startupAliasBuildRefusal = await inspectInstalledStartupAliasBuildRefusal({
+          toolingEntry: path.resolve("scripts/run-node.mjs"),
+          selected,
+          peer,
+          expectedSelected: after,
+          expectedPeer: peerAfter,
+          readStatus: async (task) => JSON.parse(await cli(task, ["gateway", "status", "--json"])),
+          commands,
+          signal,
+          lifetime,
+          admissions,
+          admissionPath,
+          waitForLoopbackPortRelease: owners.waitForLoopbackPortRelease,
+          recordProgress,
+        });
+      }
       await cli(peer, ["gateway", "stop", "--force", "--json"]);
       await owners.waitForLoopbackPortRelease(peer.gatewayPort);
       await cli(peer, ["gateway", "uninstall", "--json"]);
@@ -426,6 +464,17 @@ export async function runInstalledLifecycle(
         admissionPath,
         recordProgress,
       });
+      observations.startupSiblings = await inspectInstalledStartupSiblings({
+        selected,
+        launcher: selected,
+        expectedStatus: before,
+        doctor,
+        deepStatus: async (task) =>
+          JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
+        lifetime,
+        admissions,
+        admissionPath,
+      });
     }
     const configBeforePreview = await fs.readFile(selected.configPath);
     const healthy = await preview();
@@ -435,6 +484,42 @@ export async function runInstalledLifecycle(
     );
     await cli(selected, ["gateway", "stop", "--force", "--json"]);
     await owners.waitForLoopbackPortRelease(selected.gatewayPort);
+    observations.selectedStartupFallback = await inspectInstalledSelectedStartupFallback({
+      ...(key === "2026.9.4"
+        ? {
+            observeFingerprint: async () => {
+              const observation = JSON.parse(
+                await run(
+                  [
+                    "--import",
+                    pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+                    path.resolve(
+                      "src/daemon/schtasks.installed-fingerprint-observer.test-support.mts",
+                    ),
+                    inputPath,
+                  ],
+                  selected.env,
+                  process.cwd(),
+                  commands,
+                  0,
+                  signal,
+                ),
+              );
+              await recordProgress("fingerprint-result");
+              return observation;
+            },
+          }
+        : {}),
+      selected,
+      expectedCommand: candidateStatus.service.command.programArguments,
+      doctor,
+      deepStatus: async (task) =>
+        JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
+      canBindLoopbackPort: owners.canBindLoopbackPort,
+      lifetime,
+      admissions,
+      admissionPath,
+    });
     if (key === "2026.9.3") {
       assert.ok(authorityPeerRoot);
       const { inspectInstalledTaskAuthority } =

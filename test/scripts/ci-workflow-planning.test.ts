@@ -2677,7 +2677,13 @@ describe("ci workflow guards", () => {
             })
           : value;
       const rows: string[] = [];
-      const hostedLabels = new Set(["ubuntu-24.04", "windows-2025", "macos-15", "xcode-27"]);
+      const hostedLabels = new Set([
+        "ubuntu-24.04",
+        "windows-2025",
+        "macos-15",
+        "xcode-27",
+        "xcode-27-xlarge",
+      ]);
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
         const definition = job as {
           if?: string;
@@ -3470,6 +3476,7 @@ describe("ci workflow guards", () => {
       repository: "openclaw/openclaw",
       runAttempt: 1,
       preflightOutputs: manifest.outputs,
+      steps: { built_artifact_checks: { outputs: {}, outcome: "success" as const } },
     };
     const evaluateCondition = (expression: string) =>
       evaluateWorkflowExpression(
@@ -3603,6 +3610,7 @@ describe("ci workflow guards", () => {
         repository: "openclaw/openclaw",
         runAttempt: 1,
         preflightOutputs: manifest.outputs,
+        steps: { built_artifact_checks: { outputs: {}, outcome: "success" as const } },
       };
       const steps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
       const verifiers = expectDefined(
@@ -3913,6 +3921,13 @@ describe("ci workflow guards", () => {
     }
 
     it.each([
+      {
+        task: "test-third-party",
+        lint: false,
+        app_lint: "third-party",
+        build_benchmark: false,
+        calls: 2,
+      },
       { task: "test-wear", lint: true, app_lint: "third-party", build_benchmark: false, calls: 3 },
       { task: "ktlint", lint: false, app_lint: "play", build_benchmark: false, calls: 2 },
       { task: "ktlint", lint: false, app_lint: "play", build_benchmark: true, calls: 3 },
@@ -4089,6 +4104,12 @@ describe("ci workflow guards", () => {
     it.each([
       { task: "test-play", failTask: ":app:testPlayDebugUnitTest", calls: 1 },
       { task: "test-third-party", failTask: ":app:testThirdPartyDebugUnitTest", calls: 1 },
+      {
+        task: "test-third-party",
+        app_lint: "third-party",
+        failTask: ":app:lintThirdPartyDebug",
+        calls: 2,
+      },
       {
         task: "test-wear",
         lint: true,
@@ -7782,12 +7803,15 @@ describe("ci workflow guards", () => {
           JSON.parse(expectDefined(preflightOutputs.android_matrix, "Android matrix")).include,
         ).toEqual([
           { check_name: "android-test-play", task: "test-play" },
-          { check_name: "android-test-third-party", task: "test-third-party" },
+          {
+            check_name: "android-test-third-party",
+            task: "test-third-party",
+            app_lint: "third-party",
+          },
           {
             check_name: "android-test-wear",
             task: "test-wear",
             lint: true,
-            app_lint: "third-party",
           },
           { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
         ]);
@@ -8342,12 +8366,15 @@ describe("ci workflow guards", () => {
       ).include,
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
-      { check_name: "android-test-third-party", task: "test-third-party" },
+      {
+        check_name: "android-test-third-party",
+        task: "test-third-party",
+        app_lint: "third-party",
+      },
       {
         check_name: "android-test-wear",
         task: "test-wear",
         lint: true,
-        app_lint: "third-party",
       },
       { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
     ]);
@@ -10708,6 +10735,61 @@ describe("ci workflow guards", () => {
     ]);
   });
 
+  it("prepares the Docker sandbox image only for selected container E2E cases", () => {
+    const sandboxExec = "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts";
+    const workspaceIsolation =
+      "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts";
+    const unrelated = "src/agents/run-wait.test.ts";
+    const selections = [
+      { targets: [sandboxExec] },
+      { includePatterns: [workspaceIsolation] },
+      { includePatterns: ["test/e2e/qa-lab/runtime/*sandbox*.e2e.test.ts"] },
+      { groups: [{ shard_name: "sandbox", targets: [sandboxExec] }] },
+      { targets: [unrelated] },
+      { includePatterns: [unrelated] },
+      { configs: ["test/vitest/vitest.e2e.config.ts"] },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      nodeTestShards: selections.map((selection, index) =>
+        Object.assign(
+          {
+            checkName: `sandbox-${index}`,
+            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "compact-small-1",
+          },
+          selection,
+        ),
+      ),
+    });
+    expect(result.status, result.output).toBe(0);
+    const matrix = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
+    ) as { include: { requires_sandbox_image?: boolean }[] };
+    expect(matrix.include.map((row) => Boolean(row.requires_sandbox_image))).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+    ]);
+
+    const nodeTestJob = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+    const imageStep = expectDefined(
+      nodeTestJob.steps.find((step: WorkflowStep) => step.name === "Prepare Docker sandbox image"),
+      "Node shard Docker sandbox image preparation",
+    );
+    expect(imageStep.if).toBe("matrix.requires_sandbox_image == true && runner.os == 'Linux'");
+    expect(imageStep.run).toContain("scripts/sandbox-setup.sh");
+    expect(nodeTestJob.steps.indexOf(imageStep)).toBeLessThan(
+      nodeTestJob.steps.findIndex((step: WorkflowStep) => step.name === "Run Node test shard"),
+    );
+  });
+
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -11438,8 +11520,16 @@ describe("ci workflow guards", () => {
     for (const owner of ["guards", "planning", "evidence"]) {
       expect(runStep.run.split(`test/scripts/ci-workflow-${owner}.test.ts`)).toHaveLength(3);
     }
-    expect(runStep.run.match(/test\/scripts\/ci-changed-node-test-plan\.test\.ts/g)?.length).toBe(
-      2,
-    );
+    for (const file of [
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+      "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+      "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+      "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+      "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+      "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
+    ]) {
+      expect(runStep.run.split(file)).toHaveLength(3);
+    }
   });
 });

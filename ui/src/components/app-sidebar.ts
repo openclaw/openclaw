@@ -489,7 +489,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
     // Pinned sessions live in the navigation zone, not a session list.
-    return renderSessionTree({ host: this, session, listItem: false });
+    return this.sidebarAgentsMode === "roster" && this.rosterRenderer
+      ? this.rosterRenderer.renderSidebarPinnedSession(this, session)
+      : renderSessionTree({ host: this, session, listItem: false });
   }
 
   private renderSessions() {
@@ -513,6 +515,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       return this.rosterRenderer.renderSidebarAgentRoster(
         this,
         this.projectedSessionSections.sections,
+        this.selectedAgentSessionRows(this.getSessionNavigationState()).length === 0,
       );
     }
     const navigationState = this.getSessionNavigationState();
@@ -603,18 +606,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
                   ${renderAppSidebarHomeRow(this)}
-                  ${repeat(
-                    sidebarZone.entries.filter(
-                      (entry) => this.sidebarAgentsMode !== "roster" || entry.type !== "session",
+                  ${repeat(sidebarZone.entries, serializeSidebarEntry, (entry) =>
+                    renderAppSidebarZoneEntry(
+                      this,
+                      entry,
+                      sidebarZone.sessionRows,
+                      sidebarZone.pluginTabs,
                     ),
-                    serializeSidebarEntry,
-                    (entry) =>
-                      renderAppSidebarZoneEntry(
-                        this,
-                        entry,
-                        sidebarZone.sessionRows,
-                        sidebarZone.pluginTabs,
-                      ),
                   )}
                 </div>
               </nav>
@@ -651,11 +649,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ${renderAppSidebarFooterBar(this)}
           </div>
         </div>
-        ${this.sidebarMenus.renderCustomizeMenu()} ${this.sidebarMenus.renderMoreMenu()}
-        ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderIdentityMenu()}
-        ${this.sidebarMenus.renderSessionMenu()} ${this.sidebarMenus.catalogMenu.render()}
-        ${this.sidebarMenus.renderSessionGroupMenu()} ${this.sidebarMenus.renderSessionSortMenu()}
-        ${this.sidebarMenus.renderCatalogViewMenu()}
+        ${this.sidebarMenus.render()}
       </aside>
     `;
   }

@@ -109,7 +109,7 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
   };
   return new Map([
     ["dark", layer(blocks.get(':root[data-theme="dark"]'))],
-    ["light", layer(light)],
+    ["light", layer(light, blocks.get(':root[data-theme="light"]'))],
     ["openknot", layer(blocks.get(':root[data-theme="openknot"]'))],
     ["openknot-light", layer(light, blocks.get(':root[data-theme="openknot-light"]'))],
     ["dash", layer(blocks.get(':root[data-theme="dash"]'))],
@@ -433,6 +433,52 @@ describe("Control UI theme contrast", () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  it("keeps filled action labels and accent glyphs legible across palettes", () => {
+    for (const [themeName, tokens] of themes) {
+      for (const [fill, ink, minimum] of [
+        ["--primary", "--primary-foreground", AA_NORMAL_TEXT_MIN],
+        ["--primary-hover", "--primary-foreground", AA_NORMAL_TEXT_MIN],
+        ["--destructive-hover", "--destructive-foreground", AA_NORMAL_TEXT_MIN],
+        ["--accent", "--accent-foreground", 3],
+      ] as const) {
+        expect(
+          contrastRatio(
+            resolveOpaqueColor(`var(${ink})`, tokens),
+            resolveOpaqueColor(`var(${fill})`, tokens),
+          ),
+          `${themeName}: ${ink} on ${fill}`,
+        ).toBeGreaterThanOrEqual(minimum);
+      }
+    }
+  });
+
+  it("preserves imported fill/ink contrast when no hover pair is supplied", () => {
+    const defaults = parseThemeBlocks(baseCss).get(":root") ?? new Map<string, string>();
+    for (const text of ["#fafafa", "#211e1a"]) {
+      for (const [primary, destructive, foreground] of [
+        ["#d92a3f", "#d32f2f", "#fafafa"],
+        ["#ffc233", "#ffabab", "#000000"],
+      ] as const) {
+        const imported = new Map(defaults);
+        imported.set("--text", text);
+        imported.set("--primary", primary);
+        imported.set("--primary-foreground", foreground);
+        imported.set("--destructive", destructive);
+        imported.set("--destructive-foreground", foreground);
+        for (const fill of ["--primary", "--destructive"]) {
+          const ink = resolveOpaqueColor(`var(${fill}-foreground)`, imported);
+          const rest = contrastRatio(ink, resolveOpaqueColor(`var(${fill})`, imported));
+          const hover = contrastRatio(ink, resolveOpaqueColor(`var(${fill}-hover)`, imported));
+          expect(rest).toBeGreaterThanOrEqual(AA_NORMAL_TEXT_MIN);
+          expect(
+            hover,
+            `${fill} hover must not reduce the imported pair contrast`,
+          ).toBeGreaterThanOrEqual(rest);
+        }
+      }
+    }
   });
 
   it("keeps the markdown code chip separated from every surface it sits on", () => {

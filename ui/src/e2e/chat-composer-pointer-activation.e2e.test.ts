@@ -143,8 +143,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await page.addStyleTag({
-        content: ":root { --safe-area-bottom: 34px !important; }",
+      const protocol = await context.newCDPSession(page);
+      await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+        insets: { bottom: 34 },
       });
 
       const composerShell = page.locator(".agent-chat__composer-shell");
@@ -152,8 +153,12 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.fill("Verify mobile safe-area touch controls");
       await textarea.focus();
       await expect
-        .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("40px");
+        .poll(() =>
+          composerShell.evaluate(
+            (node) => window.innerHeight - node.getBoundingClientRect().bottom,
+          ),
+        )
+        .toBe(40);
 
       const send = page.getByRole("button", { name: "Send message" });
       await expect.poll(() => send.isVisible()).toBe(true);
@@ -191,8 +196,12 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await expect.poll(() => stop.isVisible()).toBe(true);
       await textarea.focus();
       await expect
-        .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("40px");
+        .poll(() =>
+          composerShell.evaluate(
+            (node) => window.innerHeight - node.getBoundingClientRect().bottom,
+          ),
+        )
+        .toBe(40);
       await installPointerTrace(page, stop);
       await stop.tap();
       expectStablePointerActivation(await readPointerTrace(page));
@@ -226,8 +235,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await page.addStyleTag({
-        content: ":root { --safe-area-bottom: 34px !important; }",
+      const protocol = await context.newCDPSession(page);
+      await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+        insets: { bottom: 34 },
       });
 
       const composerShell = page.locator(".agent-chat__composer-shell");
@@ -235,8 +245,12 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.fill("Verify narrow desktop pointer controls");
       await textarea.focus();
       await expect
-        .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("40px");
+        .poll(() =>
+          composerShell.evaluate(
+            (node) => window.innerHeight - node.getBoundingClientRect().bottom,
+          ),
+        )
+        .toBe(40);
 
       const send = page.getByRole("button", { name: "Send message" });
       await expect.poll(() => send.isVisible()).toBe(true);
@@ -377,8 +391,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       const gateway = await installMockGateway(page, { assistantName: "OpenClaw" });
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await page.addStyleTag({
-        content: ":root { --safe-area-bottom: 34px !important; }",
+      const protocol = await context.newCDPSession(page);
+      await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+        insets: { bottom: 34 },
       });
       const textarea = page.locator(".agent-chat__input textarea");
       await textarea.fill("Do not send this draft");

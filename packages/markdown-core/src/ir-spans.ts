@@ -117,7 +117,7 @@ export function clampAnnotationSpans(
 }
 
 export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
-  const sorted = [...spans].toSorted((a, b) => a.start - b.start || a.end - b.end);
+  const sorted = spans.toSorted((a, b) => a.start - b.start || a.end - b.end);
   const merged: MarkdownAnnotationSpan[] = [];
   for (const span of sorted) {
     const previous = merged.at(-1);
@@ -137,7 +137,7 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
 }
 
 export function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].toSorted((a, b) => {
+  const sorted = spans.toSorted((a, b) => {
     if (a.start !== b.start) {
       return a.start - b.start;
     }

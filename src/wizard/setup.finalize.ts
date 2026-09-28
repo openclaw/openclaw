@@ -421,6 +421,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
           env: selection.env,
           port: settings.port,
           runtime: selection.runtime,
+          runtimeExplicit: selection.runtimeExplicit,
+          runtimePath: selection.runtimePath,
           pinnedRuntimePath: selection.pinnedRuntimePath,
           existingCommand,
           warn: (message, title) => {
@@ -429,6 +431,16 @@ export async function ensureGatewayServiceForOnboarding(params: {
           config: nextConfig,
         });
         await flushInstallWarnings();
+        if (flow === "quickstart" && !selection.pinnedRuntimePath) {
+          await prompter.note(
+            t(
+              plan.runtime === "bun"
+                ? "wizard.finalize.quickstartBunRuntime"
+                : "wizard.finalize.quickstartNodeRuntime",
+            ),
+            t("wizard.finalize.daemonRuntime"),
+          );
+        }
 
         progress.update(t("wizard.finalize.gatewayServiceInstalling"));
         await service.install({
@@ -525,10 +537,11 @@ export async function finalizeSetupWizard(
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
       };
-      // A failed replacement may leave the old Gateway alive. Observe it once;
-      // only successful install/restart needs the startup grace period.
+      // Nothing started (declined or failed install): probe once. A reused running
+      // Gateway keeps a bounded wait because the config just written can make it
+      // reload; started Gateways use the full startup timing.
       gatewayProbe =
-        gateway.status === "failed"
+        gateway.status === "failed" || (gateway.status === "skipped" && !sessionGateway)
           ? await probeGatewayReachable(probeOptions)
           : await waitForGatewayReachable({
               ...probeOptions,

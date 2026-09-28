@@ -585,6 +585,7 @@ describe("gateway/node-registry", () => {
       capacity: { total: number; available: number };
       bundleRetention?: 1;
       bundleStatus?: 1;
+      statusWait?: 1;
     }) =>
       updateNodeRunnerInventory({
         registry: nodeRegistry,
@@ -618,6 +619,18 @@ describe("gateway/node-registry", () => {
       changed: false,
     });
     expect(runnerStateChanged).not.toHaveBeenCalled();
+
+    expect(publish({ ...retained, capacity: { total: 2, available: 0 }, statusWait: 1 })).toEqual({
+      changed: true,
+    });
+    expect(publish({ ...retained, statusWait: 1, capacity: { available: 0, total: 2 } })).toEqual({
+      changed: false,
+    });
+    expect(runnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
+    runnerStateChanged.mockClear();
 
     const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
     if (!proof) {

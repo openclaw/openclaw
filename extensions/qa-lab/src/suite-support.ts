@@ -1,10 +1,9 @@
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportId } from "./qa-transport-registry.js";
-import type { RuntimeId } from "./runtime-parity.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
-import { scenarioRequiresControlUi, splitModelRef } from "./suite-planning.js";
+import { scenarioRequiresControlUi } from "./suite-planning.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult, QaSuiteStartLabFn } from "./suite-types.js";
 
 /**
@@ -44,7 +43,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  scenario: QaSeedScenarioWithSource;
   input?: QaSuiteRunParams;
   startLab: QaSuiteStartLabFn;
 }): QaSuiteRunParams {
@@ -80,21 +79,6 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
         : undefined,
     writeEvidenceFile: params.input?.writeEvidenceFile,
   };
-}
-
-export function remapModelRefForForcedRuntime(params: {
-  modelRef: string;
-  providerMode: QaProviderMode;
-  forcedRuntime?: RuntimeId;
-}) {
-  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
-    return params.modelRef;
-  }
-  const split = splitModelRef(params.modelRef);
-  if (!split || split.provider !== "mock-openai") {
-    return params.modelRef;
-  }
-  return `openai/${split.model}`;
 }
 
 function appendNodeOption(raw: string | undefined, option: string) {

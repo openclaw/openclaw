@@ -13,11 +13,11 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
+import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
 import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
@@ -345,7 +345,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const goalCard = activeSession?.goal
     ? html`<div class="agent-chat__goal-float">
         ${renderChatGoal(state, activeSession.goal, {
-          canAct: props.connected && props.canSend && !props.goalRecovery,
+          canAct:
+            props.connected &&
+            props.canSend &&
+            !props.submitDisabledReason &&
+            Boolean(props.currentSessionId) &&
+            !props.goalRecovery,
           onGoalAction: props.onGoalAction,
           onGoalEdit: props.onGoalSubmit ? (goal) => goalComposer.begin(goal) : undefined,
           requestUpdate,
@@ -450,7 +455,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}
-                ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
+                ${renderChatAttachmentInputs({
+                  ...props,
+                  disabled: !canCompose,
+                  cameraActive: showComposer && props.cameraActive !== false,
+                })}
                 ${
                   props.realtimeTalkVideoStream
                     ? html`

@@ -21,18 +21,16 @@ import {
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
-  measureLaunchTurn,
   credential,
   openSessionManager,
   placements,
@@ -126,55 +124,18 @@ describe("worker turn launcher reclaimed placement", () => {
           timestamp: 51,
         }),
       );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     });
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn,
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),
     };

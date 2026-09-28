@@ -60,6 +60,7 @@ describe("tsgo core test shards", () => {
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
+      ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
       ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
       ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
       ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-other"],

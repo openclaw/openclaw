@@ -56,42 +56,33 @@ function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] 
       if (!account.resourceGroup) {
         continue;
       }
-      if (account.kind === "OpenAI") {
-        const endpoint = extractFoundryEndpoint(account.endpoint);
-        if (!endpoint) {
-          continue;
-        }
-        resources.push({
-          id: account.id,
-          accountName: account.name,
-          kind: "OpenAI",
-          location: account.location,
-          resourceGroup: account.resourceGroup,
-          endpoint,
-          projects: [],
-        });
+      if (account.kind !== "OpenAI" && account.kind !== "AIServices") {
         continue;
       }
-      if (account.kind !== "AIServices") {
-        continue;
-      }
-      const customSubdomain = normalizeOptionalString(account.customSubdomain);
-      const endpoint = customSubdomain
-        ? `https://${customSubdomain}.services.ai.azure.com`
-        : undefined;
+      const customSubdomain =
+        account.kind === "AIServices"
+          ? normalizeOptionalString(account.customSubdomain)
+          : undefined;
+      const endpoint =
+        account.kind === "OpenAI"
+          ? extractFoundryEndpoint(account.endpoint)
+          : customSubdomain
+            ? `https://${customSubdomain}.services.ai.azure.com`
+            : undefined;
       if (!endpoint) {
         continue;
       }
       resources.push({
         id: account.id,
         accountName: account.name,
-        kind: "AIServices",
+        kind: account.kind,
         location: account.location,
         resourceGroup: account.resourceGroup,
         endpoint,
-        projects: Array.isArray(account.projects)
-          ? account.projects.filter((project): project is string => typeof project === "string")
-          : [],
+        projects:
+          account.kind === "AIServices" && Array.isArray(account.projects)
+            ? account.projects.filter((project): project is string => typeof project === "string")
+            : [],
       });
     }
     return resources;

@@ -155,6 +155,7 @@ it("reports only the committed config with a projected hash and redacted secrets
       configRevisionProjector: {
         projectRawHash: (hash) => `public:${hash}`,
         projectResolvedHash: (hash) => hash,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
     },
   });
