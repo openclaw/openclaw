@@ -10,7 +10,7 @@ import type { WithDistArtifactOwnership } from "./runtime-artifact-contract.js";
 
 const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
 const LOCK_POLL_MS = 500;
-type ArtifactOwner = { directory: string; unjoinedError?: unknown };
+type ArtifactOwner = { directory: string; unjoinedError?: Error };
 let inheritedOwner: ArtifactOwner | undefined;
 
 export function resolveDistArtifactLockPath(rootDir: string) {
@@ -19,10 +19,13 @@ export function resolveDistArtifactLockPath(rootDir: string) {
 }
 
 function retainUnjoinedDistArtifactWork(owner: ArtifactOwner, error: unknown) {
-  if (owner.unjoinedError !== undefined) return owner.unjoinedError;
+  if (owner.unjoinedError !== undefined) {
+    return owner.unjoinedError;
+  }
   if (hasUnjoinedWork(error)) {
     // Latch before I/O: a full disk must not turn uncertain cleanup into permission to release.
-    owner.unjoinedError = error;
+    owner.unjoinedError =
+      error instanceof Error ? error : new Error("Unjoined artifact work", { cause: error });
     try {
       fs.writeFileSync(path.join(owner.directory, "unjoined"), "Child cleanup was not verified.\n");
     } catch (writeError) {
@@ -170,7 +173,9 @@ export const withDistArtifactOwnership: WithDistArtifactOwnership = async (
 ) => {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   if (directory === inheritedOwner?.directory) {
-    if (inheritedOwner.unjoinedError !== undefined) throw inheritedOwner.unjoinedError;
+    if (inheritedOwner.unjoinedError !== undefined) {
+      throw inheritedOwner.unjoinedError;
+    }
     signal?.throwIfAborted();
     try {
       return await run();
