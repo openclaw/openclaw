@@ -818,11 +818,15 @@ describe("sessions.dispatch device targets", () => {
         name: "missing",
         declaredCommands: ["system.run"],
         commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          "paired-device command codex.exec-server.stdio.v1 is not advertised by node device-1; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
       },
       {
         name: "declared but denied",
         declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
         commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          "paired-device command codex.exec-server.stdio.v1 is blocked by Gateway policy for node device-1; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
       },
     ])("rejects a $name required paired-node command before dispatch", async (scenario) => {
       useDeviceSession("codex");
@@ -852,7 +856,7 @@ describe("sessions.dispatch device targets", () => {
         undefined,
         expect.objectContaining({
           code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringMatching(/command.*(enabled|approved|declared)/i),
+          message: scenario.expectedMessage,
         }),
       );
     });
