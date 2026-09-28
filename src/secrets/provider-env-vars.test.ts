@@ -6,6 +6,7 @@ import {
   makePluginMetadataManifestRegistry,
 } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginManifestSetupProvider } from "../plugins/manifest-types.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import {
   getProviderEnvVarsCore,
@@ -80,11 +81,11 @@ describe("provider env vars", () => {
   // resolves an inherited member, `new Set(bucket)` throws, and the declared
   // credentials disappear from the secret inventory that sandbox filtering and
   // `.env` auditing consume.
-  const prototypeNamedProviders = [
+  const prototypeNamedProviders: PluginManifestSetupProvider[] = [
     {
       id: "__proto__",
       envVars: ["ACME_CREDENTIAL"],
-      authEvidence: [{ type: "local-file-with-env" }],
+      authEvidence: [{ type: "local-file-with-env", credentialMarker: "acme-local" }],
     },
     { id: "constructor", envVars: ["CTOR_CREDENTIAL"] },
     { id: "prototype", envVars: ["PROTO_CREDENTIAL"] },
