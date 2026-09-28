@@ -145,6 +145,8 @@ describe("Bun private node runtime installation", () => {
         }
         const { BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: bin } = options.env;
         if (argv.join(" ") === "bun pm bin -g") {
+          // Bun requires its global project manifest before any global command.
+          await fs.access(path.join(project!, "package.json"));
           return { code: 0, stdout: `${bin}\n`, stderr: "" };
         }
         if (argv[0] === "bun" && argv[1] === "add" && project && bin) {

@@ -218,10 +218,23 @@ export async function prepareNodeRuntimeUpdate(params: {
         }
         assertCurrent();
         if (manager === "bun") {
-          // Native staging copies an existing project and probes from its
-          // node_modules; this generation starts empty.
+          // Native staging copies an existing Bun global project (a manifest
+          // plus node_modules) and probes from it; this generation starts empty.
           await fs.mkdir(layout.globalRoot, { recursive: true });
           await fs.mkdir(layout.binDir, { recursive: true });
+          await fs
+            .writeFile(
+              path.join(path.dirname(layout.globalRoot), "package.json"),
+              '{"private":true}\n',
+              {
+                flag: "wx",
+              },
+            )
+            .catch((error: unknown) => {
+              if (!hasErrnoCode(error, "EEXIST")) {
+                throw error;
+              }
+            });
           assertCurrent();
         }
         const result = await runGlobalPackageUpdateSteps({
