@@ -236,6 +236,10 @@ directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
 module execution remains on demand. Registrations share admission facts without
 sharing their runtime authority.
+Private Doctor inspections keep their native admission facts separate from the
+operator's state. Their temporary captures never become deferred writes to the
+installed index after inspection ends; ordinary deferred writes retain their
+original state directory.
 When native packages share a dependency, admission reconciles identities only for
 its own hardlinks, even when the filesystem's ctime has not advanced. Recorded
 digests are checked against installed bytes before promotion, including companions
