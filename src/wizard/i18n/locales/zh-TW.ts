@@ -430,6 +430,11 @@ export const zh_TW = {
       workspaceConflictTitle: "現有 agent 工作區",
       workspaceDirectory: "工作區目錄",
       workspaceNotDirectory: '"{path}" 不是目錄。請在目錄中選擇工作區路徑。',
+      workspacePathError: '無法檢查 "{path}"：{error}。請檢查路徑後重試。',
+      workspacePathInvalid: '"{path}" 無效。請選擇有效的工作區路徑。',
+      workspacePathTooLong: '"{path}" 過長。請選擇較短的工作區路徑。',
+      workspacePermissionDenied: '檢查 "{path}" 時權限遭拒。請檢查目錄權限或選擇可存取的工作區。',
+      workspaceSymlinkLoop: '"{path}" 因符號連結循環而無法解析。請修復符號連結或選擇其他工作區。',
       workspaceSymlinkNotDirectory:
         '"{path}" 是無法解析至現有目錄的符號連結。請在目錄中選擇工作區路徑。',
     },

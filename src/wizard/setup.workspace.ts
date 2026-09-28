@@ -6,6 +6,7 @@ import {
 } from "../commands/onboard-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errno.js";
+import { extractErrorCode, formatErrorMessageWithCode } from "../infra/errors.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -18,8 +19,11 @@ export function validateSetupWorkspacePath(workspaceDir: string): string | undef
       if (stats.isSymbolicLink()) {
         try {
           stats = fs.statSync(candidate);
-        } catch {
-          return t("wizard.setup.workspaceSymlinkNotDirectory", { path: candidate });
+        } catch (error) {
+          if (isMissingPathError(error)) {
+            return t("wizard.setup.workspaceSymlinkNotDirectory", { path: candidate });
+          }
+          throw error;
         }
       }
       return stats.isDirectory()
@@ -27,12 +31,27 @@ export function validateSetupWorkspacePath(workspaceDir: string): string | undef
         : t("wizard.setup.workspaceNotDirectory", { path: candidate });
     } catch (error) {
       if (!isMissingPathError(error)) {
-        return undefined;
+        switch (extractErrorCode(error)) {
+          case "ELOOP":
+            return t("wizard.setup.workspaceSymlinkLoop", { path: candidate });
+          case "EACCES":
+          case "EPERM":
+            return t("wizard.setup.workspacePermissionDenied", { path: candidate });
+          case "ENAMETOOLONG":
+            return t("wizard.setup.workspacePathTooLong", { path: candidate });
+          case "EINVAL":
+            return t("wizard.setup.workspacePathInvalid", { path: candidate });
+          default:
+            return t("wizard.setup.workspacePathError", {
+              path: candidate,
+              error: formatErrorMessageWithCode(error),
+            });
+        }
       }
     }
     const parent = path.dirname(candidate);
     if (parent === candidate) {
-      return undefined;
+      return t("wizard.setup.workspaceNotDirectory", { path: candidate });
     }
     candidate = parent;
   }

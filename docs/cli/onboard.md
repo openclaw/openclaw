@@ -155,8 +155,10 @@ In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
 workspace through their normal setup flow. A workspace must be a directory or
-a new path beneath directories; a file, non-directory ancestor, or dangling
-symbolic link is rejected before setup or reset, with the blocking path named.
+a new path beneath directories; a file, non-directory ancestor, dangling
+symbolic link, or symlink loop is rejected before setup or reset, with the failing
+path named. Permission errors, overly long or invalid paths, and other filesystem
+inspection failures are reported rather than treated as missing directories.
 Symbolic links to existing directories, including new paths beneath them, are
 allowed. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
