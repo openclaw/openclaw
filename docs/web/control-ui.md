@@ -123,8 +123,11 @@ preview. Allow camera access when your browser asks, then choose **Capture**,
 not send the message. The preview stays in your browser and does not request
 microphone access.
 
-Camera capture requires HTTPS or localhost and a browser that supports camera
-access. Plain HTTP on a LAN address cannot open the camera. If access is denied,
+The live preview requires HTTPS or localhost and a browser that supports camera
+access. On plain HTTP LAN addresses or browsers without the camera API, choose
+**Use device camera** to open the native capture picker instead. This preserves
+mobile camera capture without silently substituting a picker for the preview;
+your browser decides whether it shows a camera or a file picker. If access is denied,
 allow the site in your browser and operating-system camera settings and retry.
 If no camera is available, choose **Upload photo** instead.
 

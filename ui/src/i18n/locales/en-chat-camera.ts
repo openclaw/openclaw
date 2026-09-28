@@ -16,10 +16,12 @@ const enChatCamera = {
       upload: "Upload photo",
       retry: "Try again",
       errorTitle: "Camera unavailable",
+      previewUnavailable: "Camera preview unavailable",
+      useNativeCamera: "Use device camera",
       insecure:
-        "Camera access requires HTTPS or localhost. Open a secure connection, or upload a photo instead.",
+        "Live preview requires HTTPS or localhost. Use your device camera or upload a photo. Your browser may show a camera or file picker.",
       unsupported:
-        "This browser cannot access a camera. Try another browser, or upload a photo instead.",
+        "This browser cannot show a live camera preview. Use your device camera or upload a photo. Your browser may show a camera or file picker.",
       permissionDenied:
         "Camera access was denied. Allow camera access in your browser and system settings, then try again.",
       notFound: "No camera was found. Connect a camera, or upload a photo instead.",

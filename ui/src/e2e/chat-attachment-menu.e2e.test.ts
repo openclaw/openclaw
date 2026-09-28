@@ -20,6 +20,51 @@ async function choose(page: Page, kind: string) {
 }
 
 suite.define(() => {
+  it.each([
+    { route: "chat", availability: "insecure" },
+    { route: "new", availability: "unsupported" },
+  ])(
+    "offers explicit native capture in $route when preview is $availability",
+    async ({ route, availability }) => {
+      await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+        await page.addInitScript((kind) => {
+          if (kind === "insecure") {
+            Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
+          } else {
+            Object.defineProperty(navigator, "mediaDevices", {
+              configurable: true,
+              value: undefined,
+            });
+          }
+        }, availability);
+        await installMockGateway(page, { historyMessages: [] });
+        let chooserCount = 0;
+        page.on("filechooser", () => {
+          chooserCount += 1;
+        });
+        await page.goto(suite.server.baseUrl + route);
+        await page.getByRole("button", { name: "Add attachment", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
+        const camera = page.locator("openclaw-chat-camera-capture");
+        const nativeCapture = camera.getByRole("button", {
+          name: "Use device camera",
+          exact: true,
+        });
+        await nativeCapture.waitFor();
+        expect(chooserCount).toBe(0);
+        const pending = page.waitForEvent("filechooser");
+        await nativeCapture.click();
+        const chooser = await pending;
+        expect(await chooser.element().getAttribute("capture")).toBe("environment");
+        expect(await chooser.element().getAttribute("accept")).toBe("image/*");
+        expect(chooser.isMultiple()).toBe(false);
+        await chooser.setFiles([]);
+        expect(chooserCount).toBe(1);
+        expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+      });
+    },
+  );
+
   it.each(["chat", "new"])(
     "captures a camera photo without opening a picker in %s",
     async (route) => {

@@ -76,6 +76,7 @@ describe("composer camera capture", () => {
     component = new OpenClawChatCameraCapture();
     component.onCapture = vi.fn();
     component.onUpload = vi.fn();
+    component.onNativeCapture = vi.fn();
     component.readSignal = new AbortController().signal;
     document.body.append(component);
     await settle();
@@ -182,6 +183,7 @@ describe("composer camera capture", () => {
     await settle();
     expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(copy);
     expect(component.onUpload).not.toHaveBeenCalled();
+    expect(component.renderRoot.textContent).not.toContain("Use device camera");
     const onUpload = component.onUpload;
     button("Upload photo").click();
     await settle();
@@ -189,18 +191,38 @@ describe("composer camera capture", () => {
     expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("explains insecure or unsupported camera access without a request", async () => {
+  it.each(["insecure", "unsupported"])(
+    "offers native capture explicitly for %s contexts",
+    async (kind) => {
+      if (kind === "insecure") {
+        vi.stubGlobal("isSecureContext", false);
+      } else {
+        Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+      }
+      component.show();
+      await settle();
+      expect(component.renderRoot.textContent).toContain("camera or file picker");
+      expect(getUserMedia).not.toHaveBeenCalled();
+      expect(component.onNativeCapture).not.toHaveBeenCalled();
+      expect(component.onUpload).not.toHaveBeenCalled();
+      const nativeCapture = component.onNativeCapture;
+      button("Use device camera").click();
+      await settle();
+      expect(nativeCapture).toHaveBeenCalledExactlyOnceWith(component);
+      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
+
+  it("does not open a native picker for a replaced draft", async () => {
     vi.stubGlobal("isSecureContext", false);
     component.show();
     await settle();
-    expect(component.renderRoot.textContent).toContain("requires HTTPS or localhost");
-    button("Cancel").click();
-    vi.stubGlobal("isSecureContext", true);
-    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
-    component.show();
+    const nativeCapture = component.onNativeCapture;
+    component.readSignal = new AbortController().signal;
+    button("Use device camera").click();
+    expect(nativeCapture).not.toHaveBeenCalled();
     await settle();
-    expect(component.renderRoot.textContent).toContain("This browser cannot access a camera");
-    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("keeps a stopped-camera error when an old play promise finishes", async () => {

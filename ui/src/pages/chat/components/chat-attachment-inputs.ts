@@ -43,18 +43,24 @@ export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
           appendChatAttachmentFiles([file], props);
         }
       }}
+      .onNativeCapture=${(source: HTMLElement) => {
+        if (!props.disabled) {
+          clickComposerInput(source, ".agent-chat__camera-input");
+        }
+      }}
       .onUpload=${(source: HTMLElement) => {
         if (!props.disabled) {
           clickComposerInput(source, ".agent-chat__photo-input");
         }
       }}
     ></openclaw-chat-camera-capture>
-    ${(["file", "photo"] as const).map(
+    ${(["file", "photo", "camera"] as const).map(
       (kind) => html`
         <input
           type="file"
           accept=${kind === "file" ? CHAT_ATTACHMENT_ACCEPT : "image/*"}
-          multiple
+          ?multiple=${kind !== "camera"}
+          capture=${kind === "camera" ? "environment" : nothing}
           class=${`agent-chat__${kind}-input`}
           ?disabled=${props.disabled}
           @change=${(event: Event) => {

@@ -17,6 +17,8 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
   @property({ attribute: false }) readSignal?: AbortSignal;
   @property({ attribute: false }) onCapture?: (file: File) => void;
   @property({ attribute: false }) onUpload?: (source: HTMLElement) => void;
+  @property({ attribute: false }) onNativeCapture?: (source: HTMLElement) => void;
+  @state() private nativeFallback = false;
   @state() private stage: CameraStage = "closed";
   @state() private error = "";
   @state() private photoUrl = "";
@@ -29,6 +31,7 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
   private activeSignal?: AbortSignal;
   private captureDestination?: (file: File) => void;
   private uploadDestination?: (source: HTMLElement) => void;
+  private nativeCaptureDestination?: (source: HTMLElement) => void;
 
   static override styles = cameraCaptureStyles;
 
@@ -61,6 +64,7 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
     this.activeSignal?.addEventListener("abort", this.close, { once: true });
     this.captureDestination = this.onCapture;
     this.uploadDestination = this.onUpload;
+    this.nativeCaptureDestination = this.onNativeCapture;
     this.cameraId = "";
     this.cameras = [];
     this.stage = "requesting";
@@ -105,13 +109,15 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
     this.activeSignal = undefined;
     this.captureDestination = undefined;
     this.uploadDestination = undefined;
+    this.nativeCaptureDestination = undefined;
     this.stage = "closed";
   };
 
-  private fail(message: string) {
+  private fail(message: string, nativeFallback = false) {
     this.generation += 1;
     this.stopCamera();
     this.error = message;
+    this.nativeFallback = nativeFallback;
     this.stage = "error";
   }
 
@@ -124,12 +130,13 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
     this.clearPhoto();
     this.stage = "requesting";
     this.error = "";
+    this.nativeFallback = false;
     if (!globalThis.isSecureContext) {
-      this.fail(t("chat.camera.insecure"));
+      this.fail(t("chat.camera.insecure"), true);
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      this.fail(t("chat.camera.unsupported"));
+      this.fail(t("chat.camera.unsupported"), true);
       return;
     }
     try {
@@ -268,12 +275,22 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
     destination?.(this);
   };
 
+  private useNativeCamera = () => {
+    if (!this.isCurrent(this.generation) || this.stage !== "error" || !this.nativeFallback) {
+      return;
+    }
+    const destination = this.nativeCaptureDestination;
+    this.close();
+    destination?.(this);
+  };
+
   override render() {
     if (this.stage === "closed") {
       return nothing;
     }
     const reviewing = this.stage === "review";
     const failed = this.stage === "error";
+    const nativeFallback = failed && this.nativeFallback && Boolean(this.nativeCaptureDestination);
     return html`
       <openclaw-modal-dialog .label=${t("chat.camera.title")} @modal-cancel=${this.close}>
         <section class="camera">
@@ -318,7 +335,9 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
             ${
               failed
                 ? html`<div class="notice" role="alert">
-                    ${icons.camera}<strong>${t("chat.camera.errorTitle")}</strong>
+                    ${icons.camera}<strong
+                      >${nativeFallback ? t("chat.camera.previewUnavailable") : t("chat.camera.errorTitle")}</strong
+                    >
                     <p>${this.error}</p>
                   </div>`
                 : this.stage === "requesting" || this.stage === "capturing"
@@ -371,9 +390,9 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
                 type="button"
                 class="primary"
                 ?disabled=${!reviewing && !failed && (this.stage !== "live" || !this.videoReady)}
-                @click=${reviewing ? this.usePhoto : failed ? () => void this.startCamera() : this.capture}
+                @click=${reviewing ? this.usePhoto : nativeFallback ? this.useNativeCamera : failed ? () => void this.startCamera() : this.capture}
               >
-                ${reviewing ? t("chat.camera.usePhoto") : failed ? t("chat.camera.retry") : t("chat.camera.capture")}
+                ${reviewing ? t("chat.camera.usePhoto") : nativeFallback ? t("chat.camera.useNativeCamera") : failed ? t("chat.camera.retry") : t("chat.camera.capture")}
               </button>
             </div>
           </footer>
