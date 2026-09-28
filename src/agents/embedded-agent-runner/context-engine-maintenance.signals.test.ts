@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDeferredTurnMaintenanceAbortSignal,
@@ -10,22 +11,18 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
   });
 
   it("aborts on termination signals and unregisters listeners", () => {
-    const listeners = new Map<string, Set<() => void>>();
+    const listeners = new EventEmitter();
     const kill = vi.fn();
     const processLike = {
       on(event: "SIGINT" | "SIGTERM", listener: () => void) {
-        const bucket = listeners.get(event) ?? new Set<() => void>();
-        bucket.add(listener);
-        listeners.set(event, bucket);
+        listeners.on(event, listener);
         return this;
       },
       off(event: "SIGINT" | "SIGTERM", listener: () => void) {
-        listeners.get(event)?.delete(listener);
+        listeners.off(event, listener);
         return this;
       },
-      listenerCount(event: "SIGINT" | "SIGTERM") {
-        return listeners.get(event)?.size ?? 0;
-      },
+      listenerCount: listeners.listenerCount.bind(listeners),
       kill,
       pid: 4242,
     } as unknown as NonNullable<
@@ -34,22 +31,20 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
 
     const { abortSignal, dispose } = createDeferredTurnMaintenanceAbortSignal({ processLike });
     const second = createDeferredTurnMaintenanceAbortSignal({ processLike });
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(1);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(1);
+    expect(listeners.listenerCount("SIGINT")).toBe(1);
+    expect(listeners.listenerCount("SIGTERM")).toBe(1);
 
-    const sigtermListeners = Array.from(listeners.get("SIGTERM") ?? []);
-    expect(sigtermListeners).toHaveLength(1);
-    sigtermListeners[0]?.();
+    listeners.emit("SIGTERM");
 
     expect(abortSignal?.aborted).toBe(true);
     expect(second.abortSignal?.aborted).toBe(true);
     expect(kill).toHaveBeenCalledWith(4242, "SIGTERM");
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
+    expect(listeners.listenerCount("SIGINT")).toBe(0);
+    expect(listeners.listenerCount("SIGTERM")).toBe(0);
 
     dispose();
     second.dispose();
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
+    expect(listeners.listenerCount("SIGINT")).toBe(0);
+    expect(listeners.listenerCount("SIGTERM")).toBe(0);
   });
 });

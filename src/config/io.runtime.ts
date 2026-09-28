@@ -113,11 +113,7 @@ export function loadConfig(options?: {
   return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: {
-  skipPluginValidation?: boolean;
-  pin?: boolean;
-  skipShellEnvFallback?: boolean;
-}): OpenClawConfig {
+export function getRuntimeConfig(options?: Parameters<typeof loadConfig>[0]): OpenClawConfig {
   return loadConfig(options);
 }
 
@@ -262,10 +258,19 @@ export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
 }): OpenClawConfig {
-  return createCurrentConfigReader({
+  return readCurrentConfigForPolicyCheckWithMigrations({
     ...params,
     deferredPluginMigrations: readDeferredPluginMigrations({ env: params.env }),
-  }).loadConfig({ skipSuspiciousRecovery: true });
+  });
+}
+
+/** Reread current disk policy without querying migration state; the caller owns row freshness. */
+export function readCurrentConfigForPolicyCheckWithMigrations(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  deferredPluginMigrations: readonly DeferredPluginMigration[];
+}): OpenClawConfig {
+  return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
 /** Await fresh migration facts for this read; retained synchronous guards use their own boundary. */

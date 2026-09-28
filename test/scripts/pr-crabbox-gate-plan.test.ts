@@ -337,7 +337,10 @@ describe("Crabbox PR-derived gate plan", () => {
         "scripts/test-projects.mts",
       ]);
       expect(buildVitestRunPlans(args.slice(3))).toMatchObject([
-        { includePatterns: plan.targets, forwardedArgs: ["--reporter=dot"] },
+        {
+          includePatterns: plan.targets,
+          forwardedArgs: ["--reporter=dot", "--coverage.enabled=false"],
+        },
       ]);
       expect(command).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
       expect(command).not.toContain("--silent");

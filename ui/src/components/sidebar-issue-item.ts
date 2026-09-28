@@ -104,14 +104,11 @@ export function renderSidebarMentionItem(params: {
 
 export function renderSidebarApprovalItem(params: {
   approval: ExecApprovalRequest;
-  context: ApplicationContext | undefined;
+  context: ApplicationContext;
   onNavigate: ApplicationContext["navigate"];
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
 }) {
   const context = params.context;
-  if (!context) {
-    return nothing;
-  }
   const snapshot = context.overlays.snapshot;
   const sessionKey = params.approval.request.sessionKey?.trim();
   const session = sessionKey
@@ -143,16 +140,12 @@ export function renderSidebarApprovalItem(params: {
 }
 
 export function renderSidebarUpdateSurface(params: {
-  context: Pick<ApplicationContext, "gateway" | "overlays"> | undefined;
+  context: Pick<ApplicationContext, "gateway" | "overlays">;
   onDismiss?: () => void;
   onNavigate: () => void;
-  visible: boolean;
   watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
 }) {
   const context = params.context;
-  if (!params.visible || !context) {
-    return nothing;
-  }
   const snapshot = context.overlays.snapshot;
   const gateway = context.gateway.snapshot;
   return html`<openclaw-sidebar-update-card
@@ -332,9 +325,7 @@ export function renderSidebarIssueItem(
   if (item.action.kind === "navigate") {
     return renderNavigationItem(item, handlers);
   }
-  const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
-  const visibleFacts = facts.filter((fact) => fact !== item.label);
-  const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
+  const visibleFacts = item.action.alert.facts.filter((fact) => fact !== item.label);
   const inlineAction = item.inlineAction;
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
@@ -382,7 +373,7 @@ export function renderSidebarIssueItem(
           }"
           @click=${() => handlers.onOpen(item)}
         >
-          ${actionLabel}
+          ${t("nav.askOpenClaw")}
         </button>
       </div>
     </div>

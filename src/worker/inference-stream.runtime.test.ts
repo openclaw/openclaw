@@ -28,7 +28,7 @@ import {
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
 } from "./transcript-message.js";
 import { createWorkerConnection } from "./worker-connection.js";
-import { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 
 const modelRef: WorkerInferenceModelRef = { provider: "test", model: "test-model" };
 const usage: Usage = {

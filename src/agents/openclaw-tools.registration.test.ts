@@ -19,9 +19,8 @@ import {
 } from "./cron-creator-authority-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
-  shouldIncludeAskUserToolForOpenClawTools,
+  shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
-  shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
@@ -137,6 +136,26 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
+  it("exposes presence to non-owner readers without shell access", () => {
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:dashboard:presence",
+      cwd: "/project/worktree",
+      workspaceDir: "/project/worktree",
+      senderIsOwner: false,
+      config: {
+        agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+        tools: { allow: ["presence"], fs: { workspaceOnly: true } },
+      },
+      disableMessageTool: true,
+      wrapBeforeToolCallHook: false,
+    });
+    expect(toolNames(tools)).toContain("presence");
+    expect(toolNames(tools)).not.toContain("gateway");
+    expect(toolNames(tools)).not.toContain("exec");
+    setEmbeddedMode(true);
+    expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain("presence");
+  });
+
   it("exposes progress_card from default tool construction for every embedded model", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,
@@ -149,17 +168,16 @@ describe("openclaw-tools progress_card gating", () => {
   });
 
   it("keeps human-question tools on permitted primary sessions", () => {
-    for (const includeTool of [
-      shouldIncludeAskUserToolForOpenClawTools,
-      shouldIncludeSecretsToolForOpenClawTools,
-    ]) {
-      expect(includeTool({})).toBe(false);
-      expect(includeTool({ agentSessionKey: "agent:main:main" })).toBe(true);
-      expect(includeTool({ agentSessionKey: "agent:main:subagent:worker" })).toBe(false);
-      expect(includeTool({ agentSessionKey: "agent:main:acp:worker" })).toBe(false);
+    for (const toolName of ["ask_user", "secrets"] as const) {
+      const includeTool = (agentSessionKey?: string) =>
+        shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
+      expect(includeTool()).toBe(false);
+      expect(includeTool("agent:main:main")).toBe(true);
+      expect(includeTool("agent:main:subagent:worker")).toBe(false);
+      expect(includeTool("agent:main:acp:worker")).toBe(false);
     }
     expect(
-      shouldIncludeSecretsToolForOpenClawTools({
+      shouldIncludePrimarySessionToolForOpenClawTools("secrets", {
         agentSessionKey: "agent:main:main",
         pluginToolDenylist: ["secrets"],
       }),

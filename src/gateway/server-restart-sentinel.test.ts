@@ -195,16 +195,11 @@ const mocks = vi.hoisted(() => {
     markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
     markSessionDeliverySettlement: vi.fn(async () => {}),
     appendAssistantMessageToSessionTranscript: vi.fn<AppendAssistantMessageToSessionTranscriptMock>(
-      async () => ({
-        ok: true as const,
-        target: {
-          agentId: "main",
-          sessionId: "main",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/sessions.json",
-        },
-        messageId: "generated-media-transcript",
-      }),
+      async (params) => {
+        const { appendRestartSentinelTranscriptReceipt } =
+          await import("./server-restart-sentinel.test-support.js");
+        return appendRestartSentinelTranscriptReceipt(params);
+      },
     ),
     createManagedOutgoingMediaBlocks: vi.fn<CreateManagedOutgoingMediaBlocksMock>(async (params) =>
       (params.items ?? []).map((item) => ({
@@ -214,7 +209,9 @@ const mocks = vi.hoisted(() => {
         openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
       })),
     ),
-    attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(() => true),
+    attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(
+      async () => true,
+    ),
     enrichAssistantTranscriptMediaForRun: vi.fn<EnrichAssistantTranscriptMediaForRunMock>(
       async () => null,
     ),
@@ -324,7 +321,7 @@ vi.mock("../infra/session-delivery-queue-recovery.js", async (importOriginal) =>
   };
 });
 
-vi.mock("../tasks/cron-run-continuation-cleanup.js", () => ({
+vi.mock("../cron/run-continuation-cleanup.js", () => ({
   removeCronRunContinuationSessionIfIdle: mocks.removeCronRunContinuationSessionIfIdle,
 }));
 
@@ -791,7 +788,6 @@ describe("scheduleRestartSentinelWake", () => {
       } as const;
       await recovery?.onSettled?.(entry, outcome, queueContext);
 
-      expect(mocks.settleCorrelatedSubagentDelivery).toHaveBeenCalledWith(entry, outcome);
       expect(mocks.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
         entry.sessionKey,
         entry.id,

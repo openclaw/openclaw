@@ -372,6 +372,7 @@ export async function appendAssistantTranscriptMessage(
     ttsSupplement: params.ttsSupplement,
     ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
     config: params.cfg,
+    onMessageCommitted: params.onMessageCommitted,
   });
 }
 

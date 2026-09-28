@@ -290,6 +290,18 @@ describe("shouldHandleBareRoot", () => {
   });
 
   it.each([
+    ["--unknown"],
+    ["--no-color", "--unknown"],
+    ["--unknown=value"],
+    ["--json"],
+    ["--profile"],
+    ["--log-level"],
+    [""],
+  ])("leaves invalid root arguments to Commander: %j", (...args) => {
+    expect(shouldHandleBareRoot(cliArgs(...args))).toBe(false);
+  });
+
+  it.each([
     { args: ["--", "config", "get", "gateway.mode"] },
     { args: ["--profile", "work", "--", "config", "get", "gateway.mode"] },
     { args: ["--", "--help"] },

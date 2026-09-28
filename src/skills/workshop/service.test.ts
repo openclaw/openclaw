@@ -32,10 +32,10 @@ import {
 } from "./service.js";
 import { createSkillProposalRollback } from "./service.test-support.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+import * as storeClient from "./store-client.js";
 import { writeSkillProposalRollback } from "./store-rollback.js";
 import {
   hashSkillProposalContent,
-  readSkillProposalManifest,
   readSkillProposalRollback,
   resolveSkillProposalTarget,
 } from "./store.js";
@@ -821,7 +821,7 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async () => {
+  it("rejects and quarantines proposals without touching active skills or rereading their history", async () => {
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -857,10 +857,26 @@ describe("skill workshop proposals", () => {
       proposalId: applied.record.id,
     });
 
-    const manifest = await readSkillProposalManifest(
-      { env: testEnv, config: workshopConfig, agentId: "main" },
-      { agentId: "main" },
-    );
+    const operations = vi.spyOn(storeClient, "executeSkillWorkshopOperation");
+    let manifest: Awaited<ReturnType<typeof listSkillProposals>>;
+    try {
+      manifest = await listSkillProposals({ env: testEnv });
+      const batches = await Promise.all(
+        operations.mock.calls.flatMap(([type], index) =>
+          type === "workshop.proposals.list" ? [operations.mock.results[index]?.value] : [],
+        ),
+      );
+      expect(batches.length).toBeGreaterThan(0);
+      const materialized = batches.reduce<number>((count, batch) => {
+        if (!Array.isArray(batch)) {
+          throw new Error("Expected stored proposal rows from the real worker");
+        }
+        return count + batch.length;
+      }, 0);
+      expect(materialized).toBeLessThanOrEqual(3);
+    } finally {
+      operations.mockRestore();
+    }
     expect(
       manifest.proposals
         .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))

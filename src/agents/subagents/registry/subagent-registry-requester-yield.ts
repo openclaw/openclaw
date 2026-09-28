@@ -1,9 +1,7 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
-import { promoteFollowupYield } from "../../../tasks/task-followup-completion.js";
-import { captureTaskProgressContinuationForRequesterTurn } from "../../../tasks/task-progress-requester.js";
-import { scheduleYieldedSubagentRunProgress } from "../../../tasks/task-registry-progress.js";
 /** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
   captureRequesterCronAuthority,
   promoteRequesterCronAuthority,
@@ -12,6 +10,7 @@ import { promoteRequesterFinalAttachment } from "../requester-final-attachment.j
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   recordLatestSubagentRun,
@@ -39,7 +38,7 @@ export type UnsettledRequesterChild = {
  * Lists this requester session's announcing children whose completion has not
  * reached the requester yet, regardless of which requester turn spawned them.
  * Children still bound to `excludeRequesterTurnRunId` belong to that turn's own
- * claim and are omitted.
+ * claim and are omitted, as is the settle-wake cohort already reaching that turn.
  */
 export function listUnsettledRequesterChildrenInRuns(params: {
   requesterSessionKey: string;
@@ -70,7 +69,15 @@ export function listUnsettledRequesterChildrenInRuns(params: {
     if (
       entry.collect === true ||
       entry.expectsCompletionMessage !== true ||
-      (excludedTurnRunId !== undefined && entry.requesterTurnRunId === excludedTurnRunId) ||
+      (excludedTurnRunId !== undefined &&
+        (entry.requesterTurnRunId === excludedTurnRunId ||
+          isRequesterSettleWakeForRun({
+            entry,
+            runId: excludedTurnRunId,
+            requesterSessionKey,
+            requesterAgentId: params.requesterAgentId,
+            runsById: params.runs,
+          }))) ||
       entry.killIntent ||
       entry.killReconciliation ||
       entry.suppressCompletionDelivery === true
@@ -257,14 +264,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   if (params.requesterYielded && !requesterAlreadyDeliveredFinal) {
     rearmGeneration =
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
-    const progressOperationId = (
-      params.progressPresentation ??
-      captureTaskProgressContinuationForRequesterTurn({
-        requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        requesterTurnRunId,
-      })
-    )?.operationId;
+    const progressOperationId = params.progressPresentation?.operationId;
     for (const entry of entries) {
       const existing = entry.requesterSettleWake;
       const completionEnded = typeof entry.execution.endedAt === "number";
@@ -364,11 +364,6 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       batchRunIds,
       rearmGeneration,
     });
-  }
-  if (rearmGeneration !== undefined) {
-    for (const entry of entries) {
-      scheduleYieldedSubagentRunProgress(entry);
-    }
   }
   for (const entry of entries) {
     if (

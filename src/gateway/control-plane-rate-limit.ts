@@ -1,7 +1,7 @@
 // Control-plane rate limiting bounds write-side RPC attempts per device/IP and
 // caps bucket growth against unique-key memory pressure.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 export const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 30;
@@ -20,11 +20,11 @@ const controlPlaneBuckets = new Map<string, Bucket>();
 
 /** Builds a stable throttle key while avoiding shared fallback buckets for anonymous clients. */
 function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
-  const deviceId = normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device");
-  const clientIp = normalizeControlPlaneIdentityPart(client?.clientIp, "unknown-ip");
+  const deviceId = normalizeOptionalString(client?.connect?.device?.id) ?? "unknown-device";
+  const clientIp = normalizeOptionalString(client?.clientIp) ?? "unknown-ip";
   if (deviceId === "unknown-device" && clientIp === "unknown-ip") {
     // Last-resort fallback: avoid cross-client contention when upstream identity is missing.
-    const connId = normalizeControlPlaneIdentityPart(client?.connId, "");
+    const connId = normalizeOptionalString(client?.connId);
     if (connId) {
       return `${deviceId}|${clientIp}|conn=${connId}`;
     }

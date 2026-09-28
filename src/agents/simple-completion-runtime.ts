@@ -1,9 +1,4 @@
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
-/**
- * Simple completion runtime preparation.
- *
- * Resolves agent model selection, auth, runtime policy, and missing-auth errors before simple completions run.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
@@ -541,15 +536,8 @@ type AcquiredSimpleCompletionModelForAgent =
 export async function acquireSimpleCompletionModelForAgent(
   params: PrepareSimpleCompletionModelForAgentParams,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
-  const selectionParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    modelRef: params.modelRef,
-    useUtilityModel: params.useUtilityModel,
-  };
   return await acquireSimpleCompletionModelWithSelection(params, (manifestPlugins) =>
-    resolveSimpleCompletionSelectionRequest({ ...selectionParams, manifestPlugins }),
+    resolveSimpleCompletionSelectionRequest({ ...params, manifestPlugins }),
   );
 }
 
@@ -636,21 +624,12 @@ export async function acquireSimpleCompletionModelWithSelection(
     (context) =>
       prepareSimpleCompletionModelCore(
         {
-          cfg: params.cfg,
-          agentId: params.agentId,
+          ...params,
           provider: selection.provider,
           modelId: selection.modelId,
           modelIdSource: "selected",
           agentDir: selection.agentDir,
           profileId: selection.profileId,
-          preferredProfile: params.preferredProfile,
-          allowMissingApiKeyModes: params.allowMissingApiKeyModes,
-          ...(params.allowBundledStaticCatalogFallback !== undefined
-            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-            : {}),
-          skipAgentDiscovery: params.skipAgentDiscovery,
-          bindAuthOwner: params.bindAuthOwner,
-          signal: params.signal,
         },
         context,
       ),

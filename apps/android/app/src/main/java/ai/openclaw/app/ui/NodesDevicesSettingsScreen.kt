@@ -13,9 +13,9 @@ import ai.openclaw.app.canApproveGatewayDevicePairing
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
-import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
@@ -23,15 +23,12 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,8 +68,11 @@ internal fun NodesDevicesSettingsScreen(
 
   SettingsDetailFrame(
     title = nativeString("Nodes & Devices"),
-    subtitle = nativeString("Live nodes, paired phones, and pending device requests."),
-    icon = Icons.Default.Cloud,
+    subtitle =
+      nativeString(
+        "Nodes are devices such as phones (including iPhone and Android), watches, and computers that offer capabilities, not agents or chat contacts. Known nodes stay listed when offline. Paired devices show Gateway access; the same device can appear in both groups. Notifications and push output are not agent conversations.",
+      ),
+    icon = SettingsRoute.NodesDevices.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -388,9 +388,7 @@ private fun <T> NodesSection(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      ClawSeparatedColumn(items = items, dividerColor = ClawTheme.colors.border, row = row)
-    }
+    ClawListPanel(items = items, row = row)
   }
 }
 

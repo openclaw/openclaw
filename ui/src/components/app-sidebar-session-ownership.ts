@@ -105,16 +105,6 @@ export function applySidebarSessionOwnerFilter(input: {
     (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
       ? selectedOwnerId
       : null;
-  if (!activeOwnerId) {
-    // Involving-me is evaluated by the Gateway against the complete participant table.
-    // The bounded display projection cannot safely repeat that predicate client-side.
-    return {
-      rows: input.projected,
-      ownerOptions,
-      ownershipVisibility,
-      activeOwnerId,
-    };
-  }
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
@@ -131,7 +121,8 @@ export function applySidebarSessionOwnerFilter(input: {
     return filtered;
   };
   return {
-    rows: filterTree(input.projected),
+    // Involving-me membership is Gateway-owned; only an explicit owner filters this tree.
+    rows: activeOwnerId ? filterTree(input.projected) : input.projected,
     ownerOptions,
     ownershipVisibility,
     activeOwnerId,

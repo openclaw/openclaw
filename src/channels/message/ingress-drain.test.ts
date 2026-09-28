@@ -1,6 +1,6 @@
-// Durable ingress drain contract tests for lifecycle reliability invariants.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -422,10 +422,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-await-abandon", { text: "x" }, { laneKey: "l1" });
 
-      let finishRelease!: () => void;
-      const releaseGate = new Promise<void>((resolve) => {
-        finishRelease = resolve;
-      });
+      const { promise: releaseGate, resolve: finishRelease } = createDeferred();
       const release = vi.fn(async (...args: Parameters<typeof queue.release>) => {
         await releaseGate;
         return await queue.release(...args);
@@ -530,10 +527,7 @@ describe("channel ingress drain", () => {
       const firstLifecycles: ChannelIngressDispatchLifecycle[] = [];
       let firstAdopted = false;
       const dispatches: string[] = [];
-      let releaseFirst!: () => void;
-      const firstHold = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstHold, resolve: releaseFirst } = createDeferred();
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -588,10 +582,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("a1", { text: "a" }, { laneKey: "lane" });
 
-      let hold!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        hold = resolve;
-      });
+      const { promise: gate, resolve: hold } = createDeferred();
       let aborted = false;
 
       const drain = createChannelIngressDrain<Payload>({
@@ -767,10 +758,7 @@ describe("channel ingress drain", () => {
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
       const lifecycles: ChannelIngressDispatchLifecycle[] = [];
-      let releaseOld!: () => void;
-      const oldHold = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
+      const { promise: oldHold, resolve: releaseOld } = createDeferred();
       let lateAdoptError: unknown;
 
       const drain = createChannelIngressDrain<Payload>({
@@ -882,10 +870,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-peer", { text: "x" }, { laneKey: "l1" });
 
-      let releaseFirst!: () => void;
-      const firstHold = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstHold, resolve: releaseFirst } = createDeferred();
       const firstDispatches: string[] = [];
       const secondDispatches: string[] = [];
       const firstAbort = new AbortController();
@@ -992,10 +977,7 @@ describe("channel ingress drain", () => {
 
       let sawAbort = false;
       let lateAdoptError: unknown;
-      let releaseDispatch!: () => void;
-      const holdDispatch = new Promise<void>((resolve) => {
-        releaseDispatch = resolve;
-      });
+      const { promise: holdDispatch, resolve: releaseDispatch } = createDeferred();
 
       const claimLeaseMs = 3_000;
       const drain = createChannelIngressDrain<Payload>({
@@ -1041,14 +1023,8 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
-      let releaseOld!: () => void;
-      const oldHold = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
-      let releasePredicate!: (value: boolean) => void;
-      const predicateHold = new Promise<boolean>((resolve) => {
-        releasePredicate = resolve;
-      });
+      const { promise: oldHold, resolve: releaseOld } = createDeferred();
+      const { promise: predicateHold, resolve: releasePredicate } = createDeferred<boolean>();
       let predicateStarted = false;
       let oldAdopted = false;
       let oldAborted = false;

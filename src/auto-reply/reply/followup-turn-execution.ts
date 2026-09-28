@@ -16,9 +16,10 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -408,6 +409,16 @@ export async function executeFollowupTurn(params: {
       // custody after lazy collection binds it, so runtime appends consume all sources.
       await recorder?.resolveMessage();
       turn.operation.abortSignal.throwIfAborted();
+      const sourceTurnId = resolveReplySourceTurnId({
+        sourceTurnId: turn.queued.sourceTurnId,
+        admissionRunId: turn.queued.messageId,
+        ingressProvider: turn.queued.run.messageProvider,
+        entry: turn.session.current(),
+      });
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
+        setChannelSourceTurnId(sessionCtx, sourceTurnId);
+      }
       execution = await (recorder?.withPendingInput
         ? recorder.withPendingInput(execute)
         : execute());

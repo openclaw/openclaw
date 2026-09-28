@@ -3,11 +3,11 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type {
   FollowupReply,
   FollowupCompletionOwner,
-} from "../../tasks/task-followup-completion.types.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
+} from "../subagents/completion/session-followup-completion.types.js";
 import {
   runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
@@ -15,7 +15,7 @@ import {
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 const log = createSubsystemLogger("agents/sessions-send");
 
-/** Legacy peers observe a run; native child followups consume their existing task result. */
+/** Legacy peers observe a run; native child followups consume their retained result. */
 export function startSessionsSendReplyFlow(
   params: Parameters<typeof runSessionsSendA2AFlow>[0] & {
     runId: string;

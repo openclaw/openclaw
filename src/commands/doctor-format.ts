@@ -5,7 +5,6 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
-import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildGatewayRuntimeRecoveryHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
@@ -25,13 +24,6 @@ type RuntimeHintOptions = {
   platform?: NodeJS.Platform;
   env?: Record<string, string | undefined>;
 };
-
-/** Formats the platform-specific gateway service runtime into a compact status line. */
-export function formatGatewayRuntimeSummary(
-  runtime: GatewayServiceRuntime | undefined,
-): string | null {
-  return formatRuntimeStatus(runtime);
-}
 
 /** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(

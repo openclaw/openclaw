@@ -583,7 +583,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toThrow("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS accepts at most one scenario id; got 2");
   });
 
-  it("builds a generic suite probe for the Telegram RTT lane", () => {
+  it("continues the selected scenario with the leased primary participant", () => {
     const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
 
     expect(probe).toMatchObject({
@@ -594,7 +594,8 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
       textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
       chainReplies: true,
       input: {
-        conversation: { id: "telegram-rtt-room", kind: "group" },
+        fromScenario: true,
+        senderId: "primary",
       },
     });
   });

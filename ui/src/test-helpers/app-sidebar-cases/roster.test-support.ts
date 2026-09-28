@@ -1,6 +1,7 @@
 import { expect, vi } from "vitest";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -168,12 +169,5 @@ export async function toggleRoster(sidebar: HTMLElement) {
 }
 
 export async function selectFilter(sidebar: SidebarLifecycleState, value: string) {
-  sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
-  await vi.waitFor(() => {
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
-  });
-  sidebar
-    .querySelector(".sidebar-session-sort-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } }, bubbles: true }));
-  await sidebar.updateComplete;
+  await activateSessionMenuValue(sidebar, value);
 }

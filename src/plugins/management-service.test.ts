@@ -1,8 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginsReloadParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
+import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -43,6 +49,17 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
+
+vi.mock("../config/io.factory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.factory.js")>();
+  return {
+    ...actual,
+    createConfigIO: (options: Parameters<typeof actual.createConfigIO>[0]) => ({
+      ...actual.createConfigIO(options),
+      readConfigFileSnapshotForWrite: () => mocks.readConfig(),
+    }),
+  };
+});
 
 vi.mock("./install-config-mutation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
@@ -102,6 +119,7 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { listManagedPlugins } = await import("./management-service.js");
 const { setManagedPluginEnabled, reloadManagedPlugin } = await import("./management-mutations.js");
 const { uninstallManagedPlugin } = await import("./management-uninstall.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({
@@ -558,17 +576,40 @@ describe("plugin management service", () => {
   it.each(["complete", "drain rejects", "authority revoked"])(
     "keeps external plugin files and tracking until owned drain completes: %s",
     async (outcome) => {
-      const env = { HOME: "/tmp/openclaw-managed-uninstall-home" };
+      const root = tempDirs.make("openclaw-managed-uninstall-drain-");
+      const configPath = path.join(root, "openclaw.json");
+      const configFiles = createTestConfigFileStore();
+      const env = { HOME: "/tmp/openclaw-managed-uninstall-home", OPENCLAW_STATE_DIR: root };
       const installRecord = {
         source: "clawhub",
         spec: "clawhub:@openclaw/diffs",
         installPath: "/tmp/extensions/diffs",
       };
-      const prepared = configSnapshot({
+      let currentConfig: OpenClawConfig = {
         agents: { defaults: { workspace: "~/managed-uninstall-workspace" } },
         plugins: { entries: { diffs: { enabled: true } } },
-      });
-      mocks.readConfig.mockResolvedValue(prepared);
+      };
+      let currentHash = "base-hash";
+      const prepared = {
+        snapshot: { ...configSnapshot(currentConfig).snapshot, path: configPath },
+        writeOptions: { expectedConfigPath: configPath },
+      };
+      await fs.writeFile(configPath, JSON.stringify(currentConfig));
+      mocks.readConfig.mockImplementation(async () => ({
+        ...prepared,
+        snapshot: { ...prepared.snapshot, sourceConfig: currentConfig, hash: currentHash },
+      }));
+      mocks.replaceConfig.mockImplementation(
+        async ({ sourceConfig }: { sourceConfig: OpenClawConfig }) => {
+          currentConfig = sourceConfig;
+          currentHash = "disabled-hash";
+          await fs.writeFile(configPath, JSON.stringify(currentConfig));
+          return {
+            ...configFiles.write(currentConfig, configPath),
+            persistedHash: currentHash,
+          };
+        },
+      );
       mocks.installRecords.mockResolvedValue({ diffs: installRecord });
       mocks.metadata.mockReturnValue(
         metadataSnapshot({
@@ -596,9 +637,28 @@ describe("plugin management service", () => {
         },
         directoryRemoval: { target: "/tmp/extensions/diffs" },
       });
-      mocks.commitRecords.mockResolvedValue({
-        configWrite: { persistedHash: "final-hash", persistedSourceConfig: {} },
-      });
+      mocks.commitRecords.mockImplementation(
+        async ({
+          nextConfig,
+          writeOptions,
+        }: Parameters<
+          typeof import("./install-record-commit.js").commitPluginInstallRecordsWithConfig
+        >[0]) => {
+          currentConfig = nextConfig;
+          currentHash = "final-hash";
+          await fs.writeFile(configPath, JSON.stringify(currentConfig));
+          const afterWrite = writeOptions?.afterWrite ?? { mode: "auto" as const };
+          return {
+            configWrite: {
+              ...configFiles.write(nextConfig, configPath),
+              persistedHash: currentHash,
+              persistedSourceConfig: nextConfig,
+              afterWrite,
+              followUp: resolveConfigWriteFollowUp(afterWrite),
+            },
+          };
+        },
+      );
       mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
       mocks.clawReferenceWarnings.mockReturnValue([
         'Warning: plugin "diffs" is referenced by Claw: @acme/review.',
@@ -683,13 +743,13 @@ describe("plugin management service", () => {
         expect.objectContaining({
           previousInstallRecords: { diffs: installRecord },
           nextInstallRecords: {},
-          baseHash: "base-hash",
-          writeOptions: {
+          baseHash: "disabled-hash",
+          writeOptions: expect.objectContaining({
             ...prepared.writeOptions,
             assertConfigPathForWrite: expect.any(Function),
             allowConfigSizeDrop: true,
             afterWrite: { mode: "none", reason: "plugin lifecycle applies runtime" },
-          },
+          }),
         }),
       );
       expect(

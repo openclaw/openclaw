@@ -55,7 +55,6 @@ export type GatewayServerMutableState = {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  taskUnsub: (() => void) | null;
 };
 
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
@@ -67,25 +66,24 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     heartbeatRunner: createNoopHeartbeatRunner(),
     stopDeliveryRecovery: async () => {},
     stopGatewayUpdateCheck: async () => {},
-    tailscaleCleanup: null as (() => Promise<void>) | null,
+    tailscaleCleanup: null,
     postReadySidecars: createGatewaySidecarStopOwner(),
     gatewayLifetimeSidecars: createGatewaySidecarStopOwner(),
-    skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
+    skillsRefreshTimer: null,
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: async () => {},
-    channelHealthMonitor: null as ChannelHealthMonitor | null,
+    channelHealthMonitor: null,
     configReloader: {
       stop: async () => {},
       applyPluginLifecycleChange: async () => {
         throw new Error("Plugin lifecycle is unavailable before Gateway startup completes.");
       },
       isConfigReloadSettled: () => false,
-    } satisfies GatewayConfigReloaderHandle,
+    },
     reconcileAuditPolicy: null,
-    agentUnsub: null as (() => Promise<void> | void) | null,
-    heartbeatUnsub: null as (() => void) | null,
-    transcriptUnsub: null as (() => void) | null,
-    lifecycleUnsub: null as (() => void) | null,
-    taskUnsub: null as (() => void) | null,
+    agentUnsub: null,
+    heartbeatUnsub: null,
+    transcriptUnsub: null,
+    lifecycleUnsub: null,
   };
 }

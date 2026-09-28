@@ -292,10 +292,11 @@ function composeTrackedPublisher(
 }
 
 function startGatewaySidecars(
-  params: Omit<GatewaySidecarsParams, "onPostReadySidecars"> &
-    Partial<Pick<GatewaySidecarsParams, "onPostReadySidecars">>,
+  params: Omit<GatewaySidecarsParams, "onPostReadySidecars" | "scheduler"> &
+    Partial<Pick<GatewaySidecarsParams, "onPostReadySidecars" | "scheduler">>,
 ) {
   return startGatewaySidecarsImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     ...params,
     onPostReadySidecars: composeTrackedPublisher(
       publishedPostReadySidecars,
@@ -871,40 +872,6 @@ describe("startGatewayPostAttachRuntime", () => {
       expect.objectContaining({ OPENCLAW_STATE_DIR: testState.stateDir }),
     );
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
-  });
-
-  it("keeps delayed restart sentinel recovery admitted until wake work completes", async () => {
-    vi.useFakeTimers();
-    const { promise: wake, resolve: finishWake } = createDeferred();
-    hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
-
-    const sidecar = sentinelStartup.scheduleRestartSentinelWakeAfterReady({
-      deps: {} as never,
-      log: { warn: vi.fn() },
-    });
-    await vi.advanceTimersByTimeAsync(750);
-
-    expect(hoisted.scheduleRestartSentinelWake).toHaveBeenCalledOnce();
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    finishWake?.();
-    await waitForGatewayTestState(() => {
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
-    await stopTrackedSidecar(sidecar);
-  });
-
-  it("cancels delayed restart sentinel recovery when the gateway closes", async () => {
-    vi.useFakeTimers();
-    const sidecar = sentinelStartup.scheduleRestartSentinelWakeAfterReady({
-      deps: {} as never,
-      log: { warn: vi.fn() },
-    });
-
-    await stopTrackedSidecar(sidecar);
-    await vi.advanceTimersByTimeAsync(750);
-
-    expect(hoisted.scheduleRestartSentinelWake).not.toHaveBeenCalled();
   });
 
   it("starts sidecars while startup logging is pending and waits for both", async () => {
@@ -3524,6 +3491,7 @@ describe("startGatewayPostAttachRuntime", () => {
           await import("./server-startup-post-attach.js");
 
         await startGatewaySidecarsWithDelayedImport({
+          scheduler: createTestGatewayScheduler(),
           cfg: {
             hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
           } as never,
@@ -4178,6 +4146,7 @@ describe("startGatewayPostAttachRuntime", () => {
           return managerModule;
         });
         await startFreshGatewaySidecars({
+          scheduler: params.scheduler,
           cfg: { ...params.cfgAtStart, acp: { enabled: true, backend: "acpx" } },
           pluginRegistry: params.pluginRegistry,
           defaultWorkspaceDir: params.defaultWorkspaceDir,

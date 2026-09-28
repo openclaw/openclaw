@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as secretRefReadOnly from "openclaw/plugin-sdk/secret-ref-readonly";
 import {
   listSessionEntries,
   normalizeSessionDeliveryState,
@@ -13,7 +14,7 @@ import {
   readSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuDoctor } from "./doctor.js";
 
@@ -221,7 +222,7 @@ describe("Feishu doctor state repair", () => {
   it.each(healthyStateCases)("$name", async ({ arrange }) => {
     const result = await runDoctor(false, await arrange());
 
-    expect(result).toEqual({ changeNotes: [], warningNotes: [] });
+    expect(result).toEqual({ changeNotes: [], infoNotes: [], warningNotes: [] });
   });
 
   it("repairs SQLite-backed Feishu sessions with corrupt transcript rows", async () => {
@@ -246,7 +247,7 @@ describe("Feishu doctor state repair", () => {
 
     const result = await runDoctor(false);
 
-    expect(result).toEqual({ changeNotes: [], warningNotes: [] });
+    expect(result).toEqual({ changeNotes: [], infoNotes: [], warningNotes: [] });
   });
 
   it("warns before repair when Feishu local state is corrupt", async () => {
@@ -484,5 +485,138 @@ describe("Feishu doctor state repair", () => {
     expect(store[session.sessionKey]).toBeUndefined();
     expect(store["agent:main:main-non-feishu"]).toBeDefined();
     await expect(readSessionTranscriptEvents(session)).resolves.toEqual([]);
+  });
+});
+
+describe("Feishu webhook Doctor notes", () => {
+  let testState: OpenClawTestState;
+  beforeAll(async () => {
+    testState = await createOpenClawTestState({
+      prefix: "openclaw-feishu-doctor-notes-",
+      layout: "home",
+    });
+  });
+  afterAll(async () => {
+    await testState.cleanup();
+  });
+  it.each(
+    [
+      { path: "/readyz?tenant=test", reason: "is reserved for Gateway probes" },
+      { path: "/%61pi/channels/feishu", reason: "requires Gateway authentication" },
+    ].flatMap((route) =>
+      [false, true].map((legacy) => ({ path: route.path, reason: route.reason, legacy })),
+    ),
+  )(
+    "explains $path with legacy listener $legacy",
+    async ({ path: webhookPath, reason, legacy }) => {
+      const result = await runFeishuDoctorSequence({
+        cfg: {
+          channels: {
+            feishu: {
+              appId: "cli_test",
+              appSecret: "secret_test",
+              connectionMode: "webhook",
+              webhookPath,
+              legacyWebhook: legacy ? undefined : false,
+            },
+          },
+        },
+        shouldRepair: false,
+        env: process.env,
+      });
+      expect(result.infoNotes).toEqual([]);
+      expect(result.warningNotes).toEqual([
+        expect.stringContaining(`webhookPath ${JSON.stringify(webhookPath)} ${reason}`),
+      ]);
+      expect(result.warningNotes[0]).toContain("/feishu/events");
+      expect(result.warningNotes[0]).toContain("callback");
+      expect(result.warningNotes[0]).toContain(
+        legacy ? "before setting legacyWebhook:false" : "startup is blocked",
+      );
+    },
+  );
+
+  it("reports healthy webhook guidance as information and filters inactive transports", async () => {
+    const result = await runFeishuDoctorSequence({
+      cfg: {
+        channels: {
+          feishu: {
+            connectionMode: "webhook",
+            accounts: {
+              active: { appId: "cli_active", appSecret: "secret_active" },
+              disabled: { appId: "cli_disabled", appSecret: "secret_disabled", enabled: false },
+              websocket: {
+                appId: "cli_websocket",
+                appSecret: "secret_websocket",
+                connectionMode: "websocket",
+              },
+            },
+          },
+        },
+      },
+      env: process.env,
+      shouldRepair: false,
+    });
+    expect(result.warningNotes).toEqual([]);
+    expect(result.infoNotes).toEqual([expect.stringContaining('Feishu account "active"')]);
+    expect(result.infoNotes?.[0]).toContain("127.0.0.1:3000");
+    expect(result.infoNotes?.[0]).toContain("legacyWebhook:false");
+  });
+
+  it("describes raw SecretRef webhook config without inspecting credentials", async () => {
+    const inspectSecret = vi
+      .spyOn(secretRefReadOnly, "canResolveEnvSecretRefInReadOnlyPath")
+      .mockImplementation(() => {
+        throw new Error("Doctor webhook guidance must not inspect secrets");
+      });
+    try {
+      const result = await runFeishuDoctorSequence({
+        cfg: {
+          channels: {
+            feishu: {
+              appId: "cli_test",
+              appSecret: { source: "file", provider: "fixture-file", id: "/app-secret" },
+              encryptKey: {
+                source: "env",
+                provider: "fixture-env",
+                id: "FEISHU_DOCTOR_UNUSED_KEY",
+              },
+              verificationToken: {
+                source: "exec",
+                provider: "fixture-exec",
+                id: "verification-token",
+              },
+              connectionMode: "webhook",
+            },
+          },
+        },
+        env: process.env,
+        shouldRepair: false,
+      });
+      expect(result.warningNotes).toEqual([]);
+      expect(result.infoNotes).toEqual([expect.stringContaining("127.0.0.1:3000")]);
+      expect(inspectSecret).not.toHaveBeenCalled();
+    } finally {
+      inspectSecret.mockRestore();
+    }
+  });
+
+  it("omits webhook notes when the channel is disabled", async () => {
+    const result = await runFeishuDoctorSequence({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_test",
+            appSecret: "secret_test",
+            connectionMode: "webhook",
+            enabled: false,
+          },
+        },
+      },
+      env: process.env,
+      shouldRepair: false,
+    });
+    expect(result.infoNotes).toEqual([]);
+    expect(result.warningNotes).toEqual([]);
   });
 });

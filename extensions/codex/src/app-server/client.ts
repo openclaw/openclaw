@@ -73,6 +73,13 @@ type RequestOptions = {
   attemptWaiterFinished?: CodexRequestWaiterFinished;
 };
 
+type ThreadSessionRequestGuard = (options: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  timeoutMessage: string;
+  abortMessage: string;
+}) => Promise<() => void>;
+
 /** Process-local generation fence for bindings tied to one app-server client instance. */
 export function getCodexAppServerClientInstanceId(client: object): string {
   const current = CODEX_APP_SERVER_CLIENT_INSTANCE_IDS.get(client);
@@ -239,16 +246,8 @@ export class CodexAppServerClient {
   private transportExited = false;
   private nativeExecutionObserved = false;
   private closeError: Error | undefined;
-  private serverVersion: string | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
-  private threadSessionRequestGuard:
-    | ((options: {
-        signal?: AbortSignal;
-        timeoutMs?: number;
-        timeoutMessage: string;
-        abortMessage: string;
-      }) => Promise<() => void>)
-    | undefined;
+  private threadSessionRequestGuard: ThreadSessionRequestGuard | undefined;
   private retireAfterIndeterminateThreadRequest: (() => boolean) | undefined;
   private stderrTail = "";
   private readonly privateTransportSecrets = new Set<string>();
@@ -348,14 +347,14 @@ export class CodexAppServerClient {
     // which matters when callers override the binary or app-server args.
     const response = await this.request("initialize", buildCodexAppServerInitializeParams());
     this.child.startupFailure?.complete();
-    this.serverVersion = assertSupportedCodexAppServerVersion(response);
-    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
+    const serverVersion = assertSupportedCodexAppServerVersion(response);
+    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, serverVersion);
     this.notify("initialized");
     this.initialized = true;
   }
 
   getServerVersion(): string | undefined {
-    return this.serverVersion;
+    return this.runtimeIdentity?.serverVersion;
   }
 
   getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
@@ -384,14 +383,7 @@ export class CodexAppServerClient {
 
   /** Installs the spawn-owner guard and retirement for config-loading thread requests. */
   setThreadSessionRequestGuard(
-    guard:
-      | ((options: {
-          signal?: AbortSignal;
-          timeoutMs?: number;
-          timeoutMessage: string;
-          abortMessage: string;
-        }) => Promise<() => void>)
-      | undefined,
+    guard: ThreadSessionRequestGuard | undefined,
     retireAfterIndeterminateRequest?: () => boolean,
   ): void {
     this.threadSessionRequestGuard = guard;
@@ -711,8 +703,6 @@ export class CodexAppServerClient {
     const result = attempt.wait<T>(
       {
         ...options,
-        assertCurrent: undefined,
-        disposition: "new",
         overloadAttemptOrdinal,
       },
       deadline,
@@ -774,10 +764,7 @@ export class CodexAppServerClient {
   }
 
   close(): void {
-    if (!this.markClosed(new Error("codex app-server client is closed"))) {
-      return;
-    }
-    closeCodexAppServerTransport(this.child);
+    this.closeWithError(new Error("codex app-server client is closed"));
   }
 
   async closeAndWait(options?: {
@@ -803,19 +790,10 @@ export class CodexAppServerClient {
 
   /** Closes this transport and runs cleanup only after physical process exit. */
   async closeAndRunAfterExit(onExit: () => void, operation: string): Promise<void> {
-    let settled = false;
-    const runOnExit = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      onExit();
-    };
+    this.addTransportExitHandler(onExit);
     if (this.transportExited) {
-      runOnExit();
       return;
     }
-    this.child.once("exit", runOnExit);
     try {
       await this.closeAndWait();
     } catch (closeError) {
@@ -1011,7 +989,6 @@ export class CodexAppServerClient {
 
   private rejectPendingRequests(error: Error): void {
     for (const pending of this.pending.values()) {
-      pending.cleanup();
       pending.close(error);
     }
     this.pending.clear();

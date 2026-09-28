@@ -37,7 +37,11 @@ export interface PublicationSourceFact extends PublicationSourceRequest {
   contract: "1";
   status: "source-admitted" | "not-applicable";
   inventoryDigest: string | null;
-  projection: { version: string; packages: unknown[]; platforms: unknown[] } | null;
+  projection: {
+    version: string;
+    packages: Array<{ name: string; version: string; targets: string[] }>;
+    platforms: unknown[];
+  } | null;
   digest: string;
 }
 export function publicationSourceContract(source: string): "1" | undefined;
@@ -65,7 +69,7 @@ export function publicationSourceRequest(
 export function createPublicationSourceFact(
   request: PublicationSourceRequest,
   inventory: unknown,
-  projection: PublicationSourceFact["projection"],
+  projection: { version: string; packages: unknown[]; platforms: unknown[] } | null,
 ): PublicationSourceFact;
 export function validatePublicationSourceBinding(
   record: Record<string, unknown>,

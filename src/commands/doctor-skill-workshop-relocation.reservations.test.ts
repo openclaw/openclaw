@@ -105,7 +105,7 @@ async function seedSources(sources: readonly LegacySource[]): Promise<void> {
     await fs.mkdir(record.target.skillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, content, "utf8");
   }
-  seedLegacyV15ProposalRows(
+  await seedLegacyV15ProposalRows(
     testState.env,
     sources.map(({ record, workspaceDir, ownerAgentId }) => ({
       record,

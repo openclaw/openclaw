@@ -47,6 +47,20 @@ function buildMatrixQaAttachmentDetailLines(params: {
   ];
 }
 
+function describeRecentRoomEvents(context: MatrixQaScenarioContext, roomId: string) {
+  return context.observedEvents
+    .filter((event) => event.roomId === roomId)
+    .slice(-8)
+    .map((event) => ({
+      body: truncateMatrixQaPreview(event.body),
+      eventId: event.eventId,
+      kind: event.kind,
+      msgtype: event.msgtype,
+      sender: event.sender,
+      type: event.type,
+    }));
+}
+
 function buildMatrixQaMediaTypeCoveragePrompt(params: {
   label: string;
   sutUserId: string;
@@ -272,19 +286,8 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
     timeoutMs: context.timeoutMs,
   });
   if (!matched.matched) {
-    const recentRoomEvents = context.observedEvents
-      .filter((event) => event.roomId === roomId)
-      .slice(-8)
-      .map((event) => ({
-        body: truncateMatrixQaPreview(event.body),
-        eventId: event.eventId,
-        kind: event.kind,
-        msgtype: event.msgtype,
-        sender: event.sender,
-        type: event.type,
-      }));
     throw new Error(
-      `Matrix voice-preflight scenario failed while waiting for the transcript echo; recent room events: ${JSON.stringify(recentRoomEvents)}`,
+      `Matrix voice-preflight scenario failed while waiting for the transcript echo; recent room events: ${JSON.stringify(describeRecentRoomEvents(context, roomId))}`,
     );
   }
   advanceMatrixQaActorCursor({
@@ -437,19 +440,8 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
     timeoutMs: context.timeoutMs,
   });
   if (!matched.matched) {
-    const recentRoomEvents = context.observedEvents
-      .filter((event) => event.roomId === roomId)
-      .slice(-8)
-      .map((event) => ({
-        body: truncateMatrixQaPreview(event.body),
-        eventId: event.eventId,
-        kind: event.kind,
-        msgtype: event.msgtype,
-        sender: event.sender,
-        type: event.type,
-      }));
     throw new Error(
-      `timed out after ${context.timeoutMs}ms waiting for Matrix generated image; recent room events: ${JSON.stringify(recentRoomEvents)}`,
+      `timed out after ${context.timeoutMs}ms waiting for Matrix generated image; recent room events: ${JSON.stringify(describeRecentRoomEvents(context, roomId))}`,
     );
   }
   const matchedEvent = matched.event;

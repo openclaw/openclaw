@@ -29,13 +29,6 @@ type RowUpdate = Updateable<WorkerEnvironments>;
 type SshFallbackPortInsert = Insertable<WorkerEnvironmentSshFallbackPorts>;
 type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
 
-function nextOwnerEpoch(ownerEpoch: number): number {
-  const next = ownerEpoch + 1;
-  if (!Number.isSafeInteger(next)) {
-    throw new Error("Worker environment owner epoch is exhausted");
-  }
-  return next;
-}
 export function nextGlobalOwnerEpoch(db: DatabaseSync): number {
   // Transcript commit identity is (session, epoch, seq), so an ownership
   // generation may never be reused when a session moves between environments.
@@ -51,9 +44,12 @@ export function nextGlobalOwnerEpoch(db: DatabaseSync): number {
       .selectFrom("worker_transcript_commit_heads")
       .select(({ fn }) => fn.max<number>("run_epoch").as("run_epoch")),
   );
-  return nextOwnerEpoch(
-    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
-  );
+  const next =
+    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0) + 1;
+  if (!Number.isSafeInteger(next)) {
+    throw new Error("Worker environment owner epoch is exhausted");
+  }
+  return next;
 }
 export function updateRow(
   db: DatabaseSync,

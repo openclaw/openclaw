@@ -47,6 +47,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/lib/pnpm-lockfile-documents.mjs",
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
+    "/scripts/ci-static-step.sh",
     ...(linux
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
@@ -137,10 +138,41 @@ it.concurrent.each([
           path.join(root, "checkout.sh"),
           setupFailure ? "printf 'unexpected workflow invocation\\n' >&2\nexit 99\n" : accelerated,
         );
-        if (process.platform === "win32") {
+        if (process.platform === "win32" || scenario === "git-exit-124") {
           return censusPreload(
             root,
-            "",
+            scenario === "git-exit-124"
+              ? String.raw`
+if (process.argv[2] === "supervise") {
+  const launch = cp.spawn;
+  cp.spawn = (...args) => {
+    const child = launch(...args);
+    if (args[1]?.[1] === "sentinel") {
+      child.kill = () => true;
+      child.once("close", (code, signal) => {
+        fs.writeFileSync(path.join(root, "lease-actor-close.json"), JSON.stringify({ code, signal }));
+      });
+    }
+    return child;
+  };
+}
+if (process.argv[2] === "sentinel") {
+  const read = fs.readFileSync;
+  fs.readFileSync = (filename, ...args) => {
+    try {
+      return read(filename, ...args);
+    } catch (error) {
+      if (filename === path.join(root, "lease") && ["ENOENT", "EPERM"].includes(error.code)) {
+        fs.writeFileSync(path.join(root, "lease-read-denied.json"), JSON.stringify("EPERM"));
+        error.code = "EPERM";
+      }
+      throw error;
+    }
+  };
+}
+syncFixtureBuiltinExports();
+`
+              : "",
             ["timeouts-exhausted", "recovery", "early-leader-exit", "harness-timeout"].includes(
               scenario,
             ),
@@ -190,6 +222,15 @@ it.concurrent.each([
         }
         if (scenario === "git-exit-124") {
           expect(report.output).toBe("");
+          expect(JSON.parse(readFileSync(path.join(root, "lease-read-denied.json"), "utf8"))).toBe(
+            "EPERM",
+          );
+          expect(
+            JSON.parse(readFileSync(path.join(root, "lease-actor-close.json"), "utf8")),
+          ).toEqual({
+            code: 0,
+            signal: null,
+          });
         }
         const readyAttempts =
           scenario === "pre-existing-lock" ? [] : Array.from({ length: attempts }, (_, i) => i + 1);
@@ -351,6 +392,7 @@ it.concurrent.each([
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
+      "scripts/ci-static-step.sh": "workflow static-step script\n",
     };
     const nodeSetupScripts = {
       "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(

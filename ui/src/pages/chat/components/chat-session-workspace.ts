@@ -11,6 +11,7 @@ import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts"
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
@@ -200,6 +201,9 @@ function openFile(
   opts: { line?: number | null; requestPath?: string } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
+  const draftScope = state.sessionWorkspaceDraftScope;
+  const draftContext = state.sessionWorkspaceDraftContext;
+  const gatewayUrl = state.settings?.gatewayUrl ?? "";
   openWorkspaceItem(
     state,
     workspace,
@@ -326,12 +330,17 @@ function openFile(
         name,
         content: file.content,
         draftKey: [
-          state.settings?.gatewayUrl ?? "",
-          state.sessionWorkspaceDraftScope ?? "",
+          gatewayUrl,
+          draftScope ?? "",
           result.sessionKey,
           result.root ?? "",
           file.workspacePath || file.path || path,
         ].join("\u0000"),
+        draftContext: {
+          sessionKey: result.sessionKey,
+          sessionTitle: draftContext?.sessionTitle ?? resolveSessionDisplayName(result.sessionKey),
+          paneLabel: draftContext?.paneLabel,
+        },
         root: result.root ?? null,
         mimeType: file.mimeType,
         language: languageForFile(name),
@@ -467,11 +476,13 @@ export function createSessionWorkspaceProps(
   options?: {
     narrowLayout?: boolean;
     draftScope?: string;
+    draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
     presented?: boolean;
   },
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
+  state.sessionWorkspaceDraftContext = options?.draftContext;
   const workspace = getSessionWorkspace(state);
   if (
     (options?.expanded === false || options?.presented === false) &&

@@ -189,6 +189,7 @@ async function createAttempt() {
         assertCurrent,
         () => {},
         target,
+        () => ({}),
       ),
   };
 }

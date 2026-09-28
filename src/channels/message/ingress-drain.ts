@@ -39,7 +39,7 @@ import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueRecord,
-} from "./ingress-queue.js";
+} from "./ingress-queue.types.js";
 import {
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
@@ -199,11 +199,7 @@ export function createChannelIngressDrain<
     state.guillotined = true;
     clearStallTimer(state);
     clearClaimRefresh(state);
-    try {
-      state.abortController.abort(new Error("ingress claim lease reclaimed"));
-    } catch {
-      // AbortController.abort is not fallible in practice.
-    }
+    state.abortController.abort(new Error("ingress claim lease reclaimed"));
   };
 
   const armClaimRefresh = (state: ActiveHandlerState<TPayload, TMetadata>) => {
@@ -297,17 +293,11 @@ export function createChannelIngressDrain<
       state.guillotined = true;
       clearStallTimer(state);
       log(message);
-      try {
-        state.abortController.abort(timeoutError);
-      } catch {
-        // AbortController.abort is not fallible in practice.
-      }
+      state.abortController.abort(timeoutError);
       // Route the timeout through the canonical retry owner. A release/fail write
       // error must not falsely settle (would stop heartbeat and wedge recovery).
       void state
-        .settleOnce(async () => {
-          await applyFailureDisposition(state.claim, timeoutError);
-        })
+        .settleOnce(() => applyFailureDisposition(state.claim, timeoutError))
         .catch((err: unknown) => {
           log(
             `ingress drain: failed to settle stalled event ${displayId}; holding claim: ${formatError(err)}`,
@@ -355,9 +345,7 @@ export function createChannelIngressDrain<
         // Complete at adoption, not settle — frees the lane for later events.
         state.phase = "adopted";
         clearStallTimer(state);
-        await state.settleOnce(async () => {
-          await completeClaimWithRetry(state.claim);
-        });
+        await state.settleOnce(() => completeClaimWithRetry(state.claim));
       },
       onDeferred: () => {
         if (state.phase !== "dispatching") {
@@ -398,9 +386,7 @@ export function createChannelIngressDrain<
           return;
         }
         // Keep recovery armed until disposition commits; removeActive clears it after success.
-        await state.settleOnce(async () => {
-          await applyFailureDisposition(state.claim, error);
-        });
+        await state.settleOnce(() => applyFailureDisposition(state.claim, error));
       },
       onCancelled: async () => {
         // Cancellation means ownership ended before delivery, so preserve every
@@ -493,9 +479,7 @@ export function createChannelIngressDrain<
         }
         if (result?.kind === "failed-retryable") {
           clearStallTimer(state);
-          await state.settleOnce(async () => {
-            await applyFailureDisposition(claim, result.error);
-          });
+          await state.settleOnce(() => applyFailureDisposition(claim, result.error));
           return;
         }
         // Default: dispatch returned without deferral — complete when channel
@@ -503,11 +487,7 @@ export function createChannelIngressDrain<
         // Mark adopted BEFORE tombstone retries so a write failure cannot release
         // a claim whose dispatch side effects already ran (replay risk).
         if (state.phase === "dispatching") {
-          state.phase = "adopted";
-          clearStallTimer(state);
-          await state.settleOnce(async () => {
-            await completeClaimWithRetry(claim);
-          });
+          await lifecycle.onAdopted();
         }
       } catch (err) {
         if (isStopped() || state.phase === "settled") {
@@ -526,9 +506,7 @@ export function createChannelIngressDrain<
           return;
         }
         clearStallTimer(state);
-        await state.settleOnce(async () => {
-          await applyFailureDisposition(claim, err);
-        });
+        await state.settleOnce(() => applyFailureDisposition(claim, err));
       } finally {
         releaseRootWork?.();
       }
@@ -583,8 +561,13 @@ export function createChannelIngressDrain<
 
     await recoverStaleClaims();
 
-    const pending = await queue.listPending({ limit: "all", orderBy });
-    const claims = await queue.listClaims();
+    // A release between separate reads can hide a lane's head from both collections.
+    const { pending, claims } = queue.listUnsettled
+      ? await queue.listUnsettled({ orderBy })
+      : {
+          pending: await queue.listPending({ limit: "all", orderBy }),
+          claims: await queue.listClaims(),
+        };
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
       claims

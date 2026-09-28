@@ -190,7 +190,7 @@ openclaw gateway status --port 19001
   Password auth for the probe.
 </ParamField>
 <ParamField path="--timeout <ms>" type="number" default="10000">
-  Probe timeout.
+  Probe timeout. Without an explicit value, the RPC probe uses 10 seconds and Windows Task Scheduler state and registration probes allow 60 seconds for cold startup. The read-only registration query uses this allowance for both its total runtime and time without output. Explicit values also apply to native service probes. Each operation has its own budget; this is not an overall command deadline.
 </ParamField>
 <ParamField path="--no-probe" type="boolean">
   Skip the connectivity probe (service-only view).

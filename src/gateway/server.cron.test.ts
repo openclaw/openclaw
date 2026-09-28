@@ -11,6 +11,7 @@ import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -18,7 +19,10 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -201,6 +205,10 @@ async function createDirectCronState(params?: {
   ]);
   return {
     ...buildGatewayCronService({
+      scheduler: createTestGatewayScheduler({
+        ...createGatewaySchedulerClock().clock,
+        now: () => Date.now(),
+      }),
       cfg: getRuntimeConfig(),
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),
@@ -1651,12 +1659,9 @@ describe("gateway server cron", () => {
 
       const removeWriter = await directCronReq(cronState, "cron.remove", { id: writerJobId });
       expect(removeWriter.ok).toBe(true);
-      expect(
-        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-          runtime: "cron",
-          sourceId: writerJobId,
-        }),
-      ).toEqual([expect.objectContaining({ agentId: "writer" })]);
+      expect(readCronRunRecordsForTests(writerJobId)).toEqual([
+        expect.objectContaining({ jobId: writerJobId, agentId: "writer" }),
+      ]);
       const retainedWriterRuns = await directCronReq(cronState, "cron.runs", {
         scope: "all",
         agentId: "writer",
@@ -1844,9 +1849,9 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("reports skipped isolated cron runs as failed tasks", async () => {
+  test("reports skipped isolated cron runs as failed completions", async () => {
     const { prevSkipCron } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-run-skipped-task-",
+      tempPrefix: "openclaw-gw-cron-run-skipped-history-",
       cronEnabled: false,
     });
     cronIsolatedRun.mockResolvedValueOnce({
@@ -1858,7 +1863,7 @@ describe("gateway server cron", () => {
 
     try {
       const addRes = await rpcReq(ws, "cron.add", {
-        name: "skipped task projection",
+        name: "skipped cron completion",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
@@ -1876,6 +1881,7 @@ describe("gateway server cron", () => {
       expect(await finished).toMatchObject({
         jobId,
         status: "skipped",
+        completionStatus: "failed",
         error: "model endpoint unavailable",
       });
 
@@ -1886,20 +1892,19 @@ describe("gateway server cron", () => {
           expect.objectContaining({
             jobId,
             status: "skipped",
+            completionStatus: "failed",
             error: "model endpoint unavailable",
           }),
         ],
       });
 
-      const taskList = await rpcReq(ws, "tasks.list", {});
-      expect(taskList.ok).toBe(true);
-      const tasks = (taskList.payload as { tasks?: Array<Record<string, unknown>> } | undefined)
-        ?.tasks;
-      expect(tasks?.find((task) => task.sourceId === jobId)).toMatchObject({
-        runtime: "cron",
-        status: "failed",
-        error: "model endpoint unavailable",
-      });
+      expect(readCronRunRecordsForTests(jobId)).toEqual([
+        expect.objectContaining({
+          jobId,
+          status: "failed",
+          error: "model endpoint unavailable",
+        }),
+      ]);
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

@@ -3,7 +3,7 @@ import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
-import type { browserAct } from "../../browser/client-actions-core.js";
+import type { browserAct } from "../../browser/client-actions.js";
 import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
 import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
 import {

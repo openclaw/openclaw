@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressDrain, isIngressAdoptionLostError } from "./ingress-drain.js";
@@ -17,6 +18,96 @@ describe("channel ingress drain ownership", () => {
     vi.useRealTimers();
     closeOpenClawStateDatabaseForTest();
   });
+
+  it.each(["direct", "wrapped"] as const)(
+    "holds the claim without replaying a complete with a %s unknown native outcome",
+    async (envelope) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("unknown-complete", { text: "delivered" }, { laneKey: "lane" });
+        const unknown = new SqliteWorkerError("Synthetic lost native outcome", "outcome-unknown");
+        const failure =
+          envelope === "direct"
+            ? unknown
+            : new Error("Synthetic cleanup failure", { cause: new AggregateError([unknown]) });
+        const entered = createDeferredCore();
+        let attempts = 0;
+        queue.complete = async () => {
+          attempts++;
+          entered.resolve();
+          throw failure;
+        };
+        const shutdown = new AbortController();
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          abortSignal: shutdown.signal,
+          dispatchClaimedEvent: async (_event, lifecycle) => {
+            await lifecycle.onAdopted();
+          },
+        });
+        try {
+          await drain.drainOnce();
+          await entered.promise;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(attempts).toBe(1);
+          expect((await queue.listClaims()).map((row) => row.id)).toEqual(["unknown-complete"]);
+          expect(drain.activeLaneKeys().has("lane")).toBe(true);
+        } finally {
+          shutdown.abort();
+          await drain.waitForIdle();
+          drain.dispose();
+        }
+      });
+    },
+  );
+
+  it.each(["release", "fail"] as const)(
+    "does not reenter a %s settlement whose native outcome is unknown",
+    async (method) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("unknown-settlement", { text: "delivered" }, { laneKey: "lane" });
+        const failure = new Error("Synthetic cleanup failure", {
+          cause: new SqliteWorkerError("Synthetic lost native outcome", "outcome-unknown"),
+        });
+        const write = vi.spyOn(queue, method).mockRejectedValue(failure);
+        const shutdown = new AbortController();
+        const drain = createChannelIngressDrain<Payload>(
+          {
+            queue,
+            abortSignal: shutdown.signal,
+            ...(method === "fail"
+              ? {
+                  resolveNonRetryableFailure: () => ({
+                    reason: "invalid-event",
+                    message: "invalid",
+                  }),
+                }
+              : {}),
+            dispatchClaimedEvent: async () => ({
+              kind: "failed-retryable",
+              error: new Error("Synthetic delivery failure"),
+            }),
+          },
+          true,
+        );
+        try {
+          await drain.drainOnce();
+          await drain.waitForIdle();
+          expect(write).toHaveBeenCalledOnce();
+          expect((await queue.listClaims()).map((row) => row.id)).toEqual(["unknown-settlement"]);
+          expect(drain.activeLaneKeys().has("lane")).toBe(true);
+          shutdown.abort();
+          await expect(drain.dispose({ waitForSettlements: true })).rejects.toBe(failure);
+        } finally {
+          shutdown.abort();
+          await drain.waitForIdle();
+          drain.dispose();
+          write.mockRestore();
+        }
+      });
+    },
+  );
 
   it("requires owner cancellation before finalizing retained claim custody", async () => {
     await withTempState(async (stateDir) => {

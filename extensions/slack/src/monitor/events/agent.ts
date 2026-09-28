@@ -7,6 +7,7 @@ import { getSlackRuntime } from "../../runtime.js";
 import { markSlackStreamsStopped } from "../../streaming.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackSenderAuthentication } from "../ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "../message-handler/prepare-routing.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import { createSlackCommandHandler, deliverSlackSlashResponseWithWebApi } from "../slash.js";
@@ -79,6 +80,7 @@ export function registerSlackAgentEvents(params: {
           responseTransport: "web-api",
           body,
           eventScope,
+          senderAuthentication: resolveSlackSenderAuthentication(context),
           prompt: "/stop",
           builtInCommand: "stop",
           sessionTarget: target?.route,

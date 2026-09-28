@@ -259,6 +259,11 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
+Session reset permanently removes canonical SQLite history and its owned archive
+files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
+auth profiles and unrelated database state. Stop any running Gateway first;
+onboarding refuses session cleanup while another process owns the state directory.
+
 ## Locale
 
 Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:

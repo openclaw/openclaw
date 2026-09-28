@@ -1,15 +1,14 @@
 import fs from "node:fs";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { readCurrentConfigForPolicyCheck } from "../config/io.runtime.js";
 import type { ConfigReplaceResult } from "../config/mutate.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexWriteReceipt } from "./installed-plugin-index-store-write.js";
 import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginRuntimeApplication } from "./lifecycle.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
@@ -19,6 +18,7 @@ import {
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import { withPluginSourceCleanup } from "./source-cleanup.js";
 
 export type PluginInstallRuntimeCommit = {
   pluginId: string;
@@ -31,6 +31,12 @@ export type PluginInstallRuntimeDeferral = {
 };
 
 type PluginSourceCleanup = (
+  assertOwned: () => void,
+  warn: (message: string) => void,
+) => Promise<void>;
+
+type PreparedPluginSourceCleanup = (
+  index: InstalledPluginIndex,
   assertOwned: () => void,
   warn: (message: string) => void,
 ) => Promise<void>;
@@ -59,7 +65,7 @@ function indexFromRow(value: string | undefined) {
 export class PluginInstallRuntimeBatch {
   private readonly installs: Array<{
     commit?: PluginInstallRuntimeCommit;
-    cleanups: PluginSourceCleanup[];
+    cleanups: PreparedPluginSourceCleanup[];
   }> = [];
   private targets: PluginInstallBatchTarget[] = [];
   private readonly retained = new Set<string>();
@@ -123,7 +129,7 @@ export class PluginInstallRuntimeBatch {
         }
         const configPath = entry.commit.write.configWrite.path;
         const original = fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
-        entry.cleanups.push(async (assertOwned, warn) => {
+        entry.cleanups.push(async (index, assertOwned, warn) => {
           const assertUnclaimed = () => {
             assertOwned();
             const current = fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
@@ -134,28 +140,21 @@ export class PluginInstallRuntimeBatch {
             ) {
               throw new Error(`Retired plugin source changed before cleanup: ${sourcePath}`);
             }
-            const index = indexFromRow(
-              readPersistedInstalledPluginIndexRowSync({ filePath: this.databasePath })?.value_json,
-            );
-            if (!index) {
-              throw new Error("Plugin index disappeared before source cleanup");
-            }
-            const config = readCurrentConfigForPolicyCheck({
-              configPath,
-              env: this.options.env ?? process.env,
-            });
             if (
               createInstalledPluginOwnershipResolver(index, this.options.env).isSourceInUse(
                 sourcePath,
-                config.plugins?.load?.paths ?? [],
+                [],
               )
             ) {
               throw new Error(`Retired plugin source acquired a current owner: ${sourcePath}`);
             }
             assertOwned();
           };
-          assertUnclaimed();
-          await cleanup(assertUnclaimed, warn);
+          await withPluginSourceCleanup(
+            sourcePath,
+            { configPath, env: this.options.env, assertCurrent: assertUnclaimed },
+            (assertCurrent) => cleanup(assertCurrent, warn),
+          );
         });
       },
     };
@@ -263,17 +262,32 @@ export class PluginInstallRuntimeBatch {
         warn(warning);
       }
       await withPluginLifecycleLease(this.options, async (lease) => {
-        const assertCurrent = () => {
+        const assertOwned = () => {
           this.assertOpen();
           lease.assertOwned();
           if (lease.databasePath !== this.databasePath) {
             throw new Error("Plugin cleanup belongs to a different state database");
           }
-          const records =
-            indexFromRow(
-              readPersistedInstalledPluginIndexRowSync({ filePath: lease.databasePath })
-                ?.value_json,
-            )?.installRecords ?? {};
+        };
+        assertOwned();
+        const sourceCleanups = this.installs.flatMap(({ commit, cleanups }) =>
+          commit && targets.some((target) => target.pluginId === commit.pluginId) ? cleanups : [],
+        );
+        if (sourceCleanups.length === 0) {
+          return;
+        }
+        const row = await readPluginMetadataStateRow("installed-index", {
+          path: lease.databasePath,
+        });
+        assertOwned();
+        const index = indexFromRow(row?.value_json);
+        if (!index) {
+          throw new Error("Plugin index disappeared before source cleanup");
+        }
+        // Index producers share this lease; cleanups retire filesystem sources only.
+        const records = index.installRecords;
+        const assertCurrent = () => {
+          assertOwned();
           for (const target of targets) {
             this.sourceChecks.get(target.pluginId)?.();
             if (
@@ -284,15 +298,10 @@ export class PluginInstallRuntimeBatch {
             }
           }
         };
-        for (const { commit, cleanups } of this.installs) {
-          if (!commit || !targets.some((target) => target.pluginId === commit.pluginId)) {
-            continue;
-          }
-          for (const cleanup of cleanups) {
-            assertCurrent();
-            await cleanup(assertCurrent, warn);
-            assertCurrent();
-          }
+        for (const cleanup of sourceCleanups) {
+          assertCurrent();
+          await cleanup(index, assertCurrent, warn);
+          assertCurrent();
         }
       });
       return application;

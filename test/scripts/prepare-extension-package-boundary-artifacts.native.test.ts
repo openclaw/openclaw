@@ -272,15 +272,20 @@ describe("native declaration preparation", () => {
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
         fs.renameSync(path.join(root, "src/nested.ts"), path.join(root, "src/renamed.ts"));
-        write("src/renamed.ts", 'export const value: number = "error";');
         write(`${output}/orphan.d.ts`, "export {};");
         write(`${output}/operator-note.txt`, "unowned");
-        await expect(run()).rejects.toThrow("failed with exit code 1");
-        signal.throwIfAborted();
-        expect(fs.existsSync(recordPath)).toBe(false);
-        expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(false);
-        expect(fs.existsSync(path.join(root, output, ".inputs.json"))).toBe(false);
-        expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
+        for (const invalid of [
+          'export const value: number = "error";',
+          "export const value = class { private field = 1; };",
+        ]) {
+          write("src/renamed.ts", invalid);
+          await expect(run()).rejects.toThrow("failed with exit code 1");
+          signal.throwIfAborted();
+          expect(fs.existsSync(recordPath)).toBe(false);
+          expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(false);
+          expect(fs.existsSync(path.join(root, output, ".inputs.json"))).toBe(false);
+          expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
+        }
         write("src/renamed.ts", "export const value = 2;");
         await run();
         const repaired = readArtifactRecord(recordPath)!;

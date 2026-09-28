@@ -3,6 +3,7 @@ import { Writable } from "node:stream";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
+import { ScheduledTaskInspectionError } from "../../daemon/schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import {
   ServiceInspectionError,
@@ -14,7 +15,7 @@ import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
@@ -40,7 +41,6 @@ import type {
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
-  assertGatewayServiceManagementAllowedForUpdate,
   GATEWAY_SERVICE_INSPECTION_WARNING,
   GatewayServiceUpdateOwnershipError,
   observedSystemdManagerUid,
@@ -149,20 +149,6 @@ async function abortWindowsTaskUpdateIfInterrupted(
     await recovery.complete();
   }
   throw new UpdateCommandAbort();
-}
-
-export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-  stopState: PreManagedServiceStop | undefined,
-  restartSafe?: boolean,
-  guard?: () => Promise<void>,
-  assertCurrent?: () => void,
-): Promise<void> {
-  if (!stopState?.windowsTaskAutoStartRecovery) {
-    return;
-  }
-  // Activation needs an enabled task; retain its owner until verification can
-  // commit that restoration or compensate a failed update.
-  await stopState.windowsTaskAutoStartRecovery.restore(restartSafe, guard, assertCurrent);
 }
 
 type ManagedServiceStopParams = {
@@ -282,15 +268,18 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
     }
   };
-  // Detached helpers can retain Gateway ancestry or inherited service metadata.
-  // Reprove their current handoff lease at every boundary that can stop the Gateway.
+  // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
+  // Inspection uses the inherited run ID; a missing run ID is refused.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
-    const block = gatewayMaintenanceBlock(state, params.root);
+    delete inspected.serviceMembershipSourceAbsent;
+    const block = gatewayMaintenanceBlock(state, params.root, "stop", () => {
+      inspected.serviceMembershipSourceAbsent = true;
+    });
     if (
       !block ||
       (await isCurrentManagedServiceUpdateHandoffProcess({
         root: params.handoffRoot ?? params.root,
-        runId: params.updateRun?.runId,
+        runId: params.updateRun?.runId ?? process.env[UPDATE_RUN_ID_ENV],
       }))
     ) {
       return undefined;
@@ -314,22 +303,32 @@ async function stopManagedServiceBeforeMutableUpdate(
   try {
     const inspectedService = resolveGatewayService();
     service = inspectedService;
-    serviceState = await withCommandProcessScope(() =>
-      readGatewayServiceStateForUpdate(inspectedService, serviceEnv, params.timeoutMs),
-    );
-    if (
-      process.platform === "win32" &&
-      serviceState.runtime?.inspectionFailure?.timeoutMs !== undefined
-    ) {
-      // Re-read the definition too: a timed-out snapshot cannot grant service ownership.
-      serviceState = await withCommandProcessScope(() =>
-        readGatewayServiceState(inspectedService, {
-          env: serviceEnv,
-          requireEffective: true,
-          validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-          timeoutMs: params.timeoutMs,
-        }),
-      );
+    for (let attempt = 0; ; attempt++) {
+      const retryTimeout = process.platform === "win32" && attempt === 0;
+      try {
+        serviceState = await withCommandProcessScope(() =>
+          readGatewayServiceStateForUpdate(
+            inspectedService,
+            serviceEnv,
+            params.timeoutMs,
+            params.phase === "inspect"
+              ? undefined
+              : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
+          ),
+        );
+      } catch (error) {
+        if (
+          retryTimeout &&
+          error instanceof ScheduledTaskInspectionError &&
+          error.timeoutMs !== undefined
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      if (!retryTimeout || serviceState.runtime?.inspectionFailure?.timeoutMs === undefined) {
+        break;
+      }
     }
   } catch (err) {
     if (hasCommandProcessCleanupError(err)) {
@@ -522,7 +521,10 @@ async function stopManagedServiceBeforeMutableUpdate(
     // Ownership inspection and native preparation await work. Recheck the exact
     // launcher before stopping so a replacement service cannot inherit authority.
     const readCurrentService = async (env: NodeJS.ProcessEnv) => {
-      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
+      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs, {
+        managerUid: inspected.serviceManagerUid,
+        assertCurrent,
+      });
       const verdict = await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root,
@@ -604,6 +606,16 @@ async function stopManagedServiceBeforeMutableUpdate(
             "service-process-changed",
           );
         }
+        const membershipBlock = await resolveAncestryBlock(beforeStop);
+        if (membershipBlock) {
+          throw new UpdatePreMutationError(
+            "managed-service-preflight",
+            membershipBlock.blockMessage,
+            {
+              failureFacts: membershipBlock.blockFailureFacts,
+            },
+          );
+        }
       }
       assertCurrent();
       stoppedAtMs = Date.now();
@@ -645,7 +657,14 @@ async function stopManagedServiceBeforeMutableUpdate(
     try {
       assertCurrent();
     } catch (cause) {
-      throw new AggregateError([err, cause], "Update executor was lost during native preparation", {
+      const failures = [err, cause];
+      try {
+        // Lost authority forbids restoration, but this private recovery still needs settlement.
+        await windowsTaskAutoStartRecovery?.complete(false);
+      } catch (settlementError) {
+        failures.push(settlementError);
+      }
+      throw new AggregateError(failures, "Update executor was lost during native preparation", {
         cause,
       });
     }

@@ -560,7 +560,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
     for (const svc of extraServices) {
-      const hintLabel = svc.platform === "linux" ? "Inspection hint:" : "Cleanup hint:";
+      const hintLabel = svc.platform === "darwin" ? "Cleanup hint:" : "Inspection hint:";
       for (const hint of renderGatewayServiceCleanupHints([svc])) {
         defaultRuntime.log(`${infoText(hintLabel)} ${hint}`);
       }

@@ -38,13 +38,8 @@ describe("live discovery unknown-model gate", () => {
       return false;
     });
     // The manifest-published row bypasses the gate entirely and survives.
-    expect(models.map((m) => m.id)).toEqual(["known-model"]);
+    expect(models).toEqual([fallback.models[0]]);
     expect(seen).toEqual(["brand-new-model"]);
-  });
-
-  it("keeps the manifest entry verbatim for published ids", () => {
-    const [model] = buildOpenAICompatibleLiveModels(rows, fallback, () => false);
-    expect(model).toEqual(fallback.models[0]);
   });
 
   it("admits unknown ids the gate accepts", () => {

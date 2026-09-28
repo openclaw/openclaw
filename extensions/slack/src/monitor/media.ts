@@ -286,9 +286,8 @@ async function downloadSlackMediaFile(
     }
   }
 
-  const effectiveMime = resolveSlackMediaMimetype(params.file, saved.contentType);
+  const contentType = resolveSlackMediaMimetype(params.file, saved.contentType);
   const label = saved.fileName ?? params.file.name;
-  const contentType = effectiveMime ?? saved.contentType;
   return {
     path: saved.path,
     ...(contentType ? { contentType } : {}),
@@ -306,11 +305,7 @@ function resolveForwardedAttachmentImageUrl(
     return null;
   }
   try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "https:" || !isSlackHostname(parsed.hostname, govSlack)) {
-      return null;
-    }
-    return parsed.toString();
+    return assertSlackFileUrl(rawUrl, govSlack).href;
   } catch {
     return null;
   }

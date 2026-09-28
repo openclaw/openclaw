@@ -14,6 +14,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   validateWorkerComputerParams,
   validateWorkerPortalParams,
+  validateWorkerPresenceParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -25,10 +26,10 @@ import {
   type WorkerLiveEventParams,
   type WorkerLiveEventRequestFrame,
   WorkerLiveEventRequestFrameSchema,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   type WorkerPortalParams,
+  type WorkerPresenceParams,
   type WorkerSessionsSendParams,
   type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
@@ -73,15 +74,17 @@ import {
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
-import {
-  WorkerInferenceProxyClient,
-  WorkerLiveEventClient,
-  WorkerTranscriptCommitClient,
-} from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
 } from "./worker-runtime-background-exec.suite.js";
+import {
+  registerWorkerGatewayToolAvailabilityTests,
+  registerWorkerGatewayToolRpcTests,
+} from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -224,6 +227,7 @@ class FakeWorkerGateway {
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
   readonly portalRequests: WorkerPortalParams[] = [];
+  readonly presenceRequests: WorkerPresenceParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
@@ -337,6 +341,21 @@ class FakeWorkerGateway {
                 },
               },
         );
+        return;
+      }
+      if (parsed.method === "worker.presence" && validateWorkerPresenceParams(parsed.params)) {
+        this.presenceRequests.push(structuredClone(parsed.params));
+        this.send(socket, {
+          type: "res",
+          id: parsed.id,
+          ok: true,
+          payload: {
+            resultJson: JSON.stringify({
+              content: [{ type: "text", text: "Ada is online" }],
+              details: { status: "ok", people: [{ name: "Ada" }] },
+            }),
+          },
+        });
         return;
       }
       const sessionToolMethod =
@@ -1120,48 +1139,7 @@ describe("worker runtime", () => {
     }
   });
 
-  it("exposes exactly the Gateway-authorized worker tools", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ]);
-  });
-
-  it("hides portal authority when the admitted Gateway lacks portal protocol support", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = ["read", "portal"];
-    launch.admission.handshake.protocolFeatures =
-      launch.admission.handshake.protocolFeatures.filter(
-        (feature) => feature !== WORKER_PORTAL_PROTOCOL_FEATURE,
-      );
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual(["read"]);
-  });
-
-  it("runs with no tools when the Gateway authority is empty", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
-  });
+  registerWorkerGatewayToolAvailabilityTests({ setup });
 
   it("materializes exactly the Browser tool and disposes it before finishing", async () => {
     const { gateway, launch } = await setup();
@@ -1357,27 +1335,7 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests).toHaveLength(0);
   });
 
-  it("runs an authorized nested-session tool through the closed worker RPC", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
-    launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.sessionSpawnRequests).toEqual([
-      {
-        toolCallId: "nested-session-spawn-call",
-        task: "start a nested cloud child",
-      },
-    ]);
-    expect(gateway.inferenceRequests).toHaveLength(2);
-    expect(
-      gateway.transcriptRequests.flatMap((request) =>
-        request.messages.flatMap((message) =>
-          message.role === "toolResult" ? [message.toolName] : [],
-        ),
-      ),
-    ).toContain("sessions_spawn");
-  });
+  registerWorkerGatewayToolRpcTests({ setup });
 
   it.each([
     {
@@ -1770,13 +1728,27 @@ describe("worker runtime", () => {
           "text",
         ],
         ...(processState === "completed"
-          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-file.cjs` }
+          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
       });
+      const releaseBackground = createDeferred();
+      let completionServer: Server | undefined;
       if (processState === "completed") {
+        completionServer = createServer((_request, response) => {
+          void releaseBackground.promise.then(() => response.end("background-finished"));
+        });
+        const listening = once(completionServer, "listening");
+        completionServer.listen(0, "127.0.0.1");
+        await listening;
+        const address = completionServer.address();
+        if (!address || typeof address === "string") {
+          throw new Error("background completion server did not allocate a TCP port");
+        }
+        // An explicit response also releases a child that starts after the turn finishes.
+        // Filesystem watch notifications can be lost while this shared machine is busy.
         await writeFile(
-          path.join(workspaceDir, "finish-on-file.cjs"),
-          "const fs = require('node:fs'); const finish = () => { if (fs.existsSync('finish-marker')) { process.stdout.write('background-finished'); watcher.close(); } }; const watcher = fs.watch('.', finish); finish();",
+          path.join(workspaceDir, "finish-on-release.cjs"),
+          `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
         );
       }
       const scopeKey = `worker:${SESSION_ID}`;
@@ -1810,7 +1782,7 @@ describe("worker runtime", () => {
         const sessionId = running[0]!.id;
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
-          await writeFile(path.join(workspaceDir, "finish-marker"), "finish");
+          releaseBackground.resolve();
           await waitForExecScope(scopeKey);
           await waitForFast(() =>
             expect(
@@ -1871,12 +1843,18 @@ describe("worker runtime", () => {
           expect(results[1]?.retainWorker).toBe(false);
         }
       } finally {
+        releaseBackground.resolve();
         input.end();
         try {
           await command;
         } finally {
           supervisor.cancelScope(scopeKey, "manual-cancel");
           await waitForExecScope(scopeKey);
+          if (completionServer) {
+            await new Promise<void>((resolve, reject) => {
+              completionServer.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
         }
       }
       expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(

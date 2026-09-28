@@ -162,16 +162,6 @@ describe("browser state option collisions", () => {
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
-  it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {
-    const request = await runBrowserCommandAndGetRequest([
-      "set",
-      "headers",
-      "--json",
-      '{"x-auth":"ok"}',
-    ]);
-    expect(request.body?.headers).toEqual({ "x-auth": "ok" });
-  });
-
   it("filters non-string header values from JSON payload", async () => {
     const request = await runBrowserCommandAndGetRequest([
       "set",

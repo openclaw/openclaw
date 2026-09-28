@@ -12,6 +12,7 @@ import {
   parseStoredJson,
   resolvePluginStateExpiresAtMs,
   selectPluginStateEntry,
+  upsertPluginStateEntry,
   type PluginStateDatabase,
 } from "./plugin-state-store.kernel.js";
 import {
@@ -76,6 +77,27 @@ export function registerPluginStateEntryIfAbsent(
     protectedKey: params.key,
   });
   return true;
+}
+
+/** Apply a prepared update after the caller has read and checked the current row. */
+export function updatePluginStateEntry(
+  store: PluginStateDatabase,
+  params: Omit<PluginStateRegisterEntryParams, "createdAtMs">,
+  now: number,
+  exists: boolean,
+): void {
+  if (!exists) {
+    assertCanInsertPluginStateEntry({ ...params, store, now });
+  }
+  const expiresAt = resolvePluginStateExpiresAtMs({
+    ttlMs: params.ttlMs,
+    namespace: params.namespace,
+    now,
+    operation: "register",
+    path: store.path,
+  });
+  upsertPluginStateEntry(store.db, bindPluginStateEntry({ ...params, createdAt: now, expiresAt }));
+  enforcePostRegisterLimits({ ...params, store, now, protectedKey: params.key });
 }
 
 /** The caller owns the transaction containing the authoritative comparison and deletion. */

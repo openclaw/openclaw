@@ -15,6 +15,7 @@ import {
   type InboundEventKind,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
@@ -162,6 +163,8 @@ export async function resolveTelegramInboundBody(params: {
   topicConfig?: TelegramTopicConfig;
   providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   requireMention?: boolean;
+  isBotOwnedThread?: boolean;
+  requireMentionInBotThreads?: boolean;
   options?: TelegramMessageContextOptions;
   logger: TelegramLogger;
 }): Promise<TelegramInboundBodyResult | null> {
@@ -385,10 +388,15 @@ export async function resolveTelegramInboundBody(params: {
   const replyToBotMessage = botId != null && replyFromId === botId;
   const isReplyToServiceMessage =
     replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
-  const implicitMentionKinds = implicitMentionKindWhen(
-    "reply_to_bot",
-    replyToBotMessage && !isReplyToServiceMessage,
-  );
+  const { implicitMentionKinds } = resolveBotThreadMentionPolicy({
+    isBotOwnedThread: params.isBotOwnedThread === true,
+    requireMentionInBotThreads: params.requireMentionInBotThreads,
+    requireMention: Boolean(requireMention),
+    implicitMentionKinds: implicitMentionKindWhen(
+      "reply_to_bot",
+      replyToBotMessage && !isReplyToServiceMessage,
+    ),
+  });
   const canDetectMention =
     Boolean(groupThread) || Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionDecision = resolveInboundMentionDecision({

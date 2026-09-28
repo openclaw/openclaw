@@ -8,7 +8,6 @@ import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
   hasConfiguredActivationPath,
-  normalizePluginsConfigForInstalledIndex,
 } from "./gateway-startup-plugin-config.js";
 import type {
   ConfiguredGenerationProviderIds,
@@ -65,9 +64,9 @@ export function addRequiredAgentHarnessPluginIds(
     activationSourceConfig: OpenClawConfig;
     config: OpenClawConfig;
     index: InstalledPluginIndex;
-    pluginsConfig: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    pluginsConfig: NormalizedPluginsConfig;
     activationSource: {
-      plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+      plugins: NormalizedPluginsConfig;
       rootConfig?: OpenClawConfig;
     };
     env: NodeJS.ProcessEnv;

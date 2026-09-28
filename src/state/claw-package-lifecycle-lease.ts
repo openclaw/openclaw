@@ -68,7 +68,6 @@ export function acquireClawPackageLifecycleLease(
   const expiresAt = nowMs + LEASE_TTL_MS;
   const owner = options.owner ?? randomUUID();
   const leaseKey = packageLeaseKey(artifact);
-  let acquired = false;
 
   try {
     runOpenClawStateWriteTransaction(
@@ -108,7 +107,6 @@ export function acquireClawPackageLifecycleLease(
             updated_at: nowMs,
           }),
         );
-        acquired = true;
       },
       { env, path: databasePath },
     );
@@ -119,9 +117,6 @@ export function acquireClawPackageLifecycleLease(
     return null;
   }
 
-  if (!acquired) {
-    return null;
-  }
   return {
     heartbeat: (heartbeatNowMs = Date.now()) => {
       const heartbeatExpiresAt = heartbeatNowMs + LEASE_TTL_MS;

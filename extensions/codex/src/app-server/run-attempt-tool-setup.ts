@@ -104,7 +104,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = {
     yieldDetected: false,
     yieldAcknowledgment: undefined,
-    persistentWebSearchAllowed: undefined as boolean | undefined,
+    persistentWebSearchAllowed: undefined,
     webSearchAllowed: false,
   };
   const toolOutcomeOrdinals = new Map<string, number>();
@@ -649,9 +649,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }
     return {
       tools: toolsWithScopedMcp,
-      registeredTools: registeredWithScopedMcp,
       requireExplicitMessageTarget,
-      scopedMcpTools,
       configuredMcp,
       disposeTools,
       configuredMcpOwnershipVersion:
@@ -665,7 +663,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
-      onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
       runtimeYieldCompletionClaim,
     };

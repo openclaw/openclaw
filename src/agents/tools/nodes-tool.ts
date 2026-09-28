@@ -1,9 +1,5 @@
-/**
- * nodes built-in tool.
- *
- * Manages node pairing, notifications, device state, media capture, and approved command invocation.
- */
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,10 +17,10 @@ import {
 } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
-import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction } from "./nodes-tool-commands.js";
 import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
-import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
+import { executeNodeMediaAction } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
@@ -58,7 +54,6 @@ const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
-type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
 async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
@@ -284,19 +279,14 @@ export function createNodesTool(options?: {
               gatewayOpts,
               agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
           }
           default:
             throw new Error(`Unknown action: ${action}`);
         }
       } catch (err) {
-        const nodeLabel =
-          typeof params.node === "string" && params.node.trim() ? params.node.trim() : "auto";
-        const gatewayLabel =
-          gatewayOpts.gatewayUrl && gatewayOpts.gatewayUrl.trim()
-            ? gatewayOpts.gatewayUrl.trim()
-            : "default";
+        const nodeLabel = normalizeOptionalString(params.node) ?? "auto";
+        const gatewayLabel = normalizeOptionalString(gatewayOpts.gatewayUrl) ?? "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
         const pairing =

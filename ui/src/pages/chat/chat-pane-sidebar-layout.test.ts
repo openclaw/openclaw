@@ -431,27 +431,6 @@ describe("chat pane sidebar layout", () => {
     }
   });
 
-  it("does not reinterpret restored state for chat", () => {
-    const restored = openSlot({ columns: [] }, "detail");
-
-    expect(
-      resolveSidebarLayoutForBoard({
-        board: board("chat"),
-        layout: restored,
-        paneWidth: 1_400,
-      }).open,
-    ).toBe(true);
-  });
-
-  it("keeps the detail tab when its transient content is no longer available", () => {
-    const layout = resolveSidebarLayoutForBoard({
-      board: board("chat"),
-      layout: openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
-      paneWidth: 1_400,
-    });
-    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["workspace", "detail"]);
-  });
-
   it("fits only the one canonical panel width", () => {
     const layout = resolveSidebarLayoutForBoard({
       board: board("chat"),

@@ -5,6 +5,7 @@ import {
   rememberDraftAttempt,
   rememberDraftRevision,
 } from "./outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
   storageTargetForGateway,
   storedChatOutboxScopeKey,
@@ -12,7 +13,6 @@ import {
   readStoredOutboxStore,
   notifyStoredChatOutboxChanges,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "./outbox-store.ts";
 type StoredComposerRetirementTarget = {
   key: string;

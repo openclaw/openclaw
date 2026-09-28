@@ -42,7 +42,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -124,7 +123,7 @@ internal fun SkillsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Skills"),
     subtitle = nativeString("Manage installed skills and add trusted releases from ClawHub."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Skills.icon,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, skillsState.refreshing, skillsState.errorText, viewModel::refreshSkills)
@@ -216,7 +215,7 @@ private fun SkillDetailSettingsScreen(
   SettingsDetailFrame(
     title = skill?.name ?: skillKey,
     subtitle = nativeString("Inspect and manage installed skill state."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Skills.icon,
     onBack = onBack,
   ) {
     skill?.let { summary ->
@@ -475,7 +474,7 @@ private fun SkillListRow(
     title = skill.name,
     subtitle = skillSubtitle(skill),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open skill detail"), onClick = onClick),
-    leading = { ClawTextBadge(text = skillBadge(skill)) },
+    leading = { ClawTextBadge(text = skill.emoji ?: badgeInitials(skill.name, fallback = "S")) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         ClawStatusPill(text = skillStatusText(skill), status = skillStatus(skill))
@@ -742,7 +741,7 @@ private fun installedSkillFilterLabel(filter: InstalledSkillFilter): String =
     InstalledSkillFilter.Off -> nativeString("Off")
   }
 
-private fun skillReady(skill: GatewaySkillSummary): Boolean =
+internal fun skillReady(skill: GatewaySkillSummary): Boolean =
   !skill.disabled &&
     skill.eligible &&
     !skill.blockedByAllowlist &&
@@ -811,8 +810,3 @@ private fun skillSourceLabel(skill: GatewaySkillSummary): String =
     "openclaw-extra" -> nativeString("Extra")
     else -> nativeString("Skill")
   }
-
-private fun skillBadge(skill: GatewaySkillSummary): String {
-  skill.emoji?.let { return it }
-  return badgeInitials(skill.name, fallback = "S")
-}

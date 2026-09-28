@@ -106,7 +106,7 @@ function isExpectedGeneratedEnvWrapperPair(
   );
 }
 
-function resolveGeneratedEnvWrapperLayout(
+export function resolveGeneratedEnvWrapperLayout(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): { envFilePath: string; commandStartIndex: number } | null {

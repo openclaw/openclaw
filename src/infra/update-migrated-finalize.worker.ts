@@ -20,11 +20,13 @@ import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-comman
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,
@@ -303,13 +305,13 @@ async function finalizeInput(
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
-  executorFence?.assertCurrent();
+  executorFence.assertCurrent();
   adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     ...runIdentity,
-    ...(executorFence ? { executorFence } : {}),
+    executorFence,
     ...(descriptor
       ? {
           requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
@@ -325,7 +327,7 @@ async function finalizeInput(
   executorFence.assertCurrent();
   registerRun(run);
   for (const step of input.bufferedSteps) {
-    executorFence?.assertCurrent();
+    executorFence.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
   const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
@@ -407,10 +409,31 @@ async function finalizeInput(
 }
 
 void (async () => {
+  const errors: unknown[] = [];
   try {
     await finalizeMigratedUpdate();
-  } finally {
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await finalizeActiveDebugProxyCaptures();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
     await closeOpenClawStateDatabaseAsync();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(
+      errors,
+      "Update finalization and resource cleanup failed.",
+      errors[0],
+    );
   }
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);

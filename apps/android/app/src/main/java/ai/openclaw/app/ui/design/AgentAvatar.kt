@@ -77,69 +77,35 @@ internal fun ClawAgentAvatar(
   shape: Shape = CircleShape,
   fallback: @Composable () -> Unit,
 ) {
-  when (source) {
-    is AgentAvatarSource.Data -> {
-      DataAgentAvatar(source = source, size = size, shape = shape, fallback = fallback)
-    }
-
-    is AgentAvatarSource.Remote -> {
-      RemoteAgentAvatar(source.url, size, shape, fallback)
-    }
-
-    null -> {
-      fallback()
-    }
+  if (source == null) {
+    fallback()
+    return
   }
-}
-
-@Composable
-private fun DataAgentAvatar(
-  source: AgentAvatarSource.Data,
-  size: Dp,
-  shape: Shape,
-  fallback: @Composable () -> Unit,
-) {
   var result by remember(source) { mutableStateOf<RemoteImageResult?>(null) }
   LaunchedEffect(source) {
     result =
-      withContext(Dispatchers.Default) {
-        val bytes = decodeAgentAvatarBase64(source.base64) ?: return@withContext null
-        if (source.mimeType == "image/svg+xml") {
-          RemoteImageResult.Svg(bytes)
-        } else {
-          decodeRemoteImageBitmap(
-            bytes = bytes,
-            maxDimension = AGENT_AVATAR_MAX_DIMENSION,
-            expectedContentType = source.mimeType,
-          )?.let { RemoteImageResult.Raster(it) }
+      when (source) {
+        is AgentAvatarSource.Remote -> {
+          safeRemoteImageStore.get(source.url)
+        }
+
+        is AgentAvatarSource.Data -> {
+          withContext(Dispatchers.Default) {
+            val bytes = decodeAgentAvatarBase64(source.base64) ?: return@withContext null
+            if (source.mimeType == "image/svg+xml") {
+              RemoteImageResult.Svg(bytes)
+            } else {
+              decodeRemoteImageBitmap(
+                bytes = bytes,
+                maxDimension = AGENT_AVATAR_MAX_DIMENSION,
+                expectedContentType = source.mimeType,
+              )?.let { RemoteImageResult.Raster(it) }
+            }
+          }
         }
       }
   }
-  AgentAvatarImage(result, size, shape, fallback)
-}
-
-@Composable
-private fun RemoteAgentAvatar(
-  url: String,
-  size: Dp,
-  shape: Shape,
-  fallback: @Composable () -> Unit,
-) {
-  var result by remember(url) { mutableStateOf<RemoteImageResult?>(null) }
-  LaunchedEffect(url) {
-    result = safeRemoteImageStore.get(url)
-  }
-  AgentAvatarImage(result, size, shape, fallback)
-}
-
-@Composable
-private fun AgentAvatarImage(
-  image: RemoteImageResult?,
-  size: Dp,
-  shape: Shape,
-  fallback: @Composable () -> Unit,
-) {
-  when (image) {
+  when (val image = result) {
     is RemoteImageResult.Raster -> {
       Image(
         bitmap = image.bitmap.asImageBitmap(),

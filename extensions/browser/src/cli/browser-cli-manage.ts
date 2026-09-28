@@ -128,6 +128,13 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
+  const probe = async (name: string, read: () => Promise<Omit<BrowserDoctorCheck, "name">>) => {
+    try {
+      checks.push({ name, ...(await read()) });
+    } catch (error) {
+      checks.push({ name, ok: false, detail: String(error) });
+    }
+  };
   let report: BrowserDoctorReport;
 
   try {
@@ -191,27 +198,20 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     });
   }
 
-  try {
+  await probe("profiles", async () => {
     const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
       parent,
       { method: "GET", path: "/profiles" },
       { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
     );
-    checks.push({
-      name: "profiles",
+    return {
       ok: true,
       detail: `${profiles.profiles?.length ?? 0} configured`,
-    });
-  } catch (err) {
-    checks.push({
-      name: "profiles",
-      ok: false,
-      detail: String(err),
-    });
-  }
+    };
+  });
 
   if (status.running) {
-    try {
+    await probe("tabs", async () => {
       const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
         parent,
         {
@@ -222,22 +222,15 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
         { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
       );
       const tabs = result.tabs ?? [];
-      checks.push({
-        name: "tabs",
+      return {
         ok: true,
         detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use tab reference ${tabs[0].suggestedTargetId}` : ""}`,
-      });
-    } catch (err) {
-      checks.push({
-        name: "tabs",
-        ok: false,
-        detail: String(err),
-      });
-    }
+      };
+    });
   }
 
   if (deep && status.running) {
-    try {
+    await probe("live-snapshot", async () => {
       const result = await callBrowserRequest<
         | { ok: true; format: "aria"; nodes?: unknown[] }
         | { ok: true; format: "ai"; snapshot?: string }
@@ -258,18 +251,11 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
           : typeof result.snapshot === "string"
             ? result.snapshot.split("\n").length
             : 0;
-      checks.push({
-        name: "live-snapshot",
+      return {
         ok: count > 0,
         detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
-      });
-    } catch (err) {
-      checks.push({
-        name: "live-snapshot",
-        ok: false,
-        detail: String(err),
-      });
-    }
+      };
+    });
   }
 
   return { ok: checks.every((check) => check.ok), checks, status };
@@ -476,46 +462,30 @@ export function registerBrowserManageCommands(
       });
     });
 
-  tab
-    .command("select")
-    .description("Focus tab by index (1-based)")
-    .argument("<index>", "Tab index (1-based)", parseTabIndex)
-    .action(async (index: number, _opts, cmd) => {
-      const parent = parentOpts(cmd);
-      if (!Number.isSafeInteger(index) || index < 1) {
-        defaultRuntime.error(danger("index must be a positive integer"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCliRequest({
-        parent,
-        path: "/tabs/action",
-        body: { action: "select", index: index - 1 },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-        successMessage: `selected tab ${index}`,
+  for (const [action, description, argument] of [
+    ["select", "Focus tab by index (1-based)", "<index>"],
+    ["close", "Close tab by index (1-based); default: first tab", "[index]"],
+  ] as const) {
+    tab
+      .command(action)
+      .description(description)
+      .argument(argument, "Tab index (1-based)", parseTabIndex)
+      .action(async (index: number | undefined, _opts, cmd) => {
+        const parent = parentOpts(cmd);
+        if (index !== undefined && (!Number.isSafeInteger(index) || index < 1)) {
+          defaultRuntime.error(danger("index must be a positive integer"));
+          defaultRuntime.exit(1);
+          return;
+        }
+        await runBrowserCliRequest({
+          parent,
+          path: "/tabs/action",
+          body: { action, index: index === undefined ? undefined : index - 1 },
+          timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+          successMessage: action === "select" ? `selected tab ${index}` : "closed tab",
+        });
       });
-    });
-
-  tab
-    .command("close")
-    .description("Close tab by index (1-based); default: first tab")
-    .argument("[index]", "Tab index (1-based)", parseTabIndex)
-    .action(async (index: number | undefined, _opts, cmd) => {
-      const parent = parentOpts(cmd);
-      if (typeof index === "number" && (!Number.isSafeInteger(index) || index < 1)) {
-        defaultRuntime.error(danger("index must be a positive integer"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      const idx = typeof index === "number" ? index - 1 : undefined;
-      await runBrowserCliRequest({
-        parent,
-        path: "/tabs/action",
-        body: { action: "close", index: idx },
-        timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-        successMessage: "closed tab",
-      });
-    });
+  }
 
   browser
     .command("open")

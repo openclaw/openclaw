@@ -5,7 +5,10 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -420,16 +423,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
             }
           }
         }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw createSqliteLifecycleAggregateError(
-            failures,
-            "Agent publication and cleanup failed",
-            failures[0],
-          );
-        }
+        throwSqliteLifecycleErrors(failures, "Agent publication and cleanup failed");
         if (!outcome.ok) {
           throw outcome.error;
         }

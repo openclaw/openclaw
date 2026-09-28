@@ -629,8 +629,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoCapable: props.realtimeTalkVideoCapable,
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
-    voice: props.realtimeTalkVoice,
-    onSelectVoice: props.onSelectRealtimeVoice,
     onAbort: props.onAbort,
     onSend: handleSend,
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,

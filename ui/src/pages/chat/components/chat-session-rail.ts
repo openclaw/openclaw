@@ -17,6 +17,7 @@ import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import {
   type ChatObserverDisplayPreference,
   loadChatObserverDisplayPreference,
@@ -219,6 +220,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   @property({ attribute: false })
   attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
+  @property({ attribute: false })
+  uploadConfig?: ChatAttachmentControlsProps["uploadConfig"];
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @property({ type: Boolean }) embedded = false;
@@ -226,6 +229,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) focusRequest?: () => boolean;
   @state() private now = Date.now();
 
+  constructor() {
+    super();
+    new SubscriptionsController(this).watch(
+      () => this.uploadConfig,
+      (config, notify) => config.subscribe(notify),
+    );
+  }
   private readonly railState = new ChatSessionRailState();
   private clock: ReturnType<typeof globalThis.setTimeout> | null = null;
   private renderedMode: SessionRailMode = "hidden";
@@ -536,6 +546,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     const reads = companion.attachmentReads;
     const readSignal = reads?.readSignal;
     const attachmentProps: ChatAttachmentControlsProps = {
+      uploadConfig: this.uploadConfig,
       attachments: companion.attachments,
       getAttachments: () => companion.attachments ?? [],
       attachmentReads: reads,

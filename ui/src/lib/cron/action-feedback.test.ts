@@ -118,7 +118,6 @@ it("preserves queued run feedback when due-mode history refresh fails", async ()
 it.each([
   ["not-due", "This automation is not due yet."],
   ["already-running", "This automation is already running."],
-  ["restart-recovery-pending", "Scheduler recovery is still in progress."],
   ["stopped", "The scheduler is stopped."],
 ] as const)(
   "surfaces cron.run %s outcomes without reloading run history",

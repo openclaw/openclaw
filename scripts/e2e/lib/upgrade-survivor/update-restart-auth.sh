@@ -23,10 +23,13 @@ MANAGER_ENV
   cp "$(dirname "${BASH_SOURCE[0]}")/systemd-fixture.mjs" "$shim_dir/systemd-fixture.mjs"
   node - "$shim_dir/systemd-fixture-runtime.json" \
     "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}" \
-    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" <<'RUNTIME_PATHS'
+    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" "${1:-native}" <<'RUNTIME_PATHS'
 const fs = require("node:fs");
-const [file, pidFile, daemonLog] = process.argv.slice(2);
-fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog }), { mode: 0o600 });
+const [file, pidFile, daemonLog, containment] = process.argv.slice(2);
+if (containment !== "native" && containment !== "absent") throw new Error("Unsupported fixture containment");
+const controlGroup = containment === "native" && fs.existsSync("/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs")
+  ? "/openclaw-gateway.service" : undefined;
+fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog, controlGroup }), { mode: 0o600 });
 RUNTIME_PATHS
   cat >"$shim_dir/busctl" <<'BUSCTL'
 #!/usr/bin/env bash
@@ -96,17 +99,33 @@ is_running() {
 }
 
 stop_gateway() {
-  local pid=""
+  local pid="" stop_policy_status=0
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
+    local stop_timeout_ms attempts=0
+    stop_timeout_ms="$(node "$manager_script" stop-timeout-ms)" || {
+      stop_policy_status=$?
+      # No service budget is admitted: signal the existing fatal-cleanup owner
+      # and join using only the settlement allowance, not a substitute timeout.
+      stop_timeout_ms=0
+    }
     kill "$pid" >/dev/null 2>&1 || true
-    # The supervisor gives its child 30s, so keep this outer deadline comfortably longer.
-    for _ in $(seq 1 350); do
-      is_running || break
+    # Leave the supervisor its loaded stop budget plus 5s to observe group exit.
+    while is_running; do
+      if [ "$stop_timeout_ms" != Infinity ] &&
+        [ "$attempts" -ge "$(((stop_timeout_ms + 5000 + 99) / 100))" ]; then
+        break
+      fi
       sleep 0.1
+      attempts=$((attempts + 1))
     done
-    kill -9 "$pid" >/dev/null 2>&1 || true
+    if is_running; then
+      echo "Survivor supervisor has not settled; retaining process custody." >&2
+      return 1
+    fi
   fi
+  node "$manager_script" check-stopped || return "$?"
+  [ "$stop_policy_status" -eq 0 ] || return "$stop_policy_status"
   rm -f "$pid_file" "$supervisor_script"
 }
 
@@ -122,16 +141,18 @@ start_gateway() {
   rm -f "${daemon_log}.exit.json"
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 
+const managerScript = process.env.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT;
 const command = process.env.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
 const daemonLog = process.env.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
-if (!command || !daemonLog) {
+if (!command || !daemonLog || !managerScript) {
   process.exit(2);
 }
 
 const output = fs.openSync(daemonLog, "a");
 const childEnv = { ...process.env };
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT;
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
 const managerEnv = JSON.parse(childEnv.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV);
@@ -150,7 +171,6 @@ delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;
 const restartDelayMs = 5_000;
 const restartWindowMs = 60_000;
 const restartBurst = 5;
-const stopTimeoutMs = 30_000;
 const starts = [];
 let totalStarts = 0;
 let firstExit;
@@ -158,12 +178,13 @@ let child;
 let activeGroupPid;
 let drainingGroupPid;
 let stopping = false;
+let stopFailed = false;
 
 const publishRuntime = (pid, supervisorPid = process.pid) => {
   const file = `${daemonLog}.runtime.json`;
   // Both manager adapters observe the ExecStart child, not this synthetic manager.
   fs.writeFileSync(`${file}.pending`, JSON.stringify({
-    pid, supervisorPid, groupPid: activeGroupPid ?? 0,
+    pid, supervisorPid, groupPid: activeGroupPid ?? 0, stopFailed,
     restarts: totalStarts - 1, entered: Number(process.hrtime.bigint() / 1000n),
   }));
   fs.renameSync(`${file}.pending`, file);
@@ -175,7 +196,7 @@ const finish = () => {
   try {
     fs.closeSync(output);
   } catch {}
-  process.exit(0);
+  process.exit(stopFailed ? 1 : 0);
 };
 
 const signalProcessGroup = (pid, signal) => {
@@ -209,8 +230,21 @@ const drainProcessGroup = (pid, onStopped) => {
     if (activeGroupPid === pid) activeGroupPid = undefined;
     onStopped();
   };
+  // Read at stop, not launch: daemon-reload can repair a running unit's policy.
+  let stopTimeoutMs;
+  try {
+    stopTimeoutMs = Number(execFileSync(process.execPath, [managerScript, "stop-timeout-ms"], { encoding: "utf8" }));
+  } catch (error) {
+    // Broken fixture policy is fatal, not a new stop-budget default. Keep the
+    // supervisor alive until its owned group is gone, then report the policy failure.
+    stopFailed = true;
+    stopping = true;
+    fs.writeSync(output, `[systemctl-shim] stop policy read failed; cleaning up process group: ${String(error)}\n`);
+    publishRuntime(child?.pid ?? 0);
+  }
   signalProcessGroup(pid, "SIGTERM");
-  const forceKill = setTimeout(() => {
+  if (stopFailed) signalProcessGroup(pid, "SIGKILL");
+  const forceKill = stopFailed || stopTimeoutMs === Infinity ? undefined : setTimeout(() => {
     signalProcessGroup(pid, "SIGKILL");
     // Signal delivery is not settlement; the existing observer must confirm exit.
   }, stopTimeoutMs);
@@ -291,7 +325,8 @@ start();
 SUPERVISOR
   # The manager must outlive the calling terminal, just like systemd. nohup alone
   # leaves Node in that terminal session and can strand its detached gateway.
-  OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
+  OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT="$manager_script" \
+    OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
     OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
     OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV="$manager_env" \
     node --input-type=module - "$supervisor_script" "$pid_file" "${daemon_log}.bootstrap.log" <<'START_SUPERVISOR'
@@ -353,8 +388,11 @@ case "$command" in
     exit 0
     ;;
   is-enabled)
-    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] &&
-      [ -f "$(unit_path)" ] && [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ] && exit 0
+    if [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] &&
+      [ -f "$(unit_path)" ] && [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ]; then
+      printf 'enabled\n'
+      exit 0
+    fi
     printf 'disabled\n'
     exit 1
     ;;
@@ -382,12 +420,14 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    if [ "$property" = LoadState,TimeoutStopUSec ]; then
+      node "$manager_script" stop-policy
+      exit 0
+    fi
     # Published readers omit LoadState or ControlGroup; retain their exact queries.
     runtime_properties='Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent'
-    include_control_group=0
     case "$property" in
-      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}") ;;
-      "${runtime_properties/Id,/Id,LoadState,},ControlGroup") include_control_group=1 ;;
+      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}" | "${runtime_properties/Id,/Id,LoadState,},ControlGroup") ;;
       *)
         echo "systemctl shim unsupported user-scope show: $*" >&2
         exit 1
@@ -398,10 +438,6 @@ case "$command" in
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
     fi
     node "$manager_script" runtime
-    # The emulated manager has no native unit cgroup to attest.
-    if [ "$include_control_group" = 1 ]; then
-      printf 'ControlGroup=\n'
-    fi
     exit 0
     ;;
   *)

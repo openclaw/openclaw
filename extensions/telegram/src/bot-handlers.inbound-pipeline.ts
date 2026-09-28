@@ -226,7 +226,6 @@ function createTelegramInboundHandlers(
         msg: event.msg,
         chatId: event.chatId,
         isGroup: event.isGroup,
-        isForum: event.isForum,
         threadSpec,
         dmPolicy,
         storeAllowFrom,

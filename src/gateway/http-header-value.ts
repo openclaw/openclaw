@@ -6,13 +6,7 @@ import {
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
-  if (typeof raw === "string") {
-    return raw;
-  }
-  if (Array.isArray(raw)) {
-    return raw[0];
-  }
-  return undefined;
+  return Array.isArray(raw) ? raw[0] : raw;
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {

@@ -316,6 +316,13 @@ describe("projectContextEngineAssemblyForCodex", () => {
   });
 
   it("preserves redacted tool payload context for thread bootstrap projections", async () => {
+    const shared = { recursive: true };
+    const nested: Record<string, unknown> = {
+      first: shared,
+      repeated: shared,
+      values: [null, undefined, 3],
+    };
+    nested.self = nested;
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [
         {
@@ -327,7 +334,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
               input: {
                 token: "sk-1234567890abcdef",
                 cmd: "cat .env",
-                options: { recursive: true },
+                options: nested,
               },
             },
           ],
@@ -345,6 +352,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
               content: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
               password: 842761,
               attemptsRemaining: 3,
+              nested,
             },
           ],
           timestamp: 2,
@@ -359,6 +367,11 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain('"token": "[string]"');
     expect(result.promptText).toContain('"cmd": "[string]"');
     expect(result.promptText).toContain('"recursive": "[boolean]"');
+    expect(result.promptText).toContain('"recursive": true');
+    expect(result.promptText.match(/"repeated": "\[Circular\]"/g)).toHaveLength(2);
+    expect(result.promptText.match(/"self": "\[Circular\]"/g)).toHaveLength(2);
+    expect(result.promptText).toMatch(/\[\s+null,\s+"\[undefined\]",\s+"\[number\]"\s+\]/);
+    expect(result.promptText).toMatch(/\[\s+null,\s+null,\s+3\s+\]/);
     expect(result.promptText).toContain("tool result: call-1");
     expect(result.promptText).toContain('"content"');
     expect(result.promptText).toContain("OPENAI_API_KEY=");

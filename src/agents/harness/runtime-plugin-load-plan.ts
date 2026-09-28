@@ -10,10 +10,7 @@ import {
   resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
-import {
-  addConfiguredSlotPluginIds,
-  normalizePluginsConfigForInstalledIndex,
-} from "../../plugins/gateway-startup-plugin-config.js";
+import { addConfiguredSlotPluginIds } from "../../plugins/gateway-startup-plugin-config.js";
 import { hashJson } from "../../plugins/installed-plugin-index-hash.js";
 import { createInstalledPluginIndexScopeLookup } from "../../plugins/installed-plugin-index-scope-lookup.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
@@ -109,7 +106,10 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   index: InstalledPluginIndex;
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
-  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config?.plugins, lookup);
+  const pluginsConfig = normalizePluginsConfigWithResolverCore(
+    params.config?.plugins,
+    lookup.normalizePluginId,
+  );
   if (!pluginsConfig.enabled) {
     return [];
   }

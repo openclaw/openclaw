@@ -8,6 +8,7 @@ export function createDeclarationFileSystem(
   cwd: string,
   admit: ((file: string) => string) | undefined,
   virtualFiles: ReadonlyMap<string, string>,
+  readText: (file: string) => string = (file) => fs.readFileSync(file, "utf8"),
 ) {
   const boundary = admit ? createDeclarationInputBoundary(cwd) : undefined;
   const resolve = (file: string) => boundary?.resolve(file) ?? path.resolve(cwd, file);
@@ -62,7 +63,7 @@ export function createDeclarationFileSystem(
         return virtual;
       }
       try {
-        const text = fs.readFileSync(accepted, "utf8");
+        const text = readText(accepted);
         inputs.add(accepted);
         return text;
       } catch (error) {
@@ -131,7 +132,7 @@ export function createDeclarationFileSystem(
   return {
     filesystem,
     inputs,
-    assertValid() {
+    assertValid(this: void) {
       if (failure) {
         throw failure;
       }

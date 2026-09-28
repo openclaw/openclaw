@@ -27,7 +27,8 @@ const observed = vi.hoisted(() => ({
   lookup: vi.fn<() => boolean>(),
   close: vi.fn<() => void>(),
   run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
-  closeResources: vi.fn<(key?: string) => Promise<void>>(),
+  // Import-time pools are drained even when a name filter skips every test.
+  closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   deferredRun: undefined as
     | ((prepare: () => unknown, options: { inputBytes?: number }) => Promise<unknown>)
     | undefined,
@@ -36,7 +37,7 @@ const observed = vi.hoisted(() => ({
   quarantineOpen: vi.fn<() => QuarantineDatabase>(),
   quarantinePaths: new Set<string>(),
   hydrate: vi.fn<() => unknown>(),
-  rotate: vi.fn<() => Promise<void>>(),
+  rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
   nativeWorker: vi.fn(() => {
@@ -173,6 +174,10 @@ export const typedFailures = [
   {
     error: new SessionTranscriptProjectionUnavailableError("projected-session"),
     reply: { kind: "projection", sessionId: "projected-session" },
+  },
+  {
+    error: new SessionTranscriptProjectionUnavailableError("changed-session", "window-changed"),
+    reply: { kind: "projection", sessionId: "changed-session", reason: "window-changed" },
   },
   {
     error: new SessionTranscriptReadFenceError("fence failed"),

@@ -1,5 +1,3 @@
-// Qa Matrix plugin module implements self-verification CLI E2EE scenarios.
-import { createMatrixQaClient } from "../substrate/client.js";
 import { createMatrixQaCliSelfVerificationRuntime } from "./scenario-runtime-e2ee-cli-runtime.js";
 import {
   assertMatrixQaCliSasMatches,
@@ -8,6 +6,7 @@ import {
   isMatrixQaCliOwnerSelfVerification,
   parseMatrixQaCliSasText,
   parseMatrixQaCliSummaryField,
+  loginMatrixQaCliDevice,
   registerMatrixQaCliE2eeAccount,
   runMatrixQaSetupCliJson,
   type MatrixQaCliBackupRestoreStatus,
@@ -44,17 +43,12 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
     if (!encodedRecoveryKey) {
       throw new Error("Matrix E2EE self-verification scenario did not expose a recovery key");
     }
-    const loginClient = createMatrixQaClient({
-      baseUrl: context.baseUrl,
-    });
-    const cliDevice = await loginClient.loginWithPassword({
-      deviceName: "OpenClaw Matrix QA CLI Self Verification Device",
-      password: account.password,
-      userId: account.userId,
-    });
-    if (!cliDevice.deviceId) {
-      throw new Error("Matrix E2EE CLI verification login did not return a device id");
-    }
+    const cliDevice = await loginMatrixQaCliDevice(
+      context.baseUrl,
+      account,
+      "OpenClaw Matrix QA CLI Self Verification Device",
+      "Matrix E2EE CLI verification",
+    );
 
     const cli = await createMatrixQaCliSelfVerificationRuntime({
       accountId,

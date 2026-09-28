@@ -165,17 +165,18 @@ export async function resolveQaOwnerPluginIdsForProviderIds(params: {
   return [...ownerPluginIds];
 }
 
-function collectQaBundledPluginIds(params: {
+function collectQaBundledPluginSources(params: {
   repoRoot: string;
   allowedPluginIds: readonly string[];
 }) {
-  const pluginIds = new Set<string>();
+  const sources = new Map<string, string>();
   for (const pluginId of [...params.allowedPluginIds, ...QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS]) {
-    if (resolveQaBundledPluginSourceDir({ repoRoot: params.repoRoot, pluginId })) {
-      pluginIds.add(pluginId);
+    const sourceDir = resolveQaBundledPluginSourceDir({ repoRoot: params.repoRoot, pluginId });
+    if (sourceDir) {
+      sources.set(pluginId, sourceDir);
     }
   }
-  return [...pluginIds];
+  return sources;
 }
 
 function resolveQaStagedBundledTreeName(repoRoot: string) {
@@ -241,32 +242,6 @@ async function seedQaStagedNodeModules(params: { repoRoot: string; stagedRoot: s
   }
 }
 
-function collectQaBuiltTreeRoots(params: {
-  repoRoot: string;
-  stagedPluginIds: readonly string[];
-  stagedTreeName: string;
-}) {
-  const treeRoots = new Set<string>();
-  treeRoots.add(path.join(params.repoRoot, params.stagedTreeName));
-  for (const pluginId of params.stagedPluginIds) {
-    const sourceDir = resolveQaBundledPluginSourceDir({
-      repoRoot: params.repoRoot,
-      pluginId,
-    });
-    if (!sourceDir) {
-      continue;
-    }
-    const builtTreeRoot = resolveQaBuiltBundledPluginTreeRoot({
-      repoRoot: params.repoRoot,
-      sourceDir,
-    });
-    if (builtTreeRoot) {
-      treeRoots.add(builtTreeRoot);
-    }
-  }
-  return [...treeRoots];
-}
-
 async function seedQaStagedBuiltTreeRoots(params: {
   stagedTreeRoot: string;
   sourceTreeRoots: readonly string[];
@@ -295,19 +270,7 @@ export async function resolveQaRuntimeHostVersion(params: {
   const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
   const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
   let selected = parseStableSemverFloor(rootPackage.version);
-  const stagedPluginIds = collectQaBundledPluginIds({
-    repoRoot: params.repoRoot,
-    allowedPluginIds: params.allowedPluginIds,
-  });
-
-  for (const pluginId of stagedPluginIds) {
-    const sourceDir = resolveQaBundledPluginSourceDir({
-      repoRoot: params.repoRoot,
-      pluginId,
-    });
-    if (!sourceDir) {
-      continue;
-    }
+  for (const sourceDir of collectQaBundledPluginSources(params).values()) {
     const packagePath = path.join(sourceDir, "package.json");
     if (!existsSync(packagePath)) {
       continue;
@@ -338,10 +301,7 @@ export async function createQaBundledPluginsDir(params: {
   tempRoot: string;
   allowedPluginIds: readonly string[];
 }) {
-  const stagedPluginIds = collectQaBundledPluginIds({
-    repoRoot: params.repoRoot,
-    allowedPluginIds: params.allowedPluginIds,
-  });
+  const stagedPluginSources = collectQaBundledPluginSources(params);
   const stagedRoot = resolveQaStagedBundledPluginsRoot(params);
   await fs.rm(stagedRoot, { recursive: true, force: true });
   await fs.mkdir(stagedRoot, { recursive: true });
@@ -364,11 +324,16 @@ export async function createQaBundledPluginsDir(params: {
   await fs.mkdir(stagedTreeRoot, { recursive: true });
   await seedQaStagedBuiltTreeRoots({
     stagedTreeRoot,
-    sourceTreeRoots: collectQaBuiltTreeRoots({
-      repoRoot: params.repoRoot,
-      stagedPluginIds,
-      stagedTreeName,
-    }),
+    sourceTreeRoots: uniqueStrings([
+      path.join(params.repoRoot, stagedTreeName),
+      ...[...stagedPluginSources.values()].flatMap((sourceDir) => {
+        const treeRoot = resolveQaBuiltBundledPluginTreeRoot({
+          repoRoot: params.repoRoot,
+          sourceDir,
+        });
+        return treeRoot ? [treeRoot] : [];
+      }),
+    ]),
   });
   if (stagedTreeName === "dist-runtime" && !existsSync(path.join(stagedRoot, "dist"))) {
     const repoDistDir = path.join(params.repoRoot, "dist");
@@ -381,14 +346,7 @@ export async function createQaBundledPluginsDir(params: {
   }
   const bundledPluginsDir = path.join(stagedTreeRoot, "extensions");
   await fs.mkdir(bundledPluginsDir, { recursive: true });
-  for (const pluginId of stagedPluginIds) {
-    const sourceDir = resolveQaBundledPluginSourceDir({
-      repoRoot: params.repoRoot,
-      pluginId,
-    });
-    if (!sourceDir) {
-      throw new Error(`qa bundled plugin not found: ${pluginId}`);
-    }
+  for (const [pluginId, sourceDir] of stagedPluginSources) {
     const targetDir = path.join(bundledPluginsDir, pluginId);
     await fs.cp(sourceDir, targetDir, { recursive: true });
     // Compiled extension trees omit static manifests. Restore the canonical

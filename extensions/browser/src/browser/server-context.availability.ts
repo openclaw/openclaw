@@ -100,12 +100,6 @@ function formatLocalPortOwnershipHint(profile: ResolvedBrowserProfile): string {
   );
 }
 
-function normalizeFailureMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  const trimmed = raw.trim();
-  return trimmed || "unknown browser launch failure";
-}
-
 function recordManagedLaunchFailure(profileState: ProfileRuntimeState, err: unknown): void {
   const previous = profileState.managedLaunchFailure;
   const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
@@ -119,7 +113,8 @@ function recordManagedLaunchFailure(profileState: ProfileRuntimeState, err: unkn
     consecutiveFailures,
     lastFailureAt: now,
     ...(cooldownMs > 0 ? { cooldownUntil: now + cooldownMs } : {}),
-    lastError: normalizeFailureMessage(err),
+    lastError:
+      (err instanceof Error ? err.message : String(err)).trim() || "unknown browser launch failure",
   };
 }
 

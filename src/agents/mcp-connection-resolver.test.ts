@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
@@ -13,6 +13,8 @@ import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -213,6 +215,9 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const proof = await startAuthenticatedMcpProofServer();
     const previousExternalRestartPolicy = isGatewayRestartExternallyAllowed();
 
@@ -335,6 +340,7 @@ describe("mcp connection resolver helpers", () => {
         sourceDigests: {},
       };
       const gatewayReload = createGatewayReloadHandlers({
+        scheduler,
         deps: {},
         broadcast() {},
         getState: () => gatewayState,

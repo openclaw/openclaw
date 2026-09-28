@@ -100,7 +100,8 @@ function readProbeCall(): GatewayProbeCall {
   return call as GatewayProbeCall;
 }
 
-vi.mock("../gateway/connection-details.js", () => ({
+vi.mock("../gateway/connection-details.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/connection-details.js")>()),
   buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetailsWithResolvers,
 }));
 

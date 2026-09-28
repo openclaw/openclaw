@@ -546,7 +546,7 @@ wa-switch.settings-toggle {
   width: 340px;
 }
 
-.settings-row__control input.settings-input {
+.settings-row__control input.settings-input:not(.picker-select__search) {
   text-align: right;
 }
 

@@ -23,7 +23,18 @@ afterAll(() => {
 });
 
 describe("resolveFeishuReasoningPreviewEnabled", () => {
-  const emptyCfg: ClawdbotConfig = {};
+  function resolvePreview(
+    sessionKey?: string,
+    overrides: Partial<Parameters<typeof resolveFeishuReasoningPreviewEnabled>[0]> = {},
+  ) {
+    return resolveFeishuReasoningPreviewEnabled({
+      cfg: {},
+      agentId: "main",
+      storePath: "/tmp/feishu-sessions.json",
+      sessionKey,
+      ...overrides,
+    });
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -38,22 +49,8 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
       return entries[sessionKey as keyof typeof entries];
     });
 
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg: emptyCfg,
-        agentId: "main",
-        storePath: "/tmp/feishu-sessions.json",
-        sessionKey: "agent:main:feishu:dm:ou_sender_1",
-      }),
-    ).toBe(true);
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg: emptyCfg,
-        agentId: "main",
-        storePath: "/tmp/feishu-sessions.json",
-        sessionKey: "agent:main:feishu:dm:ou_sender_2",
-      }),
-    ).toBe(false);
+    expect(resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(true);
+    expect(resolvePreview("agent:main:feishu:dm:ou_sender_2")).toBe(false);
     expect(getSessionEntryMock).toHaveBeenCalledWith({
       storePath: "/tmp/feishu-sessions.json",
       sessionKey: "agent:main:feishu:dm:ou_sender_1",
@@ -66,21 +63,8 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
       throw new Error("disk unavailable");
     });
 
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg: emptyCfg,
-        agentId: "main",
-        storePath: "/tmp/feishu-sessions.json",
-        sessionKey: "agent:main:feishu:dm:ou_sender_1",
-      }),
-    ).toBe(false);
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg: emptyCfg,
-        agentId: "main",
-        storePath: "/tmp/feishu-sessions.json",
-      }),
-    ).toBe(false);
+    expect(resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(false);
+    expect(resolvePreview()).toBe(false);
   });
 
   it("falls back to configured stream defaults", () => {
@@ -99,28 +83,8 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
       },
     };
 
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg,
-        agentId: "main",
-        storePath: "/tmp/feishu-sessions.json",
-        sessionKey: "agent:main:feishu:dm:ou_sender_1",
-      }),
-    ).toBe(true);
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg,
-        agentId: "ops",
-        storePath: "/tmp/feishu-sessions.json",
-      }),
-    ).toBe(false);
-    expect(
-      resolveFeishuReasoningPreviewEnabled({
-        cfg,
-        agentId: "main",
-        storePath: "/tmp/feishu-sessions.json",
-        sessionKey: "agent:main:feishu:dm:ou_sender_2",
-      }),
-    ).toBe(false);
+    expect(resolvePreview("agent:main:feishu:dm:ou_sender_1", { cfg })).toBe(true);
+    expect(resolvePreview(undefined, { cfg, agentId: "ops" })).toBe(false);
+    expect(resolvePreview("agent:main:feishu:dm:ou_sender_2", { cfg })).toBe(false);
   });
 });

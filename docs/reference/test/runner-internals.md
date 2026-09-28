@@ -69,6 +69,9 @@ emission. Its filesystem callbacks make candidates outside the checkout appear
 missing before native resolution can read them. Source and package-manifest reads
 are captured directly; admission does not depend on parsing resolution traces.
 The compiler version is pinned in `package.json` because this API is unstable.
+Configuration and requested semantic checks run before emission. Declaration
+errors come from the in-memory emit result, avoiding a separate declaration
+transform solely for diagnostics. Any error prevents artifact publication.
 
 Nested physical worktrees are supported with their own
 `pnpm install --frozen-lockfile`, even when ancestor directories contain
@@ -192,6 +195,10 @@ this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
 cleanup; unregistered descendants that intentionally escape the owned group remain
 outside this contract. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+The CI shard runner also removes its default include-file and transform-cache
+scratch directory after every admitted group has joined. Caller-supplied scratch
+and persistent cache roots remain caller-owned. Unverified descendant completion
+retains the shard scratch directory and reports its exact path.
 This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.

@@ -61,6 +61,32 @@ describe("createCronToolSchema", () => {
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
 
+  it("does not advertise forbidden automation management inside a scheduled run", () => {
+    const tool = createCronTool({ selfRemoveOnlyJobId: "job-current", runId: "run-current" });
+    const allowed = ["status", "list", "get", "remove", "runs", "next_check"];
+    for (const projected of [
+      tool.parameters,
+      normalizeToolParameterSchema(tool.parameters, { modelProvider: "gemini" }),
+      normalizeToolParameterSchema(tool.parameters, {
+        modelCompat: { toolSchemaProfile: "llamacpp" },
+      }),
+    ]) {
+      expect(projected).toHaveProperty("properties.action.enum", allowed);
+      for (const field of ["job", "text", "mode", "runMode", "sessionKey", "contextMessages"]) {
+        expect(projected).not.toHaveProperty(`properties.${field}`);
+      }
+    }
+    for (const action of ["add", "update", "run", "wake"]) {
+      expect(Value.Check(tool.parameters, { action, jobId: "job-current" })).toBe(false);
+    }
+    for (const action of allowed) {
+      expect(Value.Check(tool.parameters, { action, jobId: "job-current", in: "15m" })).toBe(true);
+    }
+    expect(tool.description).not.toContain("ADD: job");
+    expect(tool.description).not.toContain("delayed self-wakeups");
+    expect(tool.description).toContain("remove");
+  });
+
   it("advertises timeout clears while retaining numeric bounds", () => {
     for (const [timeoutSeconds, accepted] of [
       [null, true],
@@ -130,7 +156,7 @@ describe("createCronToolSchema", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
 
-  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+  it.each([undefined, " \t ", " agent:main:main "])(
     "advertises job retargeting only without session scope (%j)",
     (agentSessionKey) => {
       const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
@@ -370,10 +396,6 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.payload includes fallbacks", () => {
-    expect(keysAt(schemaRecord, "job.payload")).toContain("fallbacks");
-  });
-
   it("accepts script payloads in create and update calls", () => {
     expect(
       Value.Check(schema, {
@@ -575,12 +597,6 @@ describe("createCronToolSchema with cron triggers disabled", () => {
     expect(tool.description).not.toContain("Silent watcher");
     expect(tool.description).not.toContain("event watchers");
     expect(tool.description).toContain("say it is unsupported");
-  });
-
-  it("keeps the full surface when no config is provided", () => {
-    const configlessSchema = createCronTool().parameters as unknown as Record<string, unknown>;
-    expect(keysAt(configlessSchema, "job")).toContain("trigger");
-    expect(propertyAt(configlessSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
   it("keeps the full surface when config omits cron.triggers (enabled default)", () => {

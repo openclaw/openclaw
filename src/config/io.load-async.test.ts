@@ -116,7 +116,7 @@ it.each(["sync", "async"] as const)(
       reason: "Missing plugin",
       command: "openclaw doctor --fix",
     };
-    recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
+    await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
     await closeOpenClawStateDatabaseAsync();
     const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
     const context = configContext.createConfigIoContext(options);
@@ -134,7 +134,7 @@ it.each(["sync", "async"] as const)(
     expect(await read()).toEqual([pending]);
     const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
     expect(loaded.gateway?.mode).toBe("local");
-    recordDeferredPluginMigrations({
+    await recordDeferredPluginMigrations({
       env: options.env,
       pending: [{ ...pending, reason: "Changed obligation" }],
     });
@@ -176,7 +176,7 @@ it.each(["load", "snapshot", "policy"] as const)(
       configPaths: [["session", "store"]],
       validationExcludedPaths: [["session", "store"]],
     };
-    recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
+    await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
     await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveOpenClawStateSqlitePath(options.env);
     const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
@@ -220,7 +220,7 @@ it.each(["load", "snapshot", "policy"] as const)(
     );
     expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
     if (method === "policy") {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         env: options.env,
         pending: [],
         resolvedPluginIds: [pending.pluginId],

@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import {
+  detectChangedExtensionIds,
+  listAvailableExtensionIds,
+} from "../../scripts/lib/changed-extensions.mts";
+import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
@@ -20,6 +24,58 @@ const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 afterEach(() => vi.restoreAllMocks());
 
 describe("extension executable test plans", () => {
+  it("reuses singleton invocation costs across envelopes without pricing multi-file pools as serial", () => {
+    const files = ["extensions/telegram/src/one.test.ts", "extensions/telegram/src/two.test.ts"];
+    const added = "extensions/telegram/src/three.test.ts";
+    const key = extensionTestPlan.createExtensionTestTimingKey;
+    const timings: Record<string, number> = {
+      [key(workerConfig, [files[0]!], undefined, "singleton-invocation")!]: 10,
+      [key(workerConfig, [files[1]!], undefined, "singleton-invocation")!]: 21,
+      [key(workerConfig, [], undefined, "wrapper-overhead")!]: 3,
+    };
+    const samples = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(timings);
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(34);
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 3, [...files, added])).toBe(
+      42,
+    );
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, [files[1]!, added])).toBe(
+      32,
+    );
+    timings[key(workerConfig, files)!] = 60;
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(60);
+
+    samples.mockReturnValue({
+      [key(telegramConfig, [files[0]!], undefined, "singleton-invocation")!]: 100,
+      [key(telegramConfig, [files[1]!], undefined, "singleton-invocation")!]: 100,
+      [key(telegramConfig, [], undefined, "wrapper-overhead")!]: 20,
+    });
+    expect(extensionTestPlan.estimateExtensionTestCost(telegramConfig, 2, files)).toBe(9);
+    samples.mockReturnValue({
+      [key(
+        workerConfig,
+        [files[0]!],
+        { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+        "singleton-invocation",
+      )!]: 100,
+      [key(
+        workerConfig,
+        [files[1]!],
+        { OPENCLAW_VITEST_MAX_WORKERS: "2", MODE: "other" },
+        "singleton-invocation",
+      )!]: 100,
+    });
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(16);
+    const only = [files[0]!];
+    samples.mockReturnValue({ [key(workerConfig, only)!]: 22 });
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
+    samples.mockReturnValue({
+      [key(workerConfig, only)!]: 22,
+      [key(workerConfig, only, undefined, "singleton-invocation")!]: 20,
+      [key(workerConfig, [], undefined, "wrapper-overhead")!]: 2,
+    });
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
+  });
+
   it.each(["git", "filesystem"])("reads each candidate checkout's %s plugin inventory", (kind) => {
     const root = "extensions/fixture";
     for (const snapshot of ["before", "after"]) {
@@ -27,7 +83,10 @@ describe("extension executable test plans", () => {
       const selected = `${root}/${snapshot}.test.ts`;
       const files = [
         `${root}/package.json`,
+        `${root}/openclaw.plugin.json`,
         `extensions/${snapshot}/package.json`,
+        `extensions/manifest-${snapshot}/openclaw.plugin.json`,
+        `extensions/nested/${snapshot}/openclaw.plugin.json`,
         selected,
         `${root}/browser/ui.test.ts`,
         `${root}/dist/generated.test.ts`,
@@ -36,17 +95,51 @@ describe("extension executable test plans", () => {
       for (const file of files) {
         const absolute = path.join(cwd, file);
         mkdirSync(path.dirname(absolute), { recursive: true });
-        writeFileSync(absolute, file.endsWith("package.json") ? "{}\n" : "export {};\n");
+        writeFileSync(absolute, file.endsWith(".json") ? "{}\n" : "export {};\n");
       }
       if (kind === "git") {
         for (const args of [["init"], ["add", "."]]) {
           execFileSync("git", args, { cwd, stdio: "ignore" });
         }
+        const untracked = path.join(cwd, "extensions/untracked");
+        mkdirSync(untracked);
+        writeFileSync(path.join(untracked, "openclaw.plugin.json"), "{}\n");
       }
-      expect(listAvailableExtensionIds(cwd)).toEqual([snapshot, "fixture"].toSorted());
+      expect(listAvailableExtensionIds(cwd)).toEqual(
+        [snapshot, "fixture", `manifest-${snapshot}`].toSorted(),
+      );
       expect(extensionTestPlan.listExtensionTestFilesForRoots([root], cwd)).toEqual([selected]);
       expect(extensionTestPlan.listExtensionTestFilesForRoots([selected], cwd)).toEqual([selected]);
     }
+  });
+
+  it.each([
+    { selection: "name", targetArg: "active-memory", cwd: process.cwd() },
+    { selection: "path", targetArg: "extensions/active-memory", cwd: process.cwd() },
+    { selection: "cwd", cwd: path.join(process.cwd(), "extensions/active-memory") },
+  ])("plans manifest-only Active Memory by $selection", ({ targetArg, cwd }) => {
+    expect(extensionTestPlan.resolveExtensionTestPlan({ targetArg, cwd })).toMatchObject({
+      extensionId: "active-memory",
+      extensionDir: "extensions/active-memory",
+      hasTests: true,
+      planGroups: [
+        {
+          config: "test/vitest/vitest.extension-active-memory.config.ts",
+          roots: ["extensions/active-memory"],
+        },
+        {
+          config: workerConfig,
+          roots: ["extensions/active-memory/index.test.ts"],
+        },
+      ],
+    });
+  });
+
+  it("includes manifest-only Active Memory in default and changed discovery", () => {
+    expect(listAvailableExtensionIds()).toContain("active-memory");
+    expect(detectChangedExtensionIds(["extensions/active-memory/index.ts"])).toEqual([
+      "active-memory",
+    ]);
   });
 
   it.each([

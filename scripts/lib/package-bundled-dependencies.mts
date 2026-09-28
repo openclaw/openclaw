@@ -236,6 +236,18 @@ export function collectBundledDependencyErrors({
       errors.push(`bundled ${name} package.json must name ${name}`);
       continue;
     }
+    // npm infers peers of bundled packages are already in the bundle, while
+    // packlist excludes them unless explicitly bundled. Missing peers are not
+    // installed, even when the root declares them as required dependencies.
+    const peers = isRecord(manifest.peerDependencies) ? manifest.peerDependencies : {};
+    for (const peer of Object.keys(peers)) {
+      if (
+        typeof dependencies[peer] === "string" &&
+        !runtime.entries.has(`node_modules/${peer}/package.json`)
+      ) {
+        errors.push(`bundled ${name} is missing its root dependency peer ${peer}`);
+      }
+    }
     const bundled = { ...runtime, name };
     if (name === PATCHED_MCP_NAME) {
       errors.push(...collectPatchedMcpErrors(bundled, manifest, dependencies[PATCHED_MCP_NAME]));

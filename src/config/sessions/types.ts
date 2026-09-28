@@ -1,4 +1,3 @@
-// Session store types define durable per-session metadata and merge/usage helpers.
 import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
@@ -52,7 +51,7 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
-export type PersistedSessionRunStatus = SessionRunStatus | "interrupted";
+export type PersistedSessionRunStatus = SessionRunStatus;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
 export type SessionOrigin = {
@@ -661,7 +660,6 @@ function resolveSessionPluginLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
   includeLine: (line: string) => boolean,
 ): string[] {
-  // Status and trace surfaces share the same plugin-owned lines but apply different filters.
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
@@ -741,41 +739,32 @@ export function setSessionRuntimeModel(
   return true;
 }
 
-type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
-
-type MergeSessionEntryOptions = {
-  policy?: SessionEntryMergePolicy;
-  now?: number;
-};
-
 function resolveMergedUpdatedAt(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
-  options?: MergeSessionEntryOptions,
+  preserveActivity: boolean,
 ): number {
-  const now = options?.now ?? Date.now();
+  const now = Date.now();
   const existingUpdatedAt = normalizeMergedUpdatedAt(existing?.updatedAt, now);
   const patchUpdatedAt = normalizeMergedUpdatedAt(patch.updatedAt, now);
-  if (options?.policy === "preserve-activity" && existing) {
+  if (preserveActivity && existing) {
     return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
   return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
 }
 
 function normalizeMergedUpdatedAt(value: number | undefined, now: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.min(value, now);
+  const normalized = asNonNegativeFiniteNumber(value);
+  return normalized === undefined ? undefined : Math.min(normalized, now);
 }
 
 function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
-  options?: MergeSessionEntryOptions,
+  preserveActivity = false,
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
+  const updatedAt = resolveMergedUpdatedAt(existing, patch, preserveActivity);
   if (!existing) {
     return stripRetiredSessionEntryLocators(
       normalizeSessionRuntimeModelFields({
@@ -852,9 +841,7 @@ export function mergeSessionEntryPreserveActivity(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
 ): SessionEntry {
-  return mergeSessionEntryWithPolicy(existing, patch, {
-    policy: "preserve-activity",
-  });
+  return mergeSessionEntryWithPolicy(existing, patch, true);
 }
 
 export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {

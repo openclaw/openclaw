@@ -19,34 +19,45 @@ afterEach(() => {
 });
 
 describe("OpenClaw state lease", () => {
-  it.each([undefined, "worker"] as const)(
-    "releases ownership when a CLI exits with %s renewal",
-    async (heartbeat) => {
+  it.each([
+    { heartbeat: undefined, termination: "exit", processBound: false },
+    { heartbeat: "worker", termination: "exit", processBound: false },
+    { heartbeat: undefined, termination: "SIGKILL", processBound: true },
+    { heartbeat: "worker", termination: "SIGKILL", processBound: true },
+    { heartbeat: "worker", termination: "SIGKILL", processBound: false },
+  ] as const)(
+    "reclaims only settled ownership after $termination with $heartbeat renewal (process-bound: $processBound)",
+    async ({ heartbeat, termination, processBound }) => {
       await withOpenClawTestState({ label: "core-state-lease-process-exit" }, async (state) => {
         const childUrl = resolveRuntimeWorkerUrl(stateLeaseProcessExitRuntimeEntrypoint);
 
-        const exitCode = await new Promise<number | null>((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
           const child = spawn(
             process.execPath,
-            [...resolveRuntimeWorkerArgv(childUrl), state.stateDir, heartbeat ?? ""],
+            [
+              ...resolveRuntimeWorkerArgv(childUrl),
+              state.stateDir,
+              heartbeat ?? "",
+              termination,
+              processBound ? "process-bound" : "",
+            ],
             { stdio: ["ignore", "pipe", "pipe"] },
           );
           let output = "";
           child.stdout.on("data", (chunk) => (output += chunk));
           child.stderr.on("data", (chunk) => (output += chunk));
           child.on("error", reject);
-          child.on("close", (code) => {
-            if (code !== 23) {
-              reject(new Error(`lease child exited ${code}: ${output}`));
+          child.on("close", (code, signal) => {
+            if (termination === "SIGKILL" ? signal !== "SIGKILL" : code !== 23) {
+              reject(new Error(`lease child exited ${code}/${signal}: ${output}`));
               return;
             }
-            resolve(code);
+            resolve();
           });
         });
-        expect(exitCode).toBe(23);
 
         let reacquired = false;
-        await withOpenClawStateLease(
+        const acquisition = withOpenClawStateLease(
           {
             scope: "core:test",
             key: "process-exit",
@@ -58,7 +69,13 @@ describe("OpenClaw state lease", () => {
             reacquired = true;
           },
         );
-        expect(reacquired).toBe(true);
+        if (termination === "SIGKILL" && !processBound) {
+          await expect(acquisition).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+          expect(reacquired).toBe(false);
+        } else {
+          await acquisition;
+          expect(reacquired).toBe(true);
+        }
       });
     },
   );

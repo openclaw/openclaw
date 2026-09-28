@@ -19,7 +19,6 @@ import {
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import {
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginIdFromConfig,
@@ -40,7 +39,6 @@ import type {
   InstalledPluginIndexScopeLookup,
 } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
 
 export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
@@ -59,13 +57,6 @@ export function readStartupBundledDiscoveryMode(
   }
   return undefined;
 }
-export function normalizePluginsConfigForInstalledIndex(
-  config: OpenClawConfig["plugins"] | undefined,
-  lookup: InstalledPluginIndexScopeLookup,
-) {
-  return normalizePluginsConfigWithResolverCore(config, lookup.normalizePluginId);
-}
-
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
     return false;
@@ -106,10 +97,6 @@ function listPotentialEnabledChannelIds(
     .filter(Boolean);
   // Only persisted-auth evidence bypasses disabled activation during migration.
   return sortUniquePluginIds([...enabledSignals, ...persistedSignals]);
-}
-
-function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
-  return plugin.startup.memory;
 }
 
 function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
@@ -196,7 +183,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
 
 export function resolveMemorySlotStartupPluginId(params: {
   activationSourceConfig: OpenClawConfig;
-  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSourcePlugins: NormalizedPluginsConfig;
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
@@ -222,7 +209,7 @@ export function resolveMemorySlotStartupPluginId(params: {
 
 export function resolveContextEngineSlotStartupPluginId(params: {
   activationSourceConfig: OpenClawConfig;
-  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSourcePlugins: NormalizedPluginsConfig;
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
@@ -249,7 +236,7 @@ export function shouldConsiderForGatewayStartup(params: {
   if (params.contextEngineSlotStartupPluginId === params.plugin.pluginId) {
     return true;
   }
-  if (!isGatewayStartupMemoryPlugin(params.plugin)) {
+  if (!params.plugin.startup.memory) {
     return false;
   }
   if (params.startupDreamingPluginIds.has(params.plugin.pluginId)) {
@@ -308,7 +295,7 @@ export function addConfiguredActivationPathPluginIds(
 
 export function addPluginConfigEntryIds(
   target: Set<string>,
-  plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>,
+  plugins: NormalizedPluginsConfig,
 ): void {
   for (const [pluginId, entry] of Object.entries(plugins.entries)) {
     if (entry?.enabled !== false) {
@@ -321,7 +308,7 @@ export function addConfiguredSlotPluginIds(
   target: Set<string>,
   params: {
     activationSourceConfig: OpenClawConfig;
-    activationSourcePlugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    activationSourcePlugins: NormalizedPluginsConfig;
     lookup: InstalledPluginIndexScopeLookup;
   },
 ): void {

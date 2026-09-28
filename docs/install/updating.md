@@ -105,11 +105,44 @@ Service membership uses the running Gateway's process ancestry and native superv
 facts. An external terminal that inherited service environment markers can still update after native
 membership is verified as external. Reparented children remain inside when they
 share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
-Unreadable native membership refuses with `service-membership-unverified`;
+An already-current core update never refuses for service membership. When membership
+cannot be verified as external, it completes with `already-current` and a warning
+that plugin, runtime, and service maintenance was deferred, before that maintenance
+can change files or stop the Gateway. An explicit channel change is also left
+unapplied and named in the warning so it can be retried. Real updates retain the containment checks.
+Present but unreadable native membership refuses with `service-membership-unverified`;
 confirmed native membership uses `inside-gateway-service`. Windows currently uses
 verified ancestry and the inherited-marker fallback because job-object membership
 is not available to the runtime. A genuine Gateway descendant must use the managed
 update handoff or an independent terminal.
+
+Linux supports both cgroup v2 and the named systemd v1 hierarchy. When readable
+native observations establish that this host has no service containment tree or
+launchd job, a complete external ancestry walk and a distinct process group allow
+the updater to stop, update, and start the managed service itself. The service
+definition must still belong to this installation. The report and
+`openclaw update status --json` record a warning: `Service membership unverifiable
+on this host; using managed stop/update/start.`
+
+Permission failures, conflicting, incomplete or malformed observations, and known service
+members do not use this fallback. Reparented callers in the Gateway's process
+group remain inside even when there is no native unit tree. When native facts
+exist but cannot be read, run this sequence from an interactive external shell
+not started by the Gateway service, under the installation's owning account:
+
+```bash
+openclaw gateway stop && openclaw update --yes && openclaw gateway start
+```
+
+Stopping the Gateway removes the live containment ambiguity. Keep the same account,
+profile, and state/configuration paths throughout, and repeat any requested `--channel`
+or `--tag` on the update command. If the update reports an error,
+follow its recovery guidance before starting the Gateway. With native helper support,
+`openclaw gateway call update.run --params '{}'`, the Gateway tool's `update.run`
+action, and `/update` can instead perform a managed handoff. Linux transient user
+handoffs require `systemd-run`; an emulated manager without it cannot use that route.
+See [Automation and SSH](/cli/update#automation-and-ssh).
+
 Managed-service refusals retain a specific code, such as
 `inside-gateway-process-tree` or `service-definition-changed`, in the failure
 report and `openclaw update status --json`. Shared reports preserve that code and
@@ -510,11 +543,9 @@ not execute them in the shell of the Gateway hosting its session. A missing
 owner permission requires owner setup, and an externally supervised installation
 uses its deployment owner's update workflow.
 
-Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
-`openclaw update status` to read the active or latest report, including after a
-restart; `--json` exposes the `activeRun` and `lastRun` records. See
-[Run history and reports](/cli/update#run-history-and-reports) for Gateway history
-queries.
+For installations updated by OpenClaw itself, chat, CLI, Control UI, and automatic updates share a durable run ID.
+Use `openclaw update status` to read the active or latest report, including after a restart; `--json` exposes the `activeRun` and `lastRun` records.
+See [Run history and reports](/cli/update#run-history-and-reports) for Gateway history queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration)
 or have a [verified channel link to a current Gateway administrator](/concepts/user-model#channel-identity-links).

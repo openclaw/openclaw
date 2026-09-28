@@ -61,7 +61,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("./update-command-service.js").maybeRestartServiceAfterFailedMutableUpdate
     >(),
-  restoreWindowsAutoStart: vi.fn(async () => true),
+  restoreWindowsAutoStart: vi.fn(async () => {}),
   freshProcess: vi.fn(),
   writeSentinel: vi.fn<
     typeof import("./update-command-result.js").writeControlPlaneUpdateRestartSentinelBestEffort
@@ -106,7 +106,6 @@ vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: mocks.restoreWindowsAutoStart,
   maybeRestartService: mocks.restartCandidate,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopCandidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
@@ -262,6 +261,14 @@ describe("skipped update exit status", () => {
 });
 
 describe("failed update recovery restart", () => {
+  const windowsTaskAutoStartRecovery = {
+    suspended: Promise.resolve(true),
+    beginMutation: () => {},
+    restore: mocks.restoreWindowsAutoStart,
+    handoff: () => {},
+    complete: async () => {},
+    interrupted: () => false,
+  };
   beforeEach(() => {
     vi.resetAllMocks();
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
@@ -487,6 +494,7 @@ describe("failed update recovery restart", () => {
       const failure = await finishFailedUpdate(result, {
         json: true,
         stopped,
+        windowsTaskAutoStartRecovery,
         ...(original ? { failure: { cause: original, detail: formatErrorMessage(original) } } : {}),
       });
       expect(failure.exitCode).toBe(expected);
@@ -529,7 +537,7 @@ describe("failed update recovery restart", () => {
       });
       const failure = await finishFailedUpdate(
         { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
-        { json: true },
+        { json: true, windowsTaskAutoStartRecovery },
       );
       expect(failure.exitCode).toBe(79);
       expect(failure.detail).toBe(detail);

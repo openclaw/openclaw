@@ -1,9 +1,9 @@
 // Covers model auth resolution across env, profiles, CLI, and provider aliases.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -267,6 +267,8 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
 });
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const envVar = (...parts: string[]) => parts.join("_");
 
@@ -1018,7 +1020,7 @@ describe("getApiKeyForModelCore", () => {
   });
 
   it("uses trusted workspace manifest auth evidence in runtime auth checks", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const tempDir = tempDirs.make("openclaw-workspace-cloud-auth-");
     const credentialsPath = path.join(tempDir, "credentials.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
 
@@ -1028,82 +1030,70 @@ describe("getApiKeyForModelCore", () => {
       },
     };
 
-    try {
-      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        const store = { version: 1 as const, profiles: {} };
-        const resolved = await resolveApiKeyForProviderCore({
+    await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+      const store = { version: 1 as const, profiles: {} };
+      const resolved = await resolveApiKeyForProviderCore({
+        provider: "workspace-cloud",
+        cfg,
+        store,
+      });
+
+      expect(resolved).toEqual({
+        apiKey: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+        mode: "api-key",
+      });
+      expect(resolveModelAuthMode("workspace-cloud", cfg, store)).toBe("api-key");
+      await expect(
+        hasAvailableAuthForProvider({
           provider: "workspace-cloud",
           cfg,
           store,
-        });
-
-        expect(resolved).toEqual({
-          apiKey: "workspace-cloud-local-credentials",
-          source: "workspace cloud credentials",
-          mode: "api-key",
-        });
-        expect(resolveModelAuthMode("workspace-cloud", cfg, store)).toBe("api-key");
-        await expect(
-          hasAvailableAuthForProvider({
-            provider: "workspace-cloud",
-            cfg,
-            store,
-          }),
-        ).resolves.toBe(true);
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        }),
+      ).resolves.toBe(true);
+    });
   });
 
   it("ignores untrusted workspace manifest auth evidence in runtime auth checks", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const tempDir = tempDirs.make("openclaw-workspace-cloud-auth-");
     const credentialsPath = path.join(tempDir, "credentials.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
 
-    try {
-      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        const store = { version: 1 as const, profiles: {} };
-        expect(resolveModelAuthMode("workspace-cloud", { plugins: {} }, store)).toBe("unknown");
-        await expect(
-          hasAvailableAuthForProvider({
-            provider: "workspace-cloud",
-            cfg: { plugins: {} },
-            store,
-          }),
-        ).resolves.toBe(false);
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+      const store = { version: 1 as const, profiles: {} };
+      expect(resolveModelAuthMode("workspace-cloud", { plugins: {} }, store)).toBe("unknown");
+      await expect(
+        hasAvailableAuthForProvider({
+          provider: "workspace-cloud",
+          cfg: { plugins: {} },
+          store,
+        }),
+      ).resolves.toBe(false);
+    });
   });
 
   it("uses the same trusted workspace manifest auth evidence in provider auth checks", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const tempDir = tempDirs.make("openclaw-workspace-cloud-auth-");
     const credentialsPath = path.join(tempDir, "credentials.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
     const store = { version: 1 as const, profiles: {} };
 
-    try {
-      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        await expect(
-          prepareRuntimeAvailableProviderAuth({
-            provider: "workspace-cloud",
-            cfg: { plugins: { allow: ["workspace-cloud"] } },
-            store,
-          }),
-        ).resolves.toBe(true);
-        await expect(
-          prepareRuntimeAvailableProviderAuth({
-            provider: "workspace-cloud",
-            cfg: { plugins: {} },
-            store,
-          }),
-        ).resolves.toBe(false);
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+      await expect(
+        prepareRuntimeAvailableProviderAuth({
+          provider: "workspace-cloud",
+          cfg: { plugins: { allow: ["workspace-cloud"] } },
+          store,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        prepareRuntimeAvailableProviderAuth({
+          provider: "workspace-cloud",
+          cfg: { plugins: {} },
+          store,
+        }),
+      ).resolves.toBe(false);
+    });
   });
 
   it("reuses runtime auth availability for provider auth checks", async () => {
@@ -1570,7 +1560,7 @@ describe("getApiKeyForModelCore", () => {
   });
 
   it("resolveEnvApiKey('google-vertex') accepts Unicode explicit ADC credential paths", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-unicode-"));
+    const homeDir = tempDirs.make("openclaw-google-adc-unicode-");
     const explicitDir = path.join(homeDir, "認証情報");
     const fallbackDir = path.join(homeDir, ".config", "gcloud");
     const explicitCredentialsPath = path.join(explicitDir, "adc.json");
@@ -1583,23 +1573,19 @@ describe("getApiKeyForModelCore", () => {
       "utf8",
     );
 
-    try {
-      const resolved = resolveEnvApiKey("google-vertex", {
-        GOOGLE_APPLICATION_CREDENTIALS: explicitCredentialsPath,
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-        HOME: homeDir,
-      } as NodeJS.ProcessEnv);
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_APPLICATION_CREDENTIALS: explicitCredentialsPath,
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT: "vertex-project",
+      HOME: homeDir,
+    } as NodeJS.ProcessEnv);
 
-      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
-      expect(resolved?.source).toBe("gcloud adc");
-    } finally {
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
+    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+    expect(resolved?.source).toBe("gcloud adc");
   });
 
   it("resolveEnvApiKey('google-vertex') accepts Unicode ADC fallback home paths", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const tempDir = tempDirs.make("openclaw-google-adc-home-");
     const homeDir = path.join(tempDir, "認証情報-home");
     const fallbackDir = path.join(homeDir, ".config", "gcloud");
     await fs.mkdir(fallbackDir, { recursive: true });
@@ -1609,40 +1595,32 @@ describe("getApiKeyForModelCore", () => {
       "utf8",
     );
 
-    try {
-      const resolved = resolveEnvApiKey("google-vertex", {
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-        HOME: homeDir,
-      } as NodeJS.ProcessEnv);
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT: "vertex-project",
+      HOME: homeDir,
+    } as NodeJS.ProcessEnv);
 
-      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
-      expect(resolved?.source).toBe("gcloud adc");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+    expect(resolved?.source).toBe("gcloud adc");
   });
 
   it("resolveEnvApiKey('google-vertex') rejects GOOGLE_CLOUD_PROJECT_ID-only ADC auth evidence", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-project-id-"));
+    const tempDir = tempDirs.make("openclaw-google-adc-project-id-");
     const credentialsPath = path.join(tempDir, "adc.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
 
-    try {
-      const resolved = resolveEnvApiKey("google-vertex", {
-        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
-      } as NodeJS.ProcessEnv);
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+    } as NodeJS.ProcessEnv);
 
-      expect(resolved).toBeNull();
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(resolved).toBeNull();
   });
 
   it("resolveEnvApiKey('google-vertex') accepts Windows APPDATA ADC fallback evidence", async () => {
-    const appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-appdata-"));
+    const appDataDir = tempDirs.make("openclaw-google-adc-appdata-");
     const fallbackDir = path.join(appDataDir, "gcloud");
     await fs.mkdir(fallbackDir, { recursive: true });
     await fs.writeFile(
@@ -1651,25 +1629,19 @@ describe("getApiKeyForModelCore", () => {
       "utf8",
     );
 
-    try {
-      const resolved = resolveEnvApiKey("google-vertex", {
-        APPDATA: appDataDir,
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-      } as NodeJS.ProcessEnv);
+    const resolved = resolveEnvApiKey("google-vertex", {
+      APPDATA: appDataDir,
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT: "vertex-project",
+    } as NodeJS.ProcessEnv);
 
-      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
-      expect(resolved?.source).toBe("gcloud adc");
-    } finally {
-      await fs.rm(appDataDir, { recursive: true, force: true });
-    }
+    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+    expect(resolved?.source).toBe("gcloud adc");
   });
 
   it("resolveEnvApiKey('google-vertex') does not synthesize APPDATA from USERPROFILE", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
-    const userProfileDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-google-adc-userprofile-"),
-    );
+    const homeDir = tempDirs.make("openclaw-google-adc-home-");
+    const userProfileDir = tempDirs.make("openclaw-google-adc-userprofile-");
     const fallbackDir = path.join(userProfileDir, "AppData", "Roaming", "gcloud");
     await fs.mkdir(fallbackDir, { recursive: true });
     await fs.writeFile(
@@ -1678,46 +1650,37 @@ describe("getApiKeyForModelCore", () => {
       "utf8",
     );
 
-    try {
-      const resolved = resolveEnvApiKey("google-vertex", {
-        HOME: homeDir,
-        USERPROFILE: userProfileDir,
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-      } as NodeJS.ProcessEnv);
+    const resolved = resolveEnvApiKey("google-vertex", {
+      HOME: homeDir,
+      USERPROFILE: userProfileDir,
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT: "vertex-project",
+    } as NodeJS.ProcessEnv);
 
-      expect(resolved).toBeNull();
-    } finally {
-      await fs.rm(homeDir, { recursive: true, force: true });
-      await fs.rm(userProfileDir, { recursive: true, force: true });
-    }
+    expect(resolved).toBeNull();
   });
 
   it("resolveEnvApiKey('google-vertex') keeps ADC fallback when manifest env candidates are empty", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-candidates-"));
+    const tempDir = tempDirs.make("openclaw-google-adc-candidates-");
     const credentialsPath = path.join(tempDir, "adc.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
 
-    try {
-      const resolved = resolveEnvApiKey(
-        "google-vertex",
-        {
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_LOCATION: "us-central1",
-          GOOGLE_CLOUD_PROJECT: "vertex-project",
-        } as NodeJS.ProcessEnv,
-        { candidateMap: { "google-vertex": ["GOOGLE_CLOUD_API_KEY"] } },
-      );
+    const resolved = resolveEnvApiKey(
+      "google-vertex",
+      {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv,
+      { candidateMap: { "google-vertex": ["GOOGLE_CLOUD_API_KEY"] } },
+    );
 
-      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
-      expect(resolved?.source).toBe("gcloud adc");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+    expect(resolved?.source).toBe("gcloud adc");
   });
 
   it("resolveEnvApiKey('google-vertex') rejects missing explicit ADC path before fallback paths", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const homeDir = tempDirs.make("openclaw-google-adc-home-");
     const fallbackDir = path.join(homeDir, ".config", "gcloud");
     const missingCredentialsPath = path.join(homeDir, "missing-adc.json");
     await fs.mkdir(fallbackDir, { recursive: true });
@@ -1727,18 +1690,14 @@ describe("getApiKeyForModelCore", () => {
       "utf8",
     );
 
-    try {
-      const resolved = resolveEnvApiKey("google-vertex", {
-        GOOGLE_APPLICATION_CREDENTIALS: missingCredentialsPath,
-        GOOGLE_CLOUD_LOCATION: "us-central1",
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-        HOME: homeDir,
-      } as NodeJS.ProcessEnv);
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_APPLICATION_CREDENTIALS: missingCredentialsPath,
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT: "vertex-project",
+      HOME: homeDir,
+    } as NodeJS.ProcessEnv);
 
-      expect(resolved).toBeNull();
-    } finally {
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
+    expect(resolved).toBeNull();
   });
 
   it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", () => {

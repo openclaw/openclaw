@@ -8,6 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
@@ -107,9 +108,7 @@ const mocks = vi.hoisted(() => ({
   controlRealtimeVoiceAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
-  resolveRealtimeBootstrapContextInstructions: vi.fn(
-    async (): Promise<string | undefined> => undefined,
-  ),
+  resolveRealtimeVoiceAgentContextInstructions: vi.fn(async (): Promise<string> => ""),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-agent-workspace"),
   readSessionPreviewItemsFromTranscriptAsync: vi.fn(() => [
     { role: "user", text: "Earlier question" },
@@ -204,7 +203,7 @@ vi.mock("../../../plugins/runtime/index.js", () => ({
 }));
 
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: mocks.resolveRealtimeBootstrapContextInstructions,
+  resolveRealtimeVoiceAgentContextInstructions: mocks.resolveRealtimeVoiceAgentContextInstructions,
 }));
 
 vi.mock("../../../agents/agent-scope.js", async (importOriginal) => {
@@ -3334,7 +3333,9 @@ describe("talk.client.create handler", () => {
     mocks.resolveRealtimeVoiceProviderCapabilities.mockImplementation(
       ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
     );
-    mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue(undefined);
+    mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
+      REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
+    );
     mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-test");
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
@@ -3387,7 +3388,9 @@ describe("talk.client.create handler", () => {
   });
 
   it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
-    mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue("Bounded profile context.");
+    mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
+      `${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}\n\nBounded profile context.`,
+    );
     mocks.readSessionPreviewItemsFromTranscriptAsync.mockReturnValueOnce([
       { role: "user", text: "0:old small item" },
       { role: "assistant", text: `1:${"🙂".repeat(799)}` },
@@ -3790,7 +3793,9 @@ describe("talk.client.create handler", () => {
 
   it("lets native agent handoff own the Codex OAuth prompt and omits direct tools", async () => {
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue(undefined);
-    mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue("Bounded profile context.");
+    mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
+      `${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}\n\nBounded profile context.`,
+    );
     const createBrowserSession = createBrowserSessionMock();
     const provider = {
       id: "openai",
@@ -3834,7 +3839,9 @@ describe("talk.client.create handler", () => {
     });
 
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
-    expect(createInput.instructions).toBe("Speak warmly.\n\nBounded profile context.");
+    expect(createInput.instructions).toBe(
+      `Speak warmly.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}\n\nBounded profile context.`,
+    );
     expect(createInput.initialItems).toEqual([]);
     expect(createInput).not.toHaveProperty("tools");
     expect(createInput.instructions).not.toContain("openclaw_agent_consult");

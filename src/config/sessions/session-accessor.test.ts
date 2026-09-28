@@ -4177,8 +4177,8 @@ describe("session accessor seam", () => {
             admissionEntered.resolve();
             return await admissionReleased.promise;
           },
-          shouldAppendInTransaction: (latestAssistantMessage) => {
-            const latest = latestAssistantMessage as { content?: unknown } | undefined;
+          shouldAppendInTransaction: (readLatestAssistantMessage) => {
+            const latest = readLatestAssistantMessage() as { content?: unknown } | undefined;
             return latest?.content !== "committed reply";
           },
         },

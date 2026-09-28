@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -574,6 +575,82 @@ describe("narrow session read owners", () => {
           expect(respond.mock.calls[0]?.[1]).toEqual(
             unchangedAccess ? { branches: [] } : undefined,
           );
+        }
+      }
+    });
+  });
+
+  it("rechecks session visibility before fetching a remote file after stat", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const reader = roleClient("view", "remote-reader");
+      reader.connect.scopes = ["operator.sessions.read"];
+      const cfg = rolePolicyConfig();
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      for (const revoke of [false, true]) {
+        const entry = {
+          sessionId: "remote-read",
+          lifecycleRevision: "original",
+          updatedAt: 1,
+          visibility: "shared" as const,
+          spawnedWorkspaceDir: state.workspaceDir,
+        };
+        await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        let stats = 0;
+        const readFile = vi.fn(async () => Buffer.from("remote content"));
+        const unregister = registerAgentWorkspaceAccess(state.workspaceDir, {
+          bridge: {
+            readFile,
+            writeFile: async () => {
+              throw new Error("unexpected write");
+            },
+            stat: async () => {
+              if (++stats === 2) {
+                entered.resolve();
+                await release.promise;
+              }
+              return { type: "file", size: 14, mtimeMs: 1 };
+            },
+          },
+        });
+        const respond = vi.fn();
+        const request = handleGatewayRequest({
+          req: {
+            type: "req",
+            id: `remote-${revoke}`,
+            method: "sessions.files.get",
+            params: { sessionKey: key, agentId: "main", path: "note.txt" },
+          },
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+        const settled = Promise.allSettled([request]);
+        try {
+          await Promise.race([entered.promise, request]);
+          expect(stats).toBe(2);
+          expect(readFile).not.toHaveBeenCalled();
+          if (revoke) {
+            await sessions.upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              { ...entry, visibility: "draft", updatedAt: 2 },
+            );
+          }
+        } finally {
+          release.resolve();
+          await settled;
+          unregister();
+        }
+        expect(readFile).toHaveBeenCalledTimes(revoke ? 0 : 1);
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(!revoke);
+        if (revoke) {
+          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+        } else {
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({ file: { content: "remote content" } });
         }
       }
     });

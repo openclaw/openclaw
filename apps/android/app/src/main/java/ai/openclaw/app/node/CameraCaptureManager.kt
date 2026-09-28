@@ -37,6 +37,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -46,9 +47,6 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
 
-/**
- * CameraX-backed capture service used by gateway camera commands.
- */
 internal class CameraClipSession(
   private val unbind: () -> Unit,
   private val deleteTemporaryFile: (File) -> Unit,
@@ -107,11 +105,6 @@ class CameraCaptureManager(
   private val cameraEnabled: () -> Boolean = { true },
   private val defaultFacing: () -> String = { "front" },
 ) {
-  /** Base64 JSON response for camera.snap after resize and JPEG budget enforcement. */
-  data class Payload(
-    val payloadJson: String,
-  )
-
   /** Temporary MP4 response for camera.clip before CameraHandler validates invoke size. */
   data class FilePayload(
     val file: File,
@@ -120,6 +113,7 @@ class CameraCaptureManager(
   )
 
   /** Camera device metadata exposed through camera.list. */
+  @Serializable
   data class CameraDeviceInfo(
     val id: String,
     val name: String,
@@ -229,7 +223,7 @@ class CameraCaptureManager(
   }
 
   /** Captures one still image and returns a gateway-sized JPEG payload. */
-  suspend fun snap(paramsJson: String?): Payload =
+  suspend fun snap(paramsJson: String?): String =
     withCapture { owner, ensureCurrent ->
       val params = parseJsonParamsObject(paramsJson)
       val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
@@ -304,9 +298,7 @@ class CameraCaptureManager(
                 },
               )
             val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
-            Payload(
-              """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}""",
-            )
+            """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}"""
           } finally {
             scaled.recycle()
           }

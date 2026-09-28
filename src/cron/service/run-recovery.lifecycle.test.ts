@@ -5,6 +5,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
   isCronJobActive,
@@ -21,6 +25,7 @@ import {
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { locked } from "./locked.js";
@@ -28,7 +33,6 @@ import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronServiceDeps } from "./state.js";
-import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-lifecycle-" });
@@ -86,12 +90,13 @@ describe("one-shot recovery", () => {
       });
       const onEvent = vi.fn();
       const sendCronFailureAlert = vi.fn(async () => undefined);
-      const freshState = () =>
+      const freshState = (clock = createGatewaySchedulerClock(nowMs)) =>
         createCronServiceState({
           storePath,
           cronEnabled: true,
           log: logger,
-          nowMs: Date.now,
+          scheduler: createTestGatewayScheduler(clock.clock),
+          nowMs: clock.clock.now,
           enqueueSystemEvent: vi.fn(),
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -100,9 +105,6 @@ describe("one-shot recovery", () => {
           sendCronFailureAlert,
         });
       const first = freshState();
-      // An earlier repair can commit before its interrupted-task notification.
-      // That orphan shares this start millisecond, but not this run's receipt.
-      tryCreateCronTaskRunHandle({ state: first, job, startedAt: nowMs });
       const startup = manual
         ? run(
             first,
@@ -172,6 +174,7 @@ describe("one-shot recovery", () => {
           runOpenClawStateWriteTransaction(({ db }) =>
             finishCronRunReceiptInDatabase({
               database: db,
+              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               handle: previous,
               status: "superseded",
               finishedAtMs: nowMs,
@@ -186,6 +189,7 @@ describe("one-shot recovery", () => {
           successor = runOpenClawStateWriteTransaction(({ db }) =>
             claimCronRunReceiptInDatabase({
               database: db,
+              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               prepared,
               resolveAgentId: () => "alpha",
             }),
@@ -225,21 +229,15 @@ describe("one-shot recovery", () => {
           ]);
         }
         for (let restart = 0; restart < 3; restart += 1) {
-          const next = freshState();
+          const clock = createGatewaySchedulerClock(nowMs);
+          const next = freshState(clock);
           try {
             await start(next);
             if (mode === "manual-delayed-force") {
-              await vi.advanceTimersByTimeAsync(MIN_REFIRE_GAP_MS);
-              await vi.waitFor(
-                async () => {
-                  expect(runCommandJob).toHaveBeenCalledTimes(2);
-                  expect(
-                    (await loadCronStore(storePath)).jobs[0]?.state.runningAtMs,
-                  ).toBeUndefined();
-                  expect(next.activeTimerTicks).toBe(0);
-                },
-                { interval: 0 },
-              );
+              await clock.advanceBy(MIN_REFIRE_GAP_MS);
+              expect(runCommandJob).toHaveBeenCalledTimes(2);
+              expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+              expect(next.activeTimerTicks).toBe(0);
             }
             // A force run reserved before the slot borrows it; once due, its
             // distinct scheduled occurrence still runs exactly once.

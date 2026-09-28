@@ -1,8 +1,3 @@
-/**
- * SSH sandbox transport helpers.
- *
- * Materializes temporary SSH config, validates remote shell snippets, runs commands, and uploads workspace trees.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,21 +10,12 @@ import {
   type RemoteShellSandboxSession,
 } from "./remote-shell-transport.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import type { SandboxSshConfig } from "./types.js";
 
-export type SshSandboxSettings = {
-  command: string;
+export type SshSandboxSettings = Omit<SandboxSshConfig, "target" | "workspaceRoot"> & {
   target: string;
-  strictHostKeyChecking: boolean;
-  updateHostKeys: boolean;
-  identityFile?: string;
-  certificateFile?: string;
-  knownHostsFile?: string;
-  identityData?: string;
-  certificateData?: string;
-  knownHostsData?: string;
 };
 
-/** Temporary SSH session descriptor with an isolated config file. */
 export type SshSandboxSession = {
   command: string;
   configPath: string;
@@ -38,14 +24,8 @@ export type SshSandboxSession = {
   assertCurrent?: () => void;
 };
 
-/** Parameters for one SSH sandbox command execution. */
-export type RunSshSandboxCommandParams = {
+export type RunSshSandboxCommandParams = Parameters<RemoteShellSandboxSession["runCommand"]>[0] & {
   session: SshSandboxSession;
-  remoteCommand: string;
-  stdin?: Buffer | string;
-  allowFailure?: boolean;
-  signal?: AbortSignal;
-  tty?: boolean;
 };
 
 function normalizeInlineSshMaterial(contents: string, filename: string): string {
@@ -77,7 +57,6 @@ function buildSshFailureMessage(stderr: string, exitCode?: number): string {
   );
 }
 
-/** Build the local ssh argv for a prepared sandbox session. */
 export function buildSshSandboxArgv(params: {
   session: SshSandboxSession;
   remoteCommand: string;
@@ -93,7 +72,6 @@ export function buildSshSandboxArgv(params: {
   ];
 }
 
-/** Create a temporary SSH session from already-rendered ssh config text. */
 export async function createSshSandboxSessionFromConfigText(params: {
   configText: string;
   host?: string;
@@ -110,7 +88,6 @@ export async function createSshSandboxSessionFromConfigText(params: {
   );
 }
 
-/** Create a temporary SSH session from structured sandbox SSH settings. */
 export async function createSshSandboxSessionFromSettings(
   settings: SshSandboxSettings,
 ): Promise<SshSandboxSession> {
@@ -175,7 +152,6 @@ export async function createSshSandboxSessionFromSettings(
   );
 }
 
-/** Remove temporary SSH config and materialized secret files. */
 export async function disposeSshSandboxSession(session: SshSandboxSession): Promise<void> {
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true });
 }
@@ -191,7 +167,6 @@ function commandSession(session: SshSandboxSession): RemoteShellSandboxSession {
   });
 }
 
-/** Run a remote command through SSH and return buffered stdout/stderr. */
 export async function runSshSandboxCommand(
   params: RunSshSandboxCommandParams,
 ): Promise<SandboxBackendCommandResult> {
@@ -199,24 +174,19 @@ export async function runSshSandboxCommand(
 }
 
 /** Stage exec environment privately, keeping the established SSH cleanup contract. */
-export async function prepareSshSandboxExec(params: {
-  session: SshSandboxSession;
-  remoteCommand: string;
-  env: Record<string, string>;
-  tty?: boolean;
-}): Promise<{ argv: string[]; cleanup: () => Promise<void> }> {
+export async function prepareSshSandboxExec(
+  params: Parameters<RemoteShellSandboxSession["prepareExec"]>[0] & { session: SshSandboxSession },
+): Promise<{ argv: string[]; cleanup: () => Promise<void> }> {
   const prepared = await commandSession(params.session).prepareExec(params);
   return { argv: prepared.argv, cleanup: prepared.cleanup };
 }
 
 /** Stream a local directory with the shared guarded tar pipeline. */
-export async function uploadDirectoryToSshTarget(params: {
-  session: SshSandboxSession;
-  localDir: string;
-  remoteDir: string;
-  remoteRootDir?: string;
-  signal?: AbortSignal;
-}): Promise<void> {
+export async function uploadDirectoryToSshTarget(
+  params: Parameters<RemoteShellSandboxSession["uploadDirectory"]>[0] & {
+    session: SshSandboxSession;
+  },
+): Promise<void> {
   return commandSession(params.session).uploadDirectory(params);
 }
 

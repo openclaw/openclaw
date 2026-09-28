@@ -18,6 +18,12 @@ vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 let cacheEpochMs = Date.now();
 
+function localGitReads() {
+  return vi
+    .mocked(runGitWorkerOperation)
+    .mock.calls.filter(([operation]) => operation.type !== "checkout.revision");
+}
+
 beforeEach(() => {
   vi.mocked(runGitWorkerOperation).mockReset();
   vi.useFakeTimers();
@@ -129,6 +135,9 @@ describe("watched session PR retention", () => {
     ]);
     const signals = new Set<AbortSignal>();
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return "unchanged";
+      }
       if (operation.type === "checkout.context") {
         return {
           owner: "openclaw",
@@ -168,20 +177,23 @@ describe("watched session PR retention", () => {
         Array.from({ length: 100 }, (_, index) => `watched-${index + 200}`),
       );
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(runGitWorkerOperation).toHaveBeenCalledTimes(600);
+      expect(localGitReads()).toHaveLength(600);
 
       vi.setSystemTime(Date.now() + 60_000);
       await subscriptions.pollNow();
 
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(runGitWorkerOperation).toHaveBeenCalledTimes(600);
+      expect(localGitReads()).toHaveLength(600);
 
       vi.setSystemTime(Date.now() + 15_001);
       await subscriptions.pollNow();
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(runGitWorkerOperation).toHaveBeenCalledTimes(1_200);
+      expect(localGitReads()).toHaveLength(600);
+      vi.setSystemTime(Date.now() + 225_000);
+      await subscriptions.pollNow();
+      expect(localGitReads()).toHaveLength(900);
       expect(signals.size).toBe(300);
-      expect([...signals].every((signal) => getEventListeners(signal, "abort").length === 4)).toBe(
+      expect([...signals].every((signal) => getEventListeners(signal, "abort").length === 3)).toBe(
         true,
       );
     } finally {
@@ -208,6 +220,9 @@ describe("watched session PR retention", () => {
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "checkout.revision") {
+        return branch;
+      }
       if (operation.type === "checkout.context") {
         return branch
           ? {
@@ -241,11 +256,11 @@ describe("watched session PR retention", () => {
     const pins = () => getEventListeners(cacheLifetime.signal, "abort").length;
     try {
       await load();
-      expect(pins()).toBe(4);
+      expect(pins()).toBe(3);
       root = "/retained/second";
       branch = "feature-b";
       await load();
-      expect(pins()).toBe(4);
+      expect(pins()).toBe(3);
       root = null;
       await load();
       expect(pins()).toBe(0);
@@ -258,12 +273,12 @@ describe("watched session PR retention", () => {
         rateLimited: false,
         status: "unavailable",
       });
-      // Preserve context, transcript references, and the failure expiry; drop obsolete branch facts.
-      expect(pins()).toBe(3);
+      // Preserve context and the failure expiry; drop obsolete branch facts.
+      expect(pins()).toBe(2);
       fetchFailure = false;
       vi.setSystemTime(Date.now() + 30_001);
       await load();
-      expect(pins()).toBe(4);
+      expect(pins()).toBe(3);
       branch = null;
       await load();
       expect(pins()).toBe(1);

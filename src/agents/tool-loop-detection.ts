@@ -13,6 +13,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import { getCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import {
   buildArgumentChurnWarning,
@@ -22,6 +23,7 @@ import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
 import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
@@ -69,6 +71,11 @@ function selectHistoryForScope(
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
+  // Execution titles describe presentation, not a different command or program.
+  if (toolName === "exec" && isPlainObject(params)) {
+    const { title: _title, ...execution } = params;
+    return `${toolName}:${sha256Hex(stableStringify(execution))}`;
+  }
   return `${toolName}:${sha256Hex(stableStringify(params))}`;
 }
 
@@ -317,8 +324,20 @@ function hashToolOutcome(
   if (isLoopVetoResult(details)) {
     return { outcomeKind: "tool-loop-veto" };
   }
+  if (toolName === "computer" && result.isError !== true) {
+    const outcome = getComputerToolOutcome(result);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
+  }
   if (toolName === "progress_card" && result.isError !== true) {
     const outcome = getProgressCardToolOutcome(result);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
+  }
+  if (toolName === "exec" || toolName === "wait") {
+    const outcome = getCodeModeToolOutcome(result);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
     }
@@ -466,48 +485,32 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  const expectedCurrentSignature = otherSignature;
-  if (currentSignature !== expectedCurrentSignature) {
+  if (currentSignature !== otherSignature) {
     return { count: 0, noProgressEvidence: false };
   }
 
   const tailStart = Math.max(0, history.length - alternatingTailCount);
-  let firstHashA: string | undefined;
-  let firstHashB: string | undefined;
+  const resultHashes = new Map<string, string>();
   let noProgressEvidence = true;
   for (let i = tailStart; i < history.length; i += 1) {
     const call = history[i];
     if (!call) {
       continue;
     }
-    if (!call.resultHash) {
+    if (!call.resultHash || (call.argsHash !== last.argsHash && call.argsHash !== otherSignature)) {
       noProgressEvidence = false;
       break;
     }
-    if (call.argsHash === last.argsHash) {
-      if (!firstHashA) {
-        firstHashA = call.resultHash;
-      } else if (firstHashA !== call.resultHash) {
-        noProgressEvidence = false;
-        break;
-      }
-      continue;
+    const previousHash = resultHashes.get(call.argsHash);
+    if (previousHash && previousHash !== call.resultHash) {
+      noProgressEvidence = false;
+      break;
     }
-    if (call.argsHash === otherSignature) {
-      if (!firstHashB) {
-        firstHashB = call.resultHash;
-      } else if (firstHashB !== call.resultHash) {
-        noProgressEvidence = false;
-        break;
-      }
-      continue;
-    }
-    noProgressEvidence = false;
-    break;
+    resultHashes.set(call.argsHash, call.resultHash);
   }
 
   // Need repeated stable outcomes on both sides before treating ping-pong as no-progress.
-  if (!firstHashA || !firstHashB) {
+  if (resultHashes.size !== 2) {
     noProgressEvidence = false;
   }
 
@@ -729,7 +732,6 @@ export function recordToolCallOutcome(
   }
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
-  let matched = false;
   let recordedOutcome: ToolCallRecord | undefined;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
@@ -757,12 +759,11 @@ export function recordToolCallOutcome(
       delete call.noProgress;
     }
     call.unknownToolName = outcome.unknownToolName;
-    matched = true;
     recordedOutcome = call;
     break;
   }
 
-  if (!matched) {
+  if (!recordedOutcome) {
     const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,

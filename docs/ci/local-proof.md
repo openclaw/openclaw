@@ -14,6 +14,16 @@ without applying lint defaults to declaration preparation. Explicit Go settings
 remain inherited. Frozen revisions retain the workflow limits because their
 wrappers can predate this policy.
 
+Bounded core and eight-directory plugin lint shards can use two lint threads,
+four Go CPUs, `GOGC=100`, and an 8-GiB soft Go heap target on Linux CI. The batch
+owner must admit one child on at least four CPUs and 15 GiB of verified capacity;
+each child also requires 14 GiB of available memory for core or 10 GiB for plugins.
+The child verifies that its arguments match the admitted shard. Larger plugin
+chunks, unbounded commands, parallel children, and unknown memory keep their
+existing limits. Explicit thread and Go settings remain inherited. The larger
+heap target reduces repeated garbage collection without changing lint rules,
+target files, or declaration preparation.
+
 The runtime topology CI job also supplies `GOGC=30` and `GOMEMLIMIT=3GiB`
 defaults to `pnpm check:architecture`, preserving caller overrides. Both import
 cycle checks and the remaining architecture checks inherit these settings.
@@ -214,6 +224,13 @@ forbidden eager imports, and exactly-once ownership. Public SDK inventories and
 generated configuration-schema baselines remain contract guards. Runner matrix
 caps protect shared runner-registration capacity and remain blocking. Explicit
 benchmark qualification verdicts retain their requested acceptance criteria.
+
+The workflow file-size guard in `test/scripts/ci-workflow-guards.test.ts` also
+stays blocking. GitHub refuses any workflow file above 512,000 bytes (500 KiB)
+with a run that has no jobs, so every PR and main CI run stops without a failing
+check. The guard fails at 480,000 bytes, while CI can still report it. Shrink the
+file before raising the limit; for example, share byte-identical runner
+expressions, steps, and scripts through YAML anchors and aliases.
 
 ## Local check gates and changed routing
 

@@ -28,9 +28,9 @@ struct ChatMediaAudioAttachment: View {
         Group {
             switch self.state {
             case .loading:
-                self.loadingRow
+                self.waitingRow(String(localized: "Loading audio…"))
             case .preparing:
-                self.preparingRow
+                self.waitingRow(String(localized: "Preparing playback…"))
             case let .loaded(player):
                 self.playerRow(player)
             case .unavailable:
@@ -47,27 +47,10 @@ struct ChatMediaAudioAttachment: View {
         }
     }
 
-    private var loadingRow: some View {
+    private func waitingRow(_ message: String) -> some View {
         HStack(spacing: 8) {
             ProgressView()
-            Text(String(localized: "Loading audio…"))
-                .font(OpenClawChatTypography.footnote)
-                .foregroundStyle(.secondary)
-            Spacer()
-            if let durationSeconds {
-                Text(openClawVoiceNoteDurationLabel(durationSeconds))
-                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(minHeight: 52)
-        .padding(.horizontal, 10)
-    }
-
-    private var preparingRow: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-            Text(String(localized: "Preparing playback…"))
+            Text(message)
                 .font(OpenClawChatTypography.footnote)
                 .foregroundStyle(.secondary)
             Spacer()

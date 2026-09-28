@@ -453,8 +453,7 @@ private fun RenderList(
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     var index = (list as? OrderedList)?.markerStartNumber ?: 1
-    var item = list.firstChild
-    while (item != null) {
+    for (item in markdownSiblings(list.firstChild)) {
       if (item is ListItem) {
         RenderListItem(
           item = item,
@@ -467,7 +466,6 @@ private fun RenderList(
         )
         index += 1
       }
-      item = item.next
     }
   }
 }
@@ -567,14 +565,12 @@ private fun buildTableRows(
   inlineStyles: InlineStyles,
 ): List<TableRenderRow> {
   val rows = mutableListOf<TableRenderRow>()
-  var child = table.firstChild
-  while (child != null) {
+  for (child in markdownSiblings(table.firstChild)) {
     when (child) {
       is TableHead -> rows.addAll(readTableSection(child, isHeader = true, inlineStyles = inlineStyles))
       is TableBody -> rows.addAll(readTableSection(child, isHeader = false, inlineStyles = inlineStyles))
       is TableRow -> rows.add(readTableRow(child, isHeader = false, inlineStyles = inlineStyles))
     }
-    child = child.next
   }
   return rows
 }
@@ -583,33 +579,25 @@ private fun readTableSection(
   section: Node,
   isHeader: Boolean,
   inlineStyles: InlineStyles,
-): List<TableRenderRow> {
-  val rows = mutableListOf<TableRenderRow>()
-  var row = section.firstChild
-  while (row != null) {
-    if (row is TableRow) {
-      rows.add(readTableRow(row, isHeader = isHeader, inlineStyles = inlineStyles))
-    }
-    row = row.next
-  }
-  return rows
-}
+): List<TableRenderRow> =
+  markdownSiblings(section.firstChild)
+    .filterIsInstance<TableRow>()
+    .map { readTableRow(it, isHeader, inlineStyles) }
+    .toList()
 
 private fun readTableRow(
   row: TableRow,
   isHeader: Boolean,
   inlineStyles: InlineStyles,
-): TableRenderRow {
-  val cells = mutableListOf<AnnotatedString>()
-  var cellNode = row.firstChild
-  while (cellNode != null) {
-    if (cellNode is TableCell) {
-      cells.add(buildInlineMarkdown(cellNode.firstChild, inlineStyles))
-    }
-    cellNode = cellNode.next
-  }
-  return TableRenderRow(isHeader = isHeader, cells = cells)
-}
+): TableRenderRow =
+  TableRenderRow(
+    isHeader = isHeader,
+    cells =
+      markdownSiblings(row.firstChild)
+        .filterIsInstance<TableCell>()
+        .map { buildInlineMarkdown(it.firstChild, inlineStyles) }
+        .toList(),
+  )
 
 private fun buildInlineMarkdown(
   start: Node?,
@@ -625,8 +613,8 @@ private fun AnnotatedString.Builder.appendInlineNode(
   styles: InlineStyles,
   endExclusive: Node? = null,
 ) {
-  var current = node
-  while (current != null && current !== endExclusive) {
+  for (current in markdownSiblings(node)) {
+    if (current === endExclusive) break
     when (current) {
       is MarkdownTextNode -> {
         append(current.literal)
@@ -683,7 +671,6 @@ private fun AnnotatedString.Builder.appendInlineNode(
         appendInlineNode(current.firstChild, styles)
       }
     }
-    current = current.next
   }
 }
 
@@ -738,6 +725,8 @@ internal fun buildChatInlineMarkdown(
 
 internal fun parseChatMarkdown(text: String): Document = markdownParser.parse(text) as Document
 
+internal fun markdownSiblings(start: Node?): Sequence<Node> = generateSequence(start) { it.next }
+
 internal sealed interface ChatMarkdownRenderBlock {
   data class CommonMark(
     val node: Node,
@@ -763,28 +752,17 @@ internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock
   val document = parseChatMarkdown(text)
   val tokenizer = DisclosureTokenizer()
   val tokens = mutableListOf<DisclosureToken>()
-  var node = document.firstChild
-  while (node != null) {
-    val current = node
+  for (current in markdownSiblings(document.firstChild)) {
     if (current is HtmlBlock && tokenizer.shouldTokenize(current.literal.orEmpty())) {
       tokens += tokenizer.tokenize(current.literal.orEmpty())
     } else {
       tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.CommonMark(current))
     }
-    node = current.next
   }
   return foldDisclosureTokens(tokens)
 }
 
-private fun commonMarkBlocks(start: Node?): List<ChatMarkdownRenderBlock> {
-  val blocks = mutableListOf<ChatMarkdownRenderBlock>()
-  var node = start
-  while (node != null) {
-    blocks += ChatMarkdownRenderBlock.CommonMark(node)
-    node = node.next
-  }
-  return blocks
-}
+private fun commonMarkBlocks(start: Node?): List<ChatMarkdownRenderBlock> = markdownSiblings(start).map(ChatMarkdownRenderBlock::CommonMark).toList()
 
 private sealed interface DisclosureToken {
   data class Block(
@@ -866,12 +844,7 @@ private class DisclosureTokenizer {
       val markdown = pendingSource.toString()
       pendingSource.clear()
       if (markdown.isBlank()) return
-      val document = parseChatMarkdown(markdown)
-      var child = document.firstChild
-      while (child != null) {
-        tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.CommonMark(child))
-        child = child.next
-      }
+      tokens += commonMarkBlocks(parseChatMarkdown(markdown).firstChild).map(DisclosureToken::Block)
     }
 
     fun appendLiteral(raw: String) {
@@ -1125,14 +1098,12 @@ private fun foldDisclosureTokens(tokens: List<DisclosureToken>): List<ChatMarkdo
 
 private fun buildPlainText(start: Node?): String {
   val sb = StringBuilder()
-  var node = start
-  while (node != null) {
+  for (node in markdownSiblings(start)) {
     when (node) {
       is MarkdownTextNode -> sb.append(node.literal)
       is SoftLineBreak, is HardLineBreak -> sb.append('\n')
       else -> sb.append(buildPlainText(node.firstChild))
     }
-    node = node.next
   }
   return sb.toString()
 }

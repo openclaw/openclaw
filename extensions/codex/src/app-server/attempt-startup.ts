@@ -1,7 +1,3 @@
-/**
- * Startup orchestration for Codex app-server attempts, including shared-client
- * leasing, plugin thread config, sandbox environment, and thread lifecycle binding.
- */
 import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
@@ -22,7 +18,6 @@ import {
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
-import type { StartCodexAttemptThreadResult } from "./attempt-startup-result.js";
 import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
@@ -81,6 +76,7 @@ import {
   startOrResumeThread,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
+import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -88,10 +84,6 @@ const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
-/**
- * Starts or resumes the Codex app-server thread and returns the resources the
- * run loop must later release.
- */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
   attemptClientFactory: CodexAppServerClientFactory;
@@ -145,7 +137,7 @@ export async function startCodexAttemptThread(params: {
   onStartupTimeout: () => void | Promise<void>;
   onExecutionDisconnect?: (error: Error) => void;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
-}): Promise<StartCodexAttemptThreadResult> {
+}) {
   let pluginAppServer = params.appServer;
   const startupRuntimeAuthProfileId =
     params.startupPreparedAuth?.kind === "profile"
@@ -638,6 +630,8 @@ export async function startCodexAttemptThread(params: {
             const clientRetired = error instanceof CodexThreadClientReplacementError;
             if (
               startupAbandonController.signal.aborted ||
+              // Physical startup already owns the bounded unopened-socket retries.
+              isCodexWebSocketOpenFailure(error) ||
               (clientRetired && replacedSettledFailureClient) ||
               (!clientRetired && !selectionChanged && !isCodexAppServerConnectionClosedError(error))
             ) {

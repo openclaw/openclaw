@@ -5,9 +5,9 @@ import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
@@ -42,7 +42,6 @@ import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparatio
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
-import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -382,9 +381,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     admittedRunContext,
     abortSignal: attemptAbortController.signal,
     onAbort: () => {
-      if (!params.abortSignal?.aborted) {
-        params.replyOperation?.abortByUser();
-      }
+      params.replyOperation?.abortByUser();
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
@@ -538,8 +535,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       : {}),
     ...(params.sessionKey
       ? {
-          agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
+          agentHarnessCompletionScope: createAgentHarnessCompletionScope({
             requesterSessionKey: params.sessionKey,
+            requesterAgentId: workspaceResolution.agentId,
             gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
@@ -624,7 +622,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    ...resolveSkillWorkshopAttemptParams(params),
+    skillWorkshopAutonomousCapture: params.skillWorkshopAutonomousCapture,
+    skillWorkshopUpdateProposals: params.skillWorkshopUpdateProposals,
+    skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+    skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
+    skillWorkshopOrigin: params.skillWorkshopOrigin,
+    skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+    skillWorkshopProposalRevision: params.skillWorkshopProposalRevision,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
     enforceFinalTag: params.enforceFinalTag,

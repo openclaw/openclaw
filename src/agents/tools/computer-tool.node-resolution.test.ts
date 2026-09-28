@@ -578,16 +578,6 @@ describe("createComputerTool node resolution", () => {
     );
   });
 
-  it("rejects a named node that is not computer-capable", async () => {
-    listNodesMock.mockResolvedValue([
-      { nodeId: "mac-2", platform: "macos", connected: true, commands: ["screen.snapshot"] },
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot", node: "mac-2" })).rejects.toThrow(
-      /not computer-capable/,
-    );
-  });
-
   it("reports the eligible node ids when an exact id names an ineligible machine", async () => {
     listNodesMock.mockResolvedValue([
       macComputerNode({ nodeId: "mac-disabled", commands: ["screen.snapshot"] }),

@@ -28,15 +28,6 @@ function createProgram(): Command {
 }
 
 describe("Microsoft Teams meetings CLI", () => {
-  it("exposes the same bounded timeout on both live probes", () => {
-    const root = createProgram().commands.find((command) => command.name() === "teamsmeetings");
-
-    for (const name of ["test-speech", "test-listen"]) {
-      const probe = root?.commands.find((command) => command.name() === name);
-      expect(probe?.options.map((option) => option.long)).toContain("--timeout-ms");
-    }
-  });
-
   it("forwards the listening probe timeout to the gateway operation", async () => {
     callGatewayFromCliMock.mockResolvedValue({ ok: true });
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);

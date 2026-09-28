@@ -85,11 +85,15 @@ export function appendSqliteTrajectoryRuntimeEvents(
     return;
   }
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
-  runOpenClawAgentWriteTransaction((database) => {
-    scope.assertCommitAllowed?.();
-    appendSqliteTrajectoryRuntimeEventsInTransaction(database, { ...scope, events });
-    scope.assertCommitAllowed?.();
-  }, options);
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      scope.assertCommitAllowed?.();
+      appendSqliteTrajectoryRuntimeEventsInTransaction(database, { ...scope, events });
+      scope.assertCommitAllowed?.();
+    },
+    options,
+    { operationLabel: "trajectory.runtime.append" },
+  );
 }
 
 export function appendSqliteTrajectoryRuntimeEventsInTransaction(
