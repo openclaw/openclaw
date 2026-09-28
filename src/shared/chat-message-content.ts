@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-// Chat message content helpers extract user-visible text from mixed message parts.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
 /** Returns inline string content or the first array text block without scanning later blocks. */
@@ -187,10 +186,6 @@ export function extractAssistantTextForPhase(
     return text?.trim() ? text : undefined;
   }
 
-  if (!Array.isArray(entry.content)) {
-    return undefined;
-  }
-
   const parts: string[] = [];
   for (const block of readAssistantTextBlocksForPhase(message, phase)) {
     const sanitized = sanitizeBlockText(block.text);
@@ -203,11 +198,10 @@ export function extractAssistantTextForPhase(
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
 export function extractAssistantPhaseText(message: unknown): string | undefined {
-  const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
-  if (finalAnswerText) {
-    return finalAnswerText;
-  }
-  return extractAssistantTextForPhase(message);
+  return (
+    extractAssistantTextForPhase(message, { phase: "final_answer" }) ??
+    extractAssistantTextForPhase(message)
+  );
 }
 
 /** Captures authored display sources without making commentary a final reply. */

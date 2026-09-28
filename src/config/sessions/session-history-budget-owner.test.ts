@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
@@ -196,15 +195,17 @@ it.each([
             ),
           ).toEqual({ current_session_id: originalId });
           // Evict the host handle before the lazy loader without revoking this active sweep's workers.
-          const cached = getOpenClawAgentDatabaseIfOpen({
+          const databaseOptions = {
             agentId: target.agentId ?? "main",
             path: databasePath,
             env: state.env,
-          });
-          assert(cached);
-          closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          };
+          const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+          if (cached) {
+            closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          }
           clearOpenClawAgentDatabaseValidationCache(state.root);
-          expect(cached.db.isOpen).toBe(false);
+          expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
         }
         return await deleteEntry(...args);
       },

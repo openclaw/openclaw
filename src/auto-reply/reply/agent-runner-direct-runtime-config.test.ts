@@ -145,12 +145,12 @@ function createReplyOperation(): TestReplyOperation {
 }
 
 function createDirectRuntimeReplyParams({
-  shouldFollowup,
-  isActive,
+  shouldFollowup = false,
+  isActive = false,
 }: {
-  shouldFollowup: boolean;
-  isActive: boolean;
-}) {
+  shouldFollowup?: boolean;
+  isActive?: boolean;
+} = {}) {
   const followupRun = createTestFollowupRun({
     sessionId: "session-1",
     sessionKey: "agent:main:telegram:default:direct:test",
@@ -260,10 +260,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("resolves direct reply runs before early helpers read config", async () => {
-    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams();
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
@@ -306,10 +303,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("passes the derived runtime-policy key to pre-run maintenance", async () => {
-    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams();
     const runtimePolicySessionKey = "agent:main:telegram:default:direct:test";
     followupRun.run.sessionKey = "agent:main:main";
     followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
@@ -330,10 +324,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("continues the main reply after a recorded memory-flush failure", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     const onBlockReply = vi.fn();
     const replyOperation = createReplyOperation();
     replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only", onBlockReply };
@@ -382,10 +373,7 @@ describe("runReplyAgent runtime config", () => {
     });
     try {
       await withTestDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
-        const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-          shouldFollowup: false,
-          isActive: false,
-        });
+        const { replyParams, followupRun } = createDirectRuntimeReplyParams();
         const sessionKey = "agent:main:telegram:default:direct:test";
         const sessionEntry: SessionEntry = {
           sessionId: "session-1",
@@ -576,10 +564,7 @@ describe("runReplyAgent runtime config", () => {
   );
 
   it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
-    const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams, followupRun } = createDirectRuntimeReplyParams();
     const sessionEntry = {
       sessionId: "session-1",
       lifecycleRevision: "original-generation",
@@ -610,10 +595,7 @@ describe("runReplyAgent runtime config", () => {
   it.each(["context_overflow", "auth profile mismatch"])(
     "surfaces required preflight failure (%s) after memory exhaustion without resetting",
     async (reason) => {
-      const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-        shouldFollowup: false,
-        isActive: false,
-      });
+      const { replyParams, followupRun } = createDirectRuntimeReplyParams();
       const sessionEntry = {
         sessionId: "session-1",
         lifecycleRevision: "original-generation",
@@ -647,10 +629,7 @@ describe("runReplyAgent runtime config", () => {
   it.each(["abortByUser", "abortForRestart"] as const)(
     "records %s during memory flush as cancellation without starting the main turn",
     async (abortMethod) => {
-      const { replyParams } = createDirectRuntimeReplyParams({
-        shouldFollowup: false,
-        isActive: false,
-      });
+      const { replyParams } = createDirectRuntimeReplyParams();
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
       runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
@@ -677,10 +656,7 @@ describe("runReplyAgent runtime config", () => {
   it.each(["user", "restart"] as const)(
     "records an aborted %s agent turn as cancellation",
     async (reason) => {
-      const { replyParams } = createDirectRuntimeReplyParams({
-        shouldFollowup: false,
-        isActive: false,
-      });
+      const { replyParams } = createDirectRuntimeReplyParams();
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
       runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
@@ -696,10 +672,7 @@ describe("runReplyAgent runtime config", () => {
   );
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     const codexMessage =
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
     runSessionCompactionIfNeededMock.mockRejectedValue(
@@ -774,10 +747,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("surfaces preflight compaction failures before the agent starts", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     runSessionCompactionIfNeededMock.mockRejectedValue(
       new Error("Preflight compaction required but failed: auth profile mismatch"),
     );

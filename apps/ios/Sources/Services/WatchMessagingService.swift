@@ -219,34 +219,6 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.statusHandler?(snapshot)
     }
 
-    private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
-        self.execApprovalResolveHandler?(event)
-    }
-
-    private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
-        GatewayDiagnostics.log(
-            "watch messaging: snapshot request "
-                + "id=\(event.requestId) transport=\(event.transport) "
-                + "sentAtMs=\(event.sentAtMs ?? -1)")
-        self.execApprovalSnapshotRequestHandler?(event)
-    }
-
-    private func emitAppSnapshotRequest(_ event: WatchAppSnapshotRequestEvent) {
-        GatewayDiagnostics.log(
-            "watch messaging: app snapshot request "
-                + "id=\(event.requestId) transport=\(event.transport) "
-                + "sentAtMs=\(event.sentAtMs ?? -1)")
-        self.appSnapshotRequestHandler?(event)
-    }
-
-    private func emitAppCommand(_ event: WatchAppCommandEvent) {
-        GatewayDiagnostics.log(
-            "watch messaging: app command "
-                + "id=\(event.commandId) command=\(event.command.rawValue) "
-                + "transport=\(event.transport)")
-        self.appCommandHandler?(event)
-    }
-
     private func receiveInboundEvent(_ event: WatchMessagingInboundEvent) async throws {
         switch event {
         case let .chatDeliveryCommand(command):
@@ -288,13 +260,25 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         case .chatDeliveryCommand, .chatDeliveryReceiptAck, .legacyChat:
             preconditionFailure("Durable Watch delivery must not enter the startup buffer")
         case let .execApprovalResolve(event):
-            self.emitExecApprovalResolve(event)
+            self.execApprovalResolveHandler?(event)
         case let .execApprovalSnapshotRequest(event):
-            self.emitExecApprovalSnapshotRequest(event)
+            GatewayDiagnostics.log(
+                "watch messaging: snapshot request "
+                    + "id=\(event.requestId) transport=\(event.transport) "
+                    + "sentAtMs=\(event.sentAtMs ?? -1)")
+            self.execApprovalSnapshotRequestHandler?(event)
         case let .appSnapshotRequest(event):
-            self.emitAppSnapshotRequest(event)
+            GatewayDiagnostics.log(
+                "watch messaging: app snapshot request "
+                    + "id=\(event.requestId) transport=\(event.transport) "
+                    + "sentAtMs=\(event.sentAtMs ?? -1)")
+            self.appSnapshotRequestHandler?(event)
         case let .appCommand(event):
-            self.emitAppCommand(event)
+            GatewayDiagnostics.log(
+                "watch messaging: app command "
+                    + "id=\(event.commandId) command=\(event.command.rawValue) "
+                    + "transport=\(event.transport)")
+            self.appCommandHandler?(event)
         }
     }
 }

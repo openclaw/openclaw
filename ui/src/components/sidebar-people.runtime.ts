@@ -269,6 +269,7 @@ export class SidebarPeopleRuntime {
             });
             this.close();
             runSessionNavigationIntent(this.host, {
+              agentId,
               face,
               sessionKey: row.key,
               commit: () => {

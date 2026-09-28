@@ -10,7 +10,7 @@ scenario:
     secondary:
       - automation.heartbeat-scheduling
       - automation.wake-and-cooldown-handling
-      - gateway.task-and-automation-apis
+      - gateway.agent-and-automation-apis
   gatewayConfigPatch:
     logging:
       consoleStyle: json
@@ -195,7 +195,7 @@ flow:
                         expr: "recallTranscript.successfulToolCallCounts.message === 1"
                         message: Recall did not complete exactly one successful message-tool call.
                     - assert:
-                        expr: "Object.keys(recallTranscript.assistantToolCallCounts).every((name) => ['message', 'exec', 'wait', 'tool_search_code', 'tool_search', 'tool_describe', 'tool_call'].includes(name))"
+                        expr: "Object.keys(recallTranscript.assistantToolCallCounts).every((name) => ['message', 'exec', 'wait', 'tool_search', 'tool_describe', 'tool_call'].includes(name))"
                         message:
                           { expr: "JSON.stringify(recallTranscript.assistantToolCallCounts)" }
               - set: recorded

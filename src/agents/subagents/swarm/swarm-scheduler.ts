@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { hasRetainedPluginRuntimeCloseError } from "../../../plugins/runtime-close-error.js";
+import { SWARM_LANE_PREFIX, type CommandLaneConfiguration } from "../../../process/lanes.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
@@ -408,6 +409,22 @@ export async function closeSwarmScheduler(lifecycleOwner?: object): Promise<void
 /** True only after launch was invoked (or an already-running slot was restored). */
 export function isSwarmRunActive(runId: string): boolean {
   return runLocations.get(runId)?.state === "active";
+}
+
+/** Carry the admitted group's identity and live capacity through execution preparation. */
+export function getSwarmRunExecutionLane(runId: string): CommandLaneConfiguration | undefined {
+  const location = runLocations.get(runId);
+  if (!location || location.state !== "active") {
+    return undefined;
+  }
+  const { lane } = location;
+  return {
+    lane: `${SWARM_LANE_PREFIX}${lane.groupId}`,
+    // Preparation or a retry may outlive a scheduler capacity publication.
+    get maxConcurrent() {
+      return lane.limit;
+    },
+  };
 }
 
 /** Holds this exact reservation, including preparation that has not activated yet. */

@@ -132,7 +132,7 @@ On GitHub rate limits, the Gateway shares a cooldown across requests using the a
 
 Without operator roles, identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup. A Cloudflare or GitHub rate limit, or a network failure, returns retryable unavailability. It does not expose a mutable alias or remove a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
 
-An administrator can explicitly link profiles belonging to the same person through `users.linkEmail`. A completed profile merge retains all verified GitHub accounts and their sign-in aliases. Either account resolves the same person, avatar, preferences, and mention Inbox. The target profile keeps its primary GitHub account for public identity and Git credit; an unverified target inherits the source primary. Signing in through a secondary account does not change that choice or its credit preference. People are never merged automatically by matching names.
+An administrator can explicitly link profiles belonging to the same person through `users.linkEmail` or `users.merge`. A completed profile merge retains all verified GitHub accounts and their sign-in aliases. Either account resolves the same person, avatar, preferences, and mention Inbox. The target profile keeps its primary GitHub account for public identity and Git credit; an unverified target inherits the source primary. Signing in through a secondary account does not change that choice or its credit preference. People are never merged automatically by matching names.
 
 The primary account uses a nullable field in the existing profile table without advancing the database schema version. **Downgrade risk:** no schema-version bump blocks older builds from using this state. Their single-account writers can discard secondary account links or split the person again. Re-upgrading does not reconstruct discarded links; an administrator must explicitly relink the profiles. Keep a backup before downgrading.
 
@@ -149,6 +149,48 @@ The snapshot survives session resets and disappears with the child session. Inco
 When a session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. The Gateway publication broker applies the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
+
+## Merging duplicate profiles
+
+Use [`openclaw users`](/cli/users) to list profile IDs and merge duplicate profiles
+belonging to the same person. Both linking and merging require `operator.admin`.
+
+```bash
+openclaw users list
+openclaw users merge <duplicate-profile-id> --into <surviving-profile-id>
+```
+
+Use `openclaw users link-email <email> --to <profile-id>` when you want to move one
+email alias. It merges the previous profile only when that profile loses its last
+email. Use `users merge` when you want to merge the entire duplicate, including a
+profile with no email aliases. The Gateway method is `users.merge` with
+`sourceProfileId` and `targetProfileId`.
+
+The survivor keeps its role, display name, and primary identity; a target without
+a verified primary GitHub account inherits the source primary. Email aliases,
+provider identities, and channel links follow the survivor. Saved preference
+keys on the survivor win; source-only keys transfer up to the existing profile
+limit. Personal model accounts transfer while the survivor's existing provider
+choices, including explicit disconnects, win. The survivor's saved GitHub
+connection state also wins; if absent, it inherits the source connection. A saved
+avatar transfers only when the survivor has none. Personal `USER.md` files are
+not combined; move their contents to the surviving profile's directory yourself.
+
+The retired profile remains an alias pointing directly to the survivor. Earlier
+profiles merged into the duplicate also point directly to the survivor. Both
+IDs must exist and differ, and the target must be a current, unmerged profile.
+Neither profile may be the shared **Owner**. Repeating the same merge succeeds
+without moving anything again. If the source now points to a different profile,
+the request fails and identifies that current survivor.
+
+Historical records retain their original profile IDs: transcripts, creators,
+assigners, contributors, audit contexts, approval provenance, publication
+receipts, and session participants are not rewritten. Readers that resolve
+profile aliases can still show the surviving person. This does not transfer
+previously captured authority: privileged work bound to the retired profile
+fails closed and requires a fresh authorized request. Connected identity,
+presence, and permissions refresh after the merge; affected connections may
+need to reconnect.
 
 ## Channel identity links
 
@@ -188,6 +230,26 @@ See [Restart handoff](/cli/update/how-updates-run#restart-handoff).
 Channel policies and explicit command allowlists still apply, including to native commands. Cosmetic profile changes do not cancel an authorized request; changing its identity link or role requires a fresh request.
 
 These records use the existing shared-state identity table without changing its schema version. Older builds ignore the channel binding namespace; downgrading disables this recognition without converting the links into login accounts. Upgrading does not guess or backfill channel identities. Administrators can inspect and remove the links through the same methods after upgrading again.
+
+### Assign to me from a channel
+
+Link the sender to their existing profile with `users.linkChannelIdentity`. For
+Slack, use `channelId: "slack"`, the configured account ID, and the exact
+native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
+signature-verified HTTP delivery authenticate that sender; relay delivery does
+not. Discord's verified native senders use the same profile resolution.
+
+The next verified message turn includes the canonical profile ID and current display
+label as host-generated fields in the per-turn conversation info. The system
+prompt stays stable across requesters. For example, a linked person
+whose effective role includes `operator.admin` can ask, "Assign this session to
+me." The agent can call `sessions` with `action: "assign_owner"`,
+`ownerType: "human"`, and `ownerId` set to that trusted profile ID. Names, emails,
+and IDs pasted into messages do not establish the requester.
+
+A linked nonadmin sender also receives requester metadata, but the `sessions`
+tool remains owner-only. Unlinked or asserted senders receive no requester
+profile. Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 

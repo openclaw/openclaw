@@ -19,8 +19,9 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
 }
 
 /** Inputs that decide whether this run should inject workspace bootstrap context. */
-type BootstrapRoutingInput = {
-  workspaceBootstrapPending: boolean;
+type WorkspaceBootstrapRoutingInput = {
+  isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
+  bootstrapFilesProvideAccess?: boolean;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   trigger?: string;
   sessionKey?: string;
@@ -42,35 +43,6 @@ type WorkspaceBootstrapRouting = {
   includeBootstrapInRuntimeContext: boolean;
 };
 
-type WorkspaceBootstrapRoutingInput = Omit<BootstrapRoutingInput, "workspaceBootstrapPending"> & {
-  isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
-  bootstrapFilesProvideAccess?: boolean;
-};
-
-function resolveBootstrapRouting(params: BootstrapRoutingInput): WorkspaceBootstrapRouting {
-  const bootstrapMode = resolveBootstrapMode({
-    bootstrapPending: params.workspaceBootstrapPending,
-    runKind: params.bootstrapContextRunKind ?? "default",
-    isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
-    isPrimaryRun: params.isPrimaryRun,
-    isCanonicalWorkspace:
-      (params.isCanonicalWorkspace ?? true) &&
-      params.effectiveWorkspace === params.resolvedWorkspace,
-    hasBootstrapFileAccess: params.hasBootstrapFileAccess,
-  });
-
-  return {
-    bootstrapMode,
-    // "none" with nothing pending means no BOOTSTRAP.md content was withheld, and a guarded-read
-    // placeholder means what reached the prompt was the fault report rather than the file.
-    deliversCompleteWorkspaceContext:
-      (bootstrapMode === "full" || !params.workspaceBootstrapPending) &&
-      !(params.bootstrapFiles ?? []).some(isUnreadableWorkspaceBootstrapFile),
-    includeBootstrapInSystemContext: bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
-  };
-}
-
 /**
  * Resolves workspace bootstrap routing after checking pending state and
  * loaded bootstrap files. Content can prove bootstrap is pending; callers
@@ -90,11 +62,26 @@ export async function resolveWorkspaceBootstrapRouting(
         typeof file.content === "string" &&
         file.content.trim().length > 0,
     ) ?? false;
-  return resolveBootstrapRouting({
-    ...params,
-    workspaceBootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+  const bootstrapMode = resolveBootstrapMode({
+    bootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+    runKind: params.bootstrapContextRunKind ?? "default",
+    isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
+    isPrimaryRun: params.isPrimaryRun,
+    isCanonicalWorkspace:
+      (params.isCanonicalWorkspace ?? true) &&
+      params.effectiveWorkspace === params.resolvedWorkspace,
     hasBootstrapFileAccess:
       params.hasBootstrapFileAccess ||
       (params.bootstrapFilesProvideAccess !== false && hasBootstrapContent),
   });
+  return {
+    bootstrapMode,
+    // "none" with nothing pending means no BOOTSTRAP.md content was withheld, and a guarded-read
+    // placeholder means what reached the prompt was the fault report rather than the file.
+    deliversCompleteWorkspaceContext:
+      (bootstrapMode === "full" || !(workspaceBootstrapPending || hasBootstrapContent)) &&
+      !(params.bootstrapFiles ?? []).some(isUnreadableWorkspaceBootstrapFile),
+    includeBootstrapInSystemContext: bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
+  };
 }

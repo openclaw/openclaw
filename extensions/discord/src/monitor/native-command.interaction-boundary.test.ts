@@ -182,18 +182,42 @@ function pickerPayload(channelId: string, action: "back" | "reset" = "back", use
   });
 }
 
+function expectFollowUp(harness: ReturnType<typeof createHarness>, content: string) {
+  expect(harness.post).toHaveBeenCalledWith(
+    "/webhooks/app1/test-token",
+    { body: { content, flags: 64 } },
+    undefined,
+  );
+}
+
+function expectEmptyAutocomplete(harness: ReturnType<typeof createHarness>) {
+  expect(harness.post).toHaveBeenCalledExactlyOnceWith(
+    "/interactions/interaction1/test-token/callback",
+    {
+      body: {
+        type: InteractionResponseType.ApplicationCommandAutocompleteResult,
+        data: { choices: [] },
+      },
+    },
+  );
+  expect(harness.session).not.toHaveBeenCalled();
+}
+
+function denyThreadParent(harness: ReturnType<typeof createHarness>) {
+  harness.get.mockResolvedValue({
+    id: THREAD,
+    type: ChannelType.PublicThread,
+    parent_id: "denied",
+    name: "topic",
+  });
+}
+
 function expectVisibleStatus(harness: ReturnType<typeof createHarness>, channelId: string) {
   const sessionKey = `agent:main:discord:channel:${channelId}`;
   expect(harness.status, JSON.stringify(harness.post.mock.calls)).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ sessionKey, channel: "discord", senderId: USER, isGroup: true }),
   );
-  expect(harness.post).toHaveBeenCalledWith(
-    "/webhooks/app1/test-token",
-    {
-      body: { content: `Status for ${sessionKey}`, flags: 64 },
-    },
-    undefined,
-  );
+  expectFollowUp(harness, `Status for ${sessionKey}`);
 }
 
 // Isolated boundary proof: REST is controlled; interaction construction, dispatch,
@@ -217,39 +241,19 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each([true, false])(
-    "rejects a sender outside commands.allowFrom (hydrated=%s)",
-    async (hydrated) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(payload(CHANNEL, hydrated, "100000000000000099"));
-      expect(harness.status).not.toHaveBeenCalled();
-      expect(harness.post).toHaveBeenCalledWith(
-        "/webhooks/app1/test-token",
-        {
-          body: { content: "You are not authorized to use this command.", flags: 64 },
-        },
-        undefined,
-      );
-    },
-  );
+  it("rejects a raw command sender outside commands.allowFrom", async () => {
+    const harness = createHarness();
+    await harness.client.handleInteraction(payload(CHANNEL, false, "100000000000000099"));
+    expect(harness.status).not.toHaveBeenCalled();
+    expectFollowUp(harness, "You are not authorized to use this command.");
+  });
 
   it("rejects a thread whose parent is outside the allowlist", async () => {
     const harness = createHarness();
-    harness.get.mockResolvedValue({
-      id: THREAD,
-      type: ChannelType.PublicThread,
-      parent_id: "denied",
-      name: "topic",
-    });
+    denyThreadParent(harness);
     await harness.client.handleInteraction(payload(THREAD));
     expect(harness.status).not.toHaveBeenCalled();
-    expect(harness.post).toHaveBeenCalledWith(
-      "/webhooks/app1/test-token",
-      {
-        body: { content: "This channel is not allowed.", flags: 64 },
-      },
-      undefined,
-    );
+    expectFollowUp(harness, "This channel is not allowed.");
   });
 
   it("rejects missing channel identity under an allowlist", async () => {
@@ -258,13 +262,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     Reflect.deleteProperty(interaction, "channel_id");
     await harness.client.handleInteraction(interaction);
     expect(harness.status).not.toHaveBeenCalled();
-    expect(harness.post).toHaveBeenCalledWith(
-      "/webhooks/app1/test-token",
-      {
-        body: { content: "This channel is not allowed.", flags: 64 },
-      },
-      undefined,
-    );
+    expectFollowUp(harness, "This channel is not allowed.");
   });
 
   it.each([CHANNEL, THREAD])(
@@ -307,30 +305,6 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it("rejects a policy replaced while the channel fetch is pending", async () => {
-    const harness = createHarness();
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    harness.get.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return { id: CHANNEL, type: ChannelType.GuildText, name: "allowed" };
-    });
-    const pending = harness.client.handleInteraction(payload(CHANNEL, true));
-    await entered.promise;
-    harness.replacePolicy();
-    release.resolve();
-    await pending;
-    expect(harness.status).not.toHaveBeenCalled();
-    expect(harness.post).toHaveBeenCalledWith(
-      "/webhooks/app1/test-token",
-      {
-        body: { content: "Access policy changed. Try this interaction again.", flags: 64 },
-      },
-      undefined,
-    );
-  });
-
   it.each(["sender", "parent", "identity"] as const)(
     "denies raw autocomplete with denied %s",
     async (denial) => {
@@ -341,27 +315,13 @@ describe("Client.handleInteraction native command channel identity", () => {
         denial === "sender" ? "100000000000000099" : USER,
       );
       if (denial === "parent") {
-        harness.get.mockResolvedValue({
-          id: THREAD,
-          type: ChannelType.PublicThread,
-          parent_id: "denied",
-          name: "topic",
-        });
+        denyThreadParent(harness);
       }
       if (denial === "identity") {
         Reflect.deleteProperty(interaction, "channel_id");
       }
       await harness.client.handleInteraction(interaction);
-      expect(harness.post).toHaveBeenCalledExactlyOnceWith(
-        "/interactions/interaction1/test-token/callback",
-        {
-          body: {
-            type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-            data: { choices: [] },
-          },
-        },
-      );
-      expect(harness.session).not.toHaveBeenCalled();
+      expectEmptyAutocomplete(harness);
     },
   );
 
@@ -375,12 +335,7 @@ describe("Client.handleInteraction native command channel identity", () => {
         denial === "sender" ? "100000000000000099" : USER,
       );
       if (denial === "parent") {
-        harness.get.mockResolvedValue({
-          id: THREAD,
-          type: ChannelType.PublicThread,
-          parent_id: "denied",
-          name: "topic",
-        });
+        denyThreadParent(harness);
       }
       if (denial === "identity") {
         Reflect.deleteProperty(interaction, "channel_id");
@@ -428,21 +383,12 @@ describe("Client.handleInteraction native command channel identity", () => {
       expect(harness.status).not.toHaveBeenCalled();
       expect(harness.dispatch).not.toHaveBeenCalled();
       if (surface === "autocomplete") {
-        expect(harness.session).not.toHaveBeenCalled();
-        expect(harness.post).toHaveBeenCalledExactlyOnceWith(
-          "/interactions/interaction1/test-token/callback",
-          {
-            body: {
-              type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-              data: { choices: [] },
-            },
-          },
-        );
+        expectEmptyAutocomplete(harness);
+      } else if (surface === "status") {
+        expectFollowUp(harness, "Access policy changed. Try this interaction again.");
       } else {
         expect(JSON.stringify(harness.post.mock.calls)).toContain(
-          surface === "status"
-            ? "Access policy changed"
-            : "Failed to apply test-provider/test-model",
+          "Failed to apply test-provider/test-model",
         );
       }
     },

@@ -142,25 +142,24 @@ describe("Agents API native session receipts", () => {
     void queuedSteer.catch(() => {});
     const interruption = new Error("Host interruption");
     controller.abort(interruption);
-    let cancellationSettled = false;
-    const cancellation = session.cancel().then(() => {
-      cancellationSettled = true;
+    let closeSettled = false;
+    const closing = session.close().then(() => {
+      closeSettled = true;
     });
 
     expect(messageSignal?.aborted).toBe(false);
     expect(inputTypes).toEqual(["agent.session.input.message"]);
-    expect(cancellationSettled).toBe(false);
+    expect(closeSettled).toBe(false);
 
     messageAcknowledgement.resolve(Response.json({}));
     await expect(queuedSteer).rejects.toThrow("Agents API turn settled before input was submitted");
     await idleRequested.promise;
     expect(inputTypes).toEqual(["agent.session.input.message", "agent.session.input.cancel"]);
-    expect(cancellationSettled).toBe(false);
+    expect(closeSettled).toBe(false);
     idleReceipt.resolve(Response.json(createSavedSession("idle")));
 
-    await cancellation;
+    await closing;
     await expect(run).rejects.toBe(interruption);
-    await session.close();
   });
 
   it("admits no native work when cancellation precedes the queued message POST", async () => {
@@ -170,7 +169,6 @@ describe("Agents API native session receipts", () => {
     controller.abort(new Error("Host interruption"));
 
     await expect(queued).rejects.toThrow("Agents API turn settled before input was submitted");
-    await session.cancel();
     await session.close();
     expect(session.wasSubmitted()).toBe(false);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();

@@ -100,22 +100,6 @@ function shouldForceCredentialScopedModelResolve(
   );
 }
 
-/** Re-resolves metadata whenever the prepared credential can change provider limits. */
-function shouldMaterializeAuthPlanModel(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute" | "selectedAuthMode">,
-  requestedProfileId?: string,
-  providerUsesProfileScopedModelMetadata = false,
-): boolean {
-  return Boolean(
-    plan.modelRoute ||
-    shouldForceCredentialScopedModelResolve(
-      plan,
-      requestedProfileId,
-      providerUsesProfileScopedModelMetadata,
-    ),
-  );
-}
-
 export function resolveCredentialScopedAuthAttemptModelDecision(params: {
   attempt: PreparedAgentRuntimeAuthAttempt;
   priorProfileAttempted: boolean;
@@ -124,11 +108,13 @@ export function resolveCredentialScopedAuthAttemptModelDecision(params: {
 }) {
   const forceResolve = shouldForceDirectAuthFallbackModelResolve(params);
   const shouldMaterialize =
-    shouldMaterializeAuthPlanModel(
+    Boolean(params.attempt.plan.modelRoute) ||
+    shouldForceCredentialScopedModelResolve(
       params.attempt.plan,
       params.requestedProfileId,
       params.providerUsesProfileScopedModelMetadata,
-    ) || forceResolve;
+    ) ||
+    forceResolve;
   return {
     forceResolve,
     shouldMaterialize,

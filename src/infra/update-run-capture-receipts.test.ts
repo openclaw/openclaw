@@ -10,7 +10,12 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { encodeRun } from "./update-run-codec.js";
 import { readUpdateRunRecord } from "./update-run-read.kernel.js";
 import { toPublicUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
-import { mutateRunInTransaction, persistRun, updateRunLedgerSchema } from "./update-run-write.js";
+import {
+  mutateRunInTransaction,
+  persistRun,
+  updateRunLedgerSchema,
+  upsertStep,
+} from "./update-run-write.js";
 
 let root: string;
 let database: DatabaseSync | undefined;
@@ -109,6 +114,49 @@ beforeEach(async () => {
 });
 
 describe("durable update capture receipts", () => {
+  it("keeps database recovery locations when later diagnostics exhaust the history budget", () => {
+    const summaries = [
+      {
+        step: "diagnostic:database snapshot",
+        status: "completed" as const,
+        detail: "Databases snapshotted at /backup.databases",
+      },
+      {
+        step: "diagnostic:database migration writes",
+        status: "completed" as const,
+        detail: `Post-migration write inventory: 100 databases; SHA-256 ${"e".repeat(64)}. Snapshots: /backup.databases.`,
+      },
+      {
+        step: "diagnostic:database rollback",
+        status: "completed" as const,
+        detail: "Restored databases; migrated originals retained beside their paths",
+      },
+    ];
+    mutateRunInTransaction(
+      ownedDatabase(),
+      record().runId,
+      (run) => {
+        for (const summary of summaries) {
+          upsertStep(run, summary);
+        }
+        for (let index = 0; index < 150; index++) {
+          upsertStep(run, {
+            step: `diagnostic:${index}`,
+            status: "completed",
+            detail: "validation detail ".repeat(50),
+          });
+        }
+      },
+      { env },
+    );
+    ownedDatabase().close();
+    database = new (requireNodeSqlite().DatabaseSync)(path.join(root, "state", "receipts.sqlite"));
+    const recovered = readUpdateRunRecord(ownedDatabase(), record().runId)!;
+    expect(recovered.steps).toEqual(expect.arrayContaining(summaries));
+    expect(recovered.steps.length).toBeLessThanOrEqual(128);
+    expect(Buffer.byteLength(JSON.stringify(recovered.steps))).toBeLessThanOrEqual(16 * 1024);
+  });
+
   it("keeps ordinary runs writable without a capture receipt", () => {
     const input = { ...record(), reason: "ordinary progress" };
     persistRun(ownedDatabase(), input, { env });

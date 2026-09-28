@@ -1,4 +1,3 @@
-/** Creates and seeds the attempt-local trajectory recorder. */
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";

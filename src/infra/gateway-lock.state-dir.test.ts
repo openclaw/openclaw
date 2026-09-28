@@ -7,6 +7,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import * as windowsProcessStart from "./windows-process-start.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
@@ -75,13 +76,13 @@ describe("gateway lock state directory", () => {
       );
 
       await lock.releaseInTree();
-      await expect(fs.access(lock.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await fs.access(lock.lockPath);
       await expect(fs.access(lock.stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await lock.release();
     });
   });
 
-  it("keeps lock, coordinator, and reclaim paths inside the selected state", async () => {
+  it("keeps one external process owner and a state-local compatibility projection", async () => {
     await withTempDir("openclaw-gateway-lock-state-", async (root) => {
       const canonicalRoot = await fs.realpath(root);
       const stateDir = path.join(canonicalRoot, "selected-state");
@@ -109,10 +110,15 @@ describe("gateway lock state directory", () => {
       try {
         expect(lock.stateDir).toBe(stateDir);
         expect(lock.stateLockPath).toBe(stateLockPath);
-        expect(path.dirname(lock.lockPath)).toBe(lockDir);
-        expect(path.basename(lock.lockPath)).toMatch(/^gateway\.[0-9a-f]{8}\.lock$/u);
-        await fs.access(`${lock.lockPath}.sqlite`);
-        await fs.access(`${lock.stateLockPath}.sqlite`);
+        expect(lock.lockPath).toBe(
+          resolveGatewayStateOwnerPath(path.join(stateDir, "state", "openclaw.sqlite")),
+        );
+        await expect(fs.access(`${lock.lockPath}.sqlite`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.access(`${lock.stateLockPath}.sqlite`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
       } finally {
         await lock.release();
       }
@@ -166,7 +172,9 @@ describe("gateway lock state directory", () => {
       try {
         expect(lock.stateDir).toBe(stateDir);
         expect(lock.stateLockPath).toBe(path.join(lockDir, "gateway.state.lock"));
-        expect(path.dirname(lock.lockPath)).toBe(lockDir);
+        expect(lock.lockPath).toBe(
+          resolveGatewayStateOwnerPath(path.join(stateDir, "state", "openclaw.sqlite")),
+        );
       } finally {
         await lock.release();
       }

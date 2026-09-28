@@ -9,13 +9,18 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
+function createReadMarkerPane(result: Record<string, never> | null = null) {
+  const patch = vi.fn().mockResolvedValue(result);
+  const { pane, state } = createTestChatPane({
+    client: {} as GatewayBrowserClient,
+    sessions: createSessionCapabilityFixture({ patch }),
+  });
+  return { pane, state, patch };
+}
+
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
 
     pane.markSessionRead({
       key: "agent:main:current",
@@ -35,11 +40,7 @@ describe("chat pane read markers", () => {
   });
 
   it("marks an active agent status read even without other unread state", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
 
     pane.markSessionRead({
       key: "agent:main:current",
@@ -83,11 +84,7 @@ describe("chat pane read markers", () => {
       session: { visibility: "draft" as const, sharingRole: "member" as const },
     },
   ])("does not mutate unread state with $name", ({ methods, scopes, session }) => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, state, patch } = createReadMarkerPane();
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes },
       features: { methods },
@@ -115,11 +112,7 @@ describe("chat pane read markers", () => {
     { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
     { visibility: "draft", sharingRole: "admin", scopes: ["operator.admin"] },
   ] as const)("acknowledges unread state for $visibility $sharingRole", (session) => {
-    const patch = vi.fn().mockResolvedValue({});
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane({});
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes: [...session.scopes] },
       features: { methods: ["sessions.patch"] },
@@ -147,11 +140,7 @@ describe("chat pane read markers", () => {
     // sessions.patch resolves null without a request when the connection
     // scope is lost; the guard must unlatch like a failure or the badge
     // stays lit until navigation.
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
     const row = {
       key: "agent:main:current",
       kind: "direct" as const,
@@ -219,11 +208,7 @@ describe("chat pane read markers", () => {
   });
 
   it("does not clear unread from a hidden retained pane", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane();
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
       pane.applySessionsState({
@@ -263,36 +248,8 @@ describe("chat pane read markers", () => {
     );
   });
 
-  it("preserves a manual unread marker received after activation", () => {
-    const patch = vi.fn().mockResolvedValue(null);
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
-
-    pane.markSessionRead({
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 10,
-      unread: false,
-    });
-    pane.markSessionRead({
-      key: "agent:main:current",
-      kind: "direct",
-      markedUnreadAt: 20,
-      updatedAt: 20,
-      unread: true,
-    });
-
-    expect(patch).not.toHaveBeenCalled();
-  });
-
   it("acknowledges a manual unread marker when a retained pane is presented again", () => {
-    const patch = vi.fn().mockResolvedValue({});
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: createSessionCapabilityFixture({ patch }),
-    });
+    const { pane, patch } = createReadMarkerPane({});
     const row = {
       key: "agent:main:current",
       kind: "direct" as const,

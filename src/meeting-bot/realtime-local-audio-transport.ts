@@ -107,9 +107,19 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();
-  const inputProcess = spawnFn(input.command, input.args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let inputProcess: BridgeProcess;
+  try {
+    inputProcess = spawnFn(input.command, input.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    // Output spawn errors can arrive after input construction has already failed.
+    outputProcess.on("error", () => {});
+    void terminateMeetingBridgeProcess(outputProcess, {
+      graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+    });
+    throw error;
+  }
   let bargeInInputProcess: BridgeProcess | undefined;
   let stopped = false;
   let inputStarted = false;

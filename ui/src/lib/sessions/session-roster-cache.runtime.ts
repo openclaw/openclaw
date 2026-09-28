@@ -20,6 +20,7 @@ import {
 } from "./session-roster-cache.ts";
 
 const pending = new Map<string, SessionRosterRecord>();
+const latestPublications = new Map<string, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let writeChain = Promise.resolve();
 
@@ -100,10 +101,11 @@ async function writeRecords(records: SessionRosterRecord[], generation: number):
   }
 }
 
-export function persistSessionRoster(record: SessionRosterRecord): void {
-  if (!globalThis.indexedDB) {
+export function persistSessionRoster(record: SessionRosterRecord, publication: number): void {
+  if (!globalThis.indexedDB || publication <= (latestPublications.get(record.scope) ?? 0)) {
     return;
   }
+  latestPublications.set(record.scope, publication);
   pending.set(record.scope, record);
   if (timer !== null) {
     clearTimeout(timer);
@@ -133,6 +135,7 @@ export async function clearCachedBootState(): Promise<void> {
     timer = null;
   }
   pending.clear();
+  latestPublications.clear();
   await writeChain;
   await resetSessionRosterDatabase();
 }

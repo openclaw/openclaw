@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-// Qa Lab plugin module implements web runtime behavior.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
 type QaWebSession = {
@@ -328,24 +328,13 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
 export async function qaWebEvaluate<T = unknown>(params: QaWebEvaluateParams): Promise<T> {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return (await Promise.race([
-      session.page.evaluate(({ expression }) => (0, eval)(expression) as unknown, {
-        expression: params.expression,
-      }),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`web evaluate timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ])) as T;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return (await withTimeout(
+    session.page.evaluate(({ expression }) => (0, eval)(expression) as unknown, {
+      expression: params.expression,
+    }),
+    timeoutMs,
+    { label: "web evaluate" },
+  )) as T;
 }
 
 export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<void> {

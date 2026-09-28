@@ -126,10 +126,9 @@ function readBatchToolSearchQuery(value: unknown, field: string, maxGraphemes?: 
 }
 
 function readToolSearchArgs(
-  args: unknown,
+  params: Record<string, unknown>,
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
-  const params = asToolParamsRecord(args);
   const query = params.query;
   if (typeof query !== "string") {
     throw new ToolInputError("query must be a string.");

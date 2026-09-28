@@ -1,21 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  type StateDatabaseCoordinatorRuntime,
-} from "../infra/state-database-coordinator.js";
-
-/** Hold only the synthetic fixture's coordinator, with release independent of its main thread. */
-export function holdStateDatabaseCoordinator(
-  databasePath: string,
-  runtime: StateDatabaseCoordinatorRuntime,
-  releaseAfterMs: number,
-) {
-  const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-    databasePath,
-    runtimeDirectory: runtime.directory,
-    uid: process.getuid?.(),
-  });
+/** Hold a fixture's SQLite writer transaction, with release independent of its main thread. */
+export function holdStateDatabaseWriteTransaction(databasePath: string, releaseAfterMs: number) {
   const released = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const ready = createDeferred();
   const holder = new Worker(
@@ -23,8 +9,8 @@ export function holdStateDatabaseCoordinator(
     const { parentPort, workerData } = require("node:worker_threads");
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(workerData.path);
-    try { db.exec("BEGIN EXCLUSIVE"); }
-    catch (error) { throw new Error("Contention holder exclusive acquisition failed", { cause: error }); }
+    try { db.exec("BEGIN IMMEDIATE"); }
+    catch (error) { throw new Error("Contention holder write transaction failed", { cause: error }); }
     let done = false;
     const release = () => {
       if (done) return;
@@ -43,7 +29,7 @@ export function holdStateDatabaseCoordinator(
       eval: true,
       execArgv: [],
       env: {},
-      workerData: { path: coordinatorPath, released: released.buffer, releaseAfterMs },
+      workerData: { path: databasePath, released: released.buffer, releaseAfterMs },
     },
   );
   let readyObserved = false;

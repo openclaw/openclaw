@@ -18,6 +18,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readToolStringParam,
+  type AnyAgentTool,
 } from "./common.js";
 import {
   createImageGenerateDuplicateGuardResult,
@@ -30,26 +31,26 @@ import {
   normalizeImageGenerationAspectRatio,
   normalizeImageGenerationResolution,
 } from "./image-generate-tool.execution.js";
-import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
+import {
+  createDefaultMediaGenerateBackgroundScheduler,
+  type MediaGenerationTaskHandle,
+} from "./media-generate-background-shared.js";
 import {
   imageGenerationTaskLifecycle,
   prepareMediaGenerationTask,
   resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
-  type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
-import { acquireImageGenerationToolProviders } from "./media-generation-tool-providers.js";
+import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
-  resolveRemoteMediaSsrfPolicy,
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -198,11 +199,9 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
   }
   const outputCompression = readNonNegativeIntegerParam(raw, "outputCompression", {
     message: "openai.outputCompression must be between 0 and 100",
+    max: 100,
   });
   const user = readToolStringParam(raw, "user");
-  if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
-    throw new ToolInputError("openai.outputCompression must be between 0 and 100");
-  }
   return {
     ...(background ? { background } : {}),
     ...(moderation ? { moderation } : {}),
@@ -332,7 +331,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
         signal,
         findDuplicate: createImageGenerateDuplicateGuardResult,
         acquire: (config) =>
-          acquireImageGenerationToolProviders({
+          acquireMediaGenerationToolProviders("imageGenerationProviders", {
             cfg: config,
             prepared: options?.preparedModelRuntime,
           }),
@@ -345,7 +344,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
           explicitModelConfig,
         }) => {
           const imageGenerationProviders = acquired.providers;
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
 
           const imageInputs = normalizeMediaReferenceInputs({
             args: params,
@@ -478,7 +477,6 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
               prompt,
               requestKey,
               providerId: selectedProvider?.id,
-              config: effectiveCfg,
               scheduleBackgroundWork,
               onAsyncTaskStarted: options?.onAsyncTaskStarted,
               onFailure: (message: string, meta?: Record<string, unknown>) =>
@@ -500,7 +498,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
                 ...(filename ? { filename } : {}),
                 ...(timeoutMs !== undefined ? { timeoutMs } : {}),
               },
-              run: (taskHandle: ImageGenerationTaskHandle | null) =>
+              run: (taskHandle: MediaGenerationTaskHandle | null) =>
                 executeImageGenerationJob({
                   effectiveCfg,
                   prompt,

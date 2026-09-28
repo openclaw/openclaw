@@ -25,44 +25,60 @@ type ChannelAvatarCacheEntry = {
 };
 
 const channelAvatarCache = new Map<string, ChannelAvatarCacheEntry>();
+const channelAvatarLoads = new Map<
+  string,
+  {
+    reference: string;
+    pending: Map<string, Promise<HttpImageRepresentation | undefined>>;
+  }
+>();
 
 const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
-
-function touchChannelAvatarCache(
-  sessionKey: string,
-  reference: string,
-): HttpImageRepresentation | undefined {
-  const cached = channelAvatarCache.get(sessionKey);
-  if (!cached || cached.reference !== reference) {
-    return undefined;
-  }
-  channelAvatarCache.delete(sessionKey);
-  channelAvatarCache.set(sessionKey, cached);
-  return cached.image;
-}
 
 async function loadChannelAvatar(
   sessionKey: string,
   reference: string,
 ): Promise<HttpImageRepresentation | undefined> {
-  const cached = touchChannelAvatarCache(sessionKey, reference);
-  if (cached) {
-    return cached;
+  let loads = channelAvatarLoads.get(sessionKey);
+  if (loads) {
+    loads.reference = reference;
   }
-  const resolved = await resolveInboundMediaReference(reference);
-  if (!resolved) {
-    return undefined;
+  const cached = channelAvatarCache.get(sessionKey);
+  if (cached?.reference === reference) {
+    channelAvatarCache.delete(sessionKey);
+    channelAvatarCache.set(sessionKey, cached);
+    return cached.image;
   }
-  const stored = await readMediaBuffer(resolved.id, "inbound", HTTP_IMAGE_MAX_BYTES);
-  const image = await resolveHttpImageRepresentation(resolved.id, stored.buffer);
-  if (!image) {
-    return undefined;
+  if (!loads) {
+    loads = { reference, pending: new Map() };
+    channelAvatarLoads.set(sessionKey, loads);
   }
-  // Superseded images must not retain bytes or evict other sessions' current avatars.
-  channelAvatarCache.delete(sessionKey);
-  channelAvatarCache.set(sessionKey, { reference, image });
-  pruneMapToMaxSize(channelAvatarCache, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
-  return image;
+  let pending = loads.pending.get(reference);
+  if (!pending) {
+    const sessionLoads = loads;
+    pending = (async () => {
+      const resolved = await resolveInboundMediaReference(reference);
+      if (!resolved) {
+        return undefined;
+      }
+      const stored = await readMediaBuffer(resolved.id, "inbound", HTTP_IMAGE_MAX_BYTES);
+      const image = await resolveHttpImageRepresentation(resolved.id, stored.buffer);
+      // A superseded load may reply to its callers but must not replace the current avatar.
+      if (image && sessionLoads.reference === reference) {
+        channelAvatarCache.delete(sessionKey);
+        channelAvatarCache.set(sessionKey, { reference, image });
+        pruneMapToMaxSize(channelAvatarCache, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
+      }
+      return image;
+    })().finally(() => {
+      sessionLoads.pending.delete(reference);
+      if (sessionLoads.pending.size === 0) {
+        channelAvatarLoads.delete(sessionKey);
+      }
+    });
+    loads.pending.set(reference, pending);
+  }
+  return pending;
 }
 
 /** Serves the current channel-avatar snapshot for an owner-visible session. */

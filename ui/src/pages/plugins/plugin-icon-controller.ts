@@ -42,14 +42,30 @@ export class PluginIconController {
 
   constructor(private readonly host: PluginIconControllerHost) {}
 
-  syncCatalog(entries: readonly PluginDiscoveryEntry[], extraUrls: readonly string[] = []): void {
+  syncCatalog(
+    entries: readonly PluginDiscoveryEntry[],
+    extraUrls: readonly string[] = [],
+    renderedPluginIds?: ReadonlySet<string>,
+  ): void {
     const eligible = new Set([
       ...entries.flatMap((entry) => (entry.catalog.imageUrl ? [entry.catalog.imageUrl] : [])),
       ...extraUrls,
     ]);
     this.reconcileKeys(eligible);
-    for (const key of eligible) {
-      this.load(key);
+    // Retain artwork while its bounded catalog result is current, including the
+    // empty render between a card and its detail. Only visible entries start reads.
+    for (const entry of entries) {
+      if (
+        entry.catalog.imageUrl &&
+        (!renderedPluginIds ||
+          renderedPluginIds.has(entry.id) ||
+          Boolean(entry.local.pluginId && renderedPluginIds.has(entry.local.pluginId)))
+      ) {
+        this.load(entry.catalog.imageUrl);
+      }
+    }
+    for (const url of extraUrls) {
+      this.load(url);
     }
   }
 

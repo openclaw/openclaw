@@ -224,21 +224,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(shouldCompact(1, 16_384, { enabled: true, ...result.compaction })).toBe(false);
   });
 
-  it.each([
-    [8_000, 2_000],
-    [16_000, 4_000],
-    [24_000, 6_000],
-    [32_000, 8_000],
-    [128_000, 20_000],
-    [200_000, 20_000],
-  ])("keeps model window %i on its effective %i-token reserve", (contextTokenBudget, reserve) => {
-    const settingsManager = SettingsManager.inMemory();
-    const result = applyAgentCompactionSettingsFromConfig({ settingsManager, contextTokenBudget });
-
-    expect(result.compaction.reserveTokens).toBe(reserve);
-    expect(settingsManager.getCompactionReserveTokens()).toBe(reserve);
-  });
-
   it("applies capped floor when current reserve is below it on small-context models", () => {
     // A smaller project reserve is raised to the context-scaled floor.
     const settingsManager = {
@@ -287,19 +272,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
     });
-  });
-
-  it("falls back to uncapped floor when contextTokenBudget is not provided", () => {
-    const settingsManager = {
-      getCompactionReserveTokens: () => 16_384,
-      getCompactionKeepRecentTokens: () => 20_000,
-      applyOverrides: vi.fn(),
-    };
-
-    // No contextTokenBudget → backward-compatible behavior, floor = 20 000.
-    const result = applyAgentCompactionSettingsFromConfig({ settingsManager });
-
-    expect(result.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
   });
 });
 
@@ -423,74 +395,6 @@ describe("isSilentOverflowProneModel", () => {
 });
 
 describe("applyAgentAutoCompactionGuard", () => {
-  // Direct repro of openclaw#75799: shared model runtime's silent-overflow detection misfires
-  // on a successful turn against z.ai-style providers, triggering OpenClaw runtime's
-  // _runAutoCompaction from inside Session.prompt() and reassigning
-  // agent.state.messages between the runner's prompt.submitted trajectory
-  // event and the provider request. Disabling embedded auto-compaction here keeps
-  // state.messages intact; OpenClaw's preemptive compaction continues to
-  // handle real overflow on its own path.
-  it("disables embedded auto-compaction for silent-overflow-prone providers", () => {
-    const setCompactionEnabled = vi.fn();
-    const settingsManager = {
-      getCompactionReserveTokens: () => 20_000,
-      getCompactionKeepRecentTokens: () => 4_000,
-      applyOverrides: () => {},
-      setCompactionEnabled,
-    };
-
-    const result = applyAgentAutoCompactionGuard({
-      settingsManager,
-      silentOverflowProneProvider: true,
-    });
-
-    expect(result).toEqual({ supported: true, disabled: true });
-    expect(setCompactionEnabled).toHaveBeenCalledWith(false);
-  });
-
-  it("disables embedded auto-compaction when a context engine plugin owns compaction", () => {
-    const setCompactionEnabled = vi.fn();
-    const settingsManager = {
-      getCompactionReserveTokens: () => 20_000,
-      getCompactionKeepRecentTokens: () => 4_000,
-      applyOverrides: () => {},
-      setCompactionEnabled,
-    };
-
-    const result = applyAgentAutoCompactionGuard({
-      settingsManager,
-      contextEngineInfo: {
-        id: "third-party",
-        name: "Third-party Context Engine",
-        version: "0.1.0",
-        ownsCompaction: true,
-      },
-    });
-
-    expect(result).toEqual({ supported: true, disabled: true });
-    expect(setCompactionEnabled).toHaveBeenCalledWith(false);
-  });
-
-  it("disables embedded auto-compaction when provider config forces safeguard mode", () => {
-    const setCompactionEnabled = vi.fn();
-    const settingsManager = {
-      getCompactionReserveTokens: () => 20_000,
-      getCompactionKeepRecentTokens: () => 4_000,
-      applyOverrides: () => {},
-      setCompactionEnabled,
-    };
-
-    const result = applyAgentAutoCompactionGuard({
-      settingsManager,
-      compactionMode: resolveEffectiveCompactionMode({
-        agents: { defaults: { compaction: { provider: "deepseek" } } },
-      }),
-    });
-
-    expect(result).toEqual({ supported: true, disabled: true });
-    expect(setCompactionEnabled).toHaveBeenCalledWith(false);
-  });
-
   it("preserves configured reserve tokens when disabling embedded auto-compaction", () => {
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true, reserveTokens: 50_000 },

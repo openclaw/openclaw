@@ -317,13 +317,7 @@ describe("gateway tool defaults", () => {
       },
     );
 
-    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [callParams] = expectDefined(
-      (
-        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
-      )[0],
-      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
-    );
+    const callParams = capturedGatewayCall();
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual(["operator.approvals"]);
   });
@@ -341,13 +335,7 @@ describe("gateway tool defaults", () => {
       },
     );
 
-    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [callParams] = expectDefined(
-      (
-        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
-      )[0],
-      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
-    );
+    const callParams = capturedGatewayCall();
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual([
       "operator.admin",
@@ -372,18 +360,6 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("node.pair.approve");
     expect(call.params).toEqual({ requestId: "req-1" });
     expect(call.scopes).toEqual(["operator.admin"]);
-  });
-
-  it("marks local approval request calls as approval runtime calls", async () => {
-    mocks.callGateway.mockResolvedValueOnce({ id: "approval-id" });
-
-    await callGatewayTool("exec.approval.request", {}, { command: "printf hi" });
-
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("exec.approval.request");
-    expect(call.scopes).toEqual(["operator.approvals"]);
-    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
   it.each([
@@ -511,37 +487,11 @@ describe("gateway tool defaults", () => {
     );
   });
 
-  it("explains stale gateway cron connection metadata rejections", async () => {
-    mocks.callGateway.mockRejectedValueOnce(
-      new Error(
-        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
-      ),
-    );
-
-    await expect(
-      withGatewayToolCallerIdentity(
-        testGatewayCaller(
-          { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
-          "localEmbedded",
-        ),
-        async () => {
-          await callGatewayTool("cron.remove", {}, { id: "job-1" });
-        },
-      ),
-    ).rejects.toThrow(
-      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
-    );
-
-    const call = capturedGatewayCall();
-    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
-  });
-
-  it("explains fail-closed stale gateway cron identity rejections", async () => {
-    mocks.callGateway.mockRejectedValueOnce(
-      new Error(
-        "gateway rejected required agent runtime identity auth field; refusing to retry without it",
-      ),
-    );
+  it.each([
+    "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+    "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+  ])("explains stale gateway cron identity rejection: %s", async (message) => {
+    mocks.callGateway.mockRejectedValueOnce(new Error(message));
 
     await expect(
       withGatewayToolCallerIdentity(
@@ -626,30 +576,6 @@ describe("gateway tool defaults", () => {
       sessionKey: "agent:ops:telegram:direct:alice",
     });
     expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-  });
-
-  it("marks local approval wait calls as approval runtime calls", async () => {
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
-
-    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
-
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("exec.approval.waitDecision");
-    expect(call.scopes).toEqual(["operator.approvals"]);
-    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call).not.toHaveProperty("deviceIdentity");
-  });
-
-  it("marks local plugin approval wait calls as approval runtime calls", async () => {
-    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
-
-    await callGatewayTool("plugin.approval.waitDecision", {}, { id: "approval-id" });
-
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("plugin.approval.waitDecision");
-    expect(call.scopes).toEqual(["operator.approvals"]);
-    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
   it("attaches trusted turn-source metadata to node invokes", async () => {
@@ -898,34 +824,6 @@ describe("gateway tool defaults", () => {
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("marks local plugin approval request calls as approval runtime calls", async () => {
-    mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-id" });
-
-    await callGatewayTool("plugin.approval.request", {}, { title: "approve", description: "test" });
-
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("plugin.approval.request");
-    expect(call.scopes).toEqual(["operator.approvals"]);
-    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call).not.toHaveProperty("deviceIdentity");
-  });
-
-  it("marks local approval resolve calls as approval runtime calls", async () => {
-    mocks.callGateway.mockResolvedValueOnce({ ok: true });
-
-    await callGatewayTool(
-      "exec.approval.resolve",
-      {},
-      { id: "approval-id", decision: "allow-once" },
-    );
-
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("exec.approval.resolve");
-    expect(call.scopes).toEqual(["operator.approvals"]);
-    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call).not.toHaveProperty("deviceIdentity");
-  });
-
   it("does not attach agent provenance to ordinary contextual approval resolutions", async () => {
     await withGatewayToolCallerIdentity(
       testGatewayCaller({ agentId: "main", sessionKey: "agent:main:main" }),
@@ -1000,6 +898,8 @@ describe("gateway tool defaults", () => {
     await callGatewayTool(method, {}, { id: "approval-id", decision: "allow-once" });
 
     const call = capturedGatewayCall();
+    expect(call.method).toBe(method);
+    expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
     // Sending both would put the approval bridge back under the shared CLI device's
     // paired scope baseline. A device paired before operator.approvals existed then

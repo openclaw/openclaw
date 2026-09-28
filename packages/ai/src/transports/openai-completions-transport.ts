@@ -15,7 +15,9 @@ import {
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -185,23 +187,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant" as const,
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output: MutableAssistantOutput = createAssistantOutput(model);
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -267,6 +253,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           context,
           options as OpenAICompletionsOptions | undefined,
         );
+        const encodeBody = prepareModelRequestBody(options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
@@ -296,9 +283,12 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         const { data: responseStream, response } = await client.chat.completions
           .create(
             params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-            buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-              timeoutMs: options?.timeoutMs,
-            }),
+            {
+              ...buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+                timeoutMs: options?.timeoutMs,
+              }),
+              ...(await encodeBody(params)),
+            },
           )
           .withResponse();
         const hookedResponseStream = withProviderResponseHook({

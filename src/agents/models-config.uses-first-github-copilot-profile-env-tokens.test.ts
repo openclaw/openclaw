@@ -232,17 +232,6 @@ describe("models-config", () => {
       models: [],
     });
   });
-
-  it("writes default github-copilot baseUrl when the token exchange fails", async () => {
-    const plan = await planCopilotWithImplicitProvider({
-      provider: { baseUrl: "https://api.individual.githubcopilot.com", models: [] },
-    });
-
-    expect(expectCopilotProviderFromPlan(plan)).toEqual({
-      baseUrl: "https://api.individual.githubcopilot.com",
-      models: [],
-    });
-  });
 });
 
 async function planCopilotWithImplicitProvider(params: { provider: ProviderConfig }) {

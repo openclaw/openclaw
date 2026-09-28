@@ -59,6 +59,7 @@ export async function handleChatStartupRequest(
       isCurrent: () => getSessionRowProjection(opts.context) === projection,
     },
     (resolved) => {
+      opts.sessionMutationAuthorization?.assertCurrent();
       if (!resolved.ok) {
         opts.respond(false, undefined, resolved.error);
         return undefined;

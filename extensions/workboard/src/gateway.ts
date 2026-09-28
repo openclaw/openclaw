@@ -1,4 +1,3 @@
-// Workboard plugin module implements gateway behavior.
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
@@ -10,6 +9,7 @@ import {
   readExpectedUpdatedAt,
   registerWorkboardResultMethods,
   respondError,
+  WorkboardUploadsDisabledError,
   type GatewayMethodContext,
 } from "./gateway-helpers.js";
 import {
@@ -55,6 +55,15 @@ export function registerWorkboardGatewayMethods(params: {
   store?: WorkboardStore;
 }) {
   const { api: hostApi } = params;
+  const assertUploadsAllowed = (client: GatewayMethodContext["client"]) => {
+    if (
+      !client?.internal?.syntheticClient &&
+      !client?.internal?.agentRuntimeIdentity &&
+      hostApi.runtime.config.current().gateway?.uploads?.enabled === false
+    ) {
+      throw new WorkboardUploadsDisabledError();
+    }
+  };
   const store =
     params.store ??
     WorkboardStore.openSqlite(resolveWorkboardSqliteWorkerModuleUrl(hostApi.runtimeSource));
@@ -68,7 +77,12 @@ export function registerWorkboardGatewayMethods(params: {
         method,
         async (request) => {
           try {
-            return await store.runOperation(() => handler(request));
+            return await store.runOperation(() => {
+              if (method === "workboard.cards.attachments.add") {
+                assertUploadsAllowed(request.client);
+              }
+              return handler(request);
+            });
           } catch (error) {
             respondError(request.respond, error);
           }
@@ -271,7 +285,14 @@ export function registerWorkboardGatewayMethods(params: {
         return attachment;
       },
     ],
-    cardMutation("attachments.add", (id, input) => store.addAttachment(id, input)),
+    [
+      "workboard.cards.attachments.add",
+      WRITE_SCOPE,
+      ({ params: input, client }: GatewayMethodContext) =>
+        redactCardResult(
+          store.addAttachment(readId(input), input, undefined, () => assertUploadsAllowed(client)),
+        ),
+    ],
     [
       "workboard.cards.attachments.delete",
       WRITE_SCOPE,

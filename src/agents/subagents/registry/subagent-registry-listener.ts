@@ -86,6 +86,25 @@ export function createSubagentRegistryListener(config: {
           startedAt,
           endedAt,
         });
+        const complete = (
+          outcome: SubagentCompletionRequest["outcome"],
+          reason: SubagentCompletionRequest["reason"],
+          source: string,
+        ) =>
+          completeSubagentRunWithRecovery(
+            {
+              runId: evt.runId,
+              endedAt,
+              outcome,
+              reason,
+              sendFarewell: true,
+              accountId: entry.requesterOrigin?.accountId,
+              triggerCleanup: true,
+              startedAt,
+              terminalReply,
+            },
+            source,
+          );
         // sessions_yield ends the turn by aborting the run signal, so a yielded
         // terminal can also look aborted. An explicit yield is authoritative — pause,
         // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
@@ -117,18 +136,9 @@ export function createSubagentRegistryListener(config: {
           // its waiter blocks for good. The attempt's own terminal is the only
           // result this run will ever have: settle it as the ordinary success it
           // is, which freezes the collector completion the waiter reads.
-          await completeSubagentRunWithRecovery(
-            {
-              runId: evt.runId,
-              endedAt,
-              outcome: { status: "ok" as const },
-              reason: SUBAGENT_ENDED_REASON_COMPLETE,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-              startedAt,
-              terminalReply,
-            },
+          await complete(
+            { status: "ok" },
+            SUBAGENT_ENDED_REASON_COMPLETE,
             "lifecycle-collector-yield-event",
           );
           return;
@@ -175,38 +185,18 @@ export function createSubagentRegistryListener(config: {
         if (classification !== "success") {
           const cancelled = classification === "cancellation";
           pendingLifecycle.clear(evt.runId);
-          await completeSubagentRunWithRecovery(
+          await complete(
             {
-              runId: evt.runId,
-              endedAt,
-              outcome: {
-                status: "error" as const,
-                error: cancelled ? "subagent run terminated" : terminalOutcome.error,
-              },
-              reason: cancelled ? SUBAGENT_ENDED_REASON_KILLED : SUBAGENT_ENDED_REASON_ERROR,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-              startedAt,
-              terminalReply,
+              status: "error",
+              error: cancelled ? "subagent run terminated" : terminalOutcome.error,
             },
+            cancelled ? SUBAGENT_ENDED_REASON_KILLED : SUBAGENT_ENDED_REASON_ERROR,
             cancelled ? "lifecycle-killed-event" : `lifecycle-${terminalOutcome.reason}-event`,
           );
           return;
         }
         pendingLifecycle.clear(evt.runId);
-        const completionParams = {
-          runId: evt.runId,
-          endedAt,
-          outcome: { status: "ok" as const },
-          reason: SUBAGENT_ENDED_REASON_COMPLETE,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          triggerCleanup: true,
-          startedAt,
-          terminalReply,
-        };
-        await completeSubagentRunWithRecovery(completionParams, "lifecycle-ok-event");
+        await complete({ status: "ok" }, SUBAGENT_ENDED_REASON_COMPLETE, "lifecycle-ok-event");
       })().catch((err: unknown) => {
         warn("lifecycle event handler failed", { err, runId: evt.runId });
       });

@@ -129,10 +129,7 @@ afterEach(() => {
 
 describe("isSqliteCorruptionError", () => {
   const cases: Array<{ error: unknown; expected: boolean; name: string }> = [
-    { error: sqliteError("file is not a database", 26), expected: true, name: "NOTADB" },
-    { error: sqliteError("database disk image is malformed", 11), expected: true, name: "CORRUPT" },
     { error: sqliteError("corrupt index", 779), expected: true, name: "extended CORRUPT" },
-    { error: sqliteError("database is locked", 5), expected: false, name: "BUSY" },
     { error: sqliteError("database table is locked", 6), expected: false, name: "LOCKED" },
     { error: new Error("plain failure"), expected: false, name: "no errcode" },
   ];

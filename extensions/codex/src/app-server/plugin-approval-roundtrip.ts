@@ -2,7 +2,10 @@
  * Routes Codex app-server plugin approval prompts through OpenClaw's gateway
  * approval tool and maps gateway decisions back to Codex outcomes.
  */
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ExecApprovalDecision,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
@@ -31,8 +34,6 @@ const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
   String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
 );
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
-
 export type CodexApprovalKind = "command" | "file-change" | "permissions" | "other";
 const CODEX_APPROVAL_TIMEOUT_SUBJECTS: Record<CodexApprovalKind, string> = {
   command: "Command approval",
@@ -55,11 +56,6 @@ export type AppServerApprovalOutcome =
 
 export type PluginApprovalOutcome = AppServerApprovalOutcome | "timed-out";
 
-type ApprovalRequestResult = {
-  id?: string;
-  decision?: ExecApprovalDecision | null;
-};
-
 /** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
   hostCapabilities: AgentHarnessHostCapabilities;
@@ -72,7 +68,7 @@ export async function requestPluginApproval(params: {
   allowedDecisions?: ExecApprovalDecision[];
   mcpTool?: { server: string; tool: string };
   isMcpToolApprovalActive?: () => boolean;
-}): Promise<ApprovalRequestResult | undefined> {
+}): ReturnType<AgentHarnessHostCapabilities["requestApproval"]> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return params.hostCapabilities.requestApproval({
     signal: params.signal,
@@ -90,7 +86,7 @@ export async function requestPluginApproval(params: {
     timeoutMs,
     transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
-  }) as Promise<ApprovalRequestResult | undefined>;
+  });
 }
 
 /** Detects the gateway's explicit null-decision marker for unavailable approvals. */

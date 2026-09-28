@@ -72,6 +72,16 @@ You can also enable the global rolling-history detectors in **Settings → Agent
 | --------- | ------- | ------------------------------------------------------------------------------------------------- |
 | `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
 
+Execution titles do not distinguish otherwise identical exec calls. Code Mode
+also supplies private outcome identities: bookkeeping counters and continuation
+IDs do not count as progress. Automatically retained values use their original
+value identity rather than a fresh result-reference ID. Pending work is compared by its operation and
+arguments, while changed output, returned values, and errors remain meaningful.
+The displayed receipts and guest data are unchanged, including guest fields
+named telemetry or pendingToolCalls. This does not detect arbitrary
+semantically equivalent JavaScript rewrites or make background processes survive
+a Gateway restart.
+
 For `exec`, no-progress hashing compares stable command outcomes (status,
 exit code, timed-out flag, output) and ignores volatile runtime metadata such
 as duration, PID, session ID, and working directory.
@@ -83,6 +93,17 @@ stripped, so delivery IDs alone do not make repeated equivalent sends look like
 progress. When a run id is available, history is evaluated only within that run,
 so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts
 from earlier runs.
+
+Successful `progress_card` calls are compared using the saved Markdown and plan,
+not their write revision or receipt wording. Saved revisions and delivered receipts
+are unchanged, so a requested refresh still receives a newer saved revision even
+when the card content is unchanged. Errors and results without the tool’s private
+semantic outcome keep full outcome comparison.
+
+Window observations from `computer` `get_window_state` are compared without fresh
+observation and element references. Pixels, element labels, values, bounds, and
+other observation data still count as changes. Model-facing results retain fresh
+references, and stale references remain invalid for subsequent input.
 
 Outcome comparisons also ignore fresh external-content wrapper nonces, including
 wrapped errors and JSON results. Delivered security markers remain unchanged;
@@ -144,6 +165,10 @@ spend and lockups while preserving normal tool access.
   appearing on every repeated call. The raw outcome is recorded before the note
   is added, so warning text does not count as progress.
 - Blocking follows once a pattern persists past the warning threshold.
+- Repeating `wait` with identical arguments and outcomes ten times blocks the
+  next wait. Changed outcomes reset the streak. This uses the same recovery
+  response and terminal handling described below; it does not cancel a tool
+  call that is still executing.
 - In the embedded agent loop, the first critical loop blocks the whole tool
   batch before any tool in that batch runs. The model then gets one more
   response with its normal tools.

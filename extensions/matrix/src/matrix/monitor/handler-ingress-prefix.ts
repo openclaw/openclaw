@@ -1,9 +1,10 @@
 import type { LocationMessageEventContent } from "../sdk.js";
+import { RelationType } from "../send/types.js";
 import { hasBundledMatrixReplacementRelation } from "./handler-helpers.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
-import { EventType, RelationType } from "./types.js";
+import { EventType } from "./types.js";
 import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 
 type ReplayClaimHandle = import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;

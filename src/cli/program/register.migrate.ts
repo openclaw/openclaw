@@ -18,20 +18,32 @@ function readMigrationOption<T>(command: Command, name: string, value: T): T {
   return inheritOptionFromParent<T>(command, name) ?? value;
 }
 
-function addMigrationSkillOption(command: Command): Command {
-  return command.option(
-    "--skill <name>",
-    "Select one skill to migrate by name or item id; repeat for multiple skills",
-    collectOption,
-  );
+function addMigrationSourceOptions(command: Command): Command {
+  return command
+    .option("--from <path>", "Source directory to migrate from")
+    .option("--agent <id>", "Target agent (default: configured default agent)")
+    .option("--include-secrets", "Import supported credentials and secrets")
+    .option("--no-auth-credentials", "Skip auth credential migration")
+    .option("--overwrite", "Overwrite conflicting target files after item-level backups", false);
 }
 
-function addMigrationPluginOption(command: Command): Command {
-  return command.option(
-    "--plugin <name>",
-    "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
-    collectOption,
-  );
+function addMigrationSelectionOptions(command: Command): Command {
+  return command
+    .option(
+      "--skill <name>",
+      "Select one skill to migrate by name or item id; repeat for multiple skills",
+      collectOption,
+    )
+    .option(
+      "--plugin <name>",
+      "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
+      collectOption,
+    )
+    .option(
+      "--item <id>",
+      "Select one exact migration item id; repeat for multiple items",
+      collectOption,
+    );
 }
 
 function addVerifyPluginAppsOption(command: Command): Command {
@@ -42,34 +54,10 @@ function addVerifyPluginAppsOption(command: Command): Command {
   );
 }
 
-function addMigrationItemOption(command: Command): Command {
-  return command.option(
-    "--item <id>",
-    "Select one exact migration item id; repeat for multiple items",
-    collectOption,
-  );
-}
-
 function addMigrationOptions(command: Command): Command {
-  return addVerifyPluginAppsOption(
-    addMigrationItemOption(
-      addMigrationPluginOption(
-        addMigrationSkillOption(
-          command
-            .option("--from <path>", "Source directory to migrate from")
-            .option("--agent <id>", "Target agent (default: configured default agent)")
-            .option("--include-secrets", "Import supported credentials and secrets")
-            .option("--no-auth-credentials", "Skip auth credential migration")
-            .option(
-              "--overwrite",
-              "Overwrite conflicting target files after item-level backups",
-              false,
-            )
-            .option("--json", "Output JSON", false),
-        ),
-      ),
-    ),
-  );
+  addMigrationSourceOptions(command).option("--json", "Output JSON", false);
+  addMigrationSelectionOptions(command);
+  return addVerifyPluginAppsOption(command);
 }
 
 function readSharedMigrationOptions(opts: Record<string, unknown>, command: Command) {
@@ -108,38 +96,20 @@ function rejectUnsupportedApplyDryRun(command: Command): void {
 
 /** Register migration commands and shared provider/item selection flags. */
 export function registerMigrateCommand(program: Command) {
-  const migrate = addVerifyPluginAppsOption(
+  const migrate = addMigrationSourceOptions(
     program
       .command("migrate")
       .description("Import state from another agent system")
-      .argument("[provider]", "Migration provider id, for example hermes")
-      .option("--from <path>", "Source directory to migrate from")
-      .option("--agent <id>", "Target agent (default: configured default agent)")
-      .option("--include-secrets", "Import supported credentials and secrets")
-      .option("--no-auth-credentials", "Skip auth credential migration")
-      .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
-      .option("--dry-run", "Preview only; do not apply changes", false)
-      .option("--yes", "Apply without prompting after preview", false)
-      .option(
-        "--skill <name>",
-        "Select one skill to migrate by name or item id; repeat for multiple skills",
-        collectOption,
-      )
-      .option(
-        "--plugin <name>",
-        "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
-        collectOption,
-      )
-      .option(
-        "--item <id>",
-        "Select one exact migration item id; repeat for multiple items",
-        collectOption,
-      )
-      .option("--backup-output <path>", "Pre-migration backup archive path or directory")
-      .option("--no-backup", "Skip the pre-migration OpenClaw backup")
-      .option("--force", "Allow dangerous options such as --no-backup", false)
-      .option("--json", "Output JSON", false),
+      .argument("[provider]", "Migration provider id, for example hermes"),
   )
+    .option("--dry-run", "Preview only; do not apply changes", false)
+    .option("--yes", "Apply without prompting after preview", false);
+  addMigrationSelectionOptions(migrate)
+    .option("--backup-output <path>", "Pre-migration backup archive path or directory")
+    .option("--no-backup", "Skip the pre-migration OpenClaw backup")
+    .option("--force", "Allow dangerous options such as --no-backup", false)
+    .option("--json", "Output JSON", false);
+  addVerifyPluginAppsOption(migrate)
     .addHelpText(
       "after",
       () =>

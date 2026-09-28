@@ -1,4 +1,3 @@
-// Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
@@ -23,6 +22,7 @@ import {
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
+import { runtimeSessionChangeScope } from "./runtime-session-changes.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -236,12 +236,13 @@ export function setRuntimeConfigSnapshot(
 }
 
 function publishRuntimeConfigSnapshot(config: OpenClawConfig, sourceConfig?: OpenClawConfig): void {
+  const scope = runtimeSessionChangeScope(runtimeConfigSnapshot, config);
   runtimeConfigSnapshotGeneration += 1;
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
-  sessionChanges.emit({ all: true, scope: "config" });
+  sessionChanges.emit({ all: true, scope });
 }
 
 export function registerRuntimeConfigSnapshotPreparer(

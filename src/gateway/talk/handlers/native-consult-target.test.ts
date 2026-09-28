@@ -6,6 +6,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
   listSessionEntriesReadOnly,
@@ -76,8 +77,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
-vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+vi.mock("../../../agents/bootstrap-files.js", () => ({
+  resolveBootstrapFilesForRun: async () => [],
 }));
 vi.mock("../../../talk/provider-resolver.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
@@ -249,6 +250,7 @@ it.each([undefined, "main"])(
   async (sessionKey) => {
     config.session = { scope: "global" };
     const { sessionId } = await createRelayCall();
+    expect(providerInstructions).toBe(REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS);
     await replaceSessionEntry(
       { agentId: "primary", sessionKey: "global" },
       {
@@ -355,6 +357,32 @@ it("fences an opaque relay record replaced after authorization", async () => {
   );
 });
 
+function registerOwnedEmbeddedRun(runId: string, sessionId: string) {
+  const registration = registerChatAbortController({
+    chatAbortControllers: context.chatAbortControllers,
+    runId,
+    sessionId,
+    sessionKey: "global",
+    agentId: "voice",
+    ownerConnId: client.connId,
+    timeoutMs: 60_000,
+    kind: "chat-send",
+  });
+  const abort = vi.fn();
+  setActiveEmbeddedRun(
+    sessionId,
+    {
+      runId,
+      queueMessage: async () => undefined,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort,
+    },
+    "global",
+  );
+  return { registration, abort };
+}
+
 it("rechecks RPC sharing authorization after the control runtime import", async () => {
   config.session = { scope: "global" };
   const target = prepareTalkSessionTarget(config, "main");
@@ -364,28 +392,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     updatedAt: 1,
     visibility: "shared",
   });
-  const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId: "acl-run",
-    sessionId: "acl-session",
-    sessionKey: "global",
-    agentId: "voice",
-    ownerConnId: client.connId,
-    timeoutMs: 60_000,
-    kind: "chat-send",
-  });
-  const abort = vi.fn();
-  setActiveEmbeddedRun(
-    "acl-session",
-    {
-      runId: "acl-run",
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort,
-    },
-    "global",
-  );
+  const { registration, abort } = registerOwnedEmbeddedRun("acl-run", "acl-session");
   const authorization = resolveSessionMutationAuthorization({
     client,
     method: "talk.client.steer",
@@ -425,7 +432,6 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
 });
 
 it.each([
-  "removed",
   "replaced",
   "agent",
   "key",
@@ -442,28 +448,7 @@ it.each([
   const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
   const voiceSessionId = createOrResumeClientVoiceSession({ ...voiceScope, origin: "client" });
   registerClientVoiceConsultRun({ ...voiceScope, voiceSessionId, runId });
-  const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId,
-    sessionId: "captured-session",
-    sessionKey: "global",
-    agentId: "voice",
-    ownerConnId: client.connId,
-    timeoutMs: 60_000,
-    kind: "chat-send",
-  });
-  const abort = vi.fn();
-  setActiveEmbeddedRun(
-    "captured-session",
-    {
-      runId,
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort,
-    },
-    "global",
-  );
+  const { registration, abort } = registerOwnedEmbeddedRun(runId, "captured-session");
   const runTarget = resolveOwnedActiveTalkRunTarget({
     context,
     clientConnId: client.connId,
@@ -478,9 +463,7 @@ it.each([
     mode: "cancel",
   });
   const entry = context.chatAbortControllers.get(runId)!;
-  if (change === "removed") {
-    context.chatAbortControllers.delete(runId);
-  } else if (change === "replaced") {
+  if (change === "replaced") {
     context.chatAbortControllers.set(runId, { ...entry });
   } else if (change === "agent") {
     entry.agentId = "primary";
@@ -765,7 +748,12 @@ it("restores bounded relay history after the original voice provider finishes cl
     expect(instructions).not.toContain("HISTORY_ENTRY_00");
     expect([...instructions.matchAll(/HISTORY_ENTRY_\d{2}/gu)].length).toBeLessThanOrEqual(16);
     expect(
-      Buffer.byteLength(instructions.slice(configuredInstructions.length), "utf8"),
+      Buffer.byteLength(
+        instructions.slice(
+          configuredInstructions.length + 2 + REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS.length,
+        ),
+        "utf8",
+      ),
     ).toBeLessThanOrEqual(8_000);
 
     await expect(
@@ -801,7 +789,9 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
       ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
     });
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(providerInstructions).toBe("Keep native answers brief.");
+    expect(providerInstructions).toBe(
+      `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
+    );
     const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
     const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
     const created = loadSessionEntry(storage);

@@ -100,12 +100,15 @@ function rollbackSuccessSummary() {
   };
 }
 
-async function publishSuccess(summary: unknown) {
+async function publishSuccess(summary: unknown, logs: Record<string, unknown> = {}) {
   const root = tempDirs.make("survivor-rollback-publication-");
   const artifacts = join(root, "private");
   const published = join(root, "published");
   mkdirSync(artifacts);
   writeFileSync(join(artifacts, "summary.json"), JSON.stringify(summary));
+  for (const [name, value] of Object.entries(logs)) {
+    writeFileSync(join(artifacts, name), JSON.stringify(value));
+  }
   const { publishDiagnostics } = await import(observer);
   return {
     artifacts,
@@ -115,6 +118,82 @@ async function publishSuccess(summary: unknown) {
 }
 
 describe("upgrade survivor rollback publication", () => {
+  it("retains producer results and distinguishes canonical rollback from omitted raw transcripts", async () => {
+    const summary = rollbackSuccessSummary();
+    const omission = {
+      relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+      kind: "transcript",
+      sha256: "b".repeat(64),
+      archiveMember:
+        "backup/payload/state/agents/main/sessions/upgrade-restored-index-history.jsonl",
+      sessionId: "PRIVATE_SESSION_ID",
+      canonicalEventCount: 2,
+      reason: "published-2026.9.4-volatile-transcript",
+    };
+    const created = { verified: true, skippedVolatileCount: 3, skipped: [] };
+    const restored = { ok: true, archiveRoot: "backup" };
+    Object.assign(summary.backupRollback, {
+      backupCreate: created,
+      rawTranscriptRestoration: "unsupported-by-published-backup",
+      omittedRawTranscripts: [omission],
+    });
+    summary.backupRollback.before.files.push({
+      kind: omission.kind,
+      relative: omission.relative,
+      sha256: omission.sha256,
+      raw: "PRIVATE_JSON",
+    });
+    const { artifacts, publish, published } = await publishSuccess(summary);
+    const rawProof = {
+      status: "passed",
+      runtime: {
+        version: "2026.9.4",
+        manifestSha256: "a".repeat(64),
+        entrySha256: "a".repeat(64),
+      },
+      rawTranscriptRestoration: "unsupported-by-published-backup",
+      omittedRawTranscripts: [{ ...omission, sessionId: "upgrade-restored-index-history" }],
+    };
+    writeFileSync(join(artifacts, "backup-rollback.json"), JSON.stringify(rawProof));
+    writeFileSync(join(artifacts, "backup-rollback-create.json"), JSON.stringify(created));
+    writeFileSync(join(artifacts, "backup-rollback-restore.json"), JSON.stringify(restored));
+    publish();
+    const text = readFileSync(join(published, "summary.json"), "utf8");
+    expect(text).not.toMatch(/PRIVATE_|\/private\/host/);
+    const receipt = JSON.parse(text);
+    expect(receipt.backupRollback).toMatchObject({
+      skippedVolatileCount: 3,
+      rawTranscriptRestoration: "unsupported-by-published-backup",
+      omittedRawTranscripts: [
+        {
+          relative: omission.relative,
+          kind: "transcript",
+          sha256: omission.sha256,
+          archiveMember: omission.archiveMember,
+          canonicalEventCount: 2,
+          reason: omission.reason,
+        },
+      ],
+    });
+    expect(JSON.parse(receipt.logs["backup-rollback-create.json"])).toEqual(created);
+    expect(JSON.parse(receipt.logs["backup-rollback-restore.json"])).toEqual(restored);
+    expect(JSON.parse(receipt.logs["backup-rollback.json"])).toEqual(rawProof);
+  });
+
+  it("retains restored-index result evidence through host publication", async () => {
+    const { artifacts, publish, published } = await publishSuccess(rollbackSuccessSummary());
+    writeFileSync(
+      join(artifacts, "restored-index-post-update.json"),
+      JSON.stringify({ status: "passed", current: { label: "Renamed session", pinnedAt: 1234 } }),
+    );
+    publish();
+    const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+    expect(JSON.parse(receipt.logs["restored-index-post-update.json"])).toEqual({
+      status: "passed",
+      current: { label: "Renamed session", pinnedAt: 1234 },
+    });
+  });
+
   it("publishes the validated rollback schema, session counts and hashes without private state", async () => {
     const { publish, published } = await publishSuccess(rollbackSuccessSummary());
     publish();
@@ -214,6 +293,9 @@ describe("upgrade survivor rollback publication", () => {
     "unsafe-table-name",
     "oversized-collection",
     "no-history",
+    "unbound-omission",
+    "unsupported-restoration-claim",
+    "invalid-volatile-count",
   ])("refuses %s rollback evidence without writing a successful receipt", async (kind) => {
     const summary = rollbackSuccessSummary();
     const proof = summary.backupRollback;
@@ -246,6 +328,28 @@ describe("upgrade survivor rollback publication", () => {
     }
     if (kind === "no-history") {
       proof.before.databases[1]!.tables![1]!.rows = 0;
+    }
+    if (kind === "unbound-omission") {
+      Object.assign(proof, {
+        backupCreate: { skippedVolatileCount: 1 },
+        rawTranscriptRestoration: "unsupported-by-published-backup",
+        omittedRawTranscripts: [
+          {
+            kind: "transcript",
+            relative: "agents/main/sessions/unrecorded.jsonl",
+            archiveMember: "backup/payload/unrecorded.jsonl",
+            sha256: "b".repeat(64),
+            canonicalEventCount: 2,
+            reason: "published-2026.9.4-volatile-transcript",
+          },
+        ],
+      });
+    }
+    if (kind === "unsupported-restoration-claim") {
+      Object.assign(proof, { rawTranscriptRestoration: "unsupported-by-published-backup" });
+    }
+    if (kind === "invalid-volatile-count") {
+      Object.assign(proof, { backupCreate: { skippedVolatileCount: -1 } });
     }
     const { publish, published } = await publishSuccess(summary);
     expect(publish).toThrow();
@@ -564,9 +668,39 @@ if (process.argv[2] === 'update') {
     expect(report.omissions["session migration failure report"]).toBe(reason);
   });
 
-  it.each(["available", "unavailable", "absent", "invalid"])(
-    "publishes %s baseline companion coverage in successful receipts",
-    async (availability) => {
+  it.each([
+    { name: "available companion", availability: "available", missingLoadPath: null },
+    { name: "unavailable companion", availability: "unavailable", missingLoadPath: null },
+    { name: "absent companion", availability: "absent", missingLoadPath: null },
+    { name: "invalid companion", availability: "invalid", missingLoadPath: null },
+    {
+      name: "supported missing path",
+      availability: "absent",
+      missingLoadPath: { applicability: "supported", reason: null },
+    },
+    {
+      name: "unsupported missing path",
+      availability: "absent",
+      missingLoadPath: {
+        applicability: "unsupported-driver",
+        reason: "published-cli-rejects-invalid-config-before-staging",
+      },
+    },
+    {
+      name: "invalid missing-path applicability",
+      availability: "absent",
+      missingLoadPath: { applicability: "private-invalid-value", reason: null },
+      invalid: true,
+    },
+    {
+      name: "invalid missing-path reason",
+      availability: "absent",
+      missingLoadPath: { applicability: "unsupported-driver", reason: "private-invalid-value" },
+      invalid: true,
+    },
+  ])(
+    "publishes $name coverage in successful receipts",
+    async ({ availability, missingLoadPath, invalid }) => {
       const root = realpathSync(tempDirs.make("survivor-companion-receipt-"));
       const baselineCompanion =
         availability === "absent"
@@ -593,6 +727,7 @@ if (process.argv[2] === 'update') {
           updateOutcome: "success",
           phases: [],
           baselineCompanion,
+          missingLoadPath,
         }),
       );
       const { publishDiagnostics } = await import(observer);
@@ -604,15 +739,15 @@ if (process.argv[2] === 'update') {
           (text: string) => text.replaceAll("E404", "redacted"),
           "passed",
         );
-      if (availability === "invalid") {
+      if (availability === "invalid" || invalid) {
         expect(publish).toThrow();
         expect(existsSync(join(published, "summary.json"))).toBe(false);
         return;
       }
       publish();
-      expect(
-        JSON.parse(readFileSync(join(published, "summary.json"), "utf8")).baselineCompanion,
-      ).toEqual(
+      const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+      expect(receipt.missingLoadPath).toEqual(missingLoadPath);
+      expect(receipt.baselineCompanion).toEqual(
         baselineCompanion
           ? {
               ...baselineCompanion,
@@ -712,3 +847,35 @@ if (process.argv[2] === 'update') {
     ]);
   });
 });
+
+it.each([
+  { version: "2026.9.4", mode: "manual" },
+  { version: "2026.9.6", mode: "manual" },
+  { version: "2026.9.6", mode: "auto-auth" },
+])(
+  "publishes Cron readback proof after a successful $version $mode upgrade",
+  async ({ version, mode }) => {
+    const summary = rollbackSuccessSummary();
+    summary.baseline = { spec: `openclaw@${version}`, version };
+    summary.backupRollback.baselineVersion = version;
+    summary.backupRollback.runtime.version = version;
+    summary.updateRestartMode = mode;
+    const proofs = Object.fromEntries(
+      ["post-update", "candidate"].map((stage) => [
+        `legacy-operator-${stage}-cron-history.json`,
+        {
+          status: "passed",
+          stage,
+          source: version === "2026.9.4" ? "legacy-doctor-import" : "published-native-runs",
+          pages: [{ jobId: "synthetic", runId: "retained" }],
+        },
+      ]),
+    );
+    const publication = await publishSuccess(summary, proofs);
+    publication.publish();
+    const result = JSON.parse(readFileSync(join(publication.published, "summary.json"), "utf8"));
+    for (const [name, proof] of Object.entries(proofs)) {
+      expect(JSON.parse(result.logs[name])).toEqual(proof);
+    }
+  },
+);

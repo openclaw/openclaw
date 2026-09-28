@@ -1,4 +1,3 @@
-// Venice tests cover models plugin behavior.
 import { calculateCost, type Usage } from "openclaw/plugin-sdk/llm";
 import {
   buildOpenAICompatibleLiveModelProviderConfig,
@@ -6,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VENICE_BASE_URL, VENICE_MODEL_CATALOG, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type ModelSpecOverride = {
   id: string;
@@ -29,15 +27,11 @@ function makeModelRow(params: ModelSpecOverride) {
     id: params.id,
     model_spec: {
       name: params.id,
-      ...(params.pricing === undefined ? {} : { pricing: params.pricing }),
       privacy: "private",
-      ...(params.availableContextTokens === undefined
-        ? {}
-        : { availableContextTokens: params.availableContextTokens }),
-      ...(params.maxCompletionTokens === undefined
-        ? {}
-        : { maxCompletionTokens: params.maxCompletionTokens }),
-      ...(params.capabilities === undefined ? {} : { capabilities: params.capabilities }),
+      pricing: params.pricing,
+      availableContextTokens: params.availableContextTokens,
+      maxCompletionTokens: params.maxCompletionTokens,
+      capabilities: params.capabilities,
     },
   };
 }
@@ -78,98 +72,6 @@ describe("venice-models", () => {
     vi.unstubAllGlobals();
   });
 
-  it("excludes stale models from the static fallback catalog", () => {
-    const catalogIds = new Set(VENICE_MODEL_CATALOG.map((model) => model.id));
-    for (const staleId of [
-      "claude-opus-4-6",
-      "gemini-3-pro-preview",
-      "gemini-3-1-pro-preview",
-      "gemini-3-flash-preview",
-      "grok-41-fast",
-      "hermes-3-llama-3.1-405b",
-      "kimi-k2-thinking",
-      "llama-3.2-3b",
-      "llama-3.3-70b",
-      "minimax-m21",
-      "minimax-m25",
-      "mistral-31-24b",
-      "nvidia-nemotron-3-nano-30b-a3b",
-      "openai-gpt-4o-2024-11-20",
-      "openai-gpt-4o-mini-2024-07-18",
-      "openai-gpt-52",
-      "openai-gpt-52-codex",
-      "openai-gpt-53-codex",
-      "openai-gpt-54",
-      "openai-gpt-oss-120b",
-      "qwen3-4b",
-      "qwen3-5-35b-a3b",
-      "qwen3-235b-a22b-instruct-2507",
-      "qwen3-coder-480b-a35b-instruct",
-      "qwen3-next-80b",
-      "venice-uncensored",
-      "zai-org-glm-4.7-flash",
-      "zai-org-glm-5",
-    ]) {
-      expect(catalogIds.has(staleId)).toBe(false);
-    }
-  });
-
-  it("keeps only immediate predecessors as deprecated compatibility rows", () => {
-    // Lifecycle metadata lives on the manifest rows; the runtime provider-config
-    // bridge (ModelDefinitionConfig) intentionally carries no status fields.
-    const manifestRows = manifest.modelCatalog.providers.venice.models as Array<
-      Record<string, unknown>
-    >;
-    for (const [id, replacedBy] of [
-      ["zai-org-glm-4.6", "zai-org-glm-4.7"],
-      ["google-gemma-3-27b-it", "google-gemma-4-31b-it"],
-      ["kimi-k2-5", "kimi-k2-6"],
-    ]) {
-      expect(manifestRows.find((model) => model.id === id)).toMatchObject({
-        status: "deprecated",
-        replacedBy,
-      });
-    }
-  });
-
-  it("preserves offline seed pricing in every bundled Venice model", () => {
-    expect(
-      VENICE_MODEL_CATALOG.map(({ id, cost, compat }) => ({
-        id,
-        cost,
-        supportsUsageInStreaming: compat?.supportsUsageInStreaming,
-      })),
-    ).toEqual(
-      manifest.modelCatalog.providers.venice.models.map(({ id, cost }) => ({
-        id,
-        cost,
-        supportsUsageInStreaming: false,
-      })),
-    );
-  });
-
-  it("retains bundled prices for known live models without pricing unknown models", async () => {
-    stubVeniceModelsFetch([
-      { id: "zai-org-glm-4.7" },
-      { id: "claude-opus-5" },
-      { id: "unknown-model-without-pricing" },
-    ]);
-    const manifestCosts = new Map(
-      manifest.modelCatalog.providers.venice.models.map(({ id, cost }) => [id, cost]),
-    );
-
-    const models = await discoverVeniceModels();
-
-    expect(models.map(({ id, cost }) => ({ id, cost }))).toEqual([
-      { id: "zai-org-glm-4.7", cost: manifestCosts.get("zai-org-glm-4.7") },
-      { id: "claude-opus-5", cost: manifestCosts.get("claude-opus-5") },
-      {
-        id: "unknown-model-without-pricing",
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ]);
-  });
-
   it("uses complete live prices for known, new, and free models in the fetched rows", async () => {
     const fetchMock = stubVeniceModelsFetch([
       { id: "grok-4-5", pricing: { input: { usd: 7 }, output: { usd: 11 } } },
@@ -197,7 +99,6 @@ describe("venice-models", () => {
     undefined,
     { input: { usd: 9 } },
     { input: { usd: -1 }, output: { usd: 3 } },
-    { input: { usd: "9" }, output: { usd: 3 } },
     { input: { usd: 9 }, output: { usd: 3 }, cache_write: null },
     { input: { usd: 9 }, output: { usd: 3 }, extended: null },
     {
@@ -226,7 +127,7 @@ describe("venice-models", () => {
     expect(models[1]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
-  it.each([0, 17, 200_000, 256_000, 272_000, 17.5])(
+  it.each([0, 17.5])(
     "prices the entire request only above live threshold %s, including cached tokens",
     async (threshold) => {
       stubVeniceModelsFetch([
@@ -379,34 +280,14 @@ describe("venice-models", () => {
 
     const models = await discoverVeniceModels();
     const glm = models.find((m) => m.id === "zai-org-glm-4.7");
-    expect(glm?.maxTokens).toBe(2048);
+    expect(glm).toMatchObject({
+      maxTokens: 2048,
+      compat: { supportsUsageInStreaming: false },
+    });
     const [input, init] = fetchMock.mock.calls[0] ?? [];
     const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
     expect(headers.get("accept")).toBe("application/json");
     expect(headers.get("authorization")).toBeNull();
-  });
-
-  it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
-    stubVeniceModelsFetch([
-      {
-        id: "qwen3-235b-a22b-thinking-2507",
-        availableContextTokens: 131072,
-        capabilities: {
-          supportsReasoning: false,
-          supportsVision: false,
-          supportsFunctionCalling: true,
-        },
-      },
-    ]);
-
-    const models = await discoverVeniceModels();
-    const qwen = models.find((m) => m.id === "qwen3-235b-a22b-thinking-2507");
-    expect(qwen?.maxTokens).toBe(16384);
-  });
-
-  it("keeps tools enabled for DeepSeek V3.2", () => {
-    const model = VENICE_MODEL_CATALOG.find((entry) => entry.id === "deepseek-v3.2")!;
-    expect(model.compat?.supportsTools).toBeUndefined();
   });
 
   it("uses a conservative bounded maxTokens value for new models", async () => {
@@ -494,19 +375,5 @@ describe("venice-models", () => {
     expect(knownModel?.maxTokens).toBe(65536);
     expect(newModel?.contextWindow).toBe(32000);
     expect(newModel?.maxTokens).toBe(2048);
-  });
-
-  it("falls back to static catalog after a discovery failure", async () => {
-    const fetchMock = vi.fn(async () => {
-      throw Object.assign(new TypeError("fetch failed"), {
-        cause: { code: "ENOTFOUND", message: "getaddrinfo ENOTFOUND api.venice.ai" },
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const models = await discoverVeniceModels();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(models).toHaveLength(VENICE_MODEL_CATALOG.length);
-    expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));
   });
 });

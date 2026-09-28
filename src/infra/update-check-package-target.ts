@@ -99,6 +99,7 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
   timeoutMs: number;
   registryUrl?: string;
   packageName?: string;
+  signal?: AbortSignal;
 }): Promise<NpmPackageTargetStatus> {
   const url = npmRegistryTargetUrl({
     registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
@@ -107,6 +108,7 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
   });
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, params.timeoutMs),
+    signal: params.signal,
     operation: "npm-registry-update-check",
     url,
   });
@@ -156,6 +158,8 @@ export async function fetchNpmPackageTargetStatus(params: {
   runCommand?: NpmMetadataCommandRunner;
   registryUrl?: string;
   packageName?: string;
+  /** Aborts registry reads; command runners own their own cancellation. */
+  signal?: AbortSignal;
 }): Promise<NpmPackageTargetStatus> {
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const target = params.target;
@@ -165,6 +169,7 @@ export async function fetchNpmPackageTargetStatus(params: {
       timeoutMs,
       registryUrl: params.registryUrl,
       packageName: params.packageName,
+      signal: params.signal,
     });
   }
   const runCommand = params.runCommand ?? runCommandWithTimeout;

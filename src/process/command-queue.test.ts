@@ -6,6 +6,9 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import {
   tryBeginGatewayRootWorkAdmission,
@@ -86,6 +89,19 @@ function diagnosticDebugMessages(): string[] {
     .filter((message): message is string => typeof message === "string");
 }
 
+function captureDiagnosticConsole(level: "warn" | "error") {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+  const output = vi.fn();
+  loggingState.rawConsole = {
+    log: output,
+    info: output,
+    warn: output,
+    error: output,
+  };
+  diagnosticMocks.diag[level].mockImplementationOnce(createSubsystemLogger("diagnostic")[level]);
+  return output;
+}
+
 describe("command queue", () => {
   beforeAll(async () => {
     ({
@@ -118,6 +134,9 @@ describe("command queue", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    setLoggerOverride(null);
+    loggingState.rawConsole = null;
+    resetLogger();
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {
@@ -408,8 +427,15 @@ describe("command queue", () => {
   });
 
   it("invokes onWait callback when a task waits past the threshold", async () => {
+    const consoleOutput = captureDiagnosticConsole("warn");
     let waited: number | null = null;
     let queuedAhead: number | null = null;
+    const taskIdentity = {
+      taskKind: "spawn",
+      sessionKey: "agent:example:subagent:child",
+      runId: "child-run",
+      requesterSessionKey: "agent:example:dashboard:parent",
+    };
 
     vi.useFakeTimers();
     try {
@@ -419,6 +445,7 @@ describe("command queue", () => {
       });
 
       const second = enqueueCommandInLane(CommandLane.Main, async () => {}, {
+        taskIdentity,
         warnAfterMs: 5,
         onWait: (ms, ahead) => {
           waited = ms;
@@ -438,6 +465,12 @@ describe("command queue", () => {
           typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
       );
       expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
+      expect(waitWarning?.[1]).toMatchObject(taskIdentity);
+      expect(consoleOutput).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "taskKind=spawn sessionKey=agent:example:subagent:child runId=child-run requesterSessionKey=agent:example:dashboard:parent",
+        ),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -462,23 +495,40 @@ describe("command queue", () => {
   });
 
   it("logs error types separately from the actionable lane failure message", async () => {
+    const consoleOutput = captureDiagnosticConsole("error");
     const error = new Error("provider request failed");
     error.name = "FailoverError";
+    const taskIdentity = {
+      taskKind: "turn",
+      sessionKey: "agent:example:main",
+      runId: 'run-"quoted"\nline',
+    };
 
     await expect(
-      enqueueCommandInLane(CommandLane.Main, async () => {
-        throw error;
-      }),
+      enqueueCommandInLane(
+        CommandLane.Main,
+        async () => {
+          throw error;
+        },
+        { taskIdentity },
+      ),
     ).rejects.toBe(error);
 
     expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
       expect.not.stringContaining("FailoverError:"),
-      expect.objectContaining({ errorName: "FailoverError" }),
+      expect.objectContaining({ errorName: "FailoverError", ...taskIdentity }),
     );
     expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
       expect.stringContaining('error="provider request failed"'),
       expect.any(Object),
     );
+    expect(consoleOutput).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'taskKind=turn sessionKey=agent:example:main runId="run-\\"quoted\\"\\nline"',
+      ),
+    );
+    expect(consoleOutput.mock.calls[0]?.[0]).not.toMatch(/[\r\n]/);
+    expect(consoleOutput.mock.calls[0]?.[0]).not.toContain("requesterSessionKey=");
   });
 
   it.each([

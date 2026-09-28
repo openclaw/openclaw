@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
-import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import type {
@@ -44,7 +45,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
@@ -95,6 +96,7 @@ describe("gateway worker environment startup", () => {
         });
         const registry = createEmptyPluginRegistry();
         const creating = createGatewayWorkerEnvironmentRuntime({
+          scheduler: createTestGatewayScheduler(),
           getPluginRegistry: () => registry,
           getPortalRuntime: () => undefined,
           resolveGatewayContext: () => undefined,
@@ -131,6 +133,7 @@ describe("gateway worker environment startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
@@ -198,6 +201,7 @@ describe("gateway worker environment startup", () => {
       });
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
@@ -274,6 +278,7 @@ describe("gateway worker environment startup", () => {
 
       const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
@@ -372,6 +377,7 @@ describe("gateway worker environment startup", () => {
       };
       const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,

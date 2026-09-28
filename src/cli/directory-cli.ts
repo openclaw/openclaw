@@ -5,7 +5,6 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
@@ -27,7 +26,7 @@ import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
-import { formatHelpExamples } from "./help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 
 function parseLimit(value: unknown): number | null {
   if (value === undefined || value === null) {
@@ -97,10 +96,7 @@ export function registerDirectoryCli(program: Command) {
             "openclaw directory groups members --channel discord --group-id <id>",
             "List members for a specific group.",
           ],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/cli/directory",
-          "docs.openclaw.ai/cli/directory",
-        )}\n`,
+        ])}\n${formatDocsHelp("/cli/directory")}`,
     )
     .action(() => {
       directory.help({ error: true });
@@ -291,36 +287,26 @@ export function registerDirectoryCli(program: Command) {
   );
 
   const peers = directory.command("peers").description("Peer directory (contacts/users)");
-  withChannel(peers.command("list").description("List peers"))
-    .option("--query <text>", "Optional search query")
-    .option("--limit <n>", "Limit results")
-    .action((opts) =>
-      runDirectoryAction(opts, async () => {
-        await runDirectoryList({
-          opts,
-          action: "listPeers",
-          unsupported: "peers",
-          title: "Peers",
-          emptyMessage: "No peers found",
-        });
-      }),
-    );
-
   const groups = directory.command("groups").description("Group directory");
-  withChannel(groups.command("list").description("List groups"))
-    .option("--query <text>", "Optional search query")
-    .option("--limit <n>", "Limit results")
-    .action((opts) =>
-      runDirectoryAction(opts, async () => {
-        await runDirectoryList({
-          opts,
-          action: "listGroups",
-          unsupported: "groups",
-          title: "Groups",
-          emptyMessage: "No groups found",
-        });
-      }),
-    );
+  for (const [command, action, kind, title] of [
+    [peers, "listPeers", "peers", "Peers"],
+    [groups, "listGroups", "groups", "Groups"],
+  ] as const) {
+    withChannel(command.command("list").description(`List ${kind}`))
+      .option("--query <text>", "Optional search query")
+      .option("--limit <n>", "Limit results")
+      .action((opts) =>
+        runDirectoryAction(opts, () =>
+          runDirectoryList({
+            opts,
+            action,
+            unsupported: kind,
+            title,
+            emptyMessage: `No ${kind} found`,
+          }),
+        ),
+      );
+  }
 
   withChannel(
     groups

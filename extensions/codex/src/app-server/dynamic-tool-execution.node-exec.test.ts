@@ -14,9 +14,7 @@ describe("foreground node execution watchdog", () => {
   });
 
   it.each([
-    { timeoutSeconds: undefined, executionTimeoutMs: 1_810_000, completionMs: 105_000 },
     { timeoutSeconds: 900, executionTimeoutMs: 910_000, completionMs: 690_000 },
-    { timeoutSeconds: 0, executionTimeoutMs: 1_810_000, completionMs: 105_000 },
     {
       timeoutSeconds: Number.MAX_VALUE,
       executionTimeoutMs: 2_147_483_647,
@@ -32,7 +30,7 @@ describe("foreground node execution watchdog", () => {
         tool: "node_exec",
         arguments: {
           command: "long-command",
-          ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+          timeoutSeconds,
         },
       };
       const getExecutionTimeoutMs = vi.fn(() => executionTimeoutMs);

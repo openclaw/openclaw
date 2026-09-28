@@ -106,6 +106,7 @@ export function createCoreGatewayMethodDescriptors(
       ...(spec.since ? { since: spec.since } : {}),
       ...(spec.advertise === false ? { advertise: false } : {}),
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
+      ...(spec.lifetime ? { lifetime: spec.lifetime } : {}),
       ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
       ...(spec.description ? { description: spec.description } : {}),
       ...(spec.sessionAccess ? { sessionAccess: spec.sessionAccess } : {}),

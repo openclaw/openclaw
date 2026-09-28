@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
@@ -440,18 +442,7 @@ export function parseCanonicalSessionSyncTargetFromPath(
 }
 
 function normalizeSessionText(value: string): string {
-  return value
-    .replace(/\s*\n+\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isLowSurrogate(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function splitLongSessionLine(
@@ -483,14 +474,7 @@ function splitLongSessionLine(
         break;
       }
     }
-    if (
-      splitAt < normalized.length &&
-      splitAt > cursor &&
-      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
-      isLowSurrogate(normalized.charCodeAt(splitAt))
-    ) {
-      splitAt -= 1;
-    }
+    splitAt = avoidTrailingHighSurrogateBreak(normalized, cursor, splitAt);
     segments.push(normalized.slice(cursor, splitAt).trim());
     cursor = splitAt;
     while (cursor < normalized.length && normalized[cursor] === " ") {
@@ -616,19 +600,15 @@ export function statSessionEntrySync(
     const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
     return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
-  try {
-    const stat = fsSync.statSync(absPath);
-    return stat.isFile()
-      ? {
-          absPath,
-          path: sessionPathForFile(absPath),
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-        }
-      : null;
-  } catch {
-    return null;
-  }
+  const stat = safeStatSync(absPath);
+  return stat?.isFile()
+    ? {
+        absPath,
+        path: sessionPathForFile(absPath),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      }
+    : null;
 }
 
 async function yieldSessionEntryParseIfNeeded(

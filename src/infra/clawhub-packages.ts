@@ -191,8 +191,6 @@ export type ClawHubPackageDetail = {
           hasProvenance?: boolean;
           scanStatus?: string;
         } | null;
-        artifact?: ClawHubPackageArtifactSummary | null;
-        clawpack?: ClawHubPackageClawPackSummary;
       })
     | null;
   owner?: {
@@ -221,16 +219,8 @@ export type ClawHubPackageVersion = {
     }>;
     sha256hash?: string | null;
     compatibility?: ClawHubPackageCompatibility | null;
-    capabilities?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { capabilities?: infer C }
-        ? C
-        : never
-      : never;
-    verification?: ClawHubPackageDetail["package"] extends infer T
-      ? T extends { verification?: infer C }
-        ? C
-        : never
-      : never;
+    capabilities?: NonNullable<ClawHubPackageDetail["package"]>["capabilities"];
+    verification?: NonNullable<ClawHubPackageDetail["package"]>["verification"];
     artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
   } | null;

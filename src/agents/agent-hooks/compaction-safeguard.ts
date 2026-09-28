@@ -286,23 +286,6 @@ type ToolFailure = {
   meta?: string;
 };
 
-type ModelRegistryWithRequestAuthLookup = {
-  getApiKeyAndHeaders?: (
-    model: NonNullable<ExtensionContext["model"]>,
-  ) => Promise<ResolvedRequestAuth>;
-};
-
-type ResolvedRequestAuth =
-  | {
-      ok: true;
-      apiKey?: string;
-      headers?: Record<string, string>;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
 /**
  * Resolve model credentials. Returns auth details on success or a cancel reason on failure.
  * Extracted to keep the main handler readable when model/auth is conditional.
@@ -313,9 +296,9 @@ async function resolveModelAuth(
 ): Promise<
   { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
 > {
-  let requestAuth: ResolvedRequestAuth;
+  let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
-    const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
+    const modelRegistry = ctx.modelRegistry;
     if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
       throw new Error("model registry auth lookup unavailable");
     }
@@ -751,32 +734,23 @@ function formatBoundedContextSection(params: {
     return { text: "", segmentStarts: [] };
   }
 
-  const completePrefix = `${params.heading}\n`;
-  const complete = `${completePrefix}${segments.join("\n")}`;
-  if (complete.length <= params.maxChars) {
-    let offset = completePrefix.length;
-    return {
-      text: complete,
-      segmentStarts: segments.map((segment) => {
-        const start = offset;
-        offset += segment.length + 1;
-        return start;
-      }),
-    };
-  }
-
-  const prefix = `${completePrefix}${params.truncatedMarker}`;
-  const retained: string[] = [];
-  let usedChars = prefix.length;
-  for (const segment of segments.toReversed()) {
-    const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-    if (usedChars + segmentChars > params.maxChars) {
-      break;
+  let prefix = `${params.heading}\n`;
+  let retained = segments;
+  const truncated = !(prefix.length + segments.join("\n").length <= params.maxChars);
+  if (truncated) {
+    prefix += params.truncatedMarker;
+    retained = [];
+    let usedChars = prefix.length;
+    for (const segment of segments.toReversed()) {
+      const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
+      if (usedChars + segmentChars > params.maxChars) {
+        break;
+      }
+      retained.unshift(segment);
+      usedChars += segmentChars;
     }
-    retained.unshift(segment);
-    usedChars += segmentChars;
+    params.onTruncated?.();
   }
-  params.onTruncated?.();
   let offset = prefix.length;
   return {
     text: `${prefix}${retained.join("\n")}`,
@@ -785,7 +759,7 @@ function formatBoundedContextSection(params: {
       offset += segment.length + 1;
       return start;
     }),
-    truncatedLoss: params.truncatedLoss,
+    ...(truncated ? { truncatedLoss: params.truncatedLoss } : {}),
   };
 }
 

@@ -22,11 +22,7 @@ import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
-import {
-  resolveConfigPath as resolveConfigPathFromPaths,
-  resolveGatewayPort as resolveGatewayPortFromPaths,
-  resolveStateDir as resolveStateDirFromPaths,
-} from "../config/paths.js";
+import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -39,7 +35,9 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
 import {
+  GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
   type GatewayCallDeviceAuthOptions,
@@ -166,33 +164,12 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export class GatewayCredentialsRequiredError extends Error {
-  readonly method: string;
-  readonly configPath: string;
-
-  constructor(params: { method: string; configPath: string }) {
-    super(
-      [
-        `gateway ${params.method} requires credentials before opening a websocket`,
-        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-        `Config: ${params.configPath}`,
-      ].join("\n"),
-    );
-    this.name = "GatewayCredentialsRequiredError";
-    this.method = params.method;
-    this.configPath = params.configPath;
-  }
-}
-
 export { GatewayExplicitAuthRequiredError } from "./client-bootstrap.js";
-export { GatewayLocalBackendSharedAuthUnavailableError } from "./call-device-auth.js";
-
-export class GatewayStoredDeviceAuthUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GatewayStoredDeviceAuthUnavailableError";
-  }
-}
+export {
+  GatewayCredentialsRequiredError,
+  GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
+} from "./call-device-auth.js";
 
 export type GatewayTransportErrorJson = {
   ok: false;
@@ -376,8 +353,9 @@ export function isGatewayExplicitAuthRequiredError(
 
 // Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
 // Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
-const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
-  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+async function loadGatewayConfig(): Promise<OpenClawConfig> {
+  return getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+}
 
 async function stopGatewayClient(client: GatewayClient): Promise<void> {
   try {
@@ -400,10 +378,6 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
   return method ? `gateway:${method}` : "gateway:request";
 }
 
-async function loadGatewayConfig(): Promise<OpenClawConfig> {
-  return await defaultGetRuntimeConfig();
-}
-
 /**
  * Load config for a fully flag-addressed connection. Config only supplies
  * gateway.remote.edgeAuth here, so an unreadable or invalid config degrades to
@@ -417,20 +391,8 @@ async function loadGatewayConfigForExplicitConnection(): Promise<OpenClawConfig>
   }
 }
 
-function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
-  return readGatewayDispatchConfig();
-}
-
-function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
-  return resolveStateDirFromPaths(env);
-}
-
 function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
-  return resolveConfigPathFromPaths(env, resolveGatewayStateDir(env));
-}
-
-function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
-  return resolveGatewayPortFromPaths(config, env);
+  return resolveConfigPath(env, resolveStateDir(env));
 }
 
 export function buildGatewayConnectionDetails(
@@ -445,9 +407,9 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
-    resolveConfigPath: (env) => resolveGatewayConfigPath(env),
-    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+    getRuntimeConfig: readGatewayDispatchConfig,
+    resolveConfigPath: resolveGatewayConfigPath,
+    resolveGatewayPort,
   });
 }
 
@@ -558,7 +520,7 @@ async function resolveGatewayCallContext(
   const config =
     opts.config ??
     (canSkipConfigLoad
-      ? ({} as OpenClawConfig)
+      ? {}
       : explicitConnection
         ? await loadGatewayConfigForExplicitConnection()
         : await loadGatewayConfig());
@@ -713,6 +675,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
   deviceAuthScope?: string;
+  sshTunnel?: GatewayClientOptions["sshTunnel"];
   storedAuth?: DeviceAuthEntry;
   surfaceGatewayClientRequestErrors: boolean;
 }): Promise<T> {
@@ -729,6 +692,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     safeTimerTimeoutMs,
     deviceIdentity,
     deviceAuthScope,
+    sshTunnel,
     storedAuth,
     surfaceGatewayClientRequestErrors,
   } = params;
@@ -802,6 +766,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client: GatewayClient | undefined = new GatewayClient({
       url,
+      sshTunnel,
       token,
       password,
       edgeAuthHeaders,
@@ -1043,7 +1008,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
           "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui --url ${deviceAuthScope}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
         ].join("\n"),
       );
     }
@@ -1134,6 +1099,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
     deviceAuthScope,
+    sshTunnel: bootstrap.sshTunnel,
     ...(storedAuth ? { storedAuth } : {}),
     surfaceGatewayClientRequestErrors:
       useStoredDeviceAuth ||

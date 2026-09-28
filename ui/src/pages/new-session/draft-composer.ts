@@ -117,6 +117,7 @@ export function renderNewSessionDraftComposer(
       .onVisitsDisabled=${() => options.context?.theme.refresh()}
       .floorEnabled=${floorEnabled}
     ></openclaw-lobster-pet>`,
+    uploadConfig: options.context?.config,
     attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     getAttachments: () => options.attachmentDraft.attachments,

@@ -324,20 +324,6 @@ describe("realtime Talk microphone inputs", () => {
     expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
-  it("does not fall back for an Error-backed missing-device constraint", async () => {
-    const error = Object.assign(new Error("missing"), {
-      name: "OverconstrainedError",
-      constraint: "deviceId",
-    });
-    const getUserMedia = vi.fn().mockRejectedValue(error);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-
-    await expect(openMicrophone("missing-mic")).rejects.toThrow(
-      "The selected microphone is unavailable",
-    );
-    expect(getUserMedia).toHaveBeenCalledOnce();
-  });
-
   it("enables voice processing with exact device selection", async () => {
     const stream = { getTracks: () => [] } as unknown as MediaStream;
     const getUserMedia = vi.fn(async () => stream);

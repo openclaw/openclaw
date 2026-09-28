@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -13,6 +14,7 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
@@ -45,7 +47,7 @@ const DEFAULT_AVAILABILITY_TIMEOUT_MS = 10_000;
 const MAX_ADMISSION_ATTEMPTS = 5;
 const ADMISSION_REARM_BACKOFF = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.1 };
 
-const RETRYABLE_TRANSPORT_CODES = new Set([
+export const RETRYABLE_NODE_WORKER_TRANSPORT_CODES: ReadonlySet<string> = new Set([
   "DISCONNECTED",
   "NOT_CONNECTED",
   "PAIRING_CHANGED",
@@ -444,7 +446,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
-            !RETRYABLE_TRANSPORT_CODES.has(error.code)
+            !RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(error.code)
           ) {
             throw error;
           }
@@ -462,6 +464,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const launch = async (
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
+    const restartSignal = getGatewayRestartDrainSignal();
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
     const stableRequest = { ...request, input };
@@ -581,7 +584,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
-            !RETRYABLE_TRANSPORT_CODES.has(error.code)
+            !RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(error.code)
           ) {
             throw error;
           }
@@ -593,6 +596,10 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         });
       }
     } catch (error) {
+      if (restartSignal.aborted && isAgentRunRestartAbortReason(deadline.signal.reason)) {
+        // The launcher retains the durable claim; startup must stop this worker before reuse.
+        throw deadline.signal.reason;
+      }
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
         throw new WorkerRunnerUnavailableError();
       }

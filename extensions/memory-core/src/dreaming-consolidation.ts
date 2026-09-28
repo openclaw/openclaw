@@ -16,6 +16,7 @@ import {
   memoryEntryMatchesPromotionProjectGroup,
 } from "./short-term-promotion-metadata.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
+import { formatPromotedSnippetForMemory } from "./short-term-promotion-utils.js";
 
 const CONSOLIDATION_TIMEOUT_MS = 60_000;
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -55,14 +56,7 @@ function buildCandidateResultEntry(
   candidate: PromotionCandidate,
   maxPromotedSnippetTokens: number,
 ): string {
-  const maxSnippetChars = maxPromotedSnippetTokens * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
-  const snippet = truncateUtf16Safe(
-    candidate.snippet
-      .replace(/^[-*+]\s+/u, "")
-      .replace(/\s+/gu, " ")
-      .trim(),
-    maxSnippetChars,
-  ).trimEnd();
+  const snippet = formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens);
   return `- ${snippet} Source: ${candidateSourceRef(candidate)} ${buildPromotionRecallAnnotations(candidate)}`;
 }
 

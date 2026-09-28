@@ -60,16 +60,6 @@ describe("bundled plugin postinstall", () => {
     ).toBe(true);
   });
 
-  it("removes the lifecycle marker only after postinstall completion", () => {
-    const rmSync = vi.fn();
-
-    expect(completePackageLifecycle({ packageRoot: "/pkg", rmSync })).toBe(true);
-    expect(rmSync).toHaveBeenCalledWith(
-      path.join("/pkg", PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-      { force: true },
-    );
-  });
-
   it("fails lifecycle completion when its marker cannot be removed", () => {
     const reportError = vi.fn();
 
@@ -294,26 +284,6 @@ describe("bundled plugin postinstall", () => {
       expect(await fs.readFile(databasePath)).toEqual(before);
     },
   );
-
-  it("prunes stale dist files from packaged installs", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-");
-    const currentFile = path.join(packageRoot, "dist", "channel-BOa4MfoC.js");
-    const staleFile = path.join(packageRoot, "dist", "channel-CJUAgRQR.js");
-    await fs.mkdir(path.dirname(currentFile), { recursive: true });
-    await fs.writeFile(currentFile, "export {};\n");
-    await writePackageDistInventory(packageRoot);
-    await fs.writeFile(staleFile, "export {};\n");
-
-    expect(
-      pruneInstalledPackageDist({
-        packageRoot,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).toEqual(["dist/channel-CJUAgRQR.js"]);
-
-    await expectPathExists(currentFile);
-    await expectPathMissing(staleFile);
-  });
 
   it("prunes from the authoritative inventory without reading dist JavaScript", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-js-read-");

@@ -5,6 +5,23 @@ recovery. Select the phase below; deferred or omitted checks are not passed.
 Every selected child needs terminal evidence. A required failure cannot be
 waived by success on another surface.
 
+## Older updater checks
+
+Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
+from every release in the supported upgrade window. Verify each downloaded npm
+tarball against its published `dist.integrity` before extraction, then run
+`pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
+`--release` for every supported version. Generation replaces the recorded set:
+keep empty entries, drop expired versions and their historical corrections, and
+never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
+`latest` and `beta` must be covered. Repeat the generation arguments with
+`--check` for an offline regeneration check.
+
+Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
+from the oldest supported release. Native Windows proof must invoke the old
+updater with a registered Scheduled Task and verify that it restarts the Gateway
+without a later manual `gateway start`.
+
 ## Source and package gates
 
 Before tagging or publishing, complete the relevant source/package checks:
@@ -21,7 +38,7 @@ pnpm test:install:smoke
 
 Use existing equivalent exact-SHA release evidence; do not repeat successful
 checks solely because this list mentions them. Source CI, including `pnpm check`,
-`pnpm check:test-types`, and cross-OS outcomes, is advisory for npm/ClawHub.
+`pnpm check:test-types`, and cross-OS outcomes, must pass when selected for npm/ClawHub validation.
 Artifact, install-smoke, survivor, first-hop, pack/npm qualification, target,
 and provenance proofs remain required. Code SHA and Release SHA may be the
 same commit when it contains final notes; the same successful full parent
@@ -62,33 +79,39 @@ uses `--video-providers fal`. Full transform modes require intentional
 credentialed tests. Local live model/Parallels rosters require both OpenAI and
 Anthropic keys; missing either blocks those lanes, never print their values.
 
-## Beta-publish and the stable fast path
+### Bundled Chrome MCP artifacts
 
-Use `release_profile=beta`, `run_release_soak=false` for beta. Stable-publish
-defaults to `release_profile=stable`; the beta profile is a stable's explicit
-operator fast path only with `stable_soak_waiver`. A qualifying `all` run for
+The bundled Chrome MCP artifact checker selects a trusted, exact patch-byte
+contract from the candidate's declared dependency pin and requires the bundled
+manifest to match it. The supported contracts are `1.8.0` (shipped in
+`v2026.9.6` at `eb377ac59e6c9fd6c7705028034812becf00271b`) and `1.9.0`.
+Both retain their original runtime hashes, required assets, ESM manifest, and
+bundled CLI resolution checks. Ranges, unknown versions, mixed contracts, and
+artifact-supplied hash tables cannot authorize a payload. Retain the `1.8.0`
+contract while supported frozen release targets pin it; retire it explicitly
+when those targets retire or migrate to a qualified newer pin, not merely when
+main updates its dependency. This does not change the candidate dependency or
+waive any package acceptance gate.
+
+## Beta and stable qualification
+
+Use `release_profile=beta`, `run_release_soak=false` for beta. Stable publication
+requires `release_profile=stable` or `full`, soak, and blocking performance.
+Beta-profile evidence cannot qualify stable publication. A qualifying `all` run for
 an actual beta on its canonical branch/tag records `npm-beta-v1`. Native app
 CI, performance, and published-package Telegram move to confidence. Node,
 Control UI, plugin, cross-OS, QA parity, runtime-pair/restart, and tool coverage
-remain selected but advisory; required package/install/update proofs remain
+remain selected and blocking; package/install/update proofs remain
 enforced. Beta `all` without soak
 also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile main/alpha too, but those do
 not qualify for `npm-beta-v1`.
 
-Native app lanes (macos-swift, platform publishers) are advisory for the
-npm/ClawHub decision: record their conclusion and fix them in parallel.
-Windows node-test outcomes are also advisory for npm/ClawHub; repair their
-owner in parallel without holding publication for a green rerun.
-
-Linux Gateway cross-OS lanes are required proof; Windows/macOS variants are
-recorded as advisory. Coverage is never reduced: all-group
-`cross_os_suite_filter` selections must retain `packaged-fresh`,
-`installer-fresh`, and `packaged-upgrade` on all three OSes (nine pairs).
-Focused `cross-os` reruns may select individual lanes. Publishing a stable with
-a failed advisory lane requires `lane_waiver` (RELEASING.md "Publication
-modes"). Read required versus advisory conclusions in the manifest and
-`release-ci-summary`.
+Selected native-app CI and Windows Node tests block validation on failure.
+Native platform publication remains independent and follows its own gates.
+All-group cross-OS qualification requires all nine Linux/Windows/macOS
+install/upgrade pairs. Focused recovery may select individual lanes but does
+not itself qualify publication. No lane or soak waiver can bypass failures.
 
 ## Postpublish confidence
 
@@ -118,28 +141,21 @@ admit a confirmed product fix only to a new operator-approved candidate.
 
 ## Stable-publish and bounded execution
 
-The default stable publishes from beta-profile evidence with the recorded soak
-waiver (precedent 2026.9.5 and 2026.9.6); soak, live/E2E, Telegram, QA-live
-and Parallels run as postpublish confidence. Opt-in `release_profile=stable` or
-`full` selects its stable roster and soak; performance and ordinary tests remain
-advisory. Matching beta confidence may support the light promotion
-roster in [regular release](regular-release.md), not waive a required gate.
+Stable promotion requires successful stable/full qualification for the exact
+source, including soak and blocking performance. Beta confidence may inform
+diagnosis but cannot substitute for required stable evidence.
 
 Preserve the validation parent and successful children when continuation is
 eligible; parents that produced sealed candidate artifacts need a new parent
 with verified evidence reuse. Diagnose failures and retry only the affected
-surface within the controller's budget. Flaky tests never hold publication
-through advisory suites; an untouched test or passing replay alone proves
-neither a flake nor a fix. Change Code SHA only for a confirmed defect in
-required proof or publication bytes. Aim to seal within approximately 20 minutes
+surface within the controller's budget. Selected test failures block publication; an untouched test or passing replay
+alone proves neither a flake nor a fix. Change Code SHA for a confirmed
+product defect and validate the repaired source. Aim to seal within approximately 20 minutes
 and publish within an hour; report observed blockers and timing rather than
 claiming those objectives as measured guarantees.
 
-Native publication retains separate signing/notarization/promotion gates under
-[platform publication](platform-publication.md). Native app lanes stay
-advisory for the npm/ClawHub decision and are fixed in parallel. Native publication
-never gates npm/ClawHub, GitHub finalization, or main closeout; report each
-platform's readiness separately.
+Selected validation tests block the npm/ClawHub decision on failure. Native
+publication retains independent artifact and updater gates.
 
 Local proof is targeted: never mirror Full Release Validation locally. Run a
 lane locally only after it failed in CI, to separate flake from defect, bounded
@@ -154,3 +170,27 @@ PR preparation/landing or observed hosted-runner stalls, use
 `$openclaw-pr-maintainer` / `$openclaw-ci-limits`; never synthesize prepare
 artifacts or replace canonical `scripts/pr` with PR-controlled scripts. Record
 unrelated main failures instead of adopting them into release scope.
+
+## Immutable runtime generation proposal
+
+A durable replacement would install each version in an immutable generation
+directory and switch an installation pointer. Launchers must resolve that
+pointer before starting Node so lazy imports keep the process's original tree.
+Retain generations until their processes have exited. This is a proposal, not
+the current update layout.
+
+The design must preserve npm's ownership and bookkeeping: `npm ls -g`, later
+global installs and uninstall, lifecycle scripts, and generated launchers must
+still work. Unix uses `<prefix>/lib/node_modules` and `<prefix>/bin`; Windows
+uses `<prefix>/node_modules` and prefix-root launchers. A mutable junction alone
+does not pin old imports, and Windows pointer replacement must respect open
+handles and junction semantics. npm must not replace or orphan the retained
+generation anchor during its next install.
+
+pnpm owns a global project, manifests, lockfiles, virtual-store links, and
+version-dependent package groups; its cleanup must not collect live generations.
+Bun also owns a shared global project and separate binary directory, and its
+Windows binary launchers currently cannot be relocated by this updater.
+Generation activation must preserve sibling packages and the existing
+concurrent-project checks for both managers. These constraints need separate
+design approval and package-manager integration proof before implementation.

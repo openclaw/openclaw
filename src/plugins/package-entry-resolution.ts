@@ -19,62 +19,41 @@ type RuntimeExtensionsResolution =
   | { ok: true; runtimeExtensions: string[] }
   | { ok: false; error: string };
 
-type PackageManifestStringList = { ok: true; entries: string[] } | { ok: false; error: string };
-
-function runtimeExtensionsLengthMismatchMessage(params: {
-  runtimeExtensionsLength: number;
-  extensionsLength: number;
-}): string {
-  return (
-    `package.json openclaw.runtimeExtensions length (${params.runtimeExtensionsLength}) ` +
-    `must match openclaw.extensions length (${params.extensionsLength})`
-  );
-}
-
-function readPackageManifestStringList(params: {
-  fieldName: string;
-  value: unknown;
-}): PackageManifestStringList {
-  if (!Array.isArray(params.value)) {
-    return { ok: true, entries: [] };
-  }
-  const entries: string[] = [];
-  for (const [index, entry] of params.value.entries()) {
-    const normalized = normalizeOptionalString(entry);
-    if (!normalized) {
-      return {
-        ok: false,
-        error: `package.json ${params.fieldName}[${index}] must be a non-empty string`,
-      };
-    }
-    entries.push(normalized);
-  }
-  return { ok: true, entries };
-}
+type PackageEntrySourceParams = {
+  packageDir: string;
+  packageRootRealPath?: string;
+  entryPath: string;
+  pluginIdHint?: string;
+  sourceLabel: string;
+  diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
+};
 
 function resolvePackageRuntimeExtensionEntries(params: {
   manifest: PackageManifest | null | undefined;
   extensions: readonly string[];
 }): RuntimeExtensionsResolution {
-  const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const runtimeExtensionsResult = readPackageManifestStringList({
-    fieldName: "openclaw.runtimeExtensions",
-    value: packageManifest?.runtimeExtensions,
-  });
-  if (!runtimeExtensionsResult.ok) {
-    return runtimeExtensionsResult;
+  const declared = getPackageManifestMetadata(params.manifest ?? undefined)?.runtimeExtensions;
+  const runtimeExtensions: string[] = [];
+  if (!Array.isArray(declared)) {
+    return { ok: true, runtimeExtensions };
   }
-  const runtimeExtensions = runtimeExtensionsResult.entries;
-  if (runtimeExtensions.length === 0) {
-    return { ok: true, runtimeExtensions: [] };
+  for (const [index, entry] of declared.entries()) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) {
+      return {
+        ok: false,
+        error: `package.json openclaw.runtimeExtensions[${index}] must be a non-empty string`,
+      };
+    }
+    runtimeExtensions.push(normalized);
   }
-  if (runtimeExtensions.length !== params.extensions.length) {
+  if (runtimeExtensions.length > 0 && runtimeExtensions.length !== params.extensions.length) {
     return {
       ok: false,
-      error: runtimeExtensionsLengthMismatchMessage({
-        runtimeExtensionsLength: runtimeExtensions.length,
-        extensionsLength: params.extensions.length,
-      }),
+      error:
+        `package.json openclaw.runtimeExtensions length (${runtimeExtensions.length}) ` +
+        `must match openclaw.extensions length (${params.extensions.length})`,
     };
   }
   return { ok: true, runtimeExtensions };
@@ -210,10 +189,7 @@ export async function validatePackageExtensionEntriesForInstall(params: {
   manifest: PackageManifest;
   allowSourceTypeScriptEntries?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const runtimeResolution = resolvePackageRuntimeExtensionEntries({
-    manifest: params.manifest,
-    extensions: params.extensions,
-  });
+  const runtimeResolution = resolvePackageRuntimeExtensionEntries(params);
   if (!runtimeResolution.ok) {
     return runtimeResolution;
   }
@@ -253,15 +229,7 @@ export async function validatePackageExtensionEntriesForInstall(params: {
   return { ok: true };
 }
 
-function resolvePackageEntrySource(params: {
-  packageDir: string;
-  packageRootRealPath?: string;
-  entryPath: string;
-  pluginIdHint?: string;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string | null {
+function resolvePackageEntrySource(params: PackageEntrySourceParams): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
   const rejectHardlinks = params.rejectHardlinks ?? true;
   const candidates = [source];
@@ -314,36 +282,12 @@ function resolvePackageEntrySource(params: {
   return openCandidate(source);
 }
 
-function shouldInferBuiltRuntimeEntry(origin: PluginOrigin): boolean {
-  return origin === "config" || origin === "global";
-}
-
-function shouldRequireBuiltRuntimeEntry(origin: PluginOrigin): boolean {
-  return origin === "global";
-}
-
-function resolveSafePackageEntry(params: {
-  packageDir: string;
-  packageRootRealPath?: string;
-  entryPath: string;
-  pluginIdHint?: string;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): { relativePath: string; existingSource?: string } | null {
+function resolveSafePackageEntry(
+  params: PackageEntrySourceParams,
+): { relativePath: string; existingSource?: string } | null {
   const absolutePath = path.resolve(params.packageDir, params.entryPath);
   if (pluginCacheExistsSync(absolutePath)) {
-    const existingSource = resolvePackageEntrySource({
-      packageDir: params.packageDir,
-      ...(params.packageRootRealPath !== undefined
-        ? { packageRootRealPath: params.packageRootRealPath }
-        : {}),
-      entryPath: params.entryPath,
-      pluginIdHint: params.pluginIdHint,
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
-    });
+    const existingSource = resolvePackageEntrySource(params);
     if (!existingSource) {
       return null;
     }
@@ -371,15 +315,9 @@ function resolveSafePackageEntry(params: {
   return { relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/") };
 }
 
-function resolveOptionalExistingPackageEntrySource(params: {
-  packageDir: string;
-  packageRootRealPath?: string;
-  entryPath: string;
-  pluginIdHint?: string;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): { status: "missing" } | { status: "invalid" } | { status: "resolved"; source: string } {
+function resolveOptionalExistingPackageEntrySource(
+  params: PackageEntrySourceParams,
+): { status: "missing" } | { status: "invalid" } | { status: "resolved"; source: string } {
   const source = path.resolve(params.packageDir, params.entryPath);
   if (!pluginCacheExistsSync(source)) {
     return { status: "missing" };
@@ -388,47 +326,25 @@ function resolveOptionalExistingPackageEntrySource(params: {
   return resolved ? { status: "resolved", source: resolved } : { status: "invalid" };
 }
 
-function resolvePackageRuntimeEntrySource(params: {
-  packageDir: string;
-  packageRootRealPath?: string;
-  entryPath: string;
-  sourceEntryLabel?: string;
-  runtimeEntryPath?: string;
-  runtimeEntryLabel?: string;
-  pluginIdHint?: string;
-  origin: PluginOrigin;
-  // undefined preserves the origin default; false explicitly allows source fallback.
-  requireBuiltRuntimeEntry?: boolean;
-  sourceLabel: string;
-  diagnostics: PluginDiagnostic[];
-  rejectHardlinks?: boolean;
-}): string | null {
-  const safeEntry = resolveSafePackageEntry({
-    packageDir: params.packageDir,
-    ...(params.packageRootRealPath !== undefined
-      ? { packageRootRealPath: params.packageRootRealPath }
-      : {}),
-    entryPath: params.entryPath,
-    pluginIdHint: params.pluginIdHint,
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
-  });
+function resolvePackageRuntimeEntrySource(
+  params: PackageEntrySourceParams & {
+    sourceEntryLabel?: string;
+    runtimeEntryPath?: string;
+    runtimeEntryLabel?: string;
+    origin: PluginOrigin;
+    // undefined preserves the origin default; false explicitly allows source fallback.
+    requireBuiltRuntimeEntry?: boolean;
+  },
+): string | null {
+  const safeEntry = resolveSafePackageEntry(params);
   if (!safeEntry) {
     return null;
   }
 
   if (params.runtimeEntryPath) {
     const runtimeSource = resolvePackageEntrySource({
-      packageDir: params.packageDir,
-      ...(params.packageRootRealPath !== undefined
-        ? { packageRootRealPath: params.packageRootRealPath }
-        : {}),
+      ...params,
       entryPath: params.runtimeEntryPath,
-      pluginIdHint: params.pluginIdHint,
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
     });
     if (runtimeSource) {
       return runtimeSource;
@@ -442,19 +358,12 @@ function resolvePackageRuntimeEntrySource(params: {
     return null;
   }
 
-  if (shouldInferBuiltRuntimeEntry(params.origin)) {
+  if (params.origin === "config" || params.origin === "global") {
     const builtEntryCandidates = listBuiltRuntimeEntryCandidates(safeEntry.relativePath);
     for (const candidate of builtEntryCandidates) {
       const runtimeSource = resolveOptionalExistingPackageEntrySource({
-        packageDir: params.packageDir,
-        ...(params.packageRootRealPath !== undefined
-          ? { packageRootRealPath: params.packageRootRealPath }
-          : {}),
+        ...params,
         entryPath: candidate,
-        pluginIdHint: params.pluginIdHint,
-        sourceLabel: params.sourceLabel,
-        diagnostics: params.diagnostics,
-        rejectHardlinks: params.rejectHardlinks,
       });
       if (runtimeSource.status === "resolved") {
         return runtimeSource.source;
@@ -465,7 +374,7 @@ function resolvePackageRuntimeEntrySource(params: {
     }
     // Installed packages must ship compiled JS for TS entries; only trusted source paths fall back.
     if (
-      (params.requireBuiltRuntimeEntry ?? shouldRequireBuiltRuntimeEntry(params.origin)) &&
+      (params.requireBuiltRuntimeEntry ?? params.origin === "global") &&
       isTypeScriptPackageEntry(safeEntry.relativePath)
     ) {
       params.diagnostics.push({
@@ -487,17 +396,7 @@ function resolvePackageRuntimeEntrySource(params: {
   }
 
   if (params.rejectHardlinks === false) {
-    const trustedFallbackSource = resolvePackageEntrySource({
-      packageDir: params.packageDir,
-      ...(params.packageRootRealPath !== undefined
-        ? { packageRootRealPath: params.packageRootRealPath }
-        : {}),
-      entryPath: params.entryPath,
-      pluginIdHint: params.pluginIdHint,
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
-    });
+    const trustedFallbackSource = resolvePackageEntrySource(params);
     if (trustedFallbackSource) {
       return trustedFallbackSource;
     }
@@ -530,10 +429,7 @@ export function resolvePackageSetupSource(params: {
     return null;
   }
   return resolvePackageRuntimeEntrySource({
-    packageDir: params.packageDir,
-    ...(params.packageRootRealPath !== undefined
-      ? { packageRootRealPath: params.packageRootRealPath }
-      : {}),
+    ...params,
     entryPath: setupEntryPath,
     sourceEntryLabel: "setup entry",
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
@@ -542,13 +438,6 @@ export function resolvePackageSetupSource(params: {
       params.pluginIdHint ??
       normalizeOptionalString(packageManifest?.plugin?.id) ??
       normalizeOptionalString(packageManifest?.channel?.id),
-    origin: params.origin,
-    ...(params.requireBuiltRuntimeEntry !== undefined
-      ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
-      : {}),
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
   });
 }
 
@@ -572,10 +461,7 @@ export function resolvePackageRuntimeExtensions(params: {
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
 }): Array<{ entryPath: string; source: string }> {
-  const runtimeResolution = resolvePackageRuntimeExtensionEntries({
-    manifest: params.manifest,
-    extensions: params.extensions,
-  });
+  const runtimeResolution = resolvePackageRuntimeExtensionEntries(params);
   if (!runtimeResolution.ok) {
     params.diagnostics.push({
       level: "error",
@@ -588,22 +474,11 @@ export function resolvePackageRuntimeExtensions(params: {
 
   return params.extensions.flatMap((entryPath, index) => {
     const source = resolvePackageRuntimeEntrySource({
-      packageDir: params.packageDir,
-      ...(params.packageRootRealPath !== undefined
-        ? { packageRootRealPath: params.packageRootRealPath }
-        : {}),
+      ...params,
       entryPath,
       sourceEntryLabel: "extension entry",
       runtimeEntryPath: runtimeResolution.runtimeExtensions[index],
       runtimeEntryLabel: "runtime extension entry",
-      pluginIdHint: params.pluginIdHint,
-      origin: params.origin,
-      ...(params.requireBuiltRuntimeEntry !== undefined
-        ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
-        : {}),
-      sourceLabel: params.sourceLabel,
-      diagnostics: params.diagnostics,
-      rejectHardlinks: params.rejectHardlinks,
     });
     return source ? [{ entryPath, source }] : [];
   });

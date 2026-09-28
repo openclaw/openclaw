@@ -11,25 +11,18 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 const temporary = createTempDirHarness();
 afterEach(() => temporary.cleanup());
 
-async function startPublicCase(acknowledgments: number) {
+async function startPublicCase(
+  acknowledgments: number,
+  initialAck: "missing" | "deleted" | "foreign" = "missing",
+) {
   const scenario = readQaScenarioById("subagent-completion-direct-fallback");
   const step = scenario.execution.flow!.steps[0]!;
-  const guarded = step.actions.find((action) => {
-    if (!isRecord(action)) {
-      throw new Error("invalid terminal flow action");
-    }
-    return "try" in action;
-  });
+  const guarded = step.actions.find((action) => isRecord(action) && "try" in action);
   if (!isRecord(guarded) || !isRecord(guarded.try) || !Array.isArray(guarded.try.actions)) {
     throw new Error("expected guarded terminal flow actions");
   }
   const actions: unknown[] = guarded.try.actions;
-  const publicIndex = actions.findIndex((action) => {
-    if (!isRecord(action)) {
-      throw new Error("invalid guarded terminal flow action");
-    }
-    return "forEach" in action;
-  });
+  const publicIndex = actions.findIndex((action) => isRecord(action) && "forEach" in action);
   if (publicIndex < 0) {
     throw new Error("expected public terminal cases");
   }
@@ -38,16 +31,15 @@ async function startPublicCase(acknowledgments: number) {
   const releaseParent = createDeferred<void>();
   const parentSent = createDeferred<void>();
   const marker = "QA-SUBAGENT-TERMINAL-FALLBACK-OK";
-  const task = {
-    taskId: "child-task",
-    title: "qa-terminal-fallback",
-    status: "completed",
-    deliveryStatus: "delivered",
-    sessionKey: "parent",
+  const run = {
+    label: "qa-terminal-fallback",
+    execution: { status: "terminal", outcome: { status: "ok" } },
+    delivery: { status: "delivered" },
+    requesterSessionKey: "parent",
     childSessionKey: "child",
     runId: "run",
   };
-  const requests = [{ plannedToolName: "sessions_spawn", plannedToolArgs: { label: task.title } }];
+  const requests = [{ plannedToolName: "sessions_spawn", plannedToolArgs: { label: run.label } }];
   let parentSend: Promise<void> | undefined;
   const result = runLoadedScenarioFlow(scenario.id, {
     state,
@@ -67,6 +59,7 @@ async function startPublicCase(acknowledgments: number) {
     api: {
       fs,
       path,
+      readNativeQaSubagentRuns: async () => [run],
       config: {
         ...scenario.execution.config,
         cases: [{ name: "fallback", marker, expectedSendCount: 1 }],
@@ -77,9 +70,6 @@ async function startPublicCase(acknowledgments: number) {
         mock: { baseUrl: "http://mock.invalid" },
         gateway: {
           call: async (method: string) => {
-            if (method === "tasks.list") {
-              return { tasks: [task] };
-            }
             if (method === "chat.history") {
               return {
                 messages: [
@@ -100,13 +90,18 @@ async function startPublicCase(acknowledgments: number) {
       transport: {
         sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) => {
           const message = state.addInboundMessage(input);
-          const send = (text: string) =>
+          const send = (text: string, conversation = input.conversation.id) =>
             state.addOutboundMessage({
               accountId: "default",
-              to: `dm:${input.conversation.id}`,
+              to: `dm:${conversation}`,
               text,
             });
           send(marker);
+          if (initialAck === "deleted") {
+            state.deleteMessage({ accountId: "default", messageId: send("Worker started.").id });
+          } else if (initialAck === "foreign") {
+            send("Worker started.", "another-conversation");
+          }
           parentSend = releaseParent.promise.then(() => {
             for (let i = 0; i < acknowledgments; i++) {
               send("Worker started.");
@@ -163,15 +158,18 @@ async function startPublicCase(acknowledgments: number) {
 }
 
 describe("terminal completion scenario parent acknowledgment", () => {
-  it("waits for the parent send after child delivery and its receipt settle", async () => {
-    const run = await startPublicCase(1);
-    try {
-      expect(await run.observed).toBeUndefined();
-    } finally {
-      await run.release();
-    }
-    expect(await run.outcome).toMatchObject({ value: { status: "pass" } });
-  });
+  it.each(["missing", "deleted", "foreign"] as const)(
+    "waits for a live parent send after child delivery when the initial acknowledgment is %s",
+    async (initialAck) => {
+      const run = await startPublicCase(1, initialAck);
+      try {
+        expect(await run.observed).toBeUndefined();
+      } finally {
+        await run.release();
+      }
+      expect(await run.outcome).toMatchObject({ value: { status: "pass" } });
+    },
+  );
 
   it.each([0, 2])(
     "rejects %i parent acknowledgments despite settled child delivery",

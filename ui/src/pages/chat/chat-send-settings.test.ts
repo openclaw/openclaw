@@ -12,7 +12,8 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { getPendingChatPickerPatch, switchChatModel } from "./chat-session.ts";
+import { switchChatModel } from "./chat-session.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 

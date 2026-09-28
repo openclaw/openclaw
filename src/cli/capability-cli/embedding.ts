@@ -1,25 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
-import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
-import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
-import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
-import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
-import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
-import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import {
-  providerHasGenericConfig,
-  registerLocalProvidersCommand,
-  requireProviderModelOverride,
-  resolveCapabilityAgentOption,
-  resolveCapabilityProviderAgentId,
-  resolveLocalCapabilityRuntimeConfig,
-} from "./shared.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 async function closeEmbeddingProviderWithRetry(provider: {
   close?: () => Promise<void> | void;
@@ -37,6 +21,15 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
   agent?: string;
 }) {
+  const {
+    requireProviderModelOverride,
+    resolveCapabilityProviderAgentId,
+    resolveLocalCapabilityRuntimeConfig,
+  } = await import("./shared.js");
+  const { getMemoryEmbeddingCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+  const { createEmbeddingProvider } =
+    await import("../../plugin-sdk/memory-core-bundled-runtime.js");
   const modelRef = requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
@@ -45,6 +38,7 @@ async function runMemoryEmbeddingCreate(params: {
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await createEmbeddingProvider({
     config: cfg,
@@ -100,22 +94,28 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runMemoryEmbeddingCreate({
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
+        const { resolveCapabilityAgentOption } = await import("./shared.js");
+        return runMemoryEmbeddingCreate({
           texts: opts.text as string[],
           agent: resolveCapabilityAgentOption(command, opts.agent),
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   registerLocalProvidersCommand(
     embedding,
     "List embedding providers",
-    (cfg, agentId) => {
+    async (cfg, agentId) => {
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { resolveMemorySearchConfig } = await import("../../agents/memory-search.js");
+      const { listEmbeddingProviders } =
+        await import("../../plugins/embedding-provider-runtime.js");
+      const { listRegisteredMemoryEmbeddingProviderAdapters } =
+        await import("../../plugins/memory-embedding-provider-runtime.js");
       const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
       const selectedProvider = resolvedMemory?.provider;
       const providers = new Map(

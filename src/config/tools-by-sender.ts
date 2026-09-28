@@ -21,7 +21,6 @@ export type GroupToolPolicySender = {
   senderE164?: string | null;
 };
 
-type SenderKeyType = ToolsBySenderKeyType;
 type CompiledSenderPolicy = {
   buckets: SenderPolicyBuckets;
   wildcard?: GroupToolPolicyConfig;
@@ -40,7 +39,7 @@ const compiledToolsBySenderCache = new WeakMap<
 
 type ParsedSenderPolicyKey =
   | { kind: "wildcard" }
-  | { kind: "typed"; type: SenderKeyType; key: string };
+  | { kind: "typed"; type: ToolsBySenderKeyType; key: string };
 
 type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
 
@@ -58,7 +57,7 @@ function normalizeSenderKey(
   return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
-function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
+function normalizeTypedSenderKey(value: string, type: ToolsBySenderKeyType): string {
   if (type === "channel") {
     return normalizeChannelSenderKey(value);
   }
@@ -87,12 +86,6 @@ function normalizeChannelSenderKey(value: string): string {
     return "";
   }
   return `${channel}:${senderId}`;
-}
-
-function normalizeLegacySenderKey(value: string): string {
-  return normalizeSenderKey(value, {
-    stripLeadingAt: true,
-  });
 }
 
 function warnLegacyToolsBySenderKey(rawKey: string) {
@@ -132,7 +125,7 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
 
   // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
   warnLegacyToolsBySenderKey(trimmed);
-  const key = normalizeLegacySenderKey(trimmed);
+  const key = normalizeSenderKey(trimmed, { stripLeadingAt: true });
   if (!key) {
     return undefined;
   }
@@ -153,9 +146,13 @@ function createSenderPolicyBuckets(): SenderPolicyBuckets {
   };
 }
 
-function compileToolsBySenderPolicy(
+function resolveCompiledToolsBySenderPolicy(
   toolsBySender: GroupToolPolicyBySenderConfig,
 ): CompiledSenderPolicy | undefined {
+  const cached = compiledToolsBySenderCache.get(toolsBySender);
+  if (cached) {
+    return cached;
+  }
   const entries = Object.entries(toolsBySender);
   if (entries.length === 0) {
     return undefined;
@@ -181,31 +178,10 @@ function compileToolsBySenderPolicy(
     }
   }
 
-  return { buckets, wildcard };
-}
-
-function resolveCompiledToolsBySenderPolicy(
-  toolsBySender: GroupToolPolicyBySenderConfig,
-): CompiledSenderPolicy | undefined {
-  const cached = compiledToolsBySenderCache.get(toolsBySender);
-  if (cached) {
-    return cached;
-  }
-  const compiled = compileToolsBySenderPolicy(toolsBySender);
-  if (!compiled) {
-    return undefined;
-  }
+  const compiled = { buckets, wildcard };
   // Config is loaded once and treated as immutable; cache compiled sender policy by object identity.
   compiledToolsBySenderCache.set(toolsBySender, compiled);
   return compiled;
-}
-
-function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeTypedSenderKey(trimmed, type);
 }
 
 function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
@@ -214,10 +190,7 @@ function normalizeSenderIdCandidates(value: string | null | undefined): string[]
     return [];
   }
   const typed = normalizeTypedSenderKey(trimmed, "id");
-  const legacy = normalizeLegacySenderKey(trimmed);
-  if (!typed) {
-    return legacy ? [legacy] : [];
-  }
+  const legacy = normalizeSenderKey(trimmed, { stripLeadingAt: true });
   if (!legacy || legacy === typed) {
     return [typed];
   }
@@ -249,7 +222,7 @@ function matchToolsBySenderPolicy(
     ["username", params.senderUsername],
     ["name", params.senderName],
   ] as const) {
-    const candidate = normalizeCandidate(value, type);
+    const candidate = normalizeTypedSenderKey(normalizeOptionalString(value) ?? "", type);
     if (candidate) {
       const match = compiled.buckets[type].get(candidate);
       if (match) {

@@ -132,6 +132,13 @@ windows, and WebKit starts helper processes. A temporary `HOME`, `TMPDIR`, or
 named app profile alone is not a sandbox: fixed preferences domains and
 Keychain access can still reach macOS services outside those directories.
 
+The native test bundle links `OpenClawWebKitTestSupport`, which suppresses WebKit
+Screen Time observation for every `WKWebView` in the test process. WebKit removes
+its KVO observer on the main thread during deallocation while ScreenTime delivers
+configuration on a private queue. Tearing down a windowed HTTP(S) web view right
+after its first commit can hit this race and abort the process with
+`NSInternalInconsistencyException`. Product builds keep Screen Time.
+
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
@@ -140,7 +147,7 @@ bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;
 Foundation uses Darwin's per-user temp directory, owned and discarded by the
 disposable OS worker. The full suite explicitly selects the default profile, preserving
 its local Gateway lifecycle contracts. AppState lifecycle tests and the interactive
-XCTest chat fixture run separately with a unique named profile; no test is run twice. The child environment excludes
+chat fixture run separately with a unique named profile; no test is run twice. The child environment excludes
 inherited app settings and credentials while retaining toolchain and runtime
 loader paths. Before Swift starts, the launcher creates an empty-password test
 Keychain under its private `HOME/Library/Keychains`, unlocks it, disables automatic
@@ -172,7 +179,8 @@ CPU count, capped at 12. It runs three disjoint partitions sequentially with cov
 instrumentation: the default-profile suite, rendered Quick Chat in a fresh default-profile
 process, and named-profile fixtures. The rendered partition preserves catalog, disclosure,
 and shortcut order without sharing process-wide executor changes from other tests.
-It starts an AppKit-owned run loop before exercising native menus. Historical targets
+Both interactive fixtures use Swift Testing and start an AppKit-owned run loop before
+exercising native menus, so XCTest does not have to regain its outer wait loop afterward. Historical targets
 with the launcher keep their original default- and named-profile partitions.
 Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
 build, but does not run native tests. For native changes it exits nonzero with a

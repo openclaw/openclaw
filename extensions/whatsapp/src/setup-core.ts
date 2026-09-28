@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Whatsapp plugin module implements setup core behavior.
 import {
   createPatchedAccountSetupAdapter,
   type ChannelSetupAdapter,

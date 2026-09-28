@@ -30,6 +30,15 @@ shared `message` tool. Your plugin owns:
 - **Threading** - how replies are threaded
 - **Heartbeat typing** - optional typing/busy signals for heartbeat delivery
   targets
+- **Formatting contract** - optional `agentPrompt.inboundFormattingHints`,
+  resolved per delivering account. Despite its name, core gives it to every
+  OpenClaw agent turn whose visible text reaches the channel: replies,
+  heartbeats, cron announces, subagent announces, and cron runs without a
+  reply route that can send with the `message` tool (for example
+  `delivery.mode: "none"`). Such a run uses the message tool's default
+  channel: its current channel, or the only configured channel. A `message`
+  tool send to another channel does not get that channel's rules, and external
+  ACP agents do not receive it. Keep all formatting rules in this one hook.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group

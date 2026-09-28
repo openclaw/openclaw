@@ -30,7 +30,6 @@ import type {
   CodexPluginReadParams,
   CodexPluginReadResponse,
   CodexPluginSummary,
-  CodexSkillsListParams,
   CodexSkillsListResponse,
 } from "./protocol-control-plane.js";
 import type { JsonObject, JsonValue } from "./protocol-json.js";
@@ -77,15 +76,13 @@ export type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexPersonality = "none" | "friendly" | "pragmatic";
 
-export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
+export type CodexAppServerRequestMethod = keyof CodexAppServerRequests | (string & {});
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =
-  M extends keyof CodexAppServerRequestParamsOverride
-    ? CodexAppServerRequestParamsOverride[M]
-    : unknown;
+  M extends keyof CodexAppServerRequests ? CodexAppServerRequests[M]["params"] : unknown;
 
 export type CodexAppServerRequestResult<M extends CodexAppServerRequestMethod> =
-  M extends keyof CodexAppServerRequestResultMap
-    ? CodexAppServerRequestResultMap[M]
+  M extends keyof CodexAppServerRequests
+    ? CodexAppServerRequests[M]["result"]
     : JsonValue | undefined;
 
 export type CodexInitializeParams = {
@@ -583,6 +580,7 @@ export type CodexModel = {
   hidden: boolean;
   isDefault: boolean;
   inputModalities: string[];
+  serviceTiers?: { id: string; name: string; description: string }[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
@@ -648,101 +646,99 @@ export declare namespace v2 {
   export type PluginReadParams = CodexPluginReadParams;
   export type PluginReadResponse = CodexPluginReadResponse;
   export type PluginSummary = CodexPluginSummary;
-  export type SkillsListParams = CodexSkillsListParams;
-  export type SkillsListResponse = CodexSkillsListResponse;
 }
 
-type CodexAppServerRequestParamsOverride = {
-  "thread/backgroundTerminals/list": { threadId: string; limit?: number };
-  "thread/backgroundTerminals/terminate": { threadId: string; processId: string };
-  "app/installed": CodexAppsInstalledParams;
-  "app/list": CodexAppsListParams;
-  "app/read": CodexAppsReadParams;
-  "command/exec": CodexCommandExecParams;
-  "config/batchWrite": CodexConfigBatchWriteParams;
-  "config/read": CodexConfigReadParams;
-  "config/value/write": CodexConfigValueWriteParams;
-  "environment/add": { environmentId: string; execServerUrl: string };
-  "experimentalFeature/list": CodexExperimentalFeatureListParams;
-  "plugin/installed": CodexPluginInstalledParams;
-  "plugin/install": CodexPluginInstallParams;
-  "plugin/list": CodexPluginListParams;
-  "plugin/read": CodexPluginReadParams;
-  "thread/fork": CodexThreadForkParams;
-  "thread/archive": CodexThreadArchiveParams;
-  "thread/delete": CodexThreadDeleteParams;
-  "thread/inject_items": CodexThreadInjectItemsParams;
-  "thread/list": CodexThreadListParams;
-  "thread/turns/list": CodexThreadTurnsListParams;
-  "thread/items/list": CodexThreadItemsListParams;
-  "thread/name/set": CodexThreadSetNameParams;
-  "thread/read": CodexThreadReadParams;
-  "thread/resume": CodexThreadResumeParams;
-  "thread/start": CodexThreadStartParams;
-  "thread/unarchive": CodexThreadArchiveParams;
-  "thread/unsubscribe": CodexThreadUnsubscribeParams;
-  "thread/goal/set": CodexThreadGoalSetParams;
-  "thread/goal/get": CodexThreadGoalGetParams;
-  "thread/goal/clear": CodexThreadGoalClearParams;
-  "turn/interrupt": CodexTurnInterruptParams;
-  "turn/start": CodexTurnStartParams;
-  "turn/steer": CodexTurnSteerParams;
-  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
-  "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
-};
+type CodexRequestContract<Params, Result> = { params: Params; result: Result };
 
-type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
-  "thread/backgroundTerminals/terminate": { terminated: boolean };
-  initialize: CodexInitializeResponse;
-  "account/rateLimits/read": JsonValue;
-  "account/read": CodexGetAccountResponse;
-  "app/installed": CodexAppsInstalledResponse;
-  "app/list": CodexAppsListResponse;
-  "app/read": CodexAppsReadResponse;
-  "command/exec": CodexCommandExecResponse;
-  "config/batchWrite": CodexConfigWriteResponse;
-  "config/mcpServer/reload": JsonValue;
-  "config/read": CodexConfigReadResponse;
-  "configRequirements/read": CodexConfigRequirementsReadResponse;
-  "config/value/write": CodexConfigWriteResponse;
-  "environment/add": JsonValue;
-  "experimentalFeature/list": CodexExperimentalFeatureListResponse;
-  "experimentalFeature/enablement/set": JsonValue;
-  "feedback/upload": JsonValue;
-  "hooks/list": CodexHooksListResponse;
-  "marketplace/add": JsonValue;
-  "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;
-  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadResult;
-  "mcpServer/tool/call": CodexMcpProtocol.ToolCallResult;
-  "model/list": CodexModelListResponse;
-  "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
-  "plugin/installed": CodexPluginInstalledResponse;
-  "plugin/install": CodexPluginInstallResponse;
-  "plugin/list": CodexPluginListResponse;
-  "plugin/read": CodexPluginReadResponse;
-  "review/start": JsonValue;
-  "skills/list": CodexSkillsListResponse;
-  "thread/compact/start": JsonValue;
-  "thread/archive": JsonValue;
-  "thread/delete": CodexThreadDeleteResponse;
-  "thread/fork": CodexThreadForkResponse;
-  "thread/inject_items": JsonValue;
-  "thread/list": CodexThreadListResponse;
-  "thread/turns/list": CodexThreadTurnsListResponse;
-  "thread/items/list": CodexThreadItemsListResponse;
-  "thread/name/set": JsonValue;
-  "thread/read": CodexThreadReadResponse;
-  "thread/resume": CodexThreadResumeResponse;
-  "thread/start": CodexThreadStartResponse;
-  "thread/unarchive": CodexThreadUnarchiveResponse;
-  "thread/unsubscribe": JsonValue;
-  "thread/goal/set": CodexThreadGoalSetResponse;
-  "thread/goal/get": CodexThreadGoalGetResponse;
-  "thread/goal/clear": CodexThreadGoalClearResponse;
-  "turn/interrupt": JsonValue;
-  "turn/start": CodexTurnStartResponse;
-  "turn/steer": CodexTurnSteerResponse;
+// Each wire method owns its request and response together. Unmodeled params remain unknown.
+type CodexAppServerRequests = {
+  "thread/backgroundTerminals/list": CodexRequestContract<
+    { threadId: string; limit?: number },
+    { data: { itemId: string; processId: string }[] }
+  >;
+  "thread/backgroundTerminals/terminate": CodexRequestContract<
+    { threadId: string; processId: string },
+    { terminated: boolean }
+  >;
+  initialize: CodexRequestContract<unknown, CodexInitializeResponse>;
+  "account/rateLimits/read": CodexRequestContract<unknown, JsonValue>;
+  "account/read": CodexRequestContract<unknown, CodexGetAccountResponse>;
+  "app/installed": CodexRequestContract<CodexAppsInstalledParams, CodexAppsInstalledResponse>;
+  "app/list": CodexRequestContract<CodexAppsListParams, CodexAppsListResponse>;
+  "app/read": CodexRequestContract<CodexAppsReadParams, CodexAppsReadResponse>;
+  "command/exec": CodexRequestContract<CodexCommandExecParams, CodexCommandExecResponse>;
+  "config/batchWrite": CodexRequestContract<CodexConfigBatchWriteParams, CodexConfigWriteResponse>;
+  "config/mcpServer/reload": CodexRequestContract<unknown, JsonValue>;
+  "config/read": CodexRequestContract<CodexConfigReadParams, CodexConfigReadResponse>;
+  "configRequirements/read": CodexRequestContract<unknown, CodexConfigRequirementsReadResponse>;
+  "config/value/write": CodexRequestContract<CodexConfigValueWriteParams, CodexConfigWriteResponse>;
+  "environment/add": CodexRequestContract<
+    { environmentId: string; execServerUrl: string },
+    JsonValue
+  >;
+  "experimentalFeature/list": CodexRequestContract<
+    CodexExperimentalFeatureListParams,
+    CodexExperimentalFeatureListResponse
+  >;
+  "experimentalFeature/enablement/set": CodexRequestContract<unknown, JsonValue>;
+  "feedback/upload": CodexRequestContract<unknown, JsonValue>;
+  "hooks/list": CodexRequestContract<unknown, CodexHooksListResponse>;
+  "marketplace/add": CodexRequestContract<unknown, JsonValue>;
+  "mcpServerStatus/list": CodexRequestContract<
+    unknown,
+    CodexMcpProtocol.CodexListMcpServerStatusResponse
+  >;
+  "mcpServer/resource/read": CodexRequestContract<
+    CodexMcpProtocol.ResourceReadParams,
+    CodexMcpProtocol.ResourceReadResult
+  >;
+  "mcpServer/tool/call": CodexRequestContract<
+    CodexMcpProtocol.ToolCallParams,
+    CodexMcpProtocol.ToolCallResult
+  >;
+  "model/list": CodexRequestContract<unknown, CodexModelListResponse>;
+  "modelProvider/capabilities/read": CodexRequestContract<
+    unknown,
+    CodexModelProviderCapabilitiesReadResponse
+  >;
+  "plugin/installed": CodexRequestContract<
+    CodexPluginInstalledParams,
+    CodexPluginInstalledResponse
+  >;
+  "plugin/install": CodexRequestContract<CodexPluginInstallParams, CodexPluginInstallResponse>;
+  "plugin/list": CodexRequestContract<CodexPluginListParams, CodexPluginListResponse>;
+  "plugin/read": CodexRequestContract<CodexPluginReadParams, CodexPluginReadResponse>;
+  "review/start": CodexRequestContract<unknown, JsonValue>;
+  "skills/list": CodexRequestContract<unknown, CodexSkillsListResponse>;
+  "thread/compact/start": CodexRequestContract<unknown, JsonValue>;
+  "thread/archive": CodexRequestContract<CodexThreadArchiveParams, JsonValue>;
+  "thread/delete": CodexRequestContract<CodexThreadDeleteParams, CodexThreadDeleteResponse>;
+  "thread/fork": CodexRequestContract<CodexThreadForkParams, CodexThreadForkResponse>;
+  "thread/inject_items": CodexRequestContract<CodexThreadInjectItemsParams, JsonValue>;
+  "thread/list": CodexRequestContract<CodexThreadListParams, CodexThreadListResponse>;
+  "thread/turns/list": CodexRequestContract<
+    CodexThreadTurnsListParams,
+    CodexThreadTurnsListResponse
+  >;
+  "thread/items/list": CodexRequestContract<
+    CodexThreadItemsListParams,
+    CodexThreadItemsListResponse
+  >;
+  "thread/name/set": CodexRequestContract<CodexThreadSetNameParams, JsonValue>;
+  "thread/read": CodexRequestContract<CodexThreadReadParams, CodexThreadReadResponse>;
+  "thread/resume": CodexRequestContract<CodexThreadResumeParams, CodexThreadResumeResponse>;
+  "thread/start": CodexRequestContract<CodexThreadStartParams, CodexThreadStartResponse>;
+  "thread/unarchive": CodexRequestContract<CodexThreadArchiveParams, CodexThreadUnarchiveResponse>;
+  "thread/unsubscribe": CodexRequestContract<CodexThreadUnsubscribeParams, JsonValue>;
+  "thread/goal/set": CodexRequestContract<CodexThreadGoalSetParams, CodexThreadGoalSetResponse>;
+  "thread/goal/get": CodexRequestContract<CodexThreadGoalGetParams, CodexThreadGoalGetResponse>;
+  "thread/goal/clear": CodexRequestContract<
+    CodexThreadGoalClearParams,
+    CodexThreadGoalClearResponse
+  >;
+  "turn/interrupt": CodexRequestContract<CodexTurnInterruptParams, JsonValue>;
+  "turn/start": CodexRequestContract<CodexTurnStartParams, CodexTurnStartResponse>;
+  "turn/steer": CodexRequestContract<CodexTurnSteerParams, CodexTurnSteerResponse>;
 };
 
 export function isJsonObject(value: unknown): value is JsonObject {

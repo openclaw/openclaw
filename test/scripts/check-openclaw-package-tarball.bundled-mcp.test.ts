@@ -4,6 +4,7 @@ import {
   chmodSync,
   copyFileSync,
   cpSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -16,13 +17,21 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { listFilesRecursively, withTarball } from "./package-tarball-fixture.js";
+import {
+  expectPackageCommandSuccess,
+  listFilesRecursively,
+  withTarball,
+} from "./package-tarball-fixture.js";
 
 const require = createRequire(import.meta.url);
 const CHECK_SCRIPT = resolve("scripts/check-openclaw-package-tarball.mts");
 const MCP_NAME = "chrome-devtools-mcp";
 const MCP_PREFIX = `node_modules/${MCP_NAME}`;
 const MCP_CLI = "build/src/bin/chrome-devtools-mcp.js";
+const MCP_PROCESS_TIMEOUT_MS = 180_000;
+// The real ~90 MiB offline install has a three-minute subprocess budget on Windows.
+// Allow fixture packing, byte comparisons, and cleanup before Vitest rejects a completed run.
+const MCP_PACKAGE_TEST_TIMEOUT_MS = MCP_PROCESS_TIMEOUT_MS + 60_000;
 const packageJson = {
   files: ["dist"],
   dependencies: { [MCP_NAME]: "1.9.0" },
@@ -63,9 +72,9 @@ function installPatchedMcp(packageRoot: string) {
     env: npm.env,
     shell: npm.shell,
     windowsVerbatimArguments: npm.windowsVerbatimArguments,
-    timeout: 180_000,
+    timeout: MCP_PROCESS_TIMEOUT_MS,
   });
-  expect(packed.status, packed.stderr).toBe(0);
+  expectPackageCommandSuccess(packed, "pack installed browser MCP");
   // A local override supplies real pnpm metadata without registry or host-cache access.
   writeFileSync(
     join(packageRoot, "pnpm-workspace.yaml"),
@@ -92,13 +101,62 @@ function installPatchedMcp(packageRoot: string) {
     encoding: "utf8",
     shell: pnpm.shell,
     windowsVerbatimArguments: pnpm.windowsVerbatimArguments,
-    timeout: 180_000,
+    timeout: MCP_PROCESS_TIMEOUT_MS,
   });
-  expect(installed.status, installed.stderr || installed.stdout).toBe(0);
+  expectPackageCommandSuccess(installed, "install browser MCP fixture");
   expect(lstatSync(join(packageRoot, MCP_PREFIX)).isSymbolicLink()).toBe(true);
 }
 
 describe("bundled browser MCP package", () => {
+  it("retains native spawn failure facts and cleans the pre-pack fixture", () => {
+    let root = "";
+    let bodyRan = false;
+    expect(() =>
+      withTarball(
+        [],
+        {},
+        () => {
+          bodyRan = true;
+        },
+        undefined,
+        {
+          beforePack(packageRoot) {
+            root = dirname(packageRoot);
+            const result = spawnSync(join(packageRoot, "missing-command"), [], {
+              encoding: "utf8",
+            });
+            expectPackageCommandSuccess(result, "missing fixture command");
+          },
+        },
+      ),
+    ).toThrowError(/"status":null,"signal":null,.*"code":"ENOENT"/);
+    expect(bodyRan).toBe(false);
+    expect(root).not.toBe("");
+    expect(existsSync(root)).toBe(false);
+  });
+
+  it("keeps both streams alongside native errors without changing exit assertions", () => {
+    const result = spawnSync(process.execPath, ["-e", "process.exit(0)"], { encoding: "utf8" });
+    expect(() => expectPackageCommandSuccess(result, "successful command")).not.toThrow();
+    const failed = spawnSync(process.execPath, ["-e", "process.exit(7)"], { encoding: "utf8" });
+    expect(() => expectPackageCommandSuccess(failed, "failed command")).toThrowError(/"status":7/);
+    expect(() =>
+      expectPackageCommandSuccess(
+        {
+          ...result,
+          status: null,
+          signal: "SIGTERM",
+          error: Object.assign(new Error("spawn timed out"), { code: "ETIMEDOUT" }),
+          stderr: "captured stderr",
+          stdout: "captured stdout",
+        },
+        "fixture pack",
+      ),
+    ).toThrowError(
+      /fixture pack[\s\S]*"signal":"SIGTERM"[\s\S]*"code":"ETIMEDOUT"[\s\S]*spawn timed out[\s\S]*captured stderr[\s\S]*captured stdout/,
+    );
+  });
+
   it.each(["npm", "pnpm"] as const)(
     "retains the patched runtime through %s pack and an offline install",
     (pack) => {
@@ -108,7 +166,7 @@ describe("bundled browser MCP package", () => {
         { "dist/index.js": "export {};\n" },
         (tarball, root) => {
           const checked = check(tarball);
-          expect(checked.status, checked.stderr).toBe(0);
+          expectPackageCommandSuccess(checked, "check bundled browser MCP tarball");
           const consumer = join(root, "consumer");
           mkdirSync(consumer);
           writeFileSync(
@@ -134,9 +192,9 @@ describe("bundled browser MCP package", () => {
             env: npm.env,
             shell: npm.shell,
             windowsVerbatimArguments: npm.windowsVerbatimArguments,
-            timeout: 180_000,
+            timeout: MCP_PROCESS_TIMEOUT_MS,
           });
-          expect(installed.status, installed.stderr).toBe(0);
+          expectPackageCommandSuccess(installed, "install bundled browser MCP consumer");
           const consumerRequire = createRequire(
             join(consumer, "node_modules/openclaw/package.json"),
           );
@@ -148,7 +206,7 @@ describe("bundled browser MCP package", () => {
             {
               cwd: consumer,
               encoding: "utf8",
-              timeout: 180_000,
+              timeout: MCP_PROCESS_TIMEOUT_MS,
               env: {
                 ...process.env,
                 CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: "1",
@@ -156,7 +214,7 @@ describe("bundled browser MCP package", () => {
               },
             },
           );
-          expect(cli.status, cli.stderr).toBe(0);
+          expectPackageCommandSuccess(cli, "read bundled browser MCP version");
           expect(cli.stdout.trim()).toBe("1.9.0");
         },
         undefined,
@@ -167,7 +225,7 @@ describe("bundled browser MCP package", () => {
         },
       );
     },
-    60_000,
+    MCP_PACKAGE_TEST_TIMEOUT_MS,
   );
 
   it.each([
@@ -184,7 +242,12 @@ describe("bundled browser MCP package", () => {
     {
       name: "unpinned dependency",
       manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.9.0" } },
-      error: "must be pinned to 1.9.0",
+      error: "must be pinned to a supported patched version",
+    },
+    {
+      name: "bundle without a dependency pin",
+      manifest: { bundleDependencies: [MCP_NAME] },
+      error: "must be pinned to a supported patched version",
     },
     {
       name: "missing generic declared bundle",
@@ -217,7 +280,7 @@ describe("bundled browser MCP package", () => {
         { "dist/index.js": "export {};\n" },
         (tarball) => {
           const result = check(tarball);
-          expect(result.status, result.stderr).toBe(0);
+          expectPackageCommandSuccess(result, "check bundled browser MCP template");
           copyFileSync(tarball, templateTarball);
         },
         undefined,
@@ -232,6 +295,11 @@ describe("bundled browser MCP package", () => {
     }, 60_000);
 
     it.each([
+      {
+        file: "package.json",
+        change: "modify",
+        error: "bundled chrome-devtools-mcp must be ESM version 1.9.0",
+      },
       ...[
         "build/src/TextSnapshot.js",
         "build/src/McpPage.js",
@@ -271,7 +339,12 @@ describe("bundled browser MCP package", () => {
           mkdirSync(dirname(replacement), { recursive: true });
           writeFileSync(
             replacement,
-            Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
+            file === "package.json"
+              ? JSON.stringify({
+                  ...JSON.parse(readFileSync(join(sourceRoot(), file), "utf8")),
+                  version: "1.8.0",
+                })
+              : Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
           );
           chmodSync(replacement, 0o644);
         }

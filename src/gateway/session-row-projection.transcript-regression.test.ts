@@ -111,6 +111,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       const dirtyRequestStarted = performance.now();
       await describe("dirty-drain");
       const dirtyDescribeMs = performance.now() - dirtyRequestStarted;
+      const remainingAfterDirtyResponse = projection.dirtyRowCount;
       console.log(
         JSON.stringify({
           count,
@@ -119,6 +120,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
           initialDrainThreadCpuMs: (initialDrainCpu.user + initialDrainCpu.system) / 1000,
           describeMs,
           dirtyDescribeMs,
+          remainingAfterDirtyResponse,
           remainingAtResponse,
           materializationTranscriptReads,
           materializationUsageReads,
@@ -135,6 +137,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       expect(dirtyDescribeMs).toBeLessThan(100);
       // A response must not depend on completion of unrelated resident rows.
       expect(remainingAtResponse).toBeGreaterThan(0);
+      expect(remainingAfterDirtyResponse).toBeGreaterThan(0);
     } finally {
       projection.dispose();
     }

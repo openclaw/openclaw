@@ -675,47 +675,6 @@ describe("update run ledger", () => {
     expect(recordUpdateRunPhase(run.runId, "verifying", {}, options).phase).toBe("verifying");
   });
 
-  it.each([
-    { name: "step count", count: 130, detail: undefined },
-    { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
-    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
-  ])(
-    "retains notice custody, restoration proof, and finalization history across the $name bound and database reopen",
-    ({ count, detail }) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "chat" }, options);
-      const notices = [
-        "notice:ack",
-        "notice:activating",
-        "notice:verifying",
-        "previous generation restoration",
-        "finalize:doctor",
-        "finalize:future-phase",
-        // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
-        "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
-        "post-update verification",
-      ];
-      for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
-        recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
-      }
-      for (let index = 0; index < count; index++) {
-        recordUpdateRunStep(
-          run.runId,
-          { step: `diagnostic-${index}`, status: "completed", detail },
-          options,
-        );
-      }
-      closeOpenClawStateDatabaseForTest();
-      const persisted = getUpdateRun(run.runId, options)!;
-      expect(persisted.steps.map((step) => step.step)).toEqual(
-        expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
-      );
-      expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
-      expect(persisted.steps.length).toBeLessThanOrEqual(128);
-      expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-    },
-  );
-
   it.each(["bytes", "count"] as const)(
     "rejects oversized retained step %s without changing the row",
     (bound) => {

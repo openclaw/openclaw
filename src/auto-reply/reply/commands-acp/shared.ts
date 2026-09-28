@@ -36,24 +36,6 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export type AcpAction =
-  | "spawn"
-  | "cancel"
-  | "steer"
-  | "close"
-  | "sessions"
-  | "status"
-  | "set-mode"
-  | "set"
-  | "cwd"
-  | "permissions"
-  | "timeout"
-  | "model"
-  | "reset-options"
-  | "doctor"
-  | "install"
-  | "help";
-
 type AcpSpawnThreadMode = "auto" | "here" | "off";
 type AcpSpawnBindMode = "here" | "off";
 
@@ -84,32 +66,6 @@ type ParsedSetCommandInput = {
 
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
-
-export function resolveAcpAction(tokens: string[]): AcpAction {
-  const action = normalizeOptionalLowercaseString(tokens[0]);
-  if (
-    action === "spawn" ||
-    action === "cancel" ||
-    action === "steer" ||
-    action === "close" ||
-    action === "sessions" ||
-    action === "status" ||
-    action === "set-mode" ||
-    action === "set" ||
-    action === "cwd" ||
-    action === "permissions" ||
-    action === "timeout" ||
-    action === "model" ||
-    action === "reset-options" ||
-    action === "doctor" ||
-    action === "install" ||
-    action === "help"
-  ) {
-    tokens.shift();
-    return action;
-  }
-  return "help";
-}
 
 function readOptionValue(params: { tokens: string[]; index: number; flags: readonly string[] }):
   | {

@@ -1,8 +1,3 @@
-/**
- * Channel message action dispatcher.
- *
- * Runs plugin-owned message actions from the shared agent tool with sender trust checks.
- */
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
@@ -653,18 +648,6 @@ export function shouldDeferExternalMessageActionTargetResolution(
   );
 }
 
-function requiresTrustedRequesterSender(
-  ctx: ChannelMessageActionContext,
-  plugin: ChannelPlugin,
-): boolean {
-  return Boolean(
-    plugin?.actions?.requiresTrustedRequesterSender?.({
-      action: ctx.action,
-      toolContext: ctx.toolContext,
-    }),
-  );
-}
-
 /**
  * Runs a channel message action if the target plugin supports it.
  */
@@ -712,7 +695,10 @@ export async function dispatchChannelMessageAction(
       // Some plugin actions depend on the sender identity to enforce channel-local
       // trust. Reject tool-driven calls before invoking the action without it.
       if (
-        requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
+        plugin.actions?.requiresTrustedRequesterSender?.({
+          action: authorizedActionContext.action,
+          toolContext: authorizedActionContext.toolContext,
+        }) &&
         !authorizedActionContext.requesterSenderId?.trim()
       ) {
         throw new Error(

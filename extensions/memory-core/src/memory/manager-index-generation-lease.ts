@@ -117,25 +117,18 @@ function drain(key: string, state: GenerationLeaseState): void {
   if (state.writer) {
     return;
   }
-  if (state.readers > 0) {
-    // Readers already in the current generation may admit more readers until a
-    // writer reaches the queue head. Readers behind that writer wait for the next generation.
-    while (state.queue[0]?.kind === "read") {
-      const reader = state.queue.shift()!;
-      state.readers += 1;
-      reader.resolve(() => {
-        state.readers -= 1;
-        drain(key, state);
-      });
+  const first = state.queue[0];
+  if (!first) {
+    if (state.readers === 0) {
+      states.delete(key);
     }
     return;
   }
-  const first = state.queue.shift();
-  if (!first) {
-    states.delete(key);
-    return;
-  }
   if (first.kind === "write") {
+    if (state.readers > 0) {
+      return;
+    }
+    state.queue.shift();
     state.writer = true;
     first.resolve(() => {
       state.writer = false;
@@ -143,11 +136,13 @@ function drain(key: string, state: GenerationLeaseState): void {
     });
     return;
   }
-  const readers = [first];
+  // Admit the full consecutive group before resolving any caller: an aborted
+  // caller can release synchronously and must not let a writer overtake siblings.
+  const readers: Waiter[] = [];
   while (state.queue[0]?.kind === "read") {
     readers.push(state.queue.shift()!);
   }
-  state.readers = readers.length;
+  state.readers += readers.length;
   for (const reader of readers) {
     reader.resolve(() => {
       state.readers -= 1;
@@ -229,15 +224,6 @@ async function acquire(
   };
 }
 
-async function withLease<T>(key: string, kind: Waiter["kind"], run: () => Promise<T>): Promise<T> {
-  const release = await acquire(key, kind);
-  try {
-    return await run();
-  } finally {
-    await release();
-  }
-}
-
 export async function acquireMemoryIndexReadGeneration(
   databasePath: string,
   signal?: AbortSignal,
@@ -249,5 +235,10 @@ export async function withMemoryIndexPublishGeneration<T>(
   databasePath: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  return await withLease(databasePath, "write", run);
+  const release = await acquire(databasePath, "write");
+  try {
+    return await run();
+  } finally {
+    await release();
+  }
 }

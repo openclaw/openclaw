@@ -86,6 +86,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       await gatewayRequestContext.scopeUpgradeCoordinator?.close();
       const projection = await projectionReady.catch(() => undefined);
       await shutdownRuntime.flushPendingSessionsChangedEvents(gatewayRequestContext);
+      if (projection) {
+        await shutdownRuntime.drainSessionEventPublications(projection);
+      }
       projectionLifetime.detach?.();
       projection?.dispose();
     },
@@ -96,11 +99,17 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   }
   if (projection) {
     projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+    // The initial roster must be usable before reconnecting clients can issue lists.
+    await projection.ensureMaterialized();
+    if (projectionLifetime.closing) {
+      throw new Error("Gateway closed during session projection startup");
+    }
   }
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
   if (!runtime.opts.updateCanary) {
     await attachInitialGatewayLifetimeSidecars({
+      scheduler: runtime.scheduler,
       chatMetadataLifecycle,
       gatewayRequestContext,
       flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,

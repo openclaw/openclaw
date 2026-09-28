@@ -1,5 +1,3 @@
-// Discord plugin module implements shared custom-id value codecs.
-
 /**
  * URI-component codec for values embedded in `k=v;` custom-id grammars
  * (exec approvals, model picker, command args, agent components).

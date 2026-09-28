@@ -12,7 +12,6 @@ import {
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -21,17 +20,6 @@ export class SourceOwnerChangedError extends Error {
     super("subagent source lifecycle changed before completion delivery");
     this.name = "SourceOwnerChangedError";
   }
-}
-
-export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "source_owner_changed",
-    error: "subagent source lifecycle changed before completion delivery",
-    terminal: true,
-    disposition: "intentional_non_delivery",
-  };
 }
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {

@@ -130,6 +130,9 @@ export function spawnBrokerCommand(
   }
   const promise = remote.result
     .then(async (result) => {
+      if (result.timedOut) {
+        child.killed = true;
+      }
       // Result IPC can overtake the last bytes on separately transferred sockets.
       await closed;
       const restored = restoreExecaResult(result);

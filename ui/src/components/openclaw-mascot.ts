@@ -62,7 +62,6 @@ class OpenClawMascot extends LitElement {
   private animationFrame = 0;
   private visible = true;
   private reducedMotion = false;
-  private lastPose: MascotPose = staticMascotPose("idle");
   private intersectionObserver: IntersectionObserver | null = null;
   private themeObserver: MutationObserver | null = null;
   private motionQuery: MediaQueryList | null = null;
@@ -185,8 +184,7 @@ class OpenClawMascot extends LitElement {
     }
     if (this.reducedMotion) {
       this.stopAnimation();
-      this.lastPose = staticMascotPose(this.resolvedMood);
-      this.drawPose(this.lastPose);
+      this.drawPose(staticMascotPose(this.resolvedMood));
       return;
     }
     if (!this.shouldAnimate) {
@@ -206,10 +204,9 @@ class OpenClawMascot extends LitElement {
   }
 
   private drawCurrentFrame(time: number): void {
-    this.lastPose = this.reducedMotion
-      ? staticMascotPose(this.resolvedMood)
-      : this.animator.poseAt(time);
-    this.drawPose(this.lastPose);
+    this.drawPose(
+      this.reducedMotion ? staticMascotPose(this.resolvedMood) : this.animator.poseAt(time),
+    );
   }
 
   private drawPose(pose: MascotPose): void {

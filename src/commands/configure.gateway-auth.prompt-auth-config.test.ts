@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice as applyProviderAuthChoice } from "./auth-choice.apply.js";
 import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -37,14 +36,17 @@ vi.mock("./auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped: mocks.promptAuthChoiceGrouped,
 }));
 
-vi.mock("./auth-choice.js", () => ({
+vi.mock("./auth-choice.apply.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
+}));
+
+vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
 }));
 
-vi.mock("./model-picker.js", async () => {
+vi.mock("../flows/model-picker.js", async (importOriginal) => {
   const { applyModelAllowlist, applyModelFallbacksFromSelection } =
-    await import("../flows/model-picker.js");
+    await importOriginal<typeof import("../flows/model-picker.js")>();
   return {
     applyModelAllowlist,
     applyModelFallbacksFromSelection,
@@ -66,6 +68,9 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
+
+const { applyAuthChoice: applyProviderAuthChoice } =
+  await vi.importActual<typeof import("./auth-choice.apply.js")>("./auth-choice.apply.js");
 
 beforeEach(() => {
   // These provider fixtures expose no CLI backends; policy checks need no plugin discovery.
@@ -144,7 +149,7 @@ function createTestModel(id: string, name = id) {
   };
 }
 
-function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
+function createApplyAuthChoiceConfig() {
   return {
     config: {
       agents: {
@@ -155,24 +160,20 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
       models: {
         providers: {
           kilocode: createKilocodeProvider(),
-          ...(includeMinimaxProvider
-            ? {
-                minimax: {
-                  baseUrl: "https://api.minimax.io/anthropic",
-                  api: "anthropic-messages",
-                  models: [createTestModel("MiniMax-M2.7", "MiniMax M2.7")],
-                },
-              }
-            : {}),
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            models: [createTestModel("MiniMax-M2.7", "MiniMax M2.7")],
+          },
         },
       },
     },
   };
 }
 
-async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) {
+async function runPromptAuthConfigWithAllowlist() {
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
-  mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
+  mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig());
   mocks.promptModelAllowlist.mockResolvedValue({
     models: ["kilocode/kilo-auto/balanced"],
   });
@@ -193,14 +194,6 @@ describe("promptAuthConfig", () => {
       "kilocode/kilo-auto/balanced",
     ]);
     expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["kilocode/kilo-auto/balanced"]);
-  });
-
-  it("does not mutate provider model catalogs when allowlist is set", async () => {
-    const result = await runPromptAuthConfigWithAllowlist(true);
-    expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "kilo-auto/balanced",
-      "anthropic/claude-sonnet-4",
-    ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
       "MiniMax-M2.7",
     ]);
@@ -337,19 +330,6 @@ describe("promptAuthConfig", () => {
       "openai/gpt-5.4-mini": { alias: "mini" },
       "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
     });
-  });
-
-  it("scopes the allowlist picker to the selected provider when available", async () => {
-    vi.clearAllMocks();
-    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
-    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
-    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
-    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-
-    await promptAuthConfig({}, makeRuntime(), noopPrompter);
-
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
   });
 
   it("canonicalizes a legacy Codex primary when OpenAI OAuth selects the matching model", async () => {
@@ -702,28 +682,29 @@ describe("promptAuthConfig", () => {
     explicit: boolean;
     override: boolean;
   }>([
-    ...[false, true].flatMap((sharedPrimary) =>
-      [false, true].flatMap((agentPrimary) =>
-        [false, true].flatMap((explicit) =>
-          [false, true].map((override) => ({
-            name: `shared=${sharedPrimary}, agent=${agentPrimary}`,
-            defaultModel: sharedPrimary
-              ? { primary: "openai/gpt-5.6-luna", fallbacks: ["shared/fallback"] }
-              : undefined,
-            agentModel: agentPrimary
-              ? { primary: "anthropic/sonnet-4.6", fallbacks: ["agent/fallback"] }
-              : undefined,
-            existingPrimary: agentPrimary
-              ? "anthropic/sonnet-4.6"
-              : sharedPrimary
-                ? "openai/gpt-5.6-luna"
-                : undefined,
-            explicit,
-            override,
-          })),
-        ),
-      ),
-    ),
+    ...[
+      { sharedPrimary: false, agentPrimary: false, explicit: false, override: false },
+      { sharedPrimary: false, agentPrimary: false, explicit: false, override: true },
+      { sharedPrimary: false, agentPrimary: false, explicit: true, override: true },
+      { sharedPrimary: true, agentPrimary: false, explicit: false, override: true },
+      { sharedPrimary: true, agentPrimary: true, explicit: true, override: true },
+      { sharedPrimary: false, agentPrimary: true, explicit: false, override: false },
+    ].map(({ sharedPrimary, agentPrimary, explicit, override }) => ({
+      name: `shared=${sharedPrimary}, agent=${agentPrimary}`,
+      defaultModel: sharedPrimary
+        ? { primary: "openai/gpt-5.6-luna", fallbacks: ["shared/fallback"] }
+        : undefined,
+      agentModel: agentPrimary
+        ? { primary: "anthropic/sonnet-4.6", fallbacks: ["agent/fallback"] }
+        : undefined,
+      existingPrimary: agentPrimary
+        ? "anthropic/sonnet-4.6"
+        : sharedPrimary
+          ? "openai/gpt-5.6-luna"
+          : undefined,
+      explicit,
+      override,
+    })),
     {
       name: "inherited string primary",
       defaultModel: "openai/gpt-5.6-luna",

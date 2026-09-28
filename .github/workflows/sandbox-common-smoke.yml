@@ -3,7 +3,7 @@ name: Sandbox Common Smoke
 on:
   workflow_dispatch:
   schedule:
-    - cron: "23 * * * *"
+    - cron: "23 5 * * *"
   push:
     branches: [main]
     paths:

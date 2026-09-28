@@ -112,22 +112,11 @@ export function tryReadSecretFileSync(
 ): string | undefined | CredentialResult<string> {
   if ("credentialDiagnostic" in options) {
     const { credentialDiagnostic, ...readOptions } = options;
-    if (!filePath?.trim()) {
-      return undefined;
+    const result = tryReadSecretFileSync(filePath, label, readOptions, credentialDiagnostic);
+    if (result.status === "configured_unavailable") {
+      credentialDiagnostic.report(result.diagnostic);
     }
-    try {
-      return readSecretFileSyncImpl(filePath, label, readOptions);
-    } catch (error) {
-      if (!(error instanceof FsSafeError)) {
-        throw error;
-      }
-      credentialDiagnostic.report({
-        code: "CREDENTIAL_FILE_UNAVAILABLE",
-        path: credentialDiagnostic.configPath,
-        reason: error.code,
-      });
-      return undefined;
-    }
+    return result.status === "available" ? result.value : undefined;
   }
   if (!diagnostic) {
     return tryReadSecretFileSyncImpl(filePath, label, options);

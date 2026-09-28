@@ -1,6 +1,8 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMSTeamsRequestTimeoutMs,
   type MSTeamsRequestDeadline,
@@ -10,7 +12,6 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
   applyAuthorizationHeaderForUrl,
-  isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
@@ -24,10 +25,6 @@ import type {
   MSTeamsInboundMedia,
 } from "./types.js";
 
-/**
- * Bot Framework Service token scope for requesting a token used against
- * the Bot Connector (v3) REST endpoints such as `/v3/attachments/{id}`.
- */
 const BOT_FRAMEWORK_SCOPE = "https://api.botframework.com";
 
 /**
@@ -55,12 +52,6 @@ type BotFrameworkAttachmentInfo = {
   type?: string | null;
   views?: BotFrameworkView[] | null;
 };
-
-function normalizeServiceUrl(serviceUrl: string): string {
-  // Bot Framework service URLs sometimes carry a trailing slash; normalize so
-  // we can safely append `/v3/attachments/...` below.
-  return serviceUrl.replace(/\/+$/, "");
-}
 
 type BotFrameworkAttachmentRequest = {
   url: string;
@@ -209,7 +200,7 @@ async function downloadMSTeamsBotFrameworkAttachment(
     allowHosts: params.allowHosts,
     authAllowHosts: params.authAllowHosts,
   });
-  const baseUrl = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
+  const baseUrl = `${params.serviceUrl.replace(/\/+$/, "")}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
   if (!isUrlAllowed(baseUrl, policy.allowHosts)) {
     return undefined;
   }
@@ -303,19 +294,7 @@ async function downloadMSTeamsBotFrameworkAttachment(
 export async function downloadMSTeamsBotFrameworkAttachments(
   params: BotFrameworkDownloadOptions & { attachmentIds: string[] },
 ): Promise<MSTeamsGraphMediaResult> {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const id of params.attachmentIds ?? []) {
-    if (typeof id !== "string") {
-      continue;
-    }
-    const trimmed = id.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
+  const unique = normalizeUniqueTrimmedStringList(params.attachmentIds);
   if (unique.length === 0 || !params.serviceUrl || !params.tokenProvider) {
     return { media: [], attachmentCount: unique.length };
   }

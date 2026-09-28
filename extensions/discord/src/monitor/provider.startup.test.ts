@@ -1,6 +1,6 @@
 // Discord tests cover provider.startup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Client, Plugin } from "../internal/discord.js";
+import { Client, type Plugin, type RegisteredPlugin } from "../internal/client.js";
 
 const {
   registerVoiceClientSpy,
@@ -105,10 +105,6 @@ vi.mock("./listeners.js", () => ({
   registerDiscordListener: vi.fn(),
 }));
 
-vi.mock("./presence.js", () => ({
-  resolveDiscordPresenceUpdate: vi.fn(() => undefined),
-}));
-
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import { registerDiscordListener } from "./listeners.js";
@@ -126,29 +122,11 @@ describe("createDiscordMonitorClient", () => {
   });
 
   function createClientWithPlugins(
-    _options: ConstructorParameters<typeof import("../internal/discord.js").Client>[0],
-    handlers: ConstructorParameters<typeof import("../internal/discord.js").Client>[1],
-    plugins: Plugin[] = [],
+    options: ConstructorParameters<typeof Client>[0],
+    handlers: ConstructorParameters<typeof Client>[1],
+    plugins: RegisteredPlugin[] = [],
   ) {
-    const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
-    const listeners = [...(handlers.listeners ?? [])];
-    return {
-      listeners,
-      plugins: pluginRegistry,
-      registerListener: (listener: never) => {
-        listeners.push(listener);
-        return listener;
-      },
-      unregisterListener: (listener: never) => {
-        const index = listeners.indexOf(listener);
-        if (index < 0) {
-          return false;
-        }
-        listeners.splice(index, 1);
-        return true;
-      },
-      getPlugin: (id: string) => pluginRegistry.find((entry) => entry.id === id)?.plugin,
-    } as unknown as Client;
+    return new Client(options, handlers, plugins);
   }
 
   function createAutoPresenceController() {
@@ -169,28 +147,37 @@ describe("createDiscordMonitorClient", () => {
     return call;
   }
 
-  it("registers voice plugin listeners after gateway setup", async () => {
-    const gatewayPlugin = {
-      id: "gateway",
-      registerClient: vi.fn(),
-      registerRoutes: vi.fn(),
-    } as Plugin;
-
-    const result = await createDiscordMonitorClient({
+  function createMonitorClient(
+    overrides: Partial<Parameters<typeof createDiscordMonitorClient>[0]> = {},
+  ) {
+    return createDiscordMonitorClient({
       accountId: "default",
       applicationId: "app-1",
       token: "token-1",
       commands: [],
       components: [],
       modals: [],
-      voiceEnabled: true,
+      voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntimeSpies(),
       createClient: createClientWithPlugins,
-      createGatewayPlugin: () => gatewayPlugin as never,
+      createGatewayPlugin: () => ({ id: "gateway" }) as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
       createAutoPresenceController: () => createAutoPresenceController() as never,
       isDisallowedIntentsError: () => false,
+      ...overrides,
+    });
+  }
+
+  it("registers voice plugin listeners after gateway setup", async () => {
+    const gatewayPlugin = {
+      id: "gateway",
+      registerClient: vi.fn(),
+    } as Plugin;
+
+    const result = await createMonitorClient({
+      voiceEnabled: true,
+      createGatewayPlugin: () => gatewayPlugin as never,
     });
 
     expect(registerVoiceClientSpy).toHaveBeenCalledTimes(1);
@@ -209,21 +196,9 @@ describe("createDiscordMonitorClient", () => {
     const gatewaySupervisor = { shutdown: vi.fn(), handleError: vi.fn() };
     const createGatewaySupervisor = vi.fn(() => gatewaySupervisor);
 
-    const resultPromise = createDiscordMonitorClient({
-      accountId: "default",
-      applicationId: "app-1",
-      token: "token-1",
-      commands: [],
-      components: [],
-      modals: [],
-      voiceEnabled: false,
-      discordConfig: {},
-      runtime: createRuntimeSpies(),
-      createClient: createClientWithPlugins,
+    const resultPromise = createMonitorClient({
       createGatewayPlugin: () => gatewayPlugin as never,
       createGatewaySupervisor: createGatewaySupervisor as never,
-      createAutoPresenceController: () => createAutoPresenceController() as never,
-      isDisallowedIntentsError: () => false,
     });
     await Promise.resolve();
 
@@ -244,29 +219,15 @@ describe("createDiscordMonitorClient", () => {
       register: vi.fn(async () => undefined),
     };
 
-    await createDiscordMonitorClient({
-      accountId: "default",
-      applicationId: "app-1",
-      token: "token-1",
-      commands: [],
-      components: [],
-      modals: [],
-      voiceEnabled: false,
-      discordConfig: {},
-      runtime: createRuntimeSpies(),
+    await createMonitorClient({
       commandDeployHashStore,
       createClient,
-      createGatewayPlugin: () => ({ id: "gateway" }) as never,
-      createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
-      createAutoPresenceController: () => createAutoPresenceController() as never,
-      isDisallowedIntentsError: () => false,
     });
 
     expect(createClient).toHaveBeenCalledTimes(1);
     const [options, handlers, plugins] = firstCreateClientCall(createClient);
     expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
-      runtimeProfile: "persistent",
       maxQueueSize: 1000,
     });
     expect((options as { commandDeployHashStore?: unknown }).commandDeployHashStore).toBe(
@@ -282,29 +243,15 @@ describe("createDiscordMonitorClient", () => {
     const restFetch = vi.fn();
     const createClient = vi.fn(createClientWithPlugins);
 
-    await createDiscordMonitorClient({
-      accountId: "default",
-      applicationId: "app-1",
-      token: "token-1",
+    await createMonitorClient({
       restFetch,
-      commands: [],
-      components: [],
-      modals: [],
-      voiceEnabled: false,
-      discordConfig: {},
-      runtime: createRuntimeSpies(),
       createClient,
-      createGatewayPlugin: () => ({ id: "gateway" }) as never,
-      createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
-      createAutoPresenceController: () => createAutoPresenceController() as never,
-      isDisallowedIntentsError: () => false,
     });
 
     expect(createClient).toHaveBeenCalledTimes(1);
     const [options, handlers, plugins] = firstCreateClientCall(createClient);
     expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
-      runtimeProfile: "persistent",
       maxQueueSize: 1000,
       fetch: restFetch,
     });
@@ -323,21 +270,10 @@ describe("createDiscordMonitorClient", () => {
     );
 
     await expect(
-      createDiscordMonitorClient({
-        accountId: "default",
-        applicationId: "app-1",
-        token: "token-1",
-        commands: [],
-        components: [],
-        modals: [],
-        voiceEnabled: false,
-        discordConfig: {},
-        runtime: createRuntimeSpies(),
-        createClient: createClientWithPlugins,
+      createMonitorClient({
         createGatewayPlugin: () => gatewayPlugin as never,
         createGatewaySupervisor: createGatewaySupervisor as never,
         createAutoPresenceController: createAutoPresenceControllerForTest as never,
-        isDisallowedIntentsError: () => false,
       }),
     ).rejects.toThrow("gateway metadata denied");
 

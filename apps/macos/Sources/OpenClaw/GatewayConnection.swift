@@ -12,6 +12,12 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// Owns one Gateway websocket shared by its callers. The primary app runtime
 /// uses `.shared`; saved-profile windows use independent connections.
 actor GatewayConnection: Observable {
+    nonisolated let chatSendOwnership = OpenClawChatSendOwnership()
+    var nativeChatSubscriptionOwners: [UUID: OpenClawChatSessionTarget] = [:]
+    var nativeChatSubscribedScopes: Set<OpenClawChatSendOwnership.Scope> = []
+    var nativeChatSubscriptionLease: ServerLease?
+    var nativeChatSubscriptionTail: Task<Void, Error>?
+
     static let shared: GatewayConnection = {
         #if DEBUG
         // Rendered test views can request previews through the shared connection.
@@ -131,6 +137,7 @@ actor GatewayConnection: Observable {
         let mainSessionKey: String?
         fileprivate let currentOwner: @Sendable () -> Bool
 
+        /// Terminal chat outcomes retain route ownership; RPCs still validate the exact server lease.
         var isCurrent: Bool {
             self.currentOwner()
         }
@@ -154,26 +161,16 @@ actor GatewayConnection: Observable {
 
     enum Method: String {
         case agent
-        case status
         case setHeartbeats = "set-heartbeats"
-        case systemEvent = "system-event"
         case health
         case configGet = "config.get"
         case configSet = "config.set"
-        case configPatch = "config.patch"
-        case wizardStart = "wizard.start"
-        case wizardNext = "wizard.next"
-        case wizardCancel = "wizard.cancel"
-        case wizardStatus = "wizard.status"
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case talkSpeak = "talk.speak"
-        case modelsList = "models.list"
         case agentsList = "agents.list"
         case agentIdentityGet = "agent.identity.get"
-        case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
-        case chatSend = "chat.send"
         case skillsStatus = "skills.status"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
@@ -182,7 +179,6 @@ actor GatewayConnection: Observable {
         case devicePairList = "device.pair.list"
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
-        case execApprovalList = "exec.approval.list"
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
@@ -248,6 +244,11 @@ actor GatewayConnection: Observable {
     nonisolated var connectedEndpointRevision: UInt64? {
         guard case let .connected(connection) = self.connectionPublication.value else { return nil }
         return connection.lease.endpointRevision
+    }
+
+    nonisolated var hasConnectedServer: Bool {
+        guard case let .connected(connection) = self.connectionPublication.value else { return false }
+        return self.serverLeaseMatchesCurrentState(connection.lease)
     }
 
     private func publishConnectedServerLease() {
@@ -1343,6 +1344,14 @@ extension GatewayConnection {
         return (true, self.cachedGatewayVersion())
     }
 
+    func currentAttachmentLimits() -> GatewayAttachmentLimits? {
+        // Staging reads the admitted hello; endpoint recovery must not delay local file preparation.
+        guard case let .connected(connection) = self.connectionPublication.value,
+              self.serverLeaseMatchesCurrentState(connection.lease)
+        else { return nil }
+        return self.lastSnapshot?.advertisedAttachmentLimits()
+    }
+
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
         guard await self.isCurrentServerLease(lease) else { return nil }
         return self.cachedGatewayVersion()
@@ -1370,12 +1379,17 @@ extension GatewayConnection {
     func makePushDelivery(_ push: GatewayPush) -> PushDelivery? {
         guard case let .connected(connection) = self.connectionPublication.value else { return nil }
         let lease = connection.lease
+        let terminal = push.isTerminalChatEvent
         return PushDelivery(
             event: .push(push),
             serverLease: lease,
             mainSessionKey: connection.mainSessionKey,
             currentOwner: { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
+                // Accepted outcomes outlive socket recovery, but never their configured route.
+                if terminal {
+                    return self?.serverLeaseMatchesCurrentRoute(lease) == true
+                }
+                return self?.serverLeaseMatchesCurrentState(lease) == true
             })
     }
 
@@ -1533,15 +1547,6 @@ extension GatewayConnection {
         }
     }
 
-    func status() async -> (ok: Bool, error: String?) {
-        do {
-            _ = try await self.requestRaw(method: .status)
-            return (true, nil)
-        } catch {
-            return (false, error.localizedDescription)
-        }
-    }
-
     func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
         do {
             try await self.requestVoid(method: .setHeartbeats, params: ["enabled": AnyCodable(enabled)])
@@ -1655,6 +1660,16 @@ extension GatewayConnection {
         }
         let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
+    func conversationOwnershipScope(sessionKey: String, agentID: String?) -> OpenClawChatSendOwnership.Scope {
+        let defaults = self.lastSnapshot?.snapshot.sessiondefaults
+        return OpenClawChatSendOwnership.Scope(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            scope: defaults?["scope"]?.value as? String,
+            mainKey: defaults?["mainKey"]?.value as? String,
+            defaultAgentID: defaults?["defaultAgentId"]?.value as? String)
     }
 
     func chatSend(

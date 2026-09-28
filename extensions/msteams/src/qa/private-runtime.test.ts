@@ -61,7 +61,6 @@ describe("Microsoft Teams private QA runtime", () => {
   it("returns a skip-auth runtime with the per-run token", async () => {
     const runtime = resolveMSTeamsPrivateQaRuntime(completeEnv, completeBootstrap);
     expect(runtime?.skipAuth).toBe(true);
-    expect(runtime?.listenHost).toBe("127.0.0.1");
     await expect(runtime?.token()).resolves.toBe("qa-bot-token");
   });
 

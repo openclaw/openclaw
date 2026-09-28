@@ -1,10 +1,10 @@
-// Builds field-level capability change summaries for Claw update previews.
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
@@ -73,12 +73,9 @@ function compareRankedCapability(
 }
 
 function classifyToolSet(
-  current: unknown,
-  desired: unknown,
+  current: unknown[],
+  desired: unknown[],
 ): ClawUpdateCapabilityChange["classification"] {
-  if (!Array.isArray(current) || !Array.isArray(desired)) {
-    return "neutral";
-  }
   const currentTools = new Set(
     current.filter((value): value is string => typeof value === "string"),
   );
@@ -169,16 +166,13 @@ function classifyAgentCapability(
     return "escalation";
   }
   if (path === "sandbox.workspaceAccess") {
-    const rank = { none: 0, ro: 1, rw: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { none: 0, ro: 1, rw: 2 });
   }
   if (path === "sandbox.mode") {
-    const rank = { all: 0, "non-main": 1, off: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { all: 0, "non-main": 1, off: 2 });
   }
   if (path === "sandbox.scope") {
-    const rank = { session: 0, agent: 1, shared: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { session: 0, agent: 1, shared: 2 });
   }
   if (path === "heartbeat.every") {
     return classifyHeartbeatEvery(current, desired);
@@ -202,7 +196,7 @@ function classifyAgentCapability(
   }
   if (path === "memory.search.sources") {
     if (!Array.isArray(current) || !Array.isArray(desired)) {
-      return desired === undefined ? "reduction" : "escalation";
+      return "escalation";
     }
     const currentSources = new Set(current);
     return desired.some((source) => !currentSources.has(source)) ? "escalation" : "reduction";
@@ -275,33 +269,20 @@ function pushAgentCapabilityChanges(params: {
     ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {
-    const sandboxField = field[0] === "sandbox" ? field.slice(1) : undefined;
-    const heartbeatField = field[0] === "heartbeat" ? field.slice(1) : undefined;
-    const memorySearchField =
-      field[0] === "memory" && field[1] === "search" ? field.slice(2) : undefined;
-    const effectiveToolField =
-      field[0] === "tools" &&
-      (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
-        ? field.slice(1)
-        : undefined;
-    const currentValue = sandboxField
-      ? getPath(params.currentSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.currentHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.currentMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.currentTools, effectiveToolField)
-            : getPath(params.currentAgent, field);
-    const desiredValue = sandboxField
-      ? getPath(params.desiredSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.desiredHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.desiredMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.desiredTools, effectiveToolField)
-            : getPath(params.desiredAgent, field);
+    const [currentRoot, desiredRoot, offset]: [unknown, unknown, number] =
+      field[0] === "sandbox"
+        ? [params.currentSandbox, params.desiredSandbox, 1]
+        : field[0] === "heartbeat"
+          ? [params.currentHeartbeat, params.desiredHeartbeat, 1]
+          : field[0] === "memory" && field[1] === "search"
+            ? [params.currentMemorySearch, params.desiredMemorySearch, 2]
+            : field[0] === "tools" &&
+                (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
+              ? [params.currentTools, params.desiredTools, 1]
+              : [params.currentAgent, params.desiredAgent, 0];
+    const valuePath = field.slice(offset);
+    const currentValue = getPath(currentRoot, valuePath);
+    const desiredValue = getPath(desiredRoot, valuePath);
     const profileField = field[0] === "tools" && field[1] === "profile";
     const current = profileField ? resolveClawProfileCapabilities(currentValue) : currentValue;
     const desired = profileField ? resolveClawProfileCapabilities(desiredValue) : desiredValue;
@@ -352,8 +333,6 @@ function pushAgentCapabilityChanges(params: {
   }
 }
 
-type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
 function normalizeLegacyAgent(
   config: OpenClawConfig,
   currentAgent: AgentConfig,
@@ -365,11 +344,7 @@ function normalizeLegacyAgent(
   }
   const snapshot = resolveClawToolProfileSnapshot({
     ...tools,
-    alsoAllow: (
-      resolvePortableTools(config, currentAgent.id) as {
-        alsoAllow?: string[];
-      }
-    ).alsoAllow,
+    alsoAllow: resolvePortableTools(config, currentAgent.id).alsoAllow,
   });
   if (!snapshot) {
     return currentAgent;
@@ -402,7 +377,7 @@ function resolveHeartbeat(config: OpenClawConfig, agentId: string): unknown {
   };
 }
 
-function resolvePortableTools(config: OpenClawConfig, agentId: string): unknown {
+function resolvePortableTools(config: OpenClawConfig, agentId: string) {
   const globalTools = config.tools;
   const agentTools = listAgentEntries(config).find((agent) => agent.id === agentId)?.tools;
   return {

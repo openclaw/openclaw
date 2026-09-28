@@ -12,7 +12,6 @@ import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palett
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
-  formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
@@ -24,6 +23,7 @@ import type {
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
@@ -34,6 +34,7 @@ import { COMMAND_PALETTE_INPUT_ID, renderCommandPaletteInput } from "./command-p
 import { renderCommandPaletteResult } from "./command-palette-result.ts";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderKeyboardShortcut, renderShortcutText } from "./kbd.ts";
 import "./modal-dialog.ts";
 import "./tooltip.ts";
 import {
@@ -43,7 +44,6 @@ import {
 
 registerCommandPaletteEnglish();
 
-type PaletteItem = CommandPaletteItem;
 export type PaletteFilter = "all" | "sessions" | "messages";
 
 type CommandPaletteProps = {
@@ -60,8 +60,8 @@ type CommandPaletteProps = {
   agents: readonly GatewayAgentRow[];
   agentIdentity?: AgentIdentityCapability;
   defaultAgentId: string;
-  sessionItems: readonly PaletteItem[];
-  catalogItems: readonly PaletteItem[];
+  sessionItems: readonly CommandPaletteItem[];
+  catalogItems: readonly CommandPaletteItem[];
   primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
@@ -92,8 +92,8 @@ type CommandPaletteProps = {
   draft: PaletteSessionDraft;
 };
 
-function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
-  const map = new Map<string, PaletteItem[]>();
+function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
+  const map = new Map<string, CommandPaletteItem[]>();
   for (const item of items) {
     const group = map.get(item.category) ?? [];
     group.push(item);
@@ -105,7 +105,7 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 const paletteInputId = COMMAND_PALETTE_INPUT_ID;
 const paletteListboxId = "cmd-palette-listbox";
 
-function selectItem(item: PaletteItem, props: CommandPaletteProps) {
+function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
   if (props.draft.submitting || props.searchDebouncing) {
     return;
   }
@@ -138,10 +138,6 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   } else {
     props.onSlashCommand?.(item.action);
   }
-  props.onToggle();
-}
-
-function closePalette(props: CommandPaletteProps) {
   props.onToggle();
 }
 
@@ -193,7 +189,7 @@ function handleKeydown(event: KeyboardEvent, readProps: () => CommandPaletteProp
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
-    closePalette(props);
+    props.onToggle();
     return;
   }
   if (props.draft.submitting) {
@@ -232,7 +228,7 @@ function getOptionId(index: number): string {
   return `cmd-palette-option-${index}`;
 }
 
-function matchesFilter(item: PaletteItem, filter: PaletteFilter) {
+function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
   return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
 }
 
@@ -286,7 +282,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
   const startDisabled = props.composing || !props.draft.canSubmit;
   const startReason =
     props.draft.disabledReason ?? (props.draft.hasPrompt ? undefined : t("palette.promptRequired"));
-  const startShortcut = formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter);
+  const startShortcut = renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter);
   const searchSettled =
     Boolean(props.searchQuery.trim()) &&
     !props.sessionSearchPending &&
@@ -317,7 +313,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
           event.preventDefault();
           return;
         }
-        closePalette(props);
+        props.onToggle();
       }}
     >
       <div
@@ -362,7 +358,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                   }
                 }}
               >
-                ${startLabel}<kbd>${startShortcut}</kbd>
+                ${startLabel}${startShortcut}
               </button>
             </openclaw-tooltip>
             ${props.draft.renderControls()}
@@ -477,20 +473,31 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                               >${icons.messageSquarePlus}</span
                             >
                             <h2>${t("palette.noResults")}</h2>
-                            <p>${t("palette.noResultsStart", { shortcut: startShortcut })}</p>
+                            <p>
+                              ${renderShortcutText(t("palette.noResultsStart", { shortcut: "{shortcut}" }), renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, { inline: true }))}
+                            </p>
                           </div>`
                         : nothing
                     }
                     <div id="cmd-palette-keys" class="cmd-palette__footer">
                       ${
                         items.length > 0 && !props.query.includes("\n")
-                          ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
-                              <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>`
+                          ? html`<span class="cmd-palette__hint"
+                                >${renderKbd(["↑", "↓"])}${" "}<span
+                                  >${t("palette.footer.navigate")}</span
+                                ></span
+                              >
+                              <span class="cmd-palette__hint"
+                                >${renderKbd("↵")}${" "}<span
+                                  >${t("palette.footer.select")}</span
+                                ></span
+                              >`
                           : nothing
                       }
-                      <span
-                        ><kbd>${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newline)}</kbd>
-                        ${t("palette.footer.newline")}</span
+                      <span class="cmd-palette__hint"
+                        >${renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.newline)}${" "}<span
+                          >${t("palette.footer.newline")}</span
+                        ></span
                       >
                     </div>
                   `

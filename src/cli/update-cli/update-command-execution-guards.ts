@@ -12,8 +12,9 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
   let stateHandedOff = false;
-  const assertInvocation = () => {
-    if (opts.recovery || !stateHandedOff) {
+  const assertInvocation = (phase?: "restore") => {
+    const readStatePolicy = !stateHandedOff && phase !== "restore";
+    if (opts.recovery || readStatePolicy) {
       assertUpdateCommandRecoveryState(opts);
     }
     if (
@@ -21,7 +22,7 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
       run?.runId !== runId ||
       run?.executorFence !== executor ||
       run?.requesterAuthority !== requester ||
-      (!stateHandedOff && requester?.isCurrent() === false)
+      (readStatePolicy && requester?.isCurrent() === false)
     ) {
       throw new UpdateRequesterRevokedError();
     }
@@ -45,12 +46,14 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
       run.executorFence = acquired;
       executor = acquired;
     },
-    assertCurrent: () => {
-      assertInvocation();
+    // Forward admission already checked policy. Compensation retains native
+    // custody in a separate lease database while the source family is excluded.
+    assertCurrent: (phase?: "restore") => {
+      assertInvocation(phase);
       executor?.assertCurrent();
     },
     // This is not native authority. The Doctor caller must first bind its child
     // through the real executor, which checks both retained and candidate owners.
-    assertBoundChildCurrent: assertInvocation,
+    assertBoundChildCurrent: () => assertInvocation(),
   };
 }

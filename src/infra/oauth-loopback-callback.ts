@@ -1,5 +1,6 @@
 import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
 import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
@@ -183,13 +184,8 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let binding = true;
   const timeoutRef: { current?: NodeJS.Timeout } = {};
   let closePromise: Promise<void> | undefined;
-  let resolveWait!: (result: OAuthLoopbackCallbackResult) => void;
-  let rejectWait!: (error: Error) => void;
-  const waitPromise = new Promise<OAuthLoopbackCallbackResult>((resolve, reject) => {
-    resolveWait = resolve;
-    rejectWait = reject;
-  });
-  void waitPromise.catch(() => undefined);
+  const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
+  void callback.promise.catch(() => undefined);
   const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
   const cleanup = () => {
     if (timeoutRef.current) {
@@ -203,7 +199,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     }
     settled = true;
     cleanup();
-    rejectWait(error instanceof Error ? error : new Error("OAuth callback failed"));
+    callback.reject(error instanceof Error ? error : new Error("OAuth callback failed"));
     void close();
   };
   const onAbort = () => settleError(new Error("OAuth callback cancelled"));
@@ -219,7 +215,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
         return;
       }
       finished = true;
-      resolveWait(result);
+      callback.resolve(result);
       void close();
     };
     response.once("finish", finish);
@@ -322,7 +318,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     params.timeoutMs,
   );
   return {
-    waitForCallback: () => waitPromise,
+    waitForCallback: () => callback.promise,
     close: async () => {
       if (!settled) {
         settleError(new Error("OAuth callback cancelled"));

@@ -207,39 +207,12 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
-  return resolveRegistryManifestContractPluginIds({
-    ...params,
-    contract: "externalAuthProviders",
-  });
-}
-
-function resolveRegistryManifestContractPluginIds(params: {
-  contract: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  origin?: PluginRegistryRecord["origin"];
-  onlyPluginIds?: readonly string[];
-  manifestRegistry?: PluginManifestRegistry;
-}): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   return resolveManifestRegistry({
     ...params,
-    registry,
+    registry: loadProviderRegistrySnapshot(params),
     includeDisabled: true,
   })
-    .plugins.filter((plugin) => {
-      if (params.origin && plugin.origin !== params.origin) {
-        return false;
-      }
-      if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
-        return false;
-      }
-      return (
-        (plugin.contracts?.[params.contract as keyof NonNullable<typeof plugin.contracts>] ?? [])
-          .length > 0
-      );
-    })
+    .plugins.filter((plugin) => (plugin.contracts?.externalAuthProviders?.length ?? 0) > 0)
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -501,9 +474,6 @@ function resolvePreferredManifestPluginIds(
   });
   if (nonBundledPluginIds.length === 1) {
     return nonBundledPluginIds;
-  }
-  if (nonBundledPluginIds.length > 1) {
-    return undefined;
   }
   return undefined;
 }

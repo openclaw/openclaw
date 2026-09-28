@@ -1,13 +1,18 @@
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import {
+  SqliteCoordinatorError,
+  OpenClawStateExternalOwnershipError,
+  OpenClawStateOwnershipError,
+  OpenClawStateOwnershipMetadataError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import {
   isStartupMaintenanceKind,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -17,18 +22,12 @@ import {
   OpenClawStateLeaseError,
   type OpenClawStateLeaseErrorCode,
 } from "./openclaw-state-lease-error.js";
-import {
-  OpenClawStateExternalOwnershipError,
-  OpenClawStateOwnershipError,
-  OpenClawStateOwnershipMetadataError,
-} from "./openclaw-state-ownership.js";
 import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
 type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredError>[0];
 type StateMigrationKind = ConstructorParameters<
   typeof OpenClawStateDatabaseSchemaMigrationRequiredError
 >[0];
-type CoordinatorFamily = ConstructorParameters<typeof StateDatabaseCoordinatorContentionError>[0];
 
 export type ErrorIdentity =
   | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
@@ -51,7 +50,7 @@ export type ErrorIdentity =
         | "skill-upload-request"
         | "mcp-oauth-corruption";
     }
-  | { type: "coordinator-contention"; family: CoordinatorFamily }
+  | { type: "state-owner-contention"; databasePath: string }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
   | { type: "state-lease"; leaseCode: OpenClawStateLeaseErrorCode }
@@ -107,8 +106,8 @@ export function identifyError(error: Error): ErrorIdentity {
   if (error instanceof SkillUploadRequestError) {
     return { type: "skill-upload-request" };
   }
-  if (error instanceof StateDatabaseCoordinatorContentionError) {
-    return { type: "coordinator-contention", family: error.family };
+  if (error instanceof GatewayStateOwnerContentionError) {
+    return { type: "state-owner-contention", databasePath: error.databasePath };
   }
   if (error instanceof SqliteCoordinatorError) {
     return { type: "coordinator" };
@@ -214,11 +213,9 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         node.missingTables.every((table: unknown) => typeof table === "string")
         ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
         : undefined;
-    case "coordinator-contention":
-      return node.family === "gateway-lifecycle" ||
-        node.family === "state-lifecycle" ||
-        node.family === "state-handles"
-        ? { type: node.type, family: node.family }
+    case "state-owner-contention":
+      return typeof node.databasePath === "string"
+        ? { type: node.type, databasePath: node.databasePath }
         : undefined;
     case "ownership-metadata":
       return typeof node.databasePath === "string"
@@ -294,8 +291,8 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new AggregateError([], node.message);
     case "coordinator":
       return new SqliteCoordinatorError(node.message);
-    case "coordinator-contention":
-      return new StateDatabaseCoordinatorContentionError(node.family);
+    case "state-owner-contention":
+      return new GatewayStateOwnerContentionError(node.databasePath);
     case "ownership":
       return new OpenClawStateOwnershipError(node.message);
     case "ownership-metadata":
