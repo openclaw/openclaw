@@ -36,21 +36,24 @@ suite.define(() => {
       route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
     );
     await page.addInitScript(() => {
+      class RefusedWebSocket extends EventTarget {
+        readyState: WebSocket["readyState"] = WebSocket.CONNECTING;
+
+        send() {
+          throw new Error("Upgrade failed before WebSocket open");
+        }
+
+        close() {
+          this.readyState = WebSocket.CLOSED;
+        }
+      }
       let refused = 0;
       window.WebSocket = new Proxy(window.WebSocket, {
         construct(target, args) {
           if (refused++ >= 2) {
             return Reflect.construct(target, args);
           }
-          const socket = Object.assign(new EventTarget(), {
-            readyState: WebSocket.CONNECTING,
-            send() {
-              throw new Error("Upgrade failed before WebSocket open");
-            },
-            close() {
-              socket.readyState = WebSocket.CLOSED;
-            },
-          });
+          const socket = new RefusedWebSocket();
           queueMicrotask(() => {
             socket.readyState = WebSocket.CLOSED;
             socket.dispatchEvent(new Event("error"));
