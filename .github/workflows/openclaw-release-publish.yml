@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish, for example v2026.5.1-alpha.1 or v2026.5.1-beta.1
+        description: Release tag to publish, for example v2026.5.1-beta.1
         required: true
         type: string
       preflight_run_id:
@@ -66,7 +66,6 @@ on:
         default: beta
         type: choice
         options:
-          - alpha
           - beta
           - latest
           - extended-stable
@@ -180,12 +179,12 @@ jobs:
           RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ID="${FOCUSED_RELEASE_EVIDENCE_RUN_ID:-}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT:-}"
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
-            echo "Invalid release tag: ${RELEASE_TAG}" >&2
+          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_NPM_DIST_TAG}" == "alpha" || "${WORKFLOW_REF}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
             exit 1
           fi
-          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
-            echo "Alpha prerelease tags must publish OpenClaw to npm dist-tag alpha." >&2
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}" >&2
             exit 1
           fi
           if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
@@ -275,10 +274,6 @@ jobs:
             echo "Docker-only latest recovery requires a regular stable release tag." >&2
             exit 1
           fi
-          tideclaw_alpha_publish=false
-          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            tideclaw_alpha_publish=true
-          fi
           sha_pinned_release_publish=false
           if [[ "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
             if [[ "${WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
@@ -297,9 +292,9 @@ jobs:
             sha_pinned_release_publish=true
           fi
           # Docker-only recovery dispatches no publishing children and may use main.
-          if [[ "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
+          if [[ "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
             publish_tag="release-publish/${WORKFLOW_SHA:0:12}-$(date +%s)"
-            echo "Publishing children requires the parent to run from a protected release-publish tag (or a matching Tideclaw alpha branch), so parent approval and child provenance use the same ref." >&2
+            echo "Publishing children requires the parent to run from a protected release-publish tag, so parent approval and child provenance use the same ref." >&2
             echo "Mint the tooling tag: git tag ${publish_tag} ${WORKFLOW_SHA} && git push origin refs/tags/${publish_tag}" >&2
             echo "Then dispatch: gh workflow run openclaw-release-publish.yml --ref ${publish_tag} (with the same release inputs)." >&2
             exit 1
@@ -367,7 +362,7 @@ jobs:
           android_release_note=""
           if [[ "${android_pin_version}" == "${release_version%%-*}" ]]; then
             android_pin_matches=true
-          elif [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PUBLISH_DOCKER_ONLY}" != "true" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]; then
+          elif [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PUBLISH_DOCKER_ONLY}" != "true" && "${RELEASE_TAG}" != *"-beta."* ]]; then
             android_release_note="- Android APK: skipped — apps/android/version.json is ${android_pin_version}, release train is ${release_version%%-*}; run pnpm android:version:pin -- --from-gateway before the next tag."
             echo "${android_release_note}" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -495,7 +490,7 @@ jobs:
           import { appendFileSync, readFileSync } from 'node:fs';
           import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
           const env = process.env;
-          const prepared = env.RELEASE_TAG.includes('-alpha.') ? null : preparedDockerEvidenceFromFullRelease({ manifest: JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8')), sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
+          const prepared = preparedDockerEvidenceFromFullRelease({ manifest: JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8')), sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
           if (prepared) {
             appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
           }
@@ -937,17 +932,7 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/extended-stable)
-          if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
-            if [[ ! "${WORKFLOW_REF_NAME}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-              echo "Alpha publish tags must be dispatched from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
-              exit 1
-            fi
-            git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
-            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${WORKFLOW_REF_NAME}"; then
-              exit 0
-            fi
-          fi
-          echo "Release tag must point to a commit reachable from main, release/*, extended-stable/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
+          echo "Release tag must point to a commit reachable from main, release/*, or extended-stable/*." >&2
           exit 1
 
       - name: Summarize release target
@@ -1009,7 +994,7 @@ jobs:
   qualify_android_native:
     name: Qualify native Android release source
     needs: [resolve_release_target]
-    if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
+    if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
     # Native failure blocks its approval receipt, while core publication proceeds.
     continue-on-error: true
     permissions:
@@ -1105,7 +1090,7 @@ jobs:
   publish_android:
     name: Approve and dispatch qualified Android
     needs: [resolve_release_target, publish, qualify_android_native]
-    if: ${{ always() && !cancelled() && !inputs.publish_docker_only && inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.result == 'success' && needs.publish.result == 'success' && (needs.resolve_release_target.outputs.coverage_policy != 'npm-stable-v1' || needs.qualify_android_native.outputs.qualified == 'true') }}
+    if: ${{ always() && !cancelled() && !inputs.publish_docker_only && inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-beta.') && needs.resolve_release_target.outputs.android_pin_matches == 'true' && needs.resolve_release_target.result == 'success' && needs.publish.result == 'success' && (needs.resolve_release_target.outputs.coverage_policy != 'npm-stable-v1' || needs.qualify_android_native.outputs.qualified == 'true') }}
     continue-on-error: true
     permissions:
       actions: write
@@ -1415,20 +1400,11 @@ jobs:
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
 
           # Regular publication binds every child to the exact parent revision.
-          # Tideclaw retains its validated branch child and main bootstrap split.
           CHILD_WORKFLOW_REF="$(
             resolve_child_workflow_ref "${WORKFLOW_FULL_REF}"
           )"
-          if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]; then
-            BOOTSTRAP_WORKFLOW_REF="main"
-            bootstrap_workflow_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-                --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
-            )"
-          else
-            BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"
-            bootstrap_workflow_sha="${GITHUB_SHA}"
-          fi
+          BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"
+          bootstrap_workflow_sha="${GITHUB_SHA}"
           echo "child_workflow_ref=${CHILD_WORKFLOW_REF}" >> "${GITHUB_OUTPUT}"
 
           plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
@@ -2163,7 +2139,7 @@ jobs:
         verify_core_npm_registry,
         finalize_github_release_before_docker,
       ]
-    if: ${{ always() && (!inputs.finalize_release_before_docker || needs.finalize_github_release_before_docker.result == 'success') && !contains(inputs.tag, '-alpha.') && ((inputs.publish_openclaw_npm && needs.publish.result == 'success') || (inputs.publish_docker_only && needs.verify_core_npm_registry.result == 'success')) }}
+    if: ${{ always() && (!inputs.finalize_release_before_docker || needs.finalize_github_release_before_docker.result == 'success') && ((inputs.publish_openclaw_npm && needs.publish.result == 'success') || (inputs.publish_docker_only && needs.verify_core_npm_registry.result == 'success')) }}
     uses: ./.github/workflows/docker-release.yml
     with:
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
@@ -2206,7 +2182,7 @@ jobs:
     name: Approve verified GitHub release activation
     # Approval waits must not hold the Linux updater publication queue.
     needs: [publish, publish_docker]
-    if: ${{ always() && !inputs.finalize_release_before_docker && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
+    if: ${{ always() && !inputs.finalize_release_before_docker && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-release
@@ -2224,7 +2200,7 @@ jobs:
     needs: [publish, publish_docker, approve_github_release, finalize_github_release_before_docker]
     # Prepared releases become visible in the outer button workflow, after this
     # parent succeeds and ClawHub's terminal publication can be verified.
-    if: ${{ always() && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) && (needs.approve_github_release.result == 'success' || (inputs.finalize_release_before_docker && needs.finalize_github_release_before_docker.result == 'success')) }}
+    if: ${{ always() && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' && (needs.approve_github_release.result == 'success' || (inputs.finalize_release_before_docker && needs.finalize_github_release_before_docker.result == 'success')) }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     concurrency:
       group: linux-app-release-publish
@@ -2257,7 +2233,7 @@ jobs:
         run: |
           set -euo pipefail
           expected_prerelease=false
-          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+          if [[ "${RELEASE_TAG}" == *"-beta."* ]]; then
             expected_prerelease=true
           fi
           expected_latest=false
@@ -2347,7 +2323,7 @@ jobs:
   dispatch_linux_mirror:
     name: Dispatch legacy Linux mirror after publication
     needs: [resolve_release_target, finalize_github_release]
-    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag == 'latest' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag == 'latest' && !contains(inputs.tag, '-beta.') }}
     # Dispatch only; the child owns the shared metadata queue and its outcome.
     continue-on-error: true
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
@@ -2397,7 +2373,7 @@ jobs:
   publish_linux:
     name: Request Linux assets after publication
     needs: [resolve_release_target, finalize_github_release]
-    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-beta.') }}
     continue-on-error: true
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 10
@@ -2447,7 +2423,7 @@ jobs:
   publish_windows:
     name: Dispatch Windows assets after publication
     needs: [resolve_release_target, finalize_github_release]
-    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && (inputs.windows_node_tag != '' || inputs.windows_node_installer_digests != '') && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && (inputs.windows_node_tag != '' || inputs.windows_node_installer_digests != '') && !contains(inputs.tag, '-beta.') }}
     # App failures are reported by their own workflow; neither npm nor the
     # published GitHub release depends on native asset availability.
     continue-on-error: true

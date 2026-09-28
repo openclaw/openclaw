@@ -7782,10 +7782,7 @@ server.listen(0, "127.0.0.1", () => {
   it("bounds release ref validation fetches across checkout auth modes", () => {
     const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
 
-    for (const stepName of [
-      "Validate selected ref belongs to this repository",
-      "Validate Tideclaw alpha target matches workflow branch",
-    ]) {
+    for (const stepName of ["Validate selected ref belongs to this repository"]) {
       const step = resolveTargetSteps.find(
         (candidate: WorkflowStep) => candidate.name === stepName,
       );
@@ -11568,7 +11565,6 @@ it.each(["publish", "promote"])(
       ["v2026.9.4", "latest", "success", true],
       ["v2026.9.4", "beta", "success", true],
       ["v2026.9.4-beta.1", "beta", "success", false],
-      ["v2026.9.4-alpha.1", "alpha", "success", false],
       ["v2026.8.33", "extended-stable", "success", false],
       ["v2026.9.4", "latest", "failure", false],
       ["v2026.9.4", "latest", "skipped", false],
