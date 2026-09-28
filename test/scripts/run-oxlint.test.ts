@@ -686,6 +686,20 @@ describe("run-oxlint", () => {
     { name: "three CPUs", logicalCpuCount: 3, chunkSize: 8 },
     { name: "below capacity threshold", memoryCapacityBytes: 15 * 1024 ** 3 - 1, chunkSize: 8 },
     { name: "ancestor memory cap", memoryCapacityBytes: 8 * 1024 ** 3, chunkSize: 8 },
+    {
+      name: "large host with ancestor cap",
+      totalMemoryBytes: 31 * 1024 ** 3,
+      logicalCpuCount: 8,
+      memoryCapacityBytes: 7 * 1024 ** 3,
+      chunkSize: 8,
+    },
+    {
+      name: "large host with unknown capacity",
+      totalMemoryBytes: 64 * 1024 ** 3,
+      logicalCpuCount: 16,
+      memoryCapacityBytes: null,
+      chunkSize: 8,
+    },
     { name: "unknown capacity", memoryCapacityBytes: null, chunkSize: 8 },
     { name: "local Linux", env: {}, chunkSize: 8 },
     { name: "macOS", platform: "darwin", chunkSize: 8 },
@@ -708,7 +722,8 @@ describe("run-oxlint", () => {
         platform: "linux",
         ...scenario,
         hostResources: {
-          totalMemoryBytes: 16 * 1024 ** 3,
+          totalMemoryBytes:
+            "totalMemoryBytes" in scenario ? scenario.totalMemoryBytes : 16 * 1024 ** 3,
           logicalCpuCount: scenario.logicalCpuCount ?? 4,
           memoryCapacityBytes:
             "memoryCapacityBytes" in scenario ? scenario.memoryCapacityBytes : 15 * 1024 ** 3,
@@ -774,15 +789,29 @@ describe("run-oxlint", () => {
     ]);
   });
 
-  it.each([
-    { platform: "linux", env: { CI: "true" } },
-    { platform: "linux", env: {} },
-    { platform: "linux", env: { GITHUB_ACTIONS: "true" } },
-    { platform: "darwin", env: {} },
-    { platform: "win32", env: {} },
-  ] as const)(
-    "preserves the published updater's automatic full-lint plan on $platform with $env",
-    ({ platform, env }) => {
+  it.each(
+    (
+      [
+        { platform: "linux", env: { CI: "true" } },
+        { platform: "linux", env: {} },
+        { platform: "linux", env: { GITHUB_ACTIONS: "true" } },
+        { platform: "darwin", env: {} },
+        { platform: "win32", env: {} },
+      ] as const
+    ).flatMap((scenario) => [
+      { ...scenario, hostResources: CONSTRAINED_HOST },
+      {
+        ...scenario,
+        hostResources: {
+          totalMemoryBytes: 31 * 1024 ** 3,
+          logicalCpuCount: 8,
+          memoryCapacityBytes: 7 * 1024 ** 3,
+        },
+      },
+    ]),
+  )(
+    "preserves the published updater's automatic full-lint plan on $platform with $env and $hostResources",
+    ({ platform, env, hostResources }) => {
       const directories = ["agents", "alpha", "beta", "gateway", "infra", "zeta"];
       const cwd = createTempDir("openclaw-oxlint-core-memory-");
       for (const directory of directories) {
@@ -794,7 +823,7 @@ describe("run-oxlint", () => {
           cwd,
           env,
           platform,
-          hostResources: CONSTRAINED_HOST,
+          hostResources,
         }),
         new Set(["core"]),
       );
@@ -819,9 +848,7 @@ describe("run-oxlint", () => {
         ].toSorted(),
       );
       expect(new Set(targets).size).toBe(targets.length);
-      expect(shouldRunOxlintShardsSerial({ env, platform, hostResources: CONSTRAINED_HOST })).toBe(
-        true,
-      );
+      expect(shouldRunOxlintShardsSerial({ env, platform, hostResources })).toBe(true);
     },
   );
 
