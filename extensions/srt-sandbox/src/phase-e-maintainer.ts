@@ -8,7 +8,8 @@ export const PHASE_E_POOL = Object.freeze(
 );
 
 export type PhaseEMode = "preflight" | "setup" | "repair" | "rollback" | "teardown";
-export type PhaseEFaultPoint = "account" | "credential" | "root-store" | "fwpm";
+export type PhaseEFaultPoint = "account" | "credential" | "root-store" | "profile-scratch" | "fwpm";
+export type PhaseEProcessIdentity = { pid: number; creationTime: string };
 export type PhaseEManifest = {
   version: 1;
   generation: number;
@@ -33,7 +34,7 @@ export type PhaseEEvidence = {
     | "ROLLBACK_COMPLETE"
     | "TEARDOWN_COMPLETE"
     | "BLOCKED";
-  maintainer: { pid: number; creationTime: string };
+  maintainer: PhaseEProcessIdentity;
   canonicalAccounts: readonly { name: string; sid?: string }[];
   legacyAccountCount: number;
   seclogon: "RUNNING" | "SETUP_REQUIRED" | "UNKNOWN";
@@ -154,6 +155,25 @@ export function verifyInitialLeaseStore(store: PhaseELeaseStore): void {
 /** Evidence is schema-checked at its source, never free-form then redacted. */
 export function redactPhaseEEvidence(_: string): never {
   throw new PhaseEMaintainerError("PHASE_E_EVIDENCE_MUST_BE_TYPED");
+}
+
+/** A reused PID is not ownership: only a dead recorded process permits recovery. */
+export function verifyRestartIdentity(
+  recorded: PhaseEProcessIdentity,
+  observed: PhaseEProcessIdentity | undefined,
+): "dead" {
+  if (
+    !Number.isInteger(recorded.pid) ||
+    recorded.pid <= 0 ||
+    !/^[0-9]+$/.test(recorded.creationTime)
+  ) {
+    throw new PhaseEMaintainerError("PHASE_E_PROCESS_IDENTITY_MISMATCH");
+  }
+  if (!observed) return "dead";
+  if (observed.pid !== recorded.pid || observed.creationTime !== recorded.creationTime) {
+    throw new PhaseEMaintainerError("PHASE_E_STALE_PROCESS_IDENTITY");
+  }
+  throw new PhaseEMaintainerError("PHASE_E_MAINTAINER_ACTIVE");
 }
 
 /** The maintainer is Windows-only and never falls back to a subprocess. */

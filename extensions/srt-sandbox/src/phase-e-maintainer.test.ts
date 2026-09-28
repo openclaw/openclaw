@@ -12,6 +12,7 @@ import {
   runPhaseEMaintainer,
   runPhaseEFaultInjection,
   verifyInitialLeaseStore,
+  verifyRestartIdentity,
 } from "./phase-e-maintainer.js";
 
 describe("Phase E maintainer policy", () => {
@@ -111,6 +112,20 @@ describe("Phase E maintainer policy", () => {
       "PHASE_E_FAULT_INJECTED",
     );
     expect(() => runPhaseEFaultInjection("fwpm", native, "linux")).toThrow("UNSUPPORTED_PLATFORM");
+    expect(() => runPhaseEFaultInjection("profile-scratch", native, "win32")).toThrow(
+      "PHASE_E_FAULT_INJECTED",
+    );
+  });
+  it("fails closed for active, stale, and malformed restart identities", () => {
+    const recorded = { pid: 42, creationTime: "133713371337" };
+    expect(verifyRestartIdentity(recorded, undefined)).toBe("dead");
+    expect(() => verifyRestartIdentity(recorded, recorded)).toThrow("MAINTAINER_ACTIVE");
+    expect(() => verifyRestartIdentity(recorded, { pid: 42, creationTime: "9" })).toThrow(
+      "STALE_PROCESS_IDENTITY",
+    );
+    expect(() => verifyRestartIdentity({ pid: 0, creationTime: "x" }, undefined)).toThrow(
+      "PROCESS_IDENTITY_MISMATCH",
+    );
   });
   it("proves the maintainer source has no delegated execution surface", async () => {
     const source = await import("node:fs/promises").then((fs) =>
@@ -160,6 +175,17 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("FaultPoint::Credential");
     expect(source).toContain("FaultPoint::RootStore");
     expect(source).toContain("FaultPoint::Fwpm");
+    expect(source).toContain("FaultPoint::ProfileScratch");
+    expect(source).toContain("EnsureProfilesAndScratch(accounts)");
+    expect(source).toContain("NormalizeSlotSecurity");
+    expect(source).toContain("VerifyRecordedMaintainerDead(json)");
+    expect(source).toContain("PHASE_E_STALE_PROCESS_IDENTITY");
+    expect(source).toContain("HasPartialOwnedArtifacts()");
+    expect(source).toContain("PHASE_E_PARTIAL_STATE_DETECTED");
+    expect(source).toContain("VerifyPersistedStore(accounts)");
     expect(source).toContain("RemoveOwnedFwpm(accounts)");
+    expect(source).not.toMatch(
+      /CreateProcess|ShellExecute|WinExec|schtasks|powershell|cmd\.exe|netsh|CoCreateInstance/i,
+    );
   });
 });
