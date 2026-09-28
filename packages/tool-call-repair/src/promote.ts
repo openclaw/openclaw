@@ -1,5 +1,8 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PlainTextToolCallProtectedRangeResolver } from "./contracts.js";
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
@@ -86,11 +89,7 @@ function createPromotedToolCallBlocks(
     return undefined;
   }
   const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
-  if (
-    parsedBlocks.some((block) =>
-      protectedRanges.some((range) => block.start >= range.start && block.start < range.end),
-    )
-  ) {
+  if (parsedBlocks.some((block) => isOffsetInProtectedRanges(block.start, protectedRanges))) {
     return undefined;
   }
 

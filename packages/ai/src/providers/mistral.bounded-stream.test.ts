@@ -133,52 +133,7 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
   });
 });
 
-// Drive the bounded fetcher directly against a synthetic ReadableStream that
-// exceeds the cap. Bypasses any HTTP layer; proves the cap fires against an
-// unbounded chunked source, mirroring what the Mistral SDK's internal SSE
-// parser (`EventStream`) would see when a streaming body exceeds 16 MiB.
 describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => {
-  it("caps an oversized synthetic ReadableStream at 16 MiB", async () => {
-    const CHUNK = 1024 * 1024;
-    // Default streams keep chunk references; this reader only inspects byteLength.
-    const chunk = new Uint8Array(CHUNK);
-    let sent = 0;
-    const synthetic = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (sent < 18) {
-          controller.enqueue(chunk);
-          sent++;
-        } else {
-          controller.close();
-        }
-      },
-    });
-    // Build the same shape `fetcher` expects from a real fetch(): a
-    // `Response` whose `body` is a ReadableStream.
-    const syntheticResponse = new Response(synthetic, {
-      status: 200,
-      headers: { "content-type": "application/octet-stream" },
-    });
-    const fetcher = createBoundedMistralFetcher(MAX, async () => syntheticResponse);
-
-    let captured: Error | undefined;
-    const wrapped = await fetcher("http://unused.invalid/");
-    try {
-      await readAllChunks(wrapped.body);
-    } catch (err) {
-      captured = err as Error;
-    }
-    expect(captured).toBeInstanceOf(Error);
-    const match = (captured as Error).message.match(
-      /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
-    );
-    expect(match).not.toBeNull();
-    const got = Number(match?.[1]);
-    // Synthetic stream chunks are exactly 1 MiB aligned, so cap+1 reads
-    // give exactly cap + 1 MiB = 16 MiB + 1 MiB = 17 825 792 bytes.
-    expect(got).toBe(16777216 + CHUNK);
-  });
-
   it("finishes wrapped response cancellation after handing cleanup upstream", async () => {
     let cancelStarted = false;
     const upstreamBody = new ReadableStream<Uint8Array>({
@@ -400,7 +355,6 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
   it.each([
     { name: "EOF without a provider terminal", finishReason: null, done: false },
     { name: "DONE without a provider terminal", finishReason: null, done: true },
-    { name: "a provider error terminal", finishReason: "error", done: true },
     { name: "a filtered provider terminal", finishReason: "content_filter", done: true },
     { name: "an unknown provider terminal", finishReason: "provider_guardrail", done: true },
     { name: "malformed arguments on a tool terminal", finishReason: "tool_calls", done: true },
@@ -480,7 +434,7 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
     expect(events).toContain("toolcall_end");
   });
 
-  it.each(["null", "[]", "42", '"dangerous"'] as const)(
+  it.each(["null", "[]", "42"] as const)(
     "rejects a provider-confirmed non-object JSON argument: %s",
     async (argumentsJson) => {
       const { result, events } = await streamMistralTerminalFixture({

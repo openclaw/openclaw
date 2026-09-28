@@ -138,8 +138,10 @@ describe("structured Goal admission", () => {
 
   it("restores a rejected objective and retains the original run identity on a stored Retry", async () => {
     let reject = true;
+    const goalMode = { action: "start" as const, sessionId: "incarnation-a" };
     const host = makeChatHost({
       chatMessage: "Start this exactly once",
+      chatGoalDraftMode: goalMode,
       currentSessionId: "incarnation-a",
       chatDisplayedLeafEntryId: "leaf-a",
       requestHandlers: {
@@ -156,9 +158,11 @@ describe("structured Goal admission", () => {
     });
     await handleSendChat(host, undefined, { intent });
     expect(host.chatMessage).toBe("Start this exactly once");
+    expect(host.chatGoalDraftMode).toBe(goalMode);
 
     // Restored outboxes retry an already minted request; they must not mint another run.
     reject = false;
+    host.chatGoalDraftMode = null;
     host.chatMessage = "A separate conversation draft";
     const original = findChatSendPayload(host);
     const queued = {
@@ -184,6 +188,131 @@ describe("structured Goal admission", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]?.[1]).toEqual(original);
     expect(host.chatMessage).toBe("A separate conversation draft");
+  });
+});
+
+describe("composer recovery", () => {
+  it.each(["attachment", "reply", "goal"])(
+    "does not mix a failed model-wait draft with a newer %s-only draft",
+    async (edit) => {
+      const switchUpdate = createDeferred<boolean>();
+      const newerAttachment =
+        edit === "attachment" ? createStagedAttachment("newer-picker-attachment") : null;
+      const newerReply = edit === "reply" ? { messageId: "newer-quote", text: "New quote" } : null;
+      const newerGoal = edit === "goal" ? { action: "start" as const } : null;
+      const host = makeChatHost({
+        requestHandlers: {},
+        chatMessage: "keep this send separate",
+        pendingSettingsPatches: { "agent:main": switchUpdate.promise },
+      });
+
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+      host.chatAttachments = newerAttachment ? [newerAttachment] : [];
+      host.chatReplyTarget = newerReply;
+      host.chatGoalDraftMode = newerGoal;
+
+      switchUpdate.resolve(false);
+      await send;
+
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatAttachments).toEqual(newerAttachment ? [newerAttachment] : []);
+      expect(host.chatReplyTarget).toBe(newerReply);
+      expect(host.chatGoalDraftMode).toBe(newerGoal);
+      expect(host.chatQueue[0]).toMatchObject({
+        sendError: "Chat settings update was interrupted. Review and retry when ready.",
+        sendState: "failed",
+        text: "keep this send separate",
+      });
+      if (newerAttachment) {
+        expect(getChatAttachmentDataUrl(newerAttachment)).toBe(attachmentDataUrl);
+      }
+    },
+  );
+});
+
+describe("reply submission", () => {
+  it("escapes reply sender labels and transfers the quote before chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => sent.promise,
+      },
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "reply-source-1",
+        text: "quoted body",
+        senderLabel: "A *B* [C]",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("sends replyToId instead of an inline quote when the reply target has a transcript id", async () => {
+    const sent = createDeferred<unknown>();
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => sent.promise,
+      },
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "id:transcript-abc",
+        text: "quoted body",
+        senderLabel: "Molty",
+        sourceMessageId: "transcript-abc",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatQueue[0]?.text).toBe("continue");
+    expect(host.chatQueue[0]?.replyToId).toBe("transcript-abc");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    const sendCall = host.request.mock.calls.find(([method]) => method === "chat.send");
+    expect(sendCall?.[1]).toMatchObject({ message: "continue", replyToId: "transcript-abc" });
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("keeps failed reply metadata on the retry row instead of the composer", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => Promise.resolve({ runId: "run-failed", status: "error" }),
+      },
+      chatMessage: "retry this",
+      chatReplyTarget: {
+        messageId: "reply-source-2",
+        text: "quoted body",
+        senderLabel: "User",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "failed",
+      text: "> **User:** quoted body\n\nretry this",
+    });
   });
 });
 
@@ -473,12 +602,17 @@ describe("handleSendChat immediate local commands", () => {
   it("restores staged attachments when creating a new session is cancelled", async () => {
     const attachment = createStagedAttachment("cancelled-new-session-att");
     const createChatSession = vi.fn(async () => false);
-    const host = createImmediateCommandHost("/new", attachment, { createChatSession });
+    const replyTarget = { messageId: "quoted-before-new", text: "Keep this quote" };
+    const host = createImmediateCommandHost("/new", attachment, {
+      createChatSession,
+      chatReplyTarget: replyTarget,
+    });
 
     await handleSendChat(host);
 
     expect(createChatSession).toHaveBeenCalledOnce();
     expect(host.chatMessage).toBe("/new");
+    expect(host.chatReplyTarget).toEqual(replyTarget);
     expect(host.chatAttachments).toHaveLength(1);
     expect(host.chatAttachments[0]).toMatchObject(attachment);
     expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(attachmentDataUrl);

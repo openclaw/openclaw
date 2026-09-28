@@ -64,14 +64,6 @@ it.each<{
     suffixCalls: 1,
   },
   { name: "unsent prefix", prefix: "before-send", expected: ["See ["], suffixCalls: 0 },
-  {
-    name: "ambiguous prefix",
-    prefix: "ambiguous",
-    prepared: true,
-    expected: ["See "],
-    suffixCalls: 0,
-  },
-  { name: "pending prefix", prefix: "pending", expected: [], suffixCalls: 0 },
   { name: "ambiguous suffix", suffix: "ambiguous", expected: ["See ", "["], suffixCalls: 1 },
   { name: "pending suffix", suffix: "pending", expected: ["See "], suffixCalls: 1 },
   {

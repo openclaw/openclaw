@@ -76,17 +76,6 @@ type ResolveManifestContractOwnerPluginIdParams = ManifestContractLookupParams &
   origin?: PluginOrigin;
 };
 
-function normalizeContributionId(value: string): string {
-  return value.trim();
-}
-
-function listManifestContractValues(
-  plugin: PluginManifestRecord,
-  contract: PluginManifestContractListKey,
-): readonly string[] {
-  return plugin.contracts?.[contract] ?? [];
-}
-
 function loadManifestContractRecords(
   params: ManifestContractLookupParams & {
     onlyPluginIds?: readonly string[];
@@ -231,7 +220,7 @@ export function resolveManifestContractPluginIds(
     .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
-        listManifestContractValues(plugin, params.contract).length > 0,
+        (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -240,15 +229,15 @@ export function resolveManifestContractPluginIds(
 export function resolveManifestContractOwnerPluginId(
   params: ResolveManifestContractOwnerPluginIdParams,
 ): string | undefined {
-  const normalizedValue = normalizeContributionId(params.value ?? "").toLowerCase();
+  const normalizedValue = (params.value ?? "").trim().toLowerCase();
   if (!normalizedValue) {
     return undefined;
   }
   return loadManifestContractRecords(params).find(
     (plugin) =>
       (!params.origin || plugin.origin === params.origin) &&
-      listManifestContractValues(plugin, params.contract).some(
-        (candidate) => normalizeContributionId(candidate).toLowerCase() === normalizedValue,
+      plugin.contracts?.[params.contract]?.some(
+        (candidate) => candidate.trim().toLowerCase() === normalizedValue,
       ),
   )?.id;
 }

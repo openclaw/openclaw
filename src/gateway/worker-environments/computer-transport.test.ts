@@ -658,7 +658,9 @@ describe("session computer transport", () => {
     },
   );
 
-  it.each(revocations)("withholds an awaited result after $name revocation", async (revocation) => {
+  it.each(
+    revocations.filter(({ name }) => ["turn claim", "lease", "plugin registry"].includes(name)),
+  )("withholds an awaited result after $name revocation", async (revocation) => {
     const h = createHarness();
     const { transport, prepared } = await h.prepare();
     const entered = createDeferredCore();

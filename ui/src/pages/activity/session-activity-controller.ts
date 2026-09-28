@@ -61,6 +61,7 @@ export class SessionActivityController implements ReactiveController {
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
   private filters: ActivityQuery | null = null;
+  private dayRollover?: ReturnType<typeof setTimeout>;
   private readonly pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
   private normalizedLocation = "";
@@ -96,6 +97,8 @@ export class SessionActivityController implements ReactiveController {
   }
 
   private resetQuery(): void {
+    clearTimeout(this.dayRollover);
+    this.dayRollover = undefined;
     this.eventRefresh.reset();
     this.pending?.controller.abort();
     this.pending = undefined;
@@ -374,6 +377,13 @@ export class SessionActivityController implements ReactiveController {
       this.host.requestUpdate();
       return Promise.resolve();
     }
+    const now = new Date();
+    const until = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+    clearTimeout(this.dayRollover);
+    this.dayRollover = undefined;
+    if (filters !== "current" && typeof setTimeout === "function") {
+      this.dayRollover = setTimeout(() => this.eventRefresh.schedule(), until - Date.now() + 1_000);
+    }
     const request =
       filters === "current"
         ? {
@@ -389,6 +399,12 @@ export class SessionActivityController implements ReactiveController {
             includeGlobal: true,
             includeUnknown: true,
             includePeople: true,
+            activityPulseSince: new Date(
+              now.getFullYear(),
+              now.getMonth(),
+              now.getDate(),
+            ).getTime(),
+            activityPulseUntil: until,
             excludeSubagents: true,
             includeActivitySummary: true,
             includeDerivedTitles: true,

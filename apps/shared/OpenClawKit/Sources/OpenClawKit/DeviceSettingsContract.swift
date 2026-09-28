@@ -50,42 +50,26 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case localeAdditional = "voice.locale.additional"
     case automaticUpdates = "updates.automatic"
 
-    private enum ValueType {
-        case boolean, string, strings, nullableString, provider, location, iconStyle, appearance
-    }
-
-    private var valueType: ValueType {
-        switch self {
-        case .appearance: .appearance
-        case .computerControlProvider: .provider
-        case .locationMode: .location
-        case .iconStyle: .iconStyle
-        case .cookieSyncTargetProfile, .localePrimary: .string
-        case .cookieSyncDomains, .localeAdditional: .strings
-        case .microphone: .nullableString
-        default: .boolean
-        }
-    }
-
     public func value(from raw: Any) -> DeviceSettingValue? {
-        switch self.valueType {
-        case .boolean:
+        switch self {
+        case .cookieSyncDomains, .localeAdditional:
+            guard let values = raw as? [String] else { return nil }
+            return .strings(values)
+        case .microphone where raw is NSNull:
+            return .null
+        case .cookieSyncTargetProfile, .localePrimary, .microphone,
+             .computerControlProvider, .locationMode, .iconStyle, .appearance:
+            guard let value = raw as? String else { return nil }
+            if self == .computerControlProvider, !["peekaboo", "cua"].contains(value) { return nil }
+            if self == .locationMode, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
+            if self == .iconStyle,
+               !["paper", "heritage", "clawmark", "origami", "pincer", "openC"].contains(value) { return nil }
+            if self == .appearance, DeviceSettingsAppearance(rawValue: value) == nil { return nil }
+            return .string(value)
+        default:
             // WKWebView bridges both numbers and booleans as NSNumber. A numeric 0/1 is not a toggle.
             guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
             return .boolean(number.boolValue)
-        case .strings:
-            guard let values = raw as? [String] else { return nil }
-            return .strings(values)
-        case .nullableString where raw is NSNull:
-            return .null
-        case .string, .nullableString, .provider, .location, .iconStyle, .appearance:
-            guard let value = raw as? String else { return nil }
-            if self.valueType == .provider, !["peekaboo", "cua"].contains(value) { return nil }
-            if self.valueType == .location, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
-            if self.valueType == .iconStyle,
-               !["paper", "heritage", "clawmark", "origami", "pincer", "openC"].contains(value) { return nil }
-            if self.valueType == .appearance, DeviceSettingsAppearance(rawValue: value) == nil { return nil }
-            return .string(value)
         }
     }
 }

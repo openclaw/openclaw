@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-sharing-store.native.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -384,7 +385,11 @@ test("captured sentinel rows never substitute a later same-owner session after d
       });
       await projection.ensureMaterialized();
       expect(prepareProjectedSessionPresentation(projection, client).present(captured)).toBeNull();
-      const connection = createGatewayConnectionState({ bootId: "retired-sentinel", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "retired-sentinel",
+        cfg,
+      });
       const send = vi.fn();
       const recipient = {
         ...client,

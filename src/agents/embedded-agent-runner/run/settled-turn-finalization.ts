@@ -13,6 +13,7 @@ import {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { appendAssistantMirrorMessageByIdentity } from "../../../plugin-sdk/session-transcript-runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
 import type {
   AgentHarness,
@@ -32,10 +33,7 @@ import {
 } from "../usage-accumulator.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
-import {
-  resolveRuntimeModelAttempt,
-  runEmbeddedSettledTurnFinalizationWithBackend,
-} from "./backend.js";
+import { resolveRuntimeModelAttempt } from "./backend.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   resolveSettledToolBatchEvidence,
@@ -445,7 +443,7 @@ async function runPreparedSettledTurnFinalization(input: {
       sessionKey: input.attempt.sessionKey,
     });
     const finalization = await withGatewayToolCallerIdentity(callerIdentity, () =>
-      runEmbeddedSettledTurnFinalizationWithBackend(
+      runAgentHarnessSettledTurnFinalization(
         {
           ...input.attempt,
           abortSignal: controls.abortSignal,

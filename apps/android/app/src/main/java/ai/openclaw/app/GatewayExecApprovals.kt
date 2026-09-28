@@ -104,40 +104,31 @@ data class GatewayExecApprovalNotice(
 internal fun gatewayExecApprovalResolutionNotice(
   resolution: GatewayExecApprovalResolution,
 ): GatewayExecApprovalNotice =
-  when (resolution.approval.status) {
-    GatewayApprovalTerminalStatus.Allowed -> {
-      val saved = resolution.approval.decision == "allow-always"
-      GatewayExecApprovalNotice(
-        approvalId = resolution.approval.id,
-        message = gatewayExecApprovalAllowedMessage(attribution = resolution.attribution, saved = saved),
-        warning = false,
-      )
-    }
+  GatewayExecApprovalNotice(
+    approvalId = resolution.approval.id,
+    message =
+      when (resolution.approval.status) {
+        GatewayApprovalTerminalStatus.Allowed -> {
+          gatewayExecApprovalAllowedMessage(
+            attribution = resolution.attribution,
+            saved = resolution.approval.decision == "allow-always",
+          )
+        }
 
-    GatewayApprovalTerminalStatus.Denied -> {
-      GatewayExecApprovalNotice(
-        approvalId = resolution.approval.id,
-        message = gatewayExecApprovalDeniedMessage(resolution.attribution),
-        warning = true,
-      )
-    }
+        GatewayApprovalTerminalStatus.Denied -> {
+          gatewayExecApprovalDeniedMessage(resolution.attribution)
+        }
 
-    GatewayApprovalTerminalStatus.Expired -> {
-      GatewayExecApprovalNotice(
-        approvalId = resolution.approval.id,
-        message = gatewayExecApprovalTerminalMessage(resolution.approval.status),
-        warning = true,
-      )
-    }
+        GatewayApprovalTerminalStatus.Expired -> {
+          "This approval expired before it could be resolved."
+        }
 
-    GatewayApprovalTerminalStatus.Cancelled -> {
-      GatewayExecApprovalNotice(
-        approvalId = resolution.approval.id,
-        message = gatewayExecApprovalTerminalMessage(resolution.approval.status),
-        warning = true,
-      )
-    }
-  }
+        GatewayApprovalTerminalStatus.Cancelled -> {
+          "This approval was cancelled before it could be resolved."
+        }
+      },
+    warning = resolution.approval.status != GatewayApprovalTerminalStatus.Allowed,
+  )
 
 private fun gatewayExecApprovalAllowedMessage(
   attribution: GatewayExecApprovalResolutionAttribution,
@@ -162,13 +153,6 @@ private fun gatewayExecApprovalDeniedMessage(attribution: GatewayExecApprovalRes
     GatewayExecApprovalResolutionAttribution.Unknown -> "Gateway recorded a denial."
   }
 
-private fun gatewayExecApprovalTerminalMessage(status: GatewayApprovalTerminalStatus): String =
-  when (status) {
-    GatewayApprovalTerminalStatus.Expired -> "This approval expired before it could be resolved."
-    GatewayApprovalTerminalStatus.Cancelled -> "This approval was cancelled before it could be resolved."
-    else -> error("approval is not expired or cancelled")
-  }
-
 internal fun gatewayExecApprovalRemoteTerminalNotice(
   approval: GatewayExecApprovalSnapshot.Terminal,
 ): GatewayExecApprovalNotice =
@@ -179,19 +163,11 @@ internal fun gatewayExecApprovalRemoteTerminalNotice(
 internal fun gatewayExecApprovalPriorResolutionNotice(id: String): GatewayExecApprovalNotice =
   GatewayExecApprovalNotice(
     approvalId = id,
-    message = gatewayExecApprovalPriorResolutionMessage(),
+    message = "A prior response already resolved this approval.",
     warning = true,
   )
 
-private fun gatewayExecApprovalPriorResolutionMessage(): String = "A prior response already resolved this approval."
-
-internal fun normalizeGatewayExecApprovalDecision(value: String): String? =
-  when (value) {
-    "allow-once" -> "allow-once"
-    "allow-always" -> "allow-always"
-    "deny" -> "deny"
-    else -> null
-  }
+internal fun normalizeGatewayExecApprovalDecision(value: String): String? = value.takeIf { it in APPROVAL_DECISIONS }
 
 /** Parses the terminal winner from an authenticated Gateway resolution event. */
 internal fun parseGatewayExecApprovalResolvedEventTerminal(

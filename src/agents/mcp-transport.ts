@@ -136,6 +136,13 @@ export function resolveMcpTransport(
   if (!resolved) {
     return null;
   }
+  const metadata = {
+    description: resolved.description,
+    transportType: resolved.transportType,
+    connectionTimeoutMs: resolved.connectionTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+  };
   if (resolved.kind === "stdio") {
     const transport = new OpenClawStdioClientTransport({
       command: resolved.command,
@@ -147,11 +154,7 @@ export function resolveMcpTransport(
     });
     return {
       transport,
-      description: resolved.description,
-      transportType: "stdio",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
@@ -209,11 +212,7 @@ export function resolveMcpTransport(
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
         fetch: httpFetch,
       }),
-      description: resolved.description,
-      transportType: "streamable-http",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
     };
   }
   const sseHeaders: Record<string, string> = { ...headers };
@@ -226,10 +225,6 @@ export function resolveMcpTransport(
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
     }),
-    description: resolved.description,
-    transportType: "sse",
-    connectionTimeoutMs: resolved.connectionTimeoutMs,
-    requestTimeoutMs: resolved.requestTimeoutMs,
-    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    ...metadata,
   };
 }

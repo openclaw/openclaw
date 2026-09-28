@@ -312,7 +312,12 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
     case "native-live-src-infra":
-      return files.filter((file) => file.startsWith("src/infra/") || file.startsWith("src/cli/"));
+      return files.filter(
+        (file) =>
+          file.startsWith("src/infra/") ||
+          file.startsWith("src/cli/") ||
+          file.startsWith("src/commands/"),
+      );
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":
@@ -480,19 +485,6 @@ function normalizeReportFilePath(value: unknown, repoRoot = process.cwd()) {
   return repoRelative.split(path.sep).join("/");
 }
 
-function collectReportedLiveTestFiles(payload: unknown, repoRoot = process.cwd()) {
-  if (!isUnknownRecord(payload) || !Array.isArray(payload.testResults)) {
-    return null;
-  }
-  return new Set(
-    payload.testResults
-      .map((result) =>
-        normalizeReportFilePath(isUnknownRecord(result) ? result.name : undefined, repoRoot),
-      )
-      .filter((name) => name.length > 0),
-  );
-}
-
 function isDisabledOptInAssertion(assertion: Record<string, unknown>) {
   if (assertion.status !== "passed") {
     return false;
@@ -638,38 +630,33 @@ export function validateLiveShardReportPayload(
     return { ok: false, reason: "Vitest report has no passing live tests." };
   }
   if (expectedFiles.length > 0) {
-    const reportedFiles = collectReportedLiveTestFiles(payload, repoRoot);
     const fileEvidence = collectReportedLiveTestFileEvidence(payload, repoRoot);
-    if (!reportedFiles || !fileEvidence) {
+    if (!fileEvidence) {
       return { ok: false, reason: "Vitest report is missing testResults file evidence." };
     }
-    const missingFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => !reportedFiles.has(file));
+    const normalizedFiles = expectedFiles.map((file) => normalizeReportFilePath(file, repoRoot));
+    const missingFiles = normalizedFiles.filter((file) => !fileEvidence.has(file));
     if (missingFiles.length > 0) {
       return {
         ok: false,
         reason: `Vitest report missing selected live test file evidence: ${missingFiles.join(", ")}`,
       };
     }
-    const enabledPassFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => countEnabledLivePasses(file, fileEvidence.get(file), env) > 0);
-    if (enabledPassFiles.length === 0) {
+    if (
+      !normalizedFiles.some((file) => countEnabledLivePasses(file, fileEvidence.get(file), env) > 0)
+    ) {
       return {
         ok: false,
         reason: "Vitest report has no enabled selected live test files with passing assertions.",
       };
     }
-    const noPassFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => {
-        const evidence = fileEvidence.get(file);
-        return (
-          countEnabledLivePasses(file, evidence, env) < 1 &&
-          !isDisabledOptionalLiveShardFile(file, evidence, env)
-        );
-      });
+    const noPassFiles = normalizedFiles.filter((file) => {
+      const evidence = fileEvidence.get(file);
+      return (
+        countEnabledLivePasses(file, evidence, env) < 1 &&
+        !isDisabledOptionalLiveShardFile(file, evidence, env)
+      );
+    });
     if (noPassFiles.length > 0) {
       return {
         ok: false,

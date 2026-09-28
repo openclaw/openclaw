@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TalkClientToolCallResult } from "../../../../../packages/gateway-protocol/src/schema/channels.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../../src/talk/agent-consult-tool.js";
 import {
@@ -393,6 +394,25 @@ function requestRealtimeTalkSteer(
     : ctx.client.request("talk.client.steer", request);
 }
 
+function realtimeTalkControlProgress(result: unknown): RealtimeTalkEventInput {
+  return {
+    type: "tool.progress",
+    payload: { name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME, result },
+    final:
+      result && typeof result === "object" && "mode" in result
+        ? result.mode === "status" || result.mode === "cancel"
+        : undefined,
+  };
+}
+
+export function shouldInterruptRealtimeTalkControlResponse(result: unknown): boolean {
+  const record = asOptionalObjectRecord(result);
+  return (
+    record?.ok === true &&
+    (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
+  );
+}
+
 export async function steerRealtimeTalkActiveConsult(params: {
   ctx: RealtimeTalkTransportContext;
   text: string;
@@ -416,17 +436,7 @@ export async function steerRealtimeTalkActiveConsult(params: {
       params.speakControlResult,
       params.suppressSpeechForModes,
     );
-    params.emitTalkEvent?.({
-      type: "tool.progress",
-      payload: {
-        name: "openclaw_agent_control",
-        result,
-      },
-      final:
-        result && typeof result === "object" && "mode" in result
-          ? result.mode === "status" || result.mode === "cancel"
-          : undefined,
-    });
+    params.emitTalkEvent?.(realtimeTalkControlProgress(result));
   } catch (error) {
     params.emitTalkEvent?.({
       type: "tool.error",
@@ -457,16 +467,8 @@ export async function submitRealtimeTalkAgentControl(params: {
       return;
     }
     talkEvent = {
-      type: "tool.progress",
+      ...realtimeTalkControlProgress(result),
       callId: params.callId,
-      payload: {
-        name: "openclaw_agent_control",
-        result,
-      },
-      final:
-        result && typeof result === "object" && "mode" in result
-          ? result.mode === "status" || result.mode === "cancel"
-          : undefined,
     };
   } catch (error) {
     const message = formatUiError(error);
@@ -607,10 +609,7 @@ export async function submitRealtimeTalkConsult(params: {
 
 function isAbortError(error: unknown): boolean {
   return (
-    (typeof DOMException !== "undefined" &&
-      error instanceof DOMException &&
-      error.name === "AbortError") ||
-    (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError")
+    typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"
   );
 }
 

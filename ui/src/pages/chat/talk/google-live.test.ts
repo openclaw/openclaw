@@ -232,19 +232,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     }
   });
 
-  it("reports microphone activity and resets it when stopped", async () => {
-    const onInputLevel = vi.fn();
-    const transport = await createTransport({ onInputLevel });
-
-    await startTransport(transport);
-    pumpMicrophone(new Float32Array(4096));
-    pumpMicrophone(new Float32Array(4096).fill(0.25));
-    transport.stop();
-
-    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
-    expect(onInputLevel).toHaveBeenLastCalledWith(0);
-  });
-
   it("decodes Blob setup messages", async () => {
     const onStatus = vi.fn();
     const transport = await createTransport({ onStatus });

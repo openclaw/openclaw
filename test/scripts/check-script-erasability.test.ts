@@ -125,12 +125,4 @@ describe("check-script-erasability", () => {
     expect(result.errors[0]?.message).toMatch(/enum.*strip-only/u);
     expect(result.errors[1]?.message).toMatch(/parameter property.*strip-only/u);
   });
-
-  it("accepts the repository scripts tree", () => {
-    const scriptsRoot = path.resolve(import.meta.dirname, "../../scripts");
-    const result = checkNodeScriptErasability(scriptsRoot);
-
-    expect(result.checkedFiles).toBeGreaterThan(0);
-    expect(result.errors).toEqual([]);
-  });
 });

@@ -48,7 +48,14 @@ do not clear site data while drafts or queued messages still need recovery.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its
-changes, then retry the reload. File edits stay in memory in the current page;
+changes, then retry the reload. If a server update makes the editor unavailable,
+choose **Review file drafts** in the reload notification. You can copy or download
+each retained draft without connecting to the Gateway, explicitly discard resolved
+drafts, then try **Refresh** again. **Keep drafts** leaves them protected in this tab.
+Each draft shows the session title, session key, and pane position captured when
+the file was opened, so matching filenames remain distinguishable. Newer edits
+remain protected if they change while you review an older draft.
+File edits stay in memory in the current page;
 an explicit browser reload or closing the browser tab discards them.
 
 ## Connection loss and reconnect
@@ -60,7 +67,10 @@ automatic reconnect use a calm presentation; authentication and other failures t
 attention keep their explanation and recovery action. The same status appears in the macOS app's
 embedded dashboard. Connection status does not replace the Gateway name in the account menu.
 
-The client retries ordinary connection loss automatically with backoff (800 ms up to 15 s).
+The client retries ordinary connection loss automatically with randomized backoff: the first
+retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
+Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
+20% additional spread. Gateway startup hints keep their separate bounded timing.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
@@ -148,8 +158,16 @@ uncertain-delivery warning without sending the message again. The browser keeps 
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
 If the Gateway is holding that input for a later turn, it appears in the queue
-above the composer. Canceling that row withdraws the exact queued message without
-stopping the active turn. Server-held messages cannot be edited or reordered.
+above the composer. Removing that row withdraws the exact queued message without
+stopping the active turn. Once cancellation is confirmed, the removed prompt and
+its attachments disappear from the queue and conversation, including after a
+reconnect or reload. Server-held messages cannot be edited or reordered.
+If the message has already started, Remove leaves the active run alone; use Stop
+to interrupt it.
+Stopping a turn or an unsuccessful send can still leave a cancelled prompt with
+recovery guidance; those actions do not remove the prompt.
+Incognito chats keep their existing cancellation behavior: Remove cancels queued
+work, but the cancelled-message notice remains until the private session ends.
 
 If automatic restart recovery is interrupted or cancelled before the agent resumes,
 the **System · restart recovery** notice shows that outcome and asks you to send a
@@ -211,16 +229,19 @@ Discard stays effective after reloading the tab; it does not cancel Gateway work
 remove messages already in the conversation history.
 
 If the Gateway reports that a `/steer` or `/redirect` message failed to start, the Control UI
-restores the submitted draft when the composer is still empty. It preserves newer text and
-attachments. If you switched conversations, recovery stays with the original conversation.
+restores the submitted draft when the composer is still empty. It preserves newer text, replies,
+and attachments. If you switched conversations, recovery stays with the original conversation.
 If you moved Home between the page and its dock while the command was pending, recovery
 follows the current Home composer and preserves any newer draft entered there.
 
 Queued messages and drafts keep the conversation and agent selected when they were created.
 Switching agents, opening a split pane, or reloading does not move them to another destination.
 When split panes show the same conversation, returning to an older pane after visiting other
-conversations does not replace a newer saved draft. Text, selected recipients, Goal mode,
-and attachments follow the same draft revision. Switching quickly between split panes keeps
+conversations does not replace a newer saved draft. Text, selected recipients, quoted replies,
+Goal mode, and attachments follow the same draft revision. A selected reply survives reload
+with its preview and original message target, even before you enter text. Canceling the reply
+clears that selection without discarding the text. Sending transfers the reply to the submitted
+message; a failed admission restores it only if you have not started a newer draft. Switching quickly between split panes keeps
 the last selected conversation active, including when narrowing the window.
 A literal `global` conversation keeps its captured agent; an agent's main conversation stays
 separate unless the Gateway is configured with global session scope.

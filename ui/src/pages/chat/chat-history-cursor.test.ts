@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -19,6 +20,7 @@ import {
 } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
+  applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -44,20 +46,15 @@ function seedCachedHistory(
 ): ChatMessageCache {
   const cache: ChatMessageCache = new Map();
   state.chatMessagesBySession = cache;
-  state.chatMessages = messages;
-  state.chatHistoryPagination = { hasMore: false, completeSnapshot: true };
-  state.currentSessionId = "session-cursor";
-  cacheChatSessionSnapshot(
-    cache,
-    state,
-    { sessionKey: state.sessionKey },
-    {
-      ...(deltaCursor !== undefined ? { deltaCursor } : {}),
-      messages,
-      pagination: state.chatHistoryPagination,
-      sessionId: "session-cursor",
-    },
-  );
+  const snapshot = {
+    ...(deltaCursor !== undefined ? { deltaCursor } : {}),
+    displayedLeafEntryId: state.chatDisplayedLeafEntryId,
+    messages,
+    pagination: { hasMore: false, completeSnapshot: true } as const,
+    sessionId: "session-cursor",
+  };
+  applyChatCacheSnapshot(state, snapshot);
+  cacheChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey }, snapshot);
   return cache;
 }
 
@@ -81,6 +78,61 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 
 describe("chat history cursor revalidation", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("catches up a lagging split after a sibling advances", async () => {
+    const cached = message("user", "First turn", "user-1", 1);
+    const reply = message("assistant", "New reply", "answer-2", 2);
+    const handler = vi.fn(async (params?: unknown) => ({
+      kind: "delta",
+      messages:
+        asOptionalRecord(params)?.cursor === "cursor-1"
+          ? [{ message: reply, messageId: "answer-2", messageSeq: 2 }]
+          : [],
+      deltaCursor: "cursor-2",
+      sessionInfo: { key: "main", kind: "direct", sessionId: "session-cursor", updatedAt: 2 },
+    }));
+    const first = createState(handler);
+    const second = createState(handler);
+    const cache = seedCachedHistory(first, [cached], "cursor-1");
+    seedCachedHistory(second, [cached], "cursor-1");
+    second.chatMessagesBySession = cache;
+    second.client = first.client;
+    second.sessions = first.sessions;
+    await loadChatHistory(first);
+    expect(first.chatMessages).toEqual([cached, reply]);
+    expect(second.chatMessages).toEqual([cached]);
+    await loadChatHistory(second);
+    expect(second.chatMessages).toEqual([cached, reply]);
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-1" }));
+  });
+
+  it.each(["session", "agent", "transcript", "reset"] as const)(
+    "does not reuse a pane cursor after its %s changes",
+    async (transition) => {
+      const handler = vi.fn(async () => ({
+        messages: [message("assistant", "Replacement history", "replacement", 1)],
+        sessionId: "replacement-session",
+      }));
+      const state = createState(handler);
+      state.sessionKey = "global";
+      state.assistantAgentId = "main";
+      seedCachedHistory(state, [message("user", "Previous history", "previous", 1)], "old-cursor");
+      if (transition === "session") {
+        state.sessionKey = "agent:main:other";
+      } else if (transition === "agent") {
+        state.assistantAgentId = "other";
+      } else if (transition === "transcript") {
+        state.currentSessionId = "replacement-session";
+      } else {
+        reduceChatSessionProjection(state, { type: "sessionReset" });
+      }
+      await loadChatHistory(state);
+      expect(handler).toHaveBeenCalledExactlyOnceWith(
+        expect.not.objectContaining({ cursor: expect.anything() }),
+      );
+      expect(state.chatMessages.map(extractText)).toEqual(["Replacement history"]);
+    },
+  );
 
   it.each(["live", "history-delta"] as const)(
     "retains an attributed pending steer across a leaf advance before %s persistence",
@@ -645,5 +697,12 @@ describe("chat history cursor revalidation", () => {
     expect(handler).toHaveBeenCalledOnce();
     expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("cursor");
     expect(state.chatMessages).toEqual([cached, fresh]);
+    state.chatMessagesBySession = undefined;
+    await loadChatHistory(state);
+    await loadChatHistory(state);
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(handler.mock.calls.slice(1).map(([params]) => asOptionalRecord(params)?.cursor)).toEqual(
+      ["cursor-1", "cursor-1"],
+    );
   });
 });

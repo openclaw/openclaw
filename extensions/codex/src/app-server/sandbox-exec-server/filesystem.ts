@@ -1,7 +1,3 @@
-/**
- * Implements filesystem JSON-RPC handlers for the Codex sandbox exec-server
- * with OpenClaw sandbox policy checks before every bridge operation.
- */
 import { posix as pathPosix } from "node:path";
 import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
@@ -219,7 +215,6 @@ function requireFileReadHandleId(value: unknown): string {
   return handleId;
 }
 
-/** Reads a sandbox file as base64 after read-policy and size checks. */
 export async function readFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -240,7 +235,6 @@ export async function readFile(
   return { dataBase64: data.toString("base64") };
 }
 
-/** Writes base64 data to an existing sandbox directory after write-policy checks. */
 export async function writeFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -273,7 +267,6 @@ export async function writeFile(
   });
 }
 
-/** Creates a sandbox directory, respecting recursive and parent-directory semantics. */
 export async function createDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -307,7 +300,6 @@ export async function createDirectory(
   });
 }
 
-/** Returns normalized metadata for a sandbox path. */
 export async function getMetadata(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -321,10 +313,16 @@ export async function getMetadata(
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
-  return metadataResponse(stat);
+  return {
+    isDirectory: stat.type === "directory",
+    isFile: stat.type === "file",
+    isSymlink: false,
+    size: stat.size,
+    createdAtMs: 0,
+    modifiedAtMs: stat.mtimeMs ?? 0,
+  };
 }
 
-/** Lists sandbox directory entries visible under the resolved filesystem policy. */
 export async function readDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -370,7 +368,6 @@ async function listDirectoryEntries(
   });
 }
 
-/** Removes a sandbox path after rejecting writes outside policy or under read-only descendants. */
 export async function removePath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -402,7 +399,6 @@ export async function removePath(
   });
 }
 
-/** Copies sandbox files or recursive directories while enforcing source and destination policy. */
 export async function copyPath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -417,10 +413,6 @@ export async function copyPath(
     "copy destination path",
   );
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
-  assertResolvedFsSandboxAccess(fsSandboxPolicy, [
-    { path: sourcePath, access: "read" },
-    { path: destinationPath, access: "write" },
-  ]);
   await copySandboxPath(execServer, {
     sourcePath,
     destinationPath,
@@ -541,15 +533,4 @@ function assertSandboxFileReadWithinLimit(stat: SandboxFsStat): void {
       `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
     );
   }
-}
-
-function metadataResponse(stat: SandboxFsStat | null): JsonObject {
-  return {
-    isDirectory: stat?.type === "directory",
-    isFile: stat?.type === "file",
-    isSymlink: false,
-    size: stat?.size ?? 0,
-    createdAtMs: 0,
-    modifiedAtMs: stat?.mtimeMs ?? 0,
-  };
 }

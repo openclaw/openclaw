@@ -36,7 +36,6 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
 }
 
 const SQLITE_INSPECTION_OPERATIONS = {
-  coordinator: "acquiring its state-handles coordinator",
   source: "opening the source database",
   snapshot: "creating its private snapshot",
 } as const;

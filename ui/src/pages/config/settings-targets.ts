@@ -355,6 +355,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
     searchKeys: [
+      "configView.chatPrefs.openLinksExternally",
+      "configView.chatPrefs.openLinksExternallyHint",
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
       "configView.chatPrefs.showTaskProgress",

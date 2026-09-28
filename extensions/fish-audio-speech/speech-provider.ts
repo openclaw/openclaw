@@ -1,4 +1,3 @@
-// Fish Audio provider maps OpenClaw speech contracts to the hosted S2.1 API.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -16,6 +15,7 @@ import {
   asBoolean,
   asFiniteNumberInRange,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -72,10 +72,6 @@ function normalizeLatency(value: unknown): FishAudioLatency {
   throw new Error(`invalid Fish Audio latency "${latency}"`);
 }
 
-function normalizeNumber(value: unknown, min: number, max: number): number | undefined {
-  return asFiniteNumberInRange(value, { min, max });
-}
-
 function resolveReferenceId(raw: Record<string, unknown> | undefined): string | undefined {
   return trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId ?? raw?.referenceId);
 }
@@ -93,9 +89,9 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
     model: normalizeModel(raw?.model ?? raw?.modelId),
     referenceId: resolveReferenceId(raw),
     latency: normalizeLatency(raw?.latency),
-    speed: normalizeNumber(raw?.speed, 0.5, 2),
-    temperature: normalizeNumber(raw?.temperature, 0, 1),
-    topP: normalizeNumber(raw?.topP ?? raw?.top_p, 0, 1),
+    speed: asFiniteNumberInRange(raw?.speed, { min: 0.5, max: 2 }),
+    temperature: asFiniteNumberInRange(raw?.temperature, { min: 0, max: 1 }),
+    topP: asFiniteNumberInRange(raw?.topP ?? raw?.top_p, { min: 0, max: 1 }),
     normalize: asBoolean(raw?.normalize),
   };
 }
@@ -114,9 +110,9 @@ function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudi
       : undefined,
     referenceId: resolveReferenceId(raw),
     latency: trimToUndefined(raw.latency) ? normalizeLatency(raw.latency) : undefined,
-    speed: normalizeNumber(raw.speed, 0.5, 2),
-    temperature: normalizeNumber(raw.temperature, 0, 1),
-    topP: normalizeNumber(raw.topP ?? raw.top_p, 0, 1),
+    speed: asFiniteNumberInRange(raw.speed, { min: 0.5, max: 2 }),
+    temperature: asFiniteNumberInRange(raw.temperature, { min: 0, max: 1 }),
+    topP: asFiniteNumberInRange(raw.topP ?? raw.top_p, { min: 0, max: 1 }),
     normalize: asBoolean(raw.normalize),
   };
 }
@@ -277,31 +273,33 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
                 path: "talk.providers.fish-audio.apiKey",
               }),
             }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
+        ...filterStringRecord({
+          baseUrl: trimToUndefined(talkProviderConfig.baseUrl)
+            ? normalizeFishAudioBaseUrl(trimToUndefined(talkProviderConfig.baseUrl))
+            : undefined,
+          model: trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model)
+            ? normalizeModel(talkProviderConfig.modelId ?? talkProviderConfig.model)
+            : undefined,
+          referenceId: resolveReferenceId(talkProviderConfig),
+          latency: trimToUndefined(talkProviderConfig.latency)
+            ? normalizeLatency(talkProviderConfig.latency)
+            : undefined,
+        }),
+        ...(asFiniteNumberInRange(talkProviderConfig.speed, { min: 0.5, max: 2 }) == null
           ? {}
-          : { baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model) == null
-          ? {}
-          : { model: normalizeModel(talkProviderConfig.modelId ?? talkProviderConfig.model) }),
-        ...(resolveReferenceId(talkProviderConfig) == null
-          ? {}
-          : { referenceId: resolveReferenceId(talkProviderConfig) }),
-        ...(trimToUndefined(talkProviderConfig.latency) == null
-          ? {}
-          : { latency: normalizeLatency(talkProviderConfig.latency) }),
-        ...(normalizeNumber(talkProviderConfig.speed, 0.5, 2) == null
-          ? {}
-          : { speed: normalizeNumber(talkProviderConfig.speed, 0.5, 2) }),
+          : { speed: asFiniteNumberInRange(talkProviderConfig.speed, { min: 0.5, max: 2 }) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.modelId ?? params.model) == null
+      ...filterStringRecord({
+        model: trimToUndefined(params.modelId ?? params.model)
+          ? normalizeModel(params.modelId ?? params.model)
+          : undefined,
+        referenceId: resolveReferenceId(params),
+      }),
+      ...(asFiniteNumberInRange(params.speed, { min: 0.5, max: 2 }) == null
         ? {}
-        : { model: normalizeModel(params.modelId ?? params.model) }),
-      ...(resolveReferenceId(params) == null ? {} : { referenceId: resolveReferenceId(params) }),
-      ...(normalizeNumber(params.speed, 0.5, 2) == null
-        ? {}
-        : { speed: normalizeNumber(params.speed, 0.5, 2) }),
+        : { speed: asFiniteNumberInRange(params.speed, { min: 0.5, max: 2 }) }),
     }),
     listVoices: async (req) => {
       const config = readProviderConfig(req.providerConfig ?? {});

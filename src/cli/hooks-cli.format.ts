@@ -1,4 +1,3 @@
-// Renders the `openclaw hooks` list, info, and check reports.
 import {
   decorativeEmoji,
   decorativePrefix,
@@ -10,6 +9,7 @@ import { summarizeStringEntries } from "../shared/string-sample.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
 export type HooksListOptions = {
   agent?: string;
@@ -28,28 +28,22 @@ export type HooksCheckOptions = {
   json?: boolean;
 };
 
-function formatHookStatus(hook: HookStatusEntry): string {
+function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
   if (hook.loadable) {
-    return theme.success("✓ ready");
+    return theme.success(detailed ? "✓ Ready" : "✓ ready");
   }
   if (!hook.enabledByConfig) {
-    return theme.warn(decorativePrefix("⏸", "disabled"));
+    return theme.warn(decorativePrefix("⏸", detailed ? "Disabled" : "disabled"));
   }
-  return theme.error(`✗ ${formatHookBlockedStatusReason(hook)}`);
-}
-
-function formatHookBlockedStatusReason(hook: HookStatusEntry): string {
-  return hook.blockedReason && hook.blockedReason !== "missing requirements"
-    ? hook.blockedReason
-    : "missing";
-}
-
-function formatHookInfoBlockedStatusReason(hook: HookStatusEntry): string {
   const reason =
     hook.blockedReason && hook.blockedReason !== "missing requirements"
       ? hook.blockedReason
-      : "missing requirements";
-  return reason ? `${reason[0]?.toUpperCase() ?? ""}${reason.slice(1)}` : reason;
+      : detailed
+        ? "missing requirements"
+        : "missing";
+  return theme.error(
+    `✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
+  );
 }
 
 function formatHookName(hook: HookStatusEntry): string {
@@ -188,11 +182,7 @@ export function formatHookInfo(
 
   const lines: string[] = [];
   const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const status = hook.loadable
-    ? theme.success("✓ Ready")
-    : !hook.enabledByConfig
-      ? theme.warn(decorativePrefix("⏸", "Disabled"))
-      : theme.error(`✗ ${formatHookInfoBlockedStatusReason(hook)}`);
+  const status = formatHookStatus(hook, true);
 
   lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
   lines.push("");
@@ -227,34 +217,7 @@ export function formatHookInfo(
     lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
   }
 
-  const requirementGroups = HOOK_REQUIREMENT_GROUPS.filter(
-    ([key]) => hook.requirements[key].length > 0,
-  );
-
-  if (requirementGroups.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    const formatStatus = (value: string, satisfied: boolean) =>
-      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
-    for (const [key, label] of requirementGroups) {
-      const required = hook.requirements[key];
-      const missing = hook.missing[key];
-      let requirementStatus: string;
-      if (key === "anyBins" || key === "os") {
-        const prefix = key === "anyBins" ? "any of: " : "";
-        requirementStatus = formatStatus(`(${prefix}${required.join(", ")})`, missing.length === 0);
-      } else if (key === "config") {
-        requirementStatus = hook.configChecks
-          .map((check) => formatStatus(check.path, check.satisfied))
-          .join(", ");
-      } else {
-        requirementStatus = required
-          .map((value) => formatStatus(value, !missing.includes(value)))
-          .join(", ");
-      }
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
-    }
-  }
+  lines.push(...formatCliRequirements(hook, HOOK_REQUIREMENT_GROUPS, hook.configChecks));
 
   return lines.join("\n");
 }

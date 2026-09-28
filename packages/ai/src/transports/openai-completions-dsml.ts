@@ -9,7 +9,9 @@ export type RecoveredDeepSeekDsmlToolCall = {
   partialArgs: string;
 };
 
-type DeepSeekDsmlRecoveredPart = { kind: "text"; text: string } | RecoveredDeepSeekDsmlToolCall;
+export type DeepSeekDsmlRecoveredPart =
+  | { kind: "text"; text: string }
+  | RecoveredDeepSeekDsmlToolCall;
 
 const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
 const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
@@ -32,6 +34,7 @@ const DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN = Math.max(
 // Match the shared Chat tool-argument and post-tool-call buffer limits.
 const MAX_DSML_RECOVERY_BUFFER_BYTES = 256_000;
 const DEEPSEEK_DSML_SCAN_BATCH_CHARS = 64 * 1_024;
+const DSML_NAME_ATTRIBUTE_RE = /\bname=("([^"]*)"|'([^']*)'|([^\s>]+))/;
 
 type DeepSeekDsmlToolBlockScanState = {
   offset: number;
@@ -176,7 +179,7 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlTool
     }
     const invokeBody = body.slice(invokeBodyStart, invokeCloseIndex);
     invokeOpenRegex.lastIndex = invokeCloseIndex + invokeCloseToken.length;
-    const invokeName = parseXmlAttribute(openMatch[2] ?? "", "name");
+    const invokeName = parseDsmlNameAttribute(openMatch[2] ?? "");
     if (!invokeName) {
       continue;
     }
@@ -202,7 +205,7 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
   );
   let parameterMatch: RegExpExecArray | null;
   while ((parameterMatch = parameterRegex.exec(body)) !== null) {
-    const name = parseXmlAttribute(parameterMatch[2] ?? "", "name");
+    const name = parseDsmlNameAttribute(parameterMatch[2] ?? "");
     if (!name) {
       continue;
     }
@@ -231,23 +234,8 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
   return null;
 }
 
-// Cache compiled attribute matchers by name so the streaming parser does not
-// recompile a RegExp on every chunk/parameter it scans.
-const xmlAttributeRegexCache = new Map<string, RegExp>();
-
-function xmlAttributeRegex(name: string): RegExp {
-  const cached = xmlAttributeRegexCache.get(name);
-  if (cached) {
-    return cached;
-  }
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`\\b${escaped}=("([^"]*)"|'([^']*)'|([^\\s>]+))`);
-  xmlAttributeRegexCache.set(name, pattern);
-  return pattern;
-}
-
-function parseXmlAttribute(attributes: string, name: string): string | null {
-  const match = xmlAttributeRegex(name).exec(attributes);
+function parseDsmlNameAttribute(attributes: string): string | null {
+  const match = DSML_NAME_ATTRIBUTE_RE.exec(attributes);
   const value = match?.[2] ?? match?.[3] ?? match?.[4];
   return value ? decodeDeepSeekDsmlText(value) : null;
 }

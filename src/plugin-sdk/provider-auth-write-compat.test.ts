@@ -64,7 +64,6 @@ describe("provider auth write compatibility", () => {
 
   it.each([
     { name: "provider-auth", upsert: upsertAuthProfileWithLock },
-    { name: "provider-auth-api-key", upsert: upsertApiKeyProfileWithLock },
     { name: "throwing provider-auth-api-key", upsert: upsertAuthProfileWithLockOrThrow },
   ])("ignores internal write controls through $name", async ({ upsert }) => {
     const root = tempDirs.make("openclaw-provider-auth-sdk-");

@@ -40,10 +40,7 @@ function resolveWindowsExecutableExtensions(
   env: NodeJS.ProcessEnv | undefined,
   includeExtensionless = true,
 ): string[] {
-  if (process.platform !== "win32") {
-    return [""];
-  }
-  if (path.extname(executable).length > 0) {
+  if (process.platform !== "win32" || path.extname(executable).length > 0) {
     return [""];
   }
   const extensions = [...resolveWindowsExecutableExtSet(env)];
@@ -244,21 +241,10 @@ export function resolveExecutable(cmd: string): string {
     }
   }
 
-  const cmdMatch = matches.find(
-    (match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd",
+  return (
+    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd") ??
+    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe") ??
+    matches[0] ??
+    cmd
   );
-  if (cmdMatch) {
-    return cmdMatch;
-  }
-  const exeMatch = matches.find(
-    (match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe",
-  );
-  if (exeMatch) {
-    return exeMatch;
-  }
-  if (matches[0]) {
-    return matches[0];
-  }
-
-  return cmd;
 }

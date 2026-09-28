@@ -432,6 +432,7 @@ export async function resumeThread(
               // is gone; otherwise another session can claim and lose it.
               await releaseCodexAppServerBindingSubscription(bindingBeforeCommit, {
                 assertCurrent,
+                retainedClientId: clientId,
               });
             }
             assertCurrent();

@@ -158,8 +158,11 @@ function mapChromeSameSite(
   return undefined;
 }
 
-function decryptCookieValue(row: ChromeCookieRow, key: Buffer): string | undefined {
-  const encrypted = Buffer.from(row.encrypted_value);
+function decryptCookieValue(
+  row: ChromeCookieRow,
+  encrypted: Buffer,
+  key: Buffer,
+): string | undefined {
   if (encrypted.length === 0) {
     return row.value;
   }
@@ -250,12 +253,8 @@ async function decryptChromeCookieRows(params: {
     for (const row of selected) {
       params.signal?.throwIfAborted();
       const encrypted = Buffer.from(row.encrypted_value);
-      if (encrypted.length > 0 && !encrypted.subarray(0, 3).equals(V10_PREFIX)) {
-        counts.skipped += 1;
-        continue;
-      }
       try {
-        const value = decryptCookieValue(row, decryptionKey);
+        const value = decryptCookieValue(row, encrypted, decryptionKey);
         if (value === undefined) {
           counts.skipped += 1;
           continue;

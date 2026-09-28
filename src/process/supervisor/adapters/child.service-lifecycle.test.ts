@@ -182,6 +182,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(descendantPid);
       expect(isAlive(rootPid) && isAlive(descendantPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(100);
+      // Deadline decisions wait one timer turn for pending child exit notifications.
+      await vi.advanceTimersToNextTimerAsync();
       const exit = await run.wait();
       expect(exit.reason).toBe(timing.reason);
       expect(parsePidPair(exit.stdout)).toEqual([rootPid, descendantPid]);
@@ -228,6 +230,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(500);
+      // Let the deferred construction deadline decide before awaiting startup settlement.
+      await vi.advanceTimersToNextTimerAsync();
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",
@@ -898,17 +902,26 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
         const { adapter, ready } = await withTransport(() => createChildAdapter({
-          argv: ["/bin/sh", "-c", "read gate; kill -KILL $PPID; sleep 0.05"],
+          argv: ["/bin/sh", "-c", "read -r trigger; kill -KILL $PPID"],
           stdinMode: "pipe-open",
         }));
         await ready;
-        adapter.stdin.write("kill\\n");
+        const identityLost = new Promise((resolve) => {
+          adapter.onError((error, source) => {
+            if (source === "process") resolve(error);
+          });
+        });
+        adapter.stdin.write("trigger\\n");
         adapter.stdin.end();
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        const observedError = await identityLost;
+        await new Promise((resolve) => setImmediate(resolve));
         try {
           await adapter.wait();
           process.exit(2);
-        } catch {
+        } catch (error) {
+          if (error !== observedError || !error.message.includes("cleanup identity lost")) {
+            throw error;
+          }
           process.exit(0);
         }
       `,

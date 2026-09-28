@@ -234,27 +234,6 @@ function enforceQwenPayloadAfterCaller(
   delete payload.reasoning;
 }
 
-function finalizeQwenPayloadAfterCaller(
-  value: unknown,
-  fallbackPayload: Record<string, unknown> | undefined,
-  tokenPlanContract: QwenThinkingContract | undefined,
-  forceThinking: boolean,
-  requestedEnableThinking: boolean,
-  requestedThinkingLevel: QwenThinkingLevel,
-): unknown {
-  const finalPayload = asPayloadRecord(value) ?? fallbackPayload;
-  if (finalPayload) {
-    enforceQwenPayloadAfterCaller(
-      finalPayload,
-      tokenPlanContract,
-      forceThinking,
-      requestedEnableThinking,
-      requestedThinkingLevel,
-    );
-  }
-  return value;
-}
-
 function createQwenConstraintWrapper(
   baseStreamFn: StreamFn | undefined,
   tokenPlanContract: QwenThinkingContract | undefined,
@@ -275,27 +254,24 @@ function createQwenConstraintWrapper(
       ...options,
       onPayload(payload, payloadModel) {
         const payloadObj = asPayloadRecord(payload);
-        const result = originalOnPayload?.(payload, payloadModel);
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          return Promise.resolve(result).then((resolved) =>
-            finalizeQwenPayloadAfterCaller(
-              resolved,
-              payloadObj,
+        const finalizePayload = (value: unknown) => {
+          const finalPayload = asPayloadRecord(value) ?? payloadObj;
+          if (finalPayload) {
+            enforceQwenPayloadAfterCaller(
+              finalPayload,
               tokenPlanContract,
               forceThinking,
               requestedEnableThinking,
               requestedThinkingLevel,
-            ),
-          );
+            );
+          }
+          return value;
+        };
+        const result = originalOnPayload?.(payload, payloadModel);
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          return Promise.resolve(result).then(finalizePayload);
         }
-        return finalizeQwenPayloadAfterCaller(
-          result,
-          payloadObj,
-          tokenPlanContract,
-          forceThinking,
-          requestedEnableThinking,
-          requestedThinkingLevel,
-        );
+        return finalizePayload(result);
       },
     });
   };

@@ -1,4 +1,3 @@
-// Discord helper module supports schemas behavior.
 import { Type } from "typebox";
 import { Check } from "typebox/value";
 

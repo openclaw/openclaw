@@ -460,12 +460,17 @@ describe("openSessionWorkspaceFile", () => {
       hello: gatewayHelloForMethods(["sessions.files.set"]),
       sessionKey: "agent:main:current",
       sessionWorkspaceDraftScope: "pane-left",
+      sessionWorkspaceDraftContext: { sessionTitle: "Research", paneLabel: "Column 1, row 1" },
       settings: { gatewayUrl: "wss://gateway-a.example" },
       sidebarContent: null,
       sessions: { getFile },
     } as unknown as SessionWorkspaceHost;
 
     openSessionWorkspaceFile(state, { path: "readme.md" });
+    state.sessionWorkspaceDraftContext = {
+      sessionTitle: "Later selection",
+      paneLabel: "Column 2, row 1",
+    };
 
     expect(await loadedSidebarContent(state)).toMatchObject({
       kind: "file",
@@ -473,6 +478,11 @@ describe("openSessionWorkspaceFile", () => {
       content: "# Before\n",
       draftKey:
         "wss://gateway-a.example\u0000pane-left\u0000agent:main:current\u0000/workspace\u0000README.md",
+      draftContext: {
+        sessionKey: "agent:main:current",
+        sessionTitle: "Research",
+        paneLabel: "Column 1, row 1",
+      },
       edit: { hash: "a".repeat(64) },
     });
   });

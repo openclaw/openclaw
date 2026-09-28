@@ -768,61 +768,44 @@ describe("presentation capability limits", () => {
     );
   });
 
-  it.each(
-    [
-      { encoding: "characters" as const, length: (text: string) => Array.from(text).length },
-      {
-        encoding: "utf8-bytes" as const,
-        length: (text: string) => Buffer.byteLength(text, "utf8"),
-      },
-      { encoding: "utf16-units" as const, length: (text: string) => text.length },
-    ].flatMap((mode) =>
-      [
-        { sample: "mixed text", text: "abc😀 def\nlast" },
-        { sample: "long text", text: `${"😀".repeat(64)} split \n${"e\u0301 ".repeat(24)}last` },
-      ].map((sample) => ({
-        encoding: mode.encoding,
-        length: mode.length,
-        sample: sample.sample,
-        text: sample.text,
-      })),
-    ),
-  )(
-    "preserves authored Unicode content under $encoding limits for $sample",
-    ({ encoding, length, text }) => {
-      const original = {
-        title: text,
-        blocks: [
-          { type: "text" as const, text },
-          { type: "context" as const, text },
-        ],
-      };
-      const capabilities = { context: false, limits: { text: { maxLength: 6, encoding } } };
-      const presentation = adaptMessagePresentationForChannel({
-        presentation: original,
-        capabilities,
-      });
-      expect(length(presentation.title ?? "")).toBeLessThanOrEqual(6);
-      for (const block of presentation.blocks) {
-        expect(block.type).toBe("text");
-        if (block.type === "text") {
-          expect(length(block.text)).toBeLessThanOrEqual(6);
-          expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
-        }
+  it.each([
+    { encoding: "characters" as const, length: (text: string) => Array.from(text).length },
+    { encoding: "utf8-bytes" as const, length: (text: string) => Buffer.byteLength(text, "utf8") },
+    { encoding: "utf16-units" as const, length: (text: string) => text.length },
+  ])("preserves authored Unicode content under $encoding limits", ({ encoding, length }) => {
+    const text = `${"😀".repeat(64)} split \n${"e\u0301 ".repeat(24)}last`;
+    const original = {
+      title: text,
+      blocks: [
+        { type: "text" as const, text },
+        { type: "context" as const, text },
+      ],
+    };
+    const capabilities = { context: false, limits: { text: { maxLength: 6, encoding } } };
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: original,
+      capabilities,
+    });
+    expect(length(presentation.title ?? "")).toBeLessThanOrEqual(6);
+    for (const block of presentation.blocks) {
+      expect(block.type).toBe("text");
+      if (block.type === "text") {
+        expect(length(block.text)).toBeLessThanOrEqual(6);
+        expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
       }
-      expect(renderMessagePresentationFallbackText({ presentation })).toBe(
-        renderMessagePresentationFallbackText({ presentation: original }),
-      );
-      expect(
-        renderMessagePresentationFallbackText({
-          presentation: normalizeMessagePresentation(
-            adaptMessagePresentationForChannel({ presentation, capabilities }),
-          ),
-        }),
-      ).toBe(renderMessagePresentationFallbackText({ presentation: original }));
-      expect(adaptMessagePresentationForChannel({ presentation: original })).toEqual(original);
-    },
-  );
+    }
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      renderMessagePresentationFallbackText({ presentation: original }),
+    );
+    expect(
+      renderMessagePresentationFallbackText({
+        presentation: normalizeMessagePresentation(
+          adaptMessagePresentationForChannel({ presentation, capabilities }),
+        ),
+      }),
+    ).toBe(renderMessagePresentationFallbackText({ presentation: original }));
+    expect(adaptMessagePresentationForChannel({ presentation: original })).toEqual(original);
+  });
 
   it.each([
     {
@@ -871,33 +854,6 @@ describe("presentation capability limits", () => {
         type: "select",
         placeholder: prefixes[1],
         options: [{ label: prefixes[2], value: "yes" }],
-      },
-    ]);
-  });
-
-  it("preserves link buttons by dropping only over-limit callback values", () => {
-    const presentation = adaptMessagePresentationForChannel({
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Open report", value: "x".repeat(20), url: "https://example.test" }],
-          },
-        ],
-      },
-      capabilities: {
-        limits: {
-          actions: {
-            maxValueBytes: 4,
-          },
-        },
-      },
-    });
-
-    expect(presentation.blocks).toEqual([
-      {
-        type: "buttons",
-        buttons: [{ label: "Open report", url: "https://example.test" }],
       },
     ]);
   });

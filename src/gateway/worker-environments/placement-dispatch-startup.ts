@@ -34,7 +34,8 @@ import {
   type WorkerPlacementAuthorization,
   type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
-import type { WorkerEnvironmentReconcileCore, WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 
 export type WorkerPlacementRecoveryBarrier = (params: {
@@ -372,6 +373,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       const tunnel = await environments.startTunnel({
         environmentId: provisioned.environmentId,
         ownerEpoch,
+        authorize: assertAttachmentCurrent,
       });
       params.signal?.throwIfAborted();
       params.authorize?.();
@@ -455,6 +457,7 @@ export function createWorkerPlacementDispatchStartup(options: {
               sessionKey: request.sessionKey,
               generation: placement.generation,
               ...(gitAuthor ? { gitAuthor } : {}),
+              authorize: assertSyncOwner,
             });
       assertSyncOwner();
       params.signal?.throwIfAborted();

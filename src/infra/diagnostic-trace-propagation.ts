@@ -12,11 +12,10 @@ export type DiagnosticTracePropagationBridge<TEvent, TMetadata> = Readonly<{
   resolveTraceContext: (traceContext: DiagnosticTraceContext) => DiagnosticTraceContext | undefined;
 }>;
 
-type RegisteredDiagnosticTracePropagationBridge = Readonly<{
-  shouldPrepareEvent?: (event: unknown) => boolean;
-  prepareEvent?: (event: unknown, metadata: unknown) => void;
-  resolveTraceContext: (traceContext: DiagnosticTraceContext) => DiagnosticTraceContext | undefined;
-}>;
+type RegisteredDiagnosticTracePropagationBridge = DiagnosticTracePropagationBridge<
+  unknown,
+  unknown
+>;
 
 type DiagnosticTracePropagationResolution =
   | { active: false }

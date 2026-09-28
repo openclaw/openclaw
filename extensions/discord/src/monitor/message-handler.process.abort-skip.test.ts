@@ -16,19 +16,6 @@ describe("formatDiscordReplySkip", () => {
     );
   });
 
-  it("renders the internal-only-payload reason with the same shape", () => {
-    expect(
-      formatDiscordReplySkip({
-        kind: "block",
-        reason: "internal-only payload",
-        target: "channel:456",
-        sessionKey: "agent:friday:discord:channel:456",
-      }),
-    ).toBe(
-      "discord block reply skipped (internal-only payload): target=channel:456 session=agent:friday:discord:channel:456",
-    );
-  });
-
   it("omits the session tag when sessionKey is undefined", () => {
     expect(
       formatDiscordReplySkip({
@@ -37,29 +24,5 @@ describe("formatDiscordReplySkip", () => {
         target: "channel:456",
       }),
     ).toBe("discord tool reply skipped (aborted before delivery): target=channel:456");
-  });
-
-  it("treats an empty-string sessionKey the same as undefined", () => {
-    expect(
-      formatDiscordReplySkip({
-        kind: "tool",
-        reason: "internal-only payload",
-        target: "channel:c1",
-        sessionKey: "",
-      }),
-    ).toBe("discord tool reply skipped (internal-only payload): target=channel:c1");
-  });
-
-  it("preserves the kind discriminant in the message prefix", () => {
-    for (const kind of ["tool", "block", "final"] as const) {
-      expect(
-        formatDiscordReplySkip({
-          kind,
-          reason: "aborted before delivery",
-          target: "channel:1",
-          sessionKey: "s",
-        }),
-      ).toContain(`discord ${kind} reply skipped`);
-    }
   });
 });

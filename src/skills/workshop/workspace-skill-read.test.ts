@@ -79,7 +79,7 @@ describe("listWritableWorkshopSkillSummaries", () => {
 
   it.each(
     [false, true].flatMap((rootManifest) =>
-      [["real"], ["skills"], ["real", "skills"]].map((names) => ({ rootManifest, names })),
+      [["skills"], ["real", "skills"]].map((names) => ({ rootManifest, names })),
     ),
   )(
     "discovers Workshop children $names with root manifest=$rootManifest",

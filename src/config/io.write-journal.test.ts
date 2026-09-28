@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
@@ -83,6 +84,7 @@ describe("config write and startup journal", () => {
 
   async function reconcileStartup(snapshot: ConfigFileSnapshot) {
     const reloader = startGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler(),
       initialConfig: snapshot.config,
       initialCompareConfig: snapshot.sourceConfig,
       initialSnapshotRawHash: snapshot.hash ?? null,

@@ -918,101 +918,59 @@ describe("generateVoiceResponse", () => {
     expect(requireEmbeddedAgentArgs(runEmbeddedAgent).sessionKey).toBe("agent:voice:work");
   });
 
-  it("uses the main agent workspace when voice config omits agentId", async () => {
-    const {
-      runtime,
-      runEmbeddedAgent,
-      resolveAgentDir,
-      resolveAgentWorkspaceDir,
-      resolveAgentIdentity,
-      resolveStorePath,
-      sessionStore,
-    } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
-    const coreConfig = {} as OpenClawConfig;
+  it.each([
+    { configuredAgentId: undefined, agentId: "main" },
+    { configuredAgentId: "voice", agentId: "voice" },
+  ])(
+    "uses the $agentId agent workspace with config agentId=$configuredAgentId",
+    async ({ configuredAgentId, agentId }) => {
+      const {
+        runtime,
+        runEmbeddedAgent,
+        resolveAgentDir,
+        resolveAgentWorkspaceDir,
+        resolveAgentIdentity,
+        resolveStorePath,
+        sessionStore,
+      } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
+      const coreConfig = {} as OpenClawConfig;
 
-    await generateVoiceResponse({
-      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
-      coreConfig,
-      agentRuntime: runtime,
-      callId: "call-123",
-      from: "+15550001111",
-      senderIsOwner: undefined,
-      transcript: [],
-      userMessage: "hello there",
-    });
+      const result = await generateVoiceResponse({
+        voiceConfig: VoiceCallConfigSchema.parse({
+          agentId: configuredAgentId,
+          responseTimeoutMs: 5000,
+        }),
+        coreConfig,
+        agentRuntime: runtime,
+        callId: "call-123",
+        from: "+15550001111",
+        senderIsOwner: undefined,
+        transcript: [],
+        userMessage: "hello there",
+      });
 
-    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    const defaultSessionEntry = sessionStore["agent:main:voice:15550001111"];
-    if (!defaultSessionEntry) {
-      throw new Error("Expected default voice session entry");
-    }
-    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
-    expect(args.agentId).toBe("main");
-    expect(args.sessionKey).toBe("agent:main:voice:15550001111");
-    expect(args.sessionTarget).toStrictEqual({
-      agentId: "main",
-      sessionId: defaultSessionEntry.sessionId,
-      sessionKey: "agent:main:voice:15550001111",
-      storePath: "/tmp/openclaw/main/sessions.json",
-    });
-    expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
-    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/main");
-    expect(args.sessionFile).toBeUndefined();
-  });
-
-  it("uses the configured voice response agent workspace", async () => {
-    const {
-      runtime,
-      runEmbeddedAgent,
-      resolveAgentDir,
-      resolveAgentWorkspaceDir,
-      resolveAgentIdentity,
-      resolveStorePath,
-      sessionStore,
-    } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
-    const coreConfig = {} as OpenClawConfig;
-
-    const result = await generateVoiceResponse({
-      voiceConfig: VoiceCallConfigSchema.parse({
-        agentId: "voice",
-        responseTimeoutMs: 5000,
-      }),
-      coreConfig,
-      agentRuntime: runtime,
-      callId: "call-123",
-      from: "+15550001111",
-      senderIsOwner: undefined,
-      transcript: [],
-      userMessage: "hello there",
-    });
-
-    expect(result.text).toBe("Voice agent.");
-    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "voice" });
-    expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    const voiceSessionEntry = sessionStore["agent:voice:voice:15550001111"];
-    if (!voiceSessionEntry) {
-      throw new Error("Expected routed voice session entry");
-    }
-    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
-    expect(args.agentId).toBe("voice");
-    expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
-    expect(args.sessionTarget).toStrictEqual({
-      agentId: "voice",
-      sessionId: voiceSessionEntry.sessionId,
-      sessionKey: "agent:voice:voice:15550001111",
-      storePath: "/tmp/openclaw/voice/sessions.json",
-    });
-    expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
-    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
-    expect(args.sessionFile).toBeUndefined();
-  });
+      expect(result.text).toBe("Voice agent.");
+      expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId });
+      expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, agentId);
+      expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, agentId);
+      expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, agentId);
+      const sessionKey = `agent:${agentId}:voice:15550001111`;
+      const sessionEntry = expectDefined(sessionStore[sessionKey], "voice session entry");
+      const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+      expect(args.agentDir).toBe(`/tmp/openclaw/agents/${agentId}`);
+      expect(args.agentId).toBe(agentId);
+      expect(args.sessionKey).toBe(sessionKey);
+      expect(args.sessionTarget).toStrictEqual({
+        agentId,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        storePath: `/tmp/openclaw/${agentId}/sessions.json`,
+      });
+      expect(args.sandboxSessionKey).toBe(sessionKey);
+      expect(args.workspaceDir).toBe(`/tmp/openclaw/workspace/${agentId}`);
+      expect(args.sessionFile).toBeUndefined();
+    },
+  );
 
   it("prefers the agent frozen on the call", async () => {
     const { runtime, runEmbeddedAgent, resolveStorePath } = createAgentRuntime([

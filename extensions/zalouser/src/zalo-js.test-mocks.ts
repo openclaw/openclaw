@@ -65,7 +65,6 @@ const zaloJsMocks = vi.hoisted((): ZaloJsMocks => ({
 
 export const listZaloFriendsMock = zaloJsMocks.listZaloFriendsMock;
 export const listZaloFriendsMatchingMock = zaloJsMocks.listZaloFriendsMatchingMock;
-export const listZaloGroupMembersMock = zaloJsMocks.listZaloGroupMembersMock;
 export const listZaloGroupsMock = zaloJsMocks.listZaloGroupsMock;
 export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
 export const logoutZaloProfileMock = zaloJsMocks.logoutZaloProfileMock;
@@ -81,7 +80,7 @@ vi.mock("./zalo-js.js", () => ({
   getZaloUserInfo: zaloJsMocks.getZaloUserInfoMock,
   listZaloFriends: listZaloFriendsMock,
   listZaloFriendsMatching: listZaloFriendsMatchingMock,
-  listZaloGroupMembers: listZaloGroupMembersMock,
+  listZaloGroupMembers: zaloJsMocks.listZaloGroupMembersMock,
   listZaloGroups: listZaloGroupsMock,
   listZaloGroupsMatching: zaloJsMocks.listZaloGroupsMatchingMock,
   logoutZaloProfile: zaloJsMocks.logoutZaloProfileMock,

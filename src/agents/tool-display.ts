@@ -28,8 +28,8 @@ type ToolDisplay = {
   detail?: string;
 };
 
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
-const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback;
+const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools;
 const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   agentId: "agent",
   sessionKey: "session",
@@ -63,7 +63,7 @@ export function resolveToolDisplay(params: {
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
+  const { verb, detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
@@ -74,20 +74,13 @@ export function resolveToolDisplay(params: {
     detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
-  const { verb } = toolDisplayParts;
-  let { detail } = toolDisplayParts;
-
-  if (detail) {
-    detail = shortenHomeInString(detail);
-  }
-
   return {
     name,
     emoji,
     title,
     label,
     verb,
-    detail,
+    detail: detail ? shortenHomeInString(detail) : detail,
   };
 }
 
@@ -123,8 +116,7 @@ export function isCommandBearingToolCall(name: string | undefined, args?: unknow
   if (isShellToolDisplayName(name)) {
     return true;
   }
-  const command = asOptionalObjectRecord(args)?.command;
-  return typeof command === "string" && normalizeOptionalString(command) !== undefined;
+  return normalizeOptionalString(asOptionalObjectRecord(args)?.command) !== undefined;
 }
 
 /** Builds the compact one-line summary shown in transcripts and logs. */

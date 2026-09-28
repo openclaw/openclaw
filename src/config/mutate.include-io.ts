@@ -20,7 +20,7 @@ import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import {
   captureConfigFileWritePathProof,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
   type ConfigFileWriteRollbackProof,
 } from "./io.write-safety.js";
@@ -238,7 +238,7 @@ export async function writeRootBoundJsonFile(params: {
     skipOutputLogs: params.skipOutputLogs,
   });
   const publication: { phase: "unpublished" | "removed" | "published" } = { phase: "unpublished" };
-  const guardedFs = createGuardedConfigFileSystem(
+  const writeGuard = createConfigFileWriteGuard(
     targetAtCommit.absolutePath,
     fsNode,
     assertCurrent,
@@ -260,22 +260,24 @@ export async function writeRootBoundJsonFile(params: {
     assertCurrent: () => {
       params.assertOwnerForRollback();
       pathProof.assertCurrent();
-      guardedFs.assertPublishedIdentity();
+      writeGuard.assertPublishedIdentity();
     },
-    captureRollbackProof: () => guardedFs.captureRollbackProof(params.assertOwnerForRollback),
+    captureRollbackProof: () => writeGuard.captureRollbackProof(params.assertOwnerForRollback),
   };
   try {
     await using preparedFile = await prepareConfigFileWrite({
       configPath: targetAtCommit.absolutePath,
       previousRaw: currentRaw,
       content,
-      fsModule: guardedFs.fileSystem,
-      assertCurrent: guardedFs.assertCurrent,
+      fsModule: writeGuard.fileSystem,
+      assertCurrent: writeGuard.assertCurrent,
+      assertBeforeMutation: writeGuard.assertBeforeMutation,
+      onDestinationState: writeGuard.onDestinationState,
       destinationHardlinks: "reject",
       durable: true,
     });
     await params.beforeCommit?.();
-    guardedFs.assertCurrent();
+    writeGuard.assertCurrent();
     withDeferredPluginMigrationsCurrent(
       { env: params.env, expectedPending: params.deferredPluginMigrations },
       () => {
@@ -284,8 +286,8 @@ export async function writeRootBoundJsonFile(params: {
       },
     );
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
-    guardedFs.assertCurrent();
-    guardedFs.assertPublishedIdentity();
+    writeGuard.assertCurrent();
+    writeGuard.assertPublishedIdentity();
   } catch (error) {
     if (publication.phase === "unpublished") {
       throw error;

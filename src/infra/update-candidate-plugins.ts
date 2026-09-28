@@ -214,44 +214,42 @@ async function readCopiedPluginIndex(shared: string): Promise<
     }
   | undefined
 > {
-  if (
-    await fs.stat(shared).then(
-      () => true,
-      (error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    )
-  ) {
-    const db = openNodeSqliteDatabase(shared, { readOnly: true });
-    try {
-      if (tableExists(db, "config_machine_state")) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-            .selectFrom("config_machine_state")
-            .select("value_json")
-            .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
-        );
-        if (row) {
-          const parsed: unknown = JSON.parse(row.value_json);
-          if (!isRecord(parsed) || !isRecord(parsed.index)) {
-            throw new Error("Invalid copied plugin index");
-          }
-          const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
-          if (!installed) {
-            throw new Error("Invalid copied plugin install records");
-          }
-          return { value: parsed, records: installed };
-        }
-      }
-    } finally {
-      db.close();
+  const stat = await fs.stat(shared).catch((error: unknown) => {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return undefined;
     }
+    throw error;
+  });
+  if (!stat) {
+    return undefined;
   }
-  return undefined;
+  const db = openNodeSqliteDatabase(shared, { readOnly: true });
+  try {
+    if (!tableExists(db, "config_machine_state")) {
+      return undefined;
+    }
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+    );
+    if (!row) {
+      return undefined;
+    }
+    const parsed: unknown = JSON.parse(row.value_json);
+    if (!isRecord(parsed) || !isRecord(parsed.index)) {
+      throw new Error("Invalid copied plugin index");
+    }
+    const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
+    if (!installed) {
+      throw new Error("Invalid copied plugin install records");
+    }
+    return { value: parsed, records: installed };
+  } finally {
+    db.close();
+  }
 }
 
 /** Inventory reads only private SQLite state and freezes the complete plugin projection. */

@@ -144,7 +144,7 @@ private fun isMdnsLocalHostname(host: String): Boolean {
   return labels.dropLast(1).all(::isDnsHostnameLabel)
 }
 
-private fun isDnsHostnameLabel(label: String): Boolean {
+internal fun isDnsHostnameLabel(label: String): Boolean {
   if (label.isEmpty() || label.length > 63) return false
   if (label.first() == '-' || label.last() == '-') return false
   return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }

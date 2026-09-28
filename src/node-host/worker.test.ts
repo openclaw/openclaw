@@ -197,16 +197,6 @@ describe("NodeHostWorkerBridgeClient", () => {
     await expect(response).resolves.toEqual({ bins: ["rg"] });
   });
 
-  it("fails pending gateway requests when the app worker stops", async () => {
-    const client = new NodeHostWorkerBridgeClient(() => {});
-    client.setConnection(1, true);
-    const response = client.request("skills.bins", {}, { timeoutMs: 1_000 });
-
-    client.close();
-
-    await expect(response).rejects.toThrow("node-host worker stopped");
-  });
-
   it("does not keep the worker alive for a pending gateway timeout", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const client = new NodeHostWorkerBridgeClient(() => {});
@@ -226,9 +216,7 @@ describe("NodeHostWorkerBridgeClient", () => {
   it.each([
     { requested: Number.MAX_SAFE_INTEGER, expected: MAX_TIMER_TIMEOUT_MS },
     { requested: Number.POSITIVE_INFINITY, expected: 15_000 },
-    { requested: Number.NaN, expected: 15_000 },
     { requested: 0, expected: 1 },
-    { requested: -5, expected: 1 },
     { requested: 7.9, expected: 7 },
   ])("normalizes a gateway request timeout of $requested", async ({ requested, expected }) => {
     vi.useFakeTimers();

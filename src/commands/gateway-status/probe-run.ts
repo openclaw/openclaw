@@ -44,6 +44,7 @@ export async function runGatewayStatusProbePass(params: {
   baseTargets: GatewayStatusTarget[];
   remotePort: number;
   sshTarget: string | null;
+  sshRouteTarget?: string | null;
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
   localTlsFingerprint?: string;
@@ -77,6 +78,7 @@ export async function runGatewayStatusProbePass(params: {
       const tunnel = await startSshPortForward({
         target: sshTarget,
         identity: params.sshIdentity ?? undefined,
+        hostKeyPolicy: params.cfg.gateway?.remote?.sshHostKeyPolicy,
         localPortPreferred: params.remotePort,
         remotePort: params.remotePort,
         timeoutMs: Math.min(1500, params.overallTimeoutMs),
@@ -143,10 +145,20 @@ export async function runGatewayStatusProbePass(params: {
         const probe = await probeGateway({
           url: target.url,
           config: params.cfg,
-          // Explicit, configured-remote, and SSH targets must not inherit the
-          // local Gateway's device token, even when the transport is loopback.
+          configuredRemote: target.kind === "configRemote",
+          // The same selected route owns both token lookup and the live tunnel.
+          // Transfer that lifetime to the client; the finally block also covers
+          // failures before client construction.
           ...(target.kind === "sshTunnel"
-            ? { suppressStoredDeviceAuth: true }
+            ? {
+                originScopedDeviceAuth: true,
+                sshTunnel: {
+                  target: params.sshRouteTarget ?? sshTarget ?? "",
+                  remotePort: params.remotePort,
+                  ...(params.sshIdentity ? { identity: params.sshIdentity } : {}),
+                },
+                preparedSshTunnel: tunnel ?? undefined,
+              }
             : target.kind !== "localLoopback"
               ? { originScopedDeviceAuth: true }
               : {}),

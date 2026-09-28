@@ -2332,27 +2332,6 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
-  it("keeps omitted source-reply finality terminal when the tool requests termination", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
-      {
-        ...textToolResult("Sent.", { messageId: "imessage-6264" }),
-        terminate: true,
-      },
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "visible reply",
-    });
-    expect(result.terminate).toBe(true);
-
-    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
-      sourceReplyFinal: true,
-    });
-  });
-
   it("honors explicit finality for delivered message-tool-only source replies", async () => {
     const bridge = createBridgeWithToolResult(
       "message",

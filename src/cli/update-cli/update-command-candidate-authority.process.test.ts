@@ -7,8 +7,10 @@ import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-record-state.js";
-import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "../../plugins/test-helpers/installed-plugin-index.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";

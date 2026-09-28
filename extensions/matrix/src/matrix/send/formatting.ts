@@ -1,5 +1,4 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-// Matrix helper module supports formatting behavior.
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixBody,
@@ -128,7 +127,7 @@ export function diffMatrixMentions(
   return delta;
 }
 
-export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
+export function resolveMatrixMsgType(contentType?: string): MatrixMediaMsgType {
   const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":

@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -29,7 +30,6 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -277,7 +277,7 @@ function buildEmbeddedContextFromTemplate(params: {
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
-    memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
+    memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
@@ -286,15 +286,6 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     currentInboundAudio: hasInboundAudio(sessionCtx),
   };
-}
-
-function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
-  const roles = Array.isArray(value)
-    ? value
-        .map((roleId) => normalizeOptionalString(roleId))
-        .filter((roleId): roleId is string => Boolean(roleId))
-    : [];
-  return roles.length > 0 ? roles : undefined;
 }
 
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
@@ -415,7 +406,6 @@ export async function buildEmbeddedRunExecutionParams(params: {
     promptCacheKey: params.promptCacheKey,
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    isReasoningTagProvider,
   });
   return {
     embeddedContext,

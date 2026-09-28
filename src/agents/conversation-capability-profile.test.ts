@@ -130,84 +130,39 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.skills.snapshot?.skills).toEqual([{ name: "ops" }]);
   });
 
-  it("exempts owner WebChat from wildcard sender tool restrictions", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
+  it.each([
+    {
+      name: "exempts owner WebChat from wildcard sender tool restrictions",
+      params: { messageProvider: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true },
+      restricted: false,
+    },
+    {
+      name: "exempts owner WebChat identified through the message channel",
+      params: { messageChannel: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true },
+      restricted: false,
+    },
+    {
+      name: "keeps wildcard sender tool restrictions for non-owner WebChat",
+      params: { messageProvider: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: false },
+      restricted: true,
+    },
+    {
+      name: "keeps wildcard sender tool restrictions for owners on external channels",
+      params: { messageProvider: "discord", senderIsOwner: true },
+      restricted: true,
+    },
+  ])("$name", ({ params, restricted }) => {
+    const deny = ["exec", "process"];
     const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      config: { tools: { toolsBySender: { "*": { deny } } } },
       chatType: "direct",
-      senderIsOwner: true,
+      ...params,
     });
 
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.explicitToolDenylist).toEqual([]);
-  });
-
-  it("exempts owner WebChat identified through the message channel", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageChannel: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.explicitToolDenylist).toEqual([]);
-  });
-
-  it("keeps wildcard sender tool restrictions for non-owner WebChat", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: false,
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
-  });
-
-  it("keeps wildcard sender tool restrictions for owners on external channels", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: "discord",
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
+    expect(profile.policy.senderPolicy).toEqual(
+      restricted ? { deny: ["exec", "process"] } : undefined,
+    );
+    expect(profile.policy.explicitToolDenylist).toEqual(restricted ? ["exec", "process"] : []);
   });
 
   it("prepares a shared conversation profile with group per-sender restrictions", () => {

@@ -17,7 +17,6 @@ import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-c
 import {
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
-  type resolveCodexAppServerAuthProfileIdForAgent,
   type CodexAppServerAuthProfileLookup,
 } from "./app-server/auth-profile.js";
 import {
@@ -47,7 +46,6 @@ import type {
   CodexThreadResumeResponse,
   CodexThreadStartParams,
   CodexThreadStartResponse,
-  JsonObject,
 } from "./app-server/protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
@@ -90,9 +88,7 @@ import {
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
-export type CodexConversationConfig = Parameters<
-  typeof resolveCodexAppServerAuthProfileIdForAgent
->[0]["config"];
+export type CodexConversationConfig = CodexAppServerAuthProfileLookup["config"];
 export async function resolveConversationAppServerRuntime(params: {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
@@ -191,7 +187,14 @@ export async function resolveConversationAppServerRuntime(params: {
     execMode: execPolicy.mode,
   });
   return {
-    runtime,
+    runtime: resolveCodexAppServerForModelProvider({
+      appServer: runtime,
+      provider: params.modelProvider,
+      model: params.model,
+      config: params.config,
+      env: process.env,
+      agentDir: params.agentDir,
+    }),
     workspaceDir: resolveCodexSessionPermissionCwd({
       permissionMode,
       sessionRoot,
@@ -236,12 +239,14 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     modelProvider: params.modelProvider,
     ...agentLookup,
   });
-  const modelSelection = resolveOptionalThreadRequestModelSelection({
-    model: params.model,
-    modelProvider,
-    authProfileId: params.authProfileId,
-    ...agentLookup,
-  });
+  const modelSelection = params.model?.trim()
+    ? resolveCodexAppServerRequestModelSelection({
+        model: params.model,
+        modelProvider,
+        authProfileId: params.authProfileId,
+        ...agentLookup,
+      })
+    : undefined;
   const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
@@ -258,15 +263,7 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     model: params.model,
     agentDir: params.agentDir,
   });
-  const modelScopedRuntime = resolveCodexAppServerForModelProvider({
-    appServer: runtime,
-    provider: reviewerModelProvider,
-    model: params.model,
-    config: params.config,
-    env: process.env,
-    agentDir: params.agentDir,
-  });
-  assertNativeConversationApprovalPolicySupported(modelScopedRuntime);
+  assertNativeConversationApprovalPolicySupported(runtime);
   const clientOptions = {
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
@@ -274,7 +271,7 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     ...agentLookup,
   } satisfies CodexAppServerClientOptions;
   return {
-    runtime: modelScopedRuntime,
+    runtime,
     workspaceDir,
     agentLookup,
     model: modelSelection?.model,
@@ -288,6 +285,13 @@ function buildConversationThreadRequest(
   serviceTier?: CodexServiceTier | null,
   effectiveNativeConfig?: CodexConfigReadResponse,
 ): CodexThreadStartParams {
+  const { runtime } = resolved;
+  // Bound conversations have no app approval/tool bridge. Per-app config
+  // overrides apps._default, so disable the feature for this handlerless runtime.
+  const config = buildCodexProjectDocThreadConfig(
+    mergeCodexThreadConfigs(runtime.networkProxy?.configPatch, buildDisabledAppsConfigPatch()),
+    effectiveNativeConfig,
+  );
   return {
     cwd: resolved.workspaceDir,
     ...(resolved.model ? { model: resolved.model } : {}),
@@ -298,11 +302,7 @@ function buildConversationThreadRequest(
     ...(resolved.runtime.sessionRoot
       ? { runtimeWorkspaceRoots: [resolved.runtime.sessionRoot] }
       : {}),
-    ...codexConversationSandboxOrPermissions(
-      resolved.runtime,
-      resolved.runtime.sandbox,
-      effectiveNativeConfig,
-    ),
+    ...(runtime.networkProxy ? { config } : { sandbox: runtime.sandbox, config }),
     ...(serviceTier ? { serviceTier } : {}),
   };
 }
@@ -320,26 +320,6 @@ export async function buildConversationThreadRequestForClient(
   );
   requestOptions();
   return buildConversationThreadRequest(resolved, serviceTier, effectiveConfig);
-}
-
-function codexConversationSandboxOrPermissions(
-  runtime: Pick<ConversationAppServerRuntime["runtime"], "networkProxy">,
-  sandbox: ConversationAppServerRuntime["runtime"]["sandbox"],
-  effectiveNativeConfig?: CodexConfigReadResponse,
-): {
-  sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
-  config?: JsonObject;
-} {
-  const networkProxy = runtime.networkProxy;
-  // Bound conversations have no native app approval/tool bridge. Disable
-  // globally configured Codex apps even when a network profile adds config.
-  // Per-app user config overrides apps._default, so the feature kill switch
-  // is the only authoritative boundary for this handlerless runtime.
-  const config = buildCodexProjectDocThreadConfig(
-    mergeCodexThreadConfigs(networkProxy?.configPatch, buildDisabledAppsConfigPatch()),
-    effectiveNativeConfig,
-  );
-  return networkProxy ? { config } : { sandbox, config };
 }
 
 async function writeThreadBindingFromResponse(
@@ -371,7 +351,10 @@ async function writeThreadBindingFromResponse(
       const { assertCurrent } = requestOptions();
       // Keep the old identity visible until its sole native subscription is
       // released; a concurrent owner must not adopt it between clear and cleanup.
-      await releaseCodexAppServerBindingSubscription(current, { assertCurrent });
+      await releaseCodexAppServerBindingSubscription(current, {
+        assertCurrent,
+        retainedClientId: client.getInstanceId(),
+      });
     }
     requestOptions();
     const committed = await params.bindingStore.mutate(
@@ -646,7 +629,7 @@ async function projectConversationSourceHistory(
   if (history.length === 0) {
     return;
   }
-  const clientLease = retainSharedCodexAppServerClientByInstanceId(target.clientId);
+  const clientLease = await retainSharedCodexAppServerClientByInstanceId(target.clientId);
   if (!clientLease) {
     throw new Error("Codex conversation source history lost its bound client owner.");
   }
@@ -656,7 +639,7 @@ async function projectConversationSourceHistory(
       items: history,
     });
   } finally {
-    clientLease.release();
+    await clientLease.release();
   }
 }
 
@@ -674,25 +657,6 @@ function resolveThreadRequestModelProvider(params: {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
-}
-
-function resolveOptionalThreadRequestModelSelection(params: {
-  model?: string;
-  modelProvider?: string;
-  authProfileId?: string;
-  agentDir?: string;
-  config?: CodexAppServerAuthProfileLookup["config"];
-}): { model: string; modelProvider?: string } | undefined {
-  if (!params.model?.trim()) {
-    return undefined;
-  }
-  return resolveCodexAppServerRequestModelSelection({
-    model: params.model,
-    modelProvider: params.modelProvider,
-    authProfileId: params.authProfileId,
-    agentDir: params.agentDir,
-    config: params.config,
-  });
 }
 
 export function resolveModelBackedReviewerPolicyProvider(params: {

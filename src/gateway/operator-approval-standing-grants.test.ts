@@ -25,6 +25,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   buildCronExecOperationBinding,
@@ -298,7 +299,7 @@ describe("cron standing grant mint", () => {
     const revision = seedCronJob(databaseOptions);
     await mintGrant({ databaseOptions, jobConfigRevision: revision });
     const pathname = openOpenClawStateDatabase(databaseOptions).path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
 
     const previousReader = new DatabaseSync(pathname);
     try {
@@ -393,6 +394,7 @@ describe("cron standing grant mint", () => {
       cronOperationBinding: OPERATION_BINDING,
     };
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "exec",
       persistence: { runtimeEpoch: "epoch-1", databaseOptions },
       resolveAllowedDecisions: () => ["allow-once", "allow-always", "deny"],
@@ -445,6 +447,7 @@ describe("cron standing grant mint", () => {
     // Resolve stamps created_at from the real clock; keep expiry ahead of it.
     const configuredExpiresAtMs = Date.now() + 10 * 24 * 60 * 60_000;
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "exec",
       persistence: { runtimeEpoch: "epoch-1", databaseOptions },
       resolveAllowedDecisions: () => ["allow-once", "allow-always", "deny"],
@@ -624,7 +627,7 @@ describe("cron standing grant consumption", () => {
       stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", "job-1"),
     ).rows[0]!;
     const pathname = database.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const previousWriter = new DatabaseSync(pathname);
     try {
       previousWriter.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("job-1");

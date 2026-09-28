@@ -7,7 +7,7 @@ import { prepareConfigFileWrite } from "./backup-rotation.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import {
   captureConfigFileWritePathProof,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
 } from "./io.write-safety.js";
 
@@ -50,13 +50,15 @@ function fixture() {
 }
 
 async function prepare(f: ReturnType<typeof fixture>, io: typeof fs = fs) {
-  const guarded = createGuardedConfigFileSystem(f.target, io, f.assertCurrent, f.options);
+  const guarded = createConfigFileWriteGuard(f.target, io, f.assertCurrent, f.options);
   const prepared = await prepareConfigFileWrite({
     configPath: f.target,
     previousRaw: original,
     content,
     fsModule: guarded.fileSystem,
     assertCurrent: guarded.assertCurrent,
+    assertBeforeMutation: guarded.assertBeforeMutation,
+    onDestinationState: guarded.onDestinationState,
     destinationHardlinks: "reject",
     durable: true,
   });
@@ -227,7 +229,7 @@ describe("guarded config final effects", () => {
       }
       return handle;
     });
-    const guarded = createGuardedConfigFileSystem(f.target, fs, assertCurrent, f.options);
+    const guarded = createConfigFileWriteGuard(f.target, fs, assertCurrent, f.options);
     await expect(
       prepareConfigFileWrite({
         configPath: f.target,
@@ -235,6 +237,8 @@ describe("guarded config final effects", () => {
         content,
         fsModule: guarded.fileSystem,
         assertCurrent: guarded.assertCurrent,
+        assertBeforeMutation: guarded.assertBeforeMutation,
+        onDestinationState: guarded.onDestinationState,
       }),
     ).rejects.toBe(refusal);
     expect(fs.readFileSync(f.target, "utf8")).toBe(original);

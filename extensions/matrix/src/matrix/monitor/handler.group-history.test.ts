@@ -1,21 +1,3 @@
-/**
- * Tests for Matrix group chat history accumulation.
- *
- * Covers two key scenarios:
- *
- * Scenario 1 — basic accumulation across agents:
- *   user: msg A              (no mention, accumulates)
- *   user: @agent_a msg B     (triggers agent_a; agent_a sees [A] in history, not B itself)
- *   user: @agent_b msg C     (triggers agent_b; agent_b sees [A, B] — independent watermark)
- *   user: @agent_b msg D     (triggers agent_b; agent_b sees [] — A/B/C were consumed)
- *
- * Scenario 2 — race condition safety:
- *   user: @agent_a msg A     (triggers agent_a; agent starts processing, not yet replied)
- *   user: msg B              (no mention, arrives during processing — must not be lost)
- *   agent_a: reply           (watermark advances to just after A, not after B)
- *   user: @agent_a msg C     (triggers agent_a; agent_a sees [B] in history)
- */
-
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -173,23 +155,6 @@ function expectNoBodyContaining(bodies: readonly string[], fragment: string) {
 }
 
 describe("matrix group chat history — scenario 1: basic accumulation", () => {
-  it("pending messages appear in InboundHistory; trigger itself does not", async () => {
-    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createGroupHistoryHandler(finalizeInboundContext);
-
-    // Non-trigger message A — should not dispatch
-    await handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$a", body: "msg A", ts: 1000 }));
-    expect(finalizeInboundContext).not.toHaveBeenCalled();
-
-    // Trigger B — history must contain [msg A] only, not the trigger itself
-    await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "msg B", ts: 2000 }));
-    expect(finalizeInboundContext).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
-    const history = ctx["InboundHistory"] as Array<{ body: string; sender: string }>;
-    expect(history).toHaveLength(1);
-    expect(history[0]?.body).toContain("msg A");
-  });
-
   it('keeps threaded messages in parent history when threadReplies is "off"', async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
     const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
@@ -249,6 +214,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
     // msg A accumulates for all agents
     await handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$a", body: "msg A", ts: 1000 }));
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
 
     // @agent_a trigger B — agent_a sees [msg A]
     currentAgentId = "agent_a";
@@ -736,7 +702,13 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
           }
           return "@bot:example.org";
         },
-        getEvent: async () => ({ sender: "@bot:example.org" }),
+        getEvent: async (_roomId, eventId) =>
+          createMatrixTextMessageEvent({
+            eventId,
+            sender: "@bot:example.org",
+            body: "Bot response",
+            originServerTs: 0,
+          }),
       },
     });
 

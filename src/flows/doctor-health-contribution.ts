@@ -103,6 +103,7 @@ async function runStructuredDoctorHealthContribution(params: {
     mode: "fix",
     runtime: params.ctx.runtime,
     cfg: params.ctx.cfg,
+    env: params.ctx.env,
     cwd: workspaceDir,
     configPath: params.ctx.configPath,
     dryRun,

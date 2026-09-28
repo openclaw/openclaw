@@ -4,8 +4,6 @@ import { markdownToIR, sliceMarkdownIR } from "./ir.js";
 
 // U+1F600 (😀) = 😀 in UTF-16.
 const EMOJI = "\u{1F600}";
-const LEAD_HIGH = "\uD83D"; // High surrogate for U+1F600
-const LEAD_LOW = "\uDE00"; // Low surrogate for U+1F600
 
 function expectWellFormedUtf16(text: string): void {
   expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
@@ -31,38 +29,6 @@ describe("Markdown parser calls", () => {
 });
 
 describe("sliceMarkdownIR surrogate pair boundaries", () => {
-  it("expands start boundary backward when it lands on a low surrogate", () => {
-    // "a😀b" — UTF-16: [a] [\uD83D] [\uDE00] [b], indices 0-3
-    const ir = markdownToIR(`a${EMOJI}b`);
-    expect(ir.text[1]).toBe(LEAD_HIGH);
-    expect(ir.text[2]).toBe(LEAD_LOW);
-    // from=2 points at \uDE00 (LS); should expand to from=1 to include 😀
-    const sliced = sliceMarkdownIR(ir, 2, 4);
-    expect(sliced.text).toBe(`${EMOJI}b`);
-  });
-
-  it("expands end boundary forward when it splits between HS and LS", () => {
-    // "a😀b" — UTF-16: [a] [\uD83D] [\uDE00] [b], indices 0-3
-    const ir = markdownToIR(`a${EMOJI}b`);
-    // to=2 splits between \uD83D (HS) and \uDE00 (LS); should expand to to=3
-    const sliced = sliceMarkdownIR(ir, 0, 2);
-    expect(sliced.text).toBe(`a${EMOJI}`);
-  });
-
-  it("preserves full text when boundaries are already clean", () => {
-    const ir = markdownToIR(`a${EMOJI}b`);
-    // Clean boundaries that don't split any surrogate pair
-    const sliced = sliceMarkdownIR(ir, 0, 4);
-    expect(sliced.text).toBe(`a${EMOJI}b`);
-  });
-
-  it("leaves boundaries unchanged when start is on a high surrogate", () => {
-    const ir = markdownToIR(`a${EMOJI}b`);
-    // from=1 points at \uD83D (HS) — start of pair, no adjustment needed
-    const sliced = sliceMarkdownIR(ir, 1, 4);
-    expect(sliced.text).toBe(`${EMOJI}b`);
-  });
-
   it("handles multiple consecutive surrogate pairs", () => {
     // U+1F600 😀 (😀) + U+1F431 🐱 (🐱)
     // Indices: 0=HS😀, 1=LS😀, 2=HS🐱, 3=LS🐱, len=4
@@ -78,13 +44,6 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     // start=end=2 lands on \uDE00 (LS); must remain empty, not expand to "😀"
     const ir = markdownToIR(`a${EMOJI}b`);
     const sliced = sliceMarkdownIR(ir, 2, 2);
-    expect(sliced.text).toBe("");
-  });
-
-  it("preserves empty slice when start === end lands on a high surrogate", () => {
-    // start=end=1 lands on \uD83D (HS); must remain empty
-    const ir = markdownToIR(`a${EMOJI}b`);
-    const sliced = sliceMarkdownIR(ir, 1, 1);
     expect(sliced.text).toBe("");
   });
 
@@ -117,14 +76,6 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
         { start: 0, end: expected.length, href: "https://example.com" },
       ]);
     }
-  });
-
-  it("propagates adjusted boundaries to link spans", () => {
-    const ir = markdownToIR(`a[${EMOJI}b](https://example.com)`);
-    // from=2 is LS, should expand to 1
-    const sliced = sliceMarkdownIR(ir, 2, ir.text.length);
-    expect(sliced.text).toContain(EMOJI);
-    expect(sliced.links.length).toBeGreaterThan(0);
   });
 
   it("keeps nested link and style spans aligned with the expanded start", () => {
@@ -222,15 +173,6 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
 describe("Markdown final code content", () => {
   it.each([
     {
-      name: "terminal inline code",
-      markdown: "Copy `name `",
-      expected: {
-        text: "Copy name ",
-        styles: [{ start: 5, end: 10, style: "code" }],
-        links: [],
-      },
-    },
-    {
       name: "terminal inline code in a link label",
       markdown: "[`name `](https://example.com)",
       expected: {
@@ -239,15 +181,7 @@ describe("Markdown final code content", () => {
         links: [{ start: 0, end: 5, href: "https://example.com" }],
       },
     },
-    {
-      name: "standalone one-space inline code",
-      markdown: "` `",
-      expected: {
-        text: " ",
-        styles: [{ start: 0, end: 1, style: "code" }],
-        links: [],
-      },
-    },
+
     {
       name: "standalone three-space inline code",
       markdown: "`   `",

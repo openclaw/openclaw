@@ -79,8 +79,7 @@ function isRelayTabInfo(value: unknown): value is RelayTabInfo {
   }
   const tab = value as Record<string, unknown>;
   return (
-    Number.isSafeInteger(tab.tabId) &&
-    (tab.tabId as number) >= 0 &&
+    isNonNegativeSafeInteger(tab.tabId) &&
     typeof tab.url === "string" &&
     tab.url.length <= 16_384 &&
     typeof tab.title === "string" &&

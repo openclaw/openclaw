@@ -72,6 +72,34 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 const { createOllamaWebSearchProvider } = await import("./web-search-provider.js");
 
+function createSearchTool(apiKey?: string) {
+  const tool = createOllamaWebSearchProvider().createTool({
+    config: apiKey
+      ? {
+          models: {
+            providers: {
+              ollama: { baseUrl: "https://ollama.com", api: "ollama", models: [], apiKey },
+            },
+          },
+        }
+      : {},
+  });
+  if (!tool) {
+    throw new Error("Expected Ollama web search tool");
+  }
+  return tool;
+}
+
+async function captureSearchError(tool: ReturnType<typeof createSearchTool>): Promise<Error> {
+  const error = await tool
+    .execute({ query: "latest openclaw release" })
+    .catch((caught: unknown) => caught);
+  if (!(error instanceof Error)) {
+    throw new Error("expected Ollama web search error");
+  }
+  return error;
+}
+
 const RESPONSE_BODY = '{"error":"unauthorized"}';
 
 let server: Server;
@@ -147,10 +175,7 @@ beforeEach(() => {
 
 describe("ollama web search guarded fetch", () => {
   it("cancels a stalled 401 body before guarded release", async () => {
-    const tool = createOllamaWebSearchProvider().createTool({ config: {} } as never);
-    if (!tool) {
-      throw new Error("Expected Ollama web search tool");
-    }
+    const tool = createSearchTool();
 
     await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow(
       "ollama signin",
@@ -168,10 +193,7 @@ describe("ollama web search guarded fetch", () => {
 
   it("cancels a stalled 403 body before guarded release", async () => {
     loopback.status = 403;
-    const tool = createOllamaWebSearchProvider().createTool({ config: {} } as never);
-    if (!tool) {
-      throw new Error("Expected Ollama web search tool");
-    }
+    const tool = createSearchTool();
 
     await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow("unavailable");
 
@@ -189,30 +211,9 @@ describe("ollama web search guarded fetch", () => {
     loopback.status = 429;
     const bearerCredential = "web-search-transport-bearer-secret";
     const authorization = `Bearer ${bearerCredential}`;
-    const tool = createOllamaWebSearchProvider().createTool({
-      config: {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: "https://ollama.com",
-              api: "ollama",
-              models: [],
-              apiKey: bearerCredential,
-            },
-          },
-        },
-      },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected Ollama web search tool");
-    }
+    const tool = createSearchTool(bearerCredential);
 
-    const error = await tool
-      .execute({ query: "latest openclaw release" })
-      .catch((caught: unknown) => caught);
-    if (!(error instanceof Error)) {
-      throw new Error("expected Ollama web search error");
-    }
+    const error = await captureSearchError(tool);
 
     expect(loopback.authorization).toBe(authorization);
     expect(error.message).toContain("Ollama web search failed (429)");
@@ -230,9 +231,6 @@ describe("ollama web search guarded fetch", () => {
     loopback.status = 200;
     const result = await tool.execute({ query: "latest openclaw release" });
     expect(result).toMatchObject({ provider: "ollama", count: 1 });
-    console.info(
-      "[ollama credential redaction proof] surface=web-search status=429 safe-marker-present=true authorization-secret-absent=true custom-secret-absent=true success-control=true",
-    );
   });
 
   it("redacts a bearer prefix split by the 64,000-byte error cap", async () => {
@@ -240,30 +238,9 @@ describe("ollama web search guarded fetch", () => {
     loopback.boundaryCredentialAtCap = true;
     const bearerCredential = "web-search-boundary-credential-secret";
     const retainedPrefix = bearerCredential.slice(0, -5);
-    const tool = createOllamaWebSearchProvider().createTool({
-      config: {
-        models: {
-          providers: {
-            ollama: {
-              baseUrl: "https://ollama.com",
-              api: "ollama",
-              models: [],
-              apiKey: bearerCredential,
-            },
-          },
-        },
-      },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected Ollama web search tool");
-    }
+    const tool = createSearchTool(bearerCredential);
 
-    const error = await tool
-      .execute({ query: "latest openclaw release" })
-      .catch((caught: unknown) => caught);
-    if (!(error instanceof Error)) {
-      throw new Error("expected Ollama web search error");
-    }
+    const error = await captureSearchError(tool);
 
     expect(error.message).toContain("bounded web-search diagnostic");
     expect(error.message).not.toContain(retainedPrefix);

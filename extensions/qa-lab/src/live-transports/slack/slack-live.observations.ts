@@ -1,10 +1,7 @@
-// QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
-import {
-  asPlainRecord,
-  countSlackNativeDataBlocks,
-  instrumentSlackPostMessage,
-} from "./slack-live.config.js";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { countSlackNativeDataBlocks, instrumentSlackPostMessage } from "./slack-live.config.js";
 import {
   SLACK_QA_NATIVE_CHART,
   SLACK_QA_NATIVE_TABLE,
@@ -243,7 +240,7 @@ export function isExpectedSlackNativeChartMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       { type: block.type, title: block.title, chart: block.chart },
       SLACK_QA_NATIVE_CHART,
@@ -286,9 +283,7 @@ export async function waitForSlackStoredMessage(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -321,9 +316,7 @@ async function waitForSlackStoredMessages(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -339,7 +332,7 @@ export function isExpectedSlackNativeTableMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       {
         type: block.type,

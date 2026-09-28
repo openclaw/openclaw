@@ -211,7 +211,7 @@ export async function withSqliteSessionPageReclamation<T>(
             if (!grant()) {
               throw new Error("SQLite archive pruning authority expired");
             }
-          }),
+          }, binding.attachment),
         });
       },
     };

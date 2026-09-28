@@ -561,14 +561,12 @@ function readConfirmedSessionMeta(line: string, sessionId: string): { cwd?: stri
 }
 
 function readResponseItemMessageText(parsed: Record<string, unknown>): string | undefined {
-  if (parsed.type !== "response_item" || !isRecord(parsed.payload)) {
-    return undefined;
-  }
-  if (parsed.payload.type !== "message") {
-    return undefined;
-  }
-  const role = typeof parsed.payload.role === "string" ? parsed.payload.role : "";
-  if (role !== "user") {
+  if (
+    parsed.type !== "response_item" ||
+    !isRecord(parsed.payload) ||
+    parsed.payload.type !== "message" ||
+    parsed.payload.role !== "user"
+  ) {
     return undefined;
   }
   const content = Array.isArray(parsed.payload.content) ? parsed.payload.content : [];

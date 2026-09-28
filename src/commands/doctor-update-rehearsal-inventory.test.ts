@@ -29,13 +29,13 @@ const selection = vi.hoisted(() => ({
 }));
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const registry = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
-  const { collectPluginDoctorMigrationResources } =
+  const { preparePluginDoctorMigrationResources } =
     await import("../plugins/doctor-migration-resources.js");
   return {
     ...registry,
-    collectPluginDoctorMigrationBackupResources: (
-      params: Parameters<typeof registry.collectPluginDoctorMigrationBackupResources>[0],
-    ) => collectPluginDoctorMigrationResources(selection.entries, params),
+    preparePluginDoctorMigrationBackupResources: (
+      params: Parameters<typeof registry.preparePluginDoctorMigrationBackupResources>[0],
+    ) => preparePluginDoctorMigrationResources(selection.entries, params),
   };
 });
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -224,43 +224,58 @@ it("consumes declared paths, admits legacy plugins with one typed reported warni
   });
 });
 
-it.each([
-  "external-declaration",
-  "malformed-declaration",
-  "default-alias",
-  "hardlink",
-  "companion-alias",
-] as const)("refuses %s before launching any writer", async (mode) => {
+it.each(["malformed-declaration", "default-alias", "hardlink", "companion-alias"] as const)(
+  "refuses %s before launching any writer",
+  async (mode) => {
+    await fixture(async (f) => {
+      const declared = path.join(f.root, "declared.sqlite");
+      if (mode === "default-alias") {
+        fs.symlinkSync(f.external, path.join(f.root, "undeclared-data"));
+      }
+      if (mode === "hardlink") {
+        fs.linkSync(path.join(f.external, "retained.txt"), path.join(f.root, "unowned"));
+      }
+      if (mode === "companion-alias") {
+        fs.symlinkSync(path.join(f.external, "retained.txt"), `${declared}-wal`);
+      }
+      const entry = migration("declared", () =>
+        mode === "malformed-declaration"
+          ? ([{ path: declared, kind: "invalid" }] as unknown as { path: string; kind: "file" }[])
+          : [
+              {
+                path: declared,
+                kind: "sqlite",
+              },
+            ],
+      );
+      selection.entries = [{ pluginId: "test-plugin", migration: entry }];
+      await expect(f.invoke()).rejects.toThrow(
+        mode === "malformed-declaration"
+          ? /Invalid migration/
+          : /escapes|unsafe ownership or links/,
+      );
+      expect(f.launch).not.toHaveBeenCalled();
+      expect(entry.detectLegacyState).not.toHaveBeenCalled();
+      expect(entry.migrateLegacyState).not.toHaveBeenCalled();
+      expect(f.cleanup).toHaveBeenCalledOnce();
+    });
+  },
+);
+
+it("defers a declared external owner without authorizing its configured migration root", async () => {
   await fixture(async (f) => {
-    const declared = path.join(f.root, "declared.sqlite");
-    if (mode === "default-alias") {
-      fs.symlinkSync(f.external, path.join(f.root, "undeclared-data"));
-    }
-    if (mode === "hardlink") {
-      fs.linkSync(path.join(f.external, "retained.txt"), path.join(f.root, "unowned"));
-    }
-    if (mode === "companion-alias") {
-      fs.symlinkSync(path.join(f.external, "retained.txt"), `${declared}-wal`);
-    }
-    const entry = migration("declared", () =>
-      mode === "malformed-declaration"
-        ? ([{ path: declared, kind: "invalid" }] as unknown as { path: string; kind: "file" }[])
-        : [
-            {
-              path:
-                mode === "external-declaration" ? path.join(f.external, "retained.txt") : declared,
-              kind: "sqlite",
-            },
-          ],
-    );
-    selection.entries = [{ pluginId: "test-plugin", migration: entry }];
-    await expect(f.invoke()).rejects.toThrow(
-      mode === "malformed-declaration" ? /Invalid migration/ : /escapes|unsafe ownership or links/,
-    );
-    expect(f.launch).not.toHaveBeenCalled();
+    const entry = migration("external", () => [{ path: f.external, kind: "directory" }]);
+    selection.entries = [{ pluginId: "reef", migration: entry }];
+    const config = JSON.parse(fs.readFileSync(f.configPath, "utf8"));
+    config.channels = { reef: { stateDir: f.external } };
+    fs.writeFileSync(f.configPath, JSON.stringify(config));
+    await f.invoke();
+    expect(f.launch).toHaveBeenCalledOnce();
+    expect(JSON.parse(f.runtime.log.mock.calls[0]![0]).notices).toEqual([
+      "rehearsal: reef state migrations deferred; declared data outside the rehearsal root left untouched",
+    ]);
     expect(entry.detectLegacyState).not.toHaveBeenCalled();
     expect(entry.migrateLegacyState).not.toHaveBeenCalled();
-    expect(f.cleanup).toHaveBeenCalledOnce();
   });
 });
 

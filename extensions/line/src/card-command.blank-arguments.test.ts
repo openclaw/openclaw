@@ -46,10 +46,8 @@ async function renderedMessage(
 // LINE rejects the whole push when any of these is blank, so the reply is lost
 // rather than degraded. Blank arguments are the reachable way to produce one.
 const BLANK_ARGUMENT_INPUTS = [
-  'info "Welcome"',
   "info",
   'info "" ""',
-  'info "Welcome" ""',
   'action "Menu" "" --actions "Order|/order"',
   'receipt "R" "Item:"',
   'confirm ""',

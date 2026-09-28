@@ -3,8 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { VERSION } from "../version.js";
-import "./test-helpers/service-audit-mocks.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
+import "./test-helpers/service-audit-mocks.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
   buildLaunchAgentEnvironmentWrapper,
@@ -13,12 +13,14 @@ import {
 } from "./launchd-service-files.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
-  buildScheduledTaskXml,
   buildTaskScript,
   buildHiddenLauncherScript,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
+import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
+import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
@@ -379,6 +381,38 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(JSON.stringify(result)).not.toContain("operator-secret");
 });
 
+it.each(["legacy", "edited-file", "edited-inline", "canonical"])(
+  "preserves operator PATH edits while admitting released Darwin defaults: %s",
+  async (kind) => {
+    const home = dirs.make("definition-facts-legacy-path-");
+    await fs.mkdir(path.join(home, ".bun/bin"), { recursive: true });
+    await fs.mkdir(path.join(home, "Library/pnpm"), { recursive: true });
+    const canonical = `${home}/.n/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+    // Captured from the published 2026.4.29 installer with a synthetic HOME.
+    const legacy = `${home}/.n/bin:${home}/.local/bin:${home}/.npm-global/bin:${home}/bin:${home}/.bun/bin:${home}/.nix-profile/bin:${home}/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
+    const edited = kind.startsWith("edited");
+    const command: GatewayServiceCommandConfig = {
+      programArguments: [`${home}/.n/bin/node`, "/opt/openclaw/index.js", "gateway"],
+      environment: {
+        HOME: home,
+        PATH: kind === "canonical" ? canonical : `${legacy}${edited ? ":/operator-private" : ""}`,
+      },
+      environmentValueSources: { PATH: kind === "edited-inline" ? "inline" : "file" },
+    };
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      command,
+      { ...command, environment: { HOME: home, PATH: canonical } },
+      "darwin",
+      findings,
+    );
+    expect(findings).toEqual(
+      edited ? [expect.objectContaining({ kind: "unknown-edit", key: "Environment.PATH" })] : [],
+    );
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
+
 const discardedSettings: Array<{
   key: string;
   native: string[];
@@ -587,6 +621,8 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
 
 it.each([
   "canonical",
+  "released-waiting",
+  "released-waiting-custom",
   "script",
   "launcher",
   "metadata",
@@ -596,6 +632,7 @@ it.each([
   "custom-script",
   "native-defaults",
 ])("checks generated Scheduled Task %s before a rewrite", async (kind) => {
+  const releasedWaiting = kind.startsWith("released-waiting");
   const home = dirs.make("rewrite-task-preservation-");
   const env = {
     USERPROFILE: home,
@@ -604,6 +641,9 @@ it.each([
     ...(kind === "custom-script" ? { OPENCLAW_TASK_SCRIPT_NAME: "gateway.bat" } : {}),
   };
   const environment: Record<string, string> = { ...staleServiceEnvironment };
+  if (releasedWaiting) {
+    environment.OPENCLAW_SERVICE_VERSION = "2026.9.3";
+  }
   if (kind === "path") {
     environment.PATH = "C:\\operator-private";
   }
@@ -621,8 +661,10 @@ it.each([
     buildTaskScript(command) +
     (kind === "script" ? "echo operator-private\r\n" : "");
   const launcher =
-    buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
-    (kind === "launcher" || kind === "planned-launcher"
+    (releasedWaiting
+      ? `' OpenClaw Gateway (v2026.9.3)\r\nWScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath.replaceAll('"', '""')}""", 0, True)\r\n`
+      : buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })) +
+    (kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
       ? 'WScript.Echo "operator-private"\r\n'
       : "");
   await fs.writeFile(scriptPath, script);
@@ -664,8 +706,18 @@ it.each([
       environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     },
   });
-  if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
+  if (
+    kind === "canonical" ||
+    kind === "released-waiting" ||
+    kind === "missing-launcher" ||
+    kind === "custom-script"
+  ) {
     expect(result.definitionDrift).toBeUndefined();
+  } else if (kind === "script") {
+    expect(result.definitionDrift).toBeUndefined();
+    expect(result.definitionDriftError).toBe(
+      "Service definition inspection could not be completed.",
+    );
   } else if (kind === "native-defaults") {
     expect(result.definitionDrift).toEqual(
       expect.arrayContaining([
@@ -695,18 +747,18 @@ it.each([
       expect.objectContaining({
         kind: "unknown-edit",
         key:
-          kind === "script"
-            ? "TaskScript"
-            : kind === "launcher" || kind === "planned-launcher"
-              ? "TaskLauncher"
-              : kind === "path"
-                ? "Environment.PATH"
-                : "RegistrationInfo.Description",
+          kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
+            ? "TaskLauncher"
+            : kind === "path"
+              ? "Environment.PATH"
+              : "RegistrationInfo.Description",
       }),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   }
-  expect(result.definitionDriftError).toBeUndefined();
+  if (kind !== "script") {
+    expect(result.definitionDriftError).toBeUndefined();
+  }
   expect(await fs.readFile(scriptPath, "utf8")).toBe(script);
   if (kind === "missing-launcher") {
     await expect(fs.stat(hiddenPath)).rejects.toMatchObject({ code: "ENOENT" });

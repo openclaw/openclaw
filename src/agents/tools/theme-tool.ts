@@ -8,11 +8,18 @@ import {
 import { normalizeThemeDefinition } from "../../../packages/gateway-protocol/src/theme.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
+import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 
 const ThemeToolSchema = Type.Object(
   {
     action: Type.String({ enum: ["list", "get", "set", "import"] }),
+    user: Type.Optional(
+      Type.String({
+        description:
+          "The person's requester_profile.id, required when several people have steered this turn.",
+      }),
+    ),
     id: Type.Optional(
       Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
         description: "Theme ID; import uses a personal slug. Set null to clear the override.",
@@ -90,16 +97,18 @@ export function createThemeTool(): AnyAgentTool {
         params: themeParams(action, params),
         signal,
       };
-      if (action === "list") {
-        const { themes, current } = await callAgentToolGatewayRequest<ThemesListResult>(request);
-        return jsonResult({ themes, current });
-      }
-      if (action === "get") {
-        return jsonResult(await callAgentToolGatewayRequest<ThemesGetResult>(request));
-      }
-      const { current, theme, application } =
-        await callAgentToolGatewayRequest<ThemesMutationResult>(request);
-      return jsonResult({ current, theme, application });
+      return await withGatewayPersonalToolUser(readToolStringParam(params, "user"), async () => {
+        if (action === "list") {
+          const { themes, current } = await callAgentToolGatewayRequest<ThemesListResult>(request);
+          return jsonResult({ themes, current });
+        }
+        if (action === "get") {
+          return jsonResult(await callAgentToolGatewayRequest<ThemesGetResult>(request));
+        }
+        const { current, theme, application } =
+          await callAgentToolGatewayRequest<ThemesMutationResult>(request);
+        return jsonResult({ current, theme, application });
+      });
     },
   };
 }
