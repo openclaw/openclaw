@@ -215,6 +215,12 @@ that its installation has been replaced; restart the unit after the update.
 Use the unit name printed in your result, including any instance name, then
 check `openclaw gateway status --deep`.
 
+If the same Gateway unit exists in both user and system scopes, updates retain
+these system-scope restrictions. A differently named Gateway does not create this
+conflict. Installation-replacement restarts wait for the helper to confirm updater
+and cleanup settlement; an interrupted helper alone does not permit a restart.
+Inspect any surviving updater before manually restarting after an interruption.
+
 The restart remains operator-managed even when the updater runs as root:
 managed update handoffs own user-scope service supervision and recovery, not
 the system service's lifecycle. Pending Doctor or plugin maintenance is recorded

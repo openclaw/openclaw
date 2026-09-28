@@ -23,27 +23,12 @@ type CanvasSurfaceLease = {
   stop: () => void;
 };
 
-export function createCanvasSurfaceLease<
-  TimerHandle = ReturnType<typeof globalThis.setTimeout>,
->(params: {
+export function createCanvasSurfaceLease(params: {
   request: (method: string, params: unknown) => Promise<unknown>;
   onChange: (url: string | null) => void;
-  onConnectionChange?: () => void;
-  now?: () => number;
-  setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
-  clearTimer?: (timer: TimerHandle) => void;
 }): CanvasSurfaceLease {
-  const now = params.now ?? Date.now;
-  const setTimer =
-    params.setTimer ??
-    ((callback: () => void, delayMs: number) =>
-      globalThis.setTimeout(callback, delayMs) as TimerHandle);
-  const clearTimer =
-    params.clearTimer ??
-    ((timer: TimerHandle) =>
-      globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>));
   let currentUrl: string | null = null;
-  let timer: TimerHandle | null = null;
+  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let inFlight: { generation: number; promise: Promise<void> } | null = null;
   let consecutiveFailures = 0;
   let generation = 0;
@@ -52,7 +37,7 @@ export function createCanvasSurfaceLease<
 
   const clearScheduledRenewal = () => {
     if (timer !== null) {
-      clearTimer(timer);
+      globalThis.clearTimeout(timer);
       timer = null;
     }
   };
@@ -62,7 +47,7 @@ export function createCanvasSurfaceLease<
       return;
     }
     clearScheduledRenewal();
-    timer = setTimer(
+    timer = globalThis.setTimeout(
       () => {
         if (!ownsGeneration(expectedGeneration)) {
           return;
@@ -109,7 +94,7 @@ export function createCanvasSurfaceLease<
         const delayMs =
           refreshed.expiresAtMs === undefined
             ? MISSING_EXPIRY_RENEWAL_DELAY_MS
-            : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - now() - RENEWAL_LEAD_MS);
+            : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS);
         schedule(delayMs, expectedGeneration);
       })
       .catch(() => handleFailure(expectedGeneration))
@@ -127,7 +112,6 @@ export function createCanvasSurfaceLease<
       started = true;
       consecutiveFailures = 0;
       clearScheduledRenewal();
-      params.onConnectionChange?.();
       const trimmedUrl = helloUrl?.trim();
       currentUrl = trimmedUrl ? trimmedUrl : null;
       params.onChange(currentUrl);
@@ -143,7 +127,6 @@ export function createCanvasSurfaceLease<
       started = false;
       consecutiveFailures = 0;
       clearScheduledRenewal();
-      params.onConnectionChange?.();
       currentUrl = null;
       params.onChange(null);
     },
