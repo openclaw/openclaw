@@ -53,7 +53,9 @@ function fixture() {
   writeFileSync(trace, "");
   // Observe the actual executable boundary, then replace this process with real
   // Git. A denied command must never enter this executable.
-  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const realGit = spawnSync("/bin/sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).stdout.trim();
   writeFileSync(
     path.join(bin, "git"),
     `#!/bin/sh\nprintf 'spawn\\n' >> '${trace}'\nexec '${realGit}' "$@"\n`,
