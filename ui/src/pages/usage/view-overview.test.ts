@@ -1,32 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderUsageHeatmap } from "./view-heatmap.ts";
+import type { UsageAggregates, UsageSessionEntry } from "./types.ts";
+import { totals, dailyEntry } from "./usage-chart.test-support.ts";
+import { renderCostBreakdownCompact } from "./view-chart.ts";
 import {
-  renderDailyChartCompact,
-  renderCostBreakdownCompact,
   renderCostWindowComparison,
   renderFilterChips,
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
-
-const totals: UsageTotals = {
-  input: 100,
-  output: 40,
-  cacheRead: 300,
-  cacheWrite: 600,
-  totalTokens: 1040,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
 
 const aggregates = {
   messages: {
@@ -48,36 +32,6 @@ const aggregates = {
   byChannel: [],
   daily: [],
 } as unknown as UsageAggregates;
-
-function dailyEntry(date: string, totalTokens: number, totalCost = 0): CostDailyEntry {
-  return {
-    ...totals,
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost,
-  };
-}
-
-function renderDailyChart(
-  daily: CostDailyEntry[],
-  onSelectDay = vi.fn<(day: string, shiftKey: boolean) => void>(),
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderDailyChartCompact(daily, [], "tokens", "total", () => {}, onSelectDay),
-    container,
-  );
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
-}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -106,16 +60,21 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
-  it("renders overview hints as focusable tooltip anchors", () => {
+  it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
     render(
       renderUsageInsights(
         totals,
-        aggregates,
         {
-          durationSumMs: 0,
+          ...aggregates,
+          byAgent: [
+            { agentId: "main", totals },
+            { agentId: "research", totals },
+          ],
+        },
+        {
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -133,6 +92,14 @@ describe("renderUsageInsights", () => {
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
     expect(
       buttons.every(
         (button) =>
@@ -166,7 +133,6 @@ describe("renderUsageInsights", () => {
         totals,
         aggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -208,7 +174,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -247,7 +212,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -262,44 +226,6 @@ describe("renderUsageInsights", () => {
     );
 
     expect(container.textContent).not.toContain("1000.0% of cost");
-  });
-});
-
-describe("renderUsageHeatmap", () => {
-  it("renders the selected activity range from usage cost data", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap(
-        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
-        "2025-07-11",
-        "2026-07-09",
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-      "Token Activity",
-    );
-    expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(
-      container
-        .querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")
-        ?.getAttribute("data-tooltip"),
-    ).toContain("20 tokens");
-  });
-
-  it("keeps short ranges at their natural cell width", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector<SVGElement>(".usage-heatmap__svg")
-        ?.style.getPropertyValue("--usage-heatmap-width"),
-    ).toBe("44px");
   });
 });
 
@@ -321,7 +247,12 @@ describe("usage overview presentation owners", () => {
       container,
     );
 
-    const categories = ["output", "input", "cache-write", "cache-read"];
+    const categories = [
+      "usage-token-output",
+      "usage-token-input",
+      "usage-token-cache-write",
+      "usage-token-cache-read",
+    ];
     expect(
       [...container.querySelectorAll(".cost-breakdown-bar .cost-segment")].map((segment) =>
         categories.find((category) => segment.classList.contains(category)),
@@ -371,147 +302,6 @@ describe("usage overview presentation owners", () => {
   });
 });
 
-describe("renderDailyChartCompact", () => {
-  it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
-    const bar = expectDefined(bars[0], "daily usage bar");
-
-    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-
-    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
-
-    const space = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: " ",
-      shiftKey: true,
-    });
-    bar.dispatchEvent(space);
-    expect(space.defaultPrevented).toBe(true);
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-  });
-
-  it("labels the chart scale with the selected metric", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 2)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map(
-        (entry) => entry.textContent,
-      ),
-    ).toEqual(["$2.00", "$1.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("labels the true midpoint of a compressed chart scale", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 100)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$100.00", "$25.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")?.textContent?.trim()).toBe("√");
-  });
-
-  it("preserves sub-cent values in chart scale labels", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 0.004), dailyEntry("2026-05-04", 1_000, 0.008)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.0080", "$0.0040", "$0.00"]);
-  });
-
-  it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
-    const container = document.createElement("div");
-    const microCostDay = {
-      ...dailyEntry("2026-05-04", 1_000, 0.00001),
-      inputCost: 0.000004,
-      outputCost: 0.000006,
-    };
-    render(
-      renderDailyChartCompact(
-        [microCostDay],
-        [],
-        "cost",
-        "by-type",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
-    expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
-    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
-    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip?.content).toContain("$0.000010");
-    expect(tooltip?.content).toContain("Output $0.000006");
-    expect(tooltip?.content).toContain("Input $0.000004");
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("reserves the totals row when dense ranges hide bar totals", () => {
-    const container = document.createElement("div");
-    const daily = Array.from({ length: 15 }, (_, index) =>
-      dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, index + 1),
-    );
-    render(
-      renderDailyChartCompact(
-        daily,
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(15);
-  });
-});
-
 describe("renderCostWindowComparison", () => {
   it("shows the selected range and shorter calendar periods", () => {
     const container = document.createElement("div");
@@ -524,6 +314,7 @@ describe("renderCostWindowComparison", () => {
         ],
         "2026-06-01",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -547,6 +338,7 @@ describe("renderCostWindowComparison", () => {
         [dailyEntry("2026-07-01", 300, 0.003)],
         "2026-06-02",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -596,6 +388,22 @@ describe("renderSessionsCard", () => {
     );
     return container;
   };
+
+  it("identifies mixed-agent sessions even when optional metadata columns are hidden", async () => {
+    const container = renderCard([
+      { key: "agent:main:one", agentId: "main", usage: null },
+      { key: "agent:research:two", agentId: "research", usage: null },
+    ]);
+    document.body.append(container);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".session-bar-row .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
+  });
 
   const shownCountCases: Array<{
     name: string;
@@ -802,13 +610,6 @@ describe("renderSessionsCard", () => {
   it.each([
     {
       tokens: true,
-      sort: "tokens",
-      names: ["All time winner", "Day winner"],
-      values: ["30", "10"],
-      avg: "20",
-    },
-    {
-      tokens: true,
       sort: "cost",
       names: ["Day winner", "All time winner"],
       values: ["10", "30"],
@@ -819,13 +620,6 @@ describe("renderSessionsCard", () => {
       sort: "tokens",
       names: ["All time winner", "Day winner"],
       values: ["$1.00", "$10.00"],
-      avg: "$5.50",
-    },
-    {
-      tokens: false,
-      sort: "cost",
-      names: ["Day winner", "All time winner"],
-      values: ["$10.00", "$1.00"],
       avg: "$5.50",
     },
   ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {

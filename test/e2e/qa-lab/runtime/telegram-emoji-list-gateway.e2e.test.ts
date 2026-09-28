@@ -83,6 +83,8 @@ function scriptMessageToolCall(payload: string, args: JsonObject) {
         finishAssistantMessage(item);
       } else if (event.type === "response.function_call_arguments.delta" && scripted) {
         event.delta = argumentsText;
+      } else if (event.type === "response.function_call_arguments.done" && scripted) {
+        event.arguments = argumentsText;
       } else if (event.type === "response.completed") {
         const response = event.response as JsonObject | undefined;
         const output = response?.output;
@@ -142,7 +144,15 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
     const upstream = await fetch(`${mock.baseUrl}${pathname}`, {
       method: req.method,
       ...(raw ? { body: raw } : {}),
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(typeof req.headers.session_id === "string"
+          ? { session_id: req.headers.session_id }
+          : {}),
+        ...(typeof req.headers["x-session-affinity"] === "string"
+          ? { "x-session-affinity": req.headers["x-session-affinity"] }
+          : {}),
+      },
     });
     let payload = await upstream.text();
     const currentScenarioIndex = raw.lastIndexOf(CURRENT_CHAT_SCENARIO);
@@ -249,6 +259,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
             repoRoot,
             command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
+            mockSessionObserverUrl: mock.sessionObserverUrl,
             transportBaseUrl: apiRoot,
             transport: {
               requiredPluginIds: ["telegram"],

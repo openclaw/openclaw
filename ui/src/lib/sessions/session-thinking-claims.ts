@@ -18,6 +18,7 @@ export function createSessionThinkingClaims(
     string,
     readonly [value: string, updatedAt: number | undefined, afterRevision: number]
   >();
+  const suspended = new Map<string, Set<symbol>>();
   const claimKey = (key: string, agentId?: string | null) => {
     const ownerAgentId =
       parseAgentSessionKey(key)?.agentId ??
@@ -27,9 +28,38 @@ export function createSessionThinkingClaims(
   };
 
   return {
-    get: (key: string, agentId?: string | null) => claims.get(claimKey(key, agentId))?.[0],
-    clear: (key: string, agentId?: string | null) => claims.delete(claimKey(key, agentId)),
-    reset: () => claims.clear(),
+    get: (key: string, agentId?: string | null) => {
+      const resolvedKey = claimKey(key, agentId);
+      return suspended.has(resolvedKey) ? undefined : claims.get(resolvedKey)?.[0];
+    },
+    clear: (key: string, agentId?: string | null) => {
+      const resolvedKey = claimKey(key, agentId);
+      suspended.delete(resolvedKey);
+      return claims.delete(resolvedKey);
+    },
+    suspend: (key: string, agentId?: string | null) => {
+      const resolvedKey = claimKey(key, agentId);
+      if (!claims.has(resolvedKey)) {
+        return undefined;
+      }
+      const token = Symbol("session-thinking-claim-suspension");
+      const tokens = suspended.get(resolvedKey) ?? new Set<symbol>();
+      tokens.add(token);
+      suspended.set(resolvedKey, tokens);
+      return () => {
+        const current = suspended.get(resolvedKey);
+        if (!current?.delete(token)) {
+          return;
+        }
+        if (current.size === 0) {
+          suspended.delete(resolvedKey);
+        }
+      };
+    },
+    reset: () => {
+      claims.clear();
+      suspended.clear();
+    },
     recordCreated(key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) {
       if (typeof entry?.thinkingLevel === "string" && typeof entry.updatedAt === "number") {
         claims.set(claimKey(key, agentId), [

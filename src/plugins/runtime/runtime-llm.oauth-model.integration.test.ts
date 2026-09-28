@@ -2,7 +2,7 @@ import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -56,7 +56,7 @@ function preparedOauthModel(
   { model: unknown }
 > {
   return {
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
     selection: {
       provider: "openai",
       modelId,
@@ -215,7 +215,7 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
     ).rejects.toThrow("selected a credential with the wrong authentication mode");
     await completionWork.drain();
     expect(modelFetch).not.toHaveBeenCalled();
-    expect(prepared.release).toHaveBeenCalledTimes(1);
+    expect(prepared[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
   });
 
   it("binds a direct model override to its selected OAuth profile", async () => {
@@ -234,7 +234,7 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
 
     await expect(
       completionWork.track(() =>
-        withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
           llm.complete({
             model: `openai/${modelId}@${profileId}`,
             messages: [{ role: "user", content: "Ping" }],
@@ -268,7 +268,7 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
 
     await expect(
       completionWork.track(() =>
-        withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
           llm.complete({
             model: `openai/${modelId}@${profileId}`,
             messages: [{ role: "user", content: "Ping" }],
@@ -279,6 +279,6 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
     ).rejects.toThrow("selected a different authentication profile");
     await completionWork.drain();
     expect(modelFetch).not.toHaveBeenCalled();
-    expect(prepared.release).toHaveBeenCalledTimes(1);
+    expect(prepared[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGateway,
   createGatewayHarness,
   createSessionsHarness,
   createSessionState,
-  deferred,
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
@@ -33,6 +33,7 @@ describe("AppSidebar gateway session pagination", () => {
       harness.list.mockClear();
       harness.list.mockResolvedValue(changedResult);
 
+      vi.useFakeTimers();
       gateway.publishEvent("sessions.changed", {
         sessionKey: "agent:main:after-remote-change",
         reason: "archive",
@@ -42,6 +43,7 @@ describe("AppSidebar gateway session pagination", () => {
         reason: "archive",
       });
 
+      await vi.advanceTimersByTimeAsync(5_000);
       await waitForFast(() => {
         expect(harness.list).toHaveBeenCalledTimes(1);
         expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
@@ -89,16 +91,16 @@ describe("AppSidebar gateway session pagination", () => {
       expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       harness.list.mockClear();
 
+      vi.useFakeTimers();
       gateway.publishEvent("sessions.changed", {
         sessionKey: keys[0],
         agentId: "main",
         reason: "archive",
       });
 
-      await waitForFast(() => {
-        expect(harness.list).toHaveBeenCalledOnce();
-        expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
-      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(harness.list).toHaveBeenCalledOnce();
+      expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "main",

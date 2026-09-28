@@ -9,7 +9,7 @@ import {
   resolveLivePluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -101,7 +101,7 @@ module.exports = { stateMigrations: [{
     loadInstalledPluginIndex({ config, env }),
   );
   // Older Doctor initialization persisted a projection with otherwise current metadata.
-  writePersistedInstalledPluginIndexSync(
+  await writePersistedInstalledPluginIndex(
     {
       ...fullIndex,
       refreshReason: "migration",
@@ -141,6 +141,8 @@ module.exports = { stateMigrations: [{
 
         await expect(repair()).resolves.toEqual({
           changes: ["migrated kept-owner", "migrated omitted-owner"],
+          completedPluginIds: ["kept-owner", "omitted-owner"],
+          requiredPluginIds: ["kept-owner", "omitted-owner"],
           warnings: [],
         });
         for (const pluginId of pluginIds) {
@@ -148,7 +150,12 @@ module.exports = { stateMigrations: [{
             "migrated",
           );
         }
-        await expect(repair()).resolves.toEqual({ changes: [], warnings: [] });
+        await expect(repair()).resolves.toEqual({
+          changes: [],
+          completedPluginIds: ["kept-owner", "omitted-owner"],
+          requiredPluginIds: ["kept-owner", "omitted-owner"],
+          warnings: [],
+        });
       },
       { config, env },
     );
@@ -263,11 +270,16 @@ module.exports = { stateMigrations: [{
   const refused = await runRepair(baseConfig, frozenActions.toReversed());
   expect(refused).toEqual({
     changes: [],
+    completedPluginIds: undefined,
+    requiredPluginIds: ["acpx", "codex"],
     warnings: [expect.stringContaining("immutable action order")],
+    warningDisposition: undefined,
   });
 
   await expect(runRepair(baseConfig, frozenActions)).resolves.toEqual({
     changes: ["migrated acpx", "migrated codex"],
+    completedPluginIds: ["acpx", "codex"],
+    requiredPluginIds: ["acpx", "codex"],
     warnings: [],
   });
   expect(fs.readFileSync(markerPaths.acpx, "utf8")).toBe("migrated");
@@ -290,11 +302,11 @@ it.each([
     const pluginRoot = path.join(root, pluginId);
     const mutationPath = path.join(root, "migrated");
     const cacheRoot = path.join(root, "cache");
+    const unavailableCacheRoot = path.join(root, "unavailable-cache");
     fs.mkdirSync(pluginRoot);
+    fs.mkdirSync(cacheRoot);
     if (inventory === "staging-unavailable") {
-      fs.writeFileSync(cacheRoot, "not a directory");
-    } else {
-      fs.mkdirSync(cacheRoot);
+      fs.writeFileSync(unavailableCacheRoot, "not a directory");
     }
     vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
     const action = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
@@ -350,6 +362,7 @@ module.exports = { stateMigrations: [{
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      XDG_CACHE_HOME: cacheRoot,
     };
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
     openOpenClawStateDatabase({ env });
@@ -362,16 +375,31 @@ module.exports = { stateMigrations: [{
       clearPluginDoctorContractRegistryCache();
     }
 
-    const params = {
+    let stagingFaultArmed = false;
+    const params: Parameters<typeof autoMigrateLegacyState>[0] = {
       cfg,
       env,
       homedir: () => root,
       doctorOnlyStateMigrations: inventory !== "automatic-cache",
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      onStepReceipt(receipt) {
+        if (
+          inventory === "staging-unavailable" &&
+          receipt.id === "config-machine-state" &&
+          receipt.outcome !== "refused"
+        ) {
+          // Schema preparation also needs snapshots. Fail the following inventory
+          // discovery only after the prerequisite state preparation has settled.
+          vi.stubEnv("XDG_CACHE_HOME", unavailableCacheRoot);
+          env.XDG_CACHE_HOME = unavailableCacheRoot;
+          stagingFaultArmed = true;
+        }
+      },
     };
     const result = await autoMigrateLegacyState(params);
 
     expect(fs.existsSync(mutationPath)).toBe(false);
+    expect(stagingFaultArmed).toBe(inventory === "staging-unavailable");
     if (inventory === "automatic-cache") {
       expect(result.stepReceipts.length).toBeGreaterThan(0);
       await expect(autoMigrateLegacyState(params)).resolves.toMatchObject({
@@ -385,14 +413,12 @@ module.exports = { stateMigrations: [{
     if (inventory !== "readable") {
       expect(result.stepReceipts).toContainEqual(expect.objectContaining({ outcome: "refused" }));
       const blocker = result.stepReceipts.findIndex((receipt) => receipt.outcome === "refused");
+      // Agent history now needs the artifact-preserving snapshot before plugin inventory does.
       expect(result.stepReceipts[blocker]).toMatchObject({
-        id:
-          inventory === "staging-unavailable"
-            ? "plugin-migration-preparation"
-            : "plugin-doctor-state",
+        id: inventory === "staging-unavailable" ? "agent-migration-targets" : "plugin-doctor-state",
         refusal: {
           code:
-            inventory === "staging-unavailable" ? "plugin-inventory-unavailable" : "step-refused",
+            inventory === "staging-unavailable" ? "agent-target-discovery-failed" : "step-refused",
         },
       });
       expect(result.stepReceipts.slice(blocker + 1)).toEqual(
@@ -440,7 +466,12 @@ module.exports = { stateMigrations: [{
         maintenanceAuthority: { assertCurrent() {} },
         plannedActions: prepared?.plannedActions,
       }),
-    ).resolves.toEqual({ changes: ["migrated session action"], warnings: [] });
+    ).resolves.toEqual({
+      changes: ["migrated session action"],
+      completedPluginIds: ["inventory-owner"],
+      requiredPluginIds: ["inventory-owner"],
+      warnings: [],
+    });
     expect(fs.readFileSync(mutationPath, "utf8")).toBe("migrated");
   },
 );

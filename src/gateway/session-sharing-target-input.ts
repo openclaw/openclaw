@@ -1,21 +1,19 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  listSessionGroups,
-  normalizeGroupNames,
-  resolveSessionGroupMutationTargetsByName,
-} from "./session-groups.js";
+import { listSessionGroups } from "./session-groups.js";
 import {
   isApprovalSessionTargetMethod,
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
-import { resolveUnifiedTalkSessionTarget } from "./talk-session-registry.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
@@ -26,12 +24,12 @@ export function resolveDirectSessionTargets(
   if (method === "sessions.create" || method === "sessions.list") {
     return [];
   }
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
+  const record = asOptionalRecord(params);
+  if (!record) {
     return [];
   }
-  const record = params as Record<string, unknown>;
   const candidates = [record.key, record.sessionKey];
-  if (Array.isArray(record.keys)) {
+  if (method.startsWith("sessions.") && Array.isArray(record.keys)) {
     candidates.push(...record.keys);
   }
   if (Array.isArray(record.sessionKeys)) {
@@ -57,24 +55,19 @@ export function resolveDirectIncognitoTargets(
 }
 
 function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return undefined;
-  }
-  return normalizeOptionalString((params as Record<string, unknown>)[key]);
+  return normalizeOptionalString(asOptionalRecord(params)?.[key]);
 }
 
-function resolveSessionGroupMutationTargets(params: {
-  getCfg: () => OpenClawConfig;
-  requestParams: unknown;
-}): SessionMutationTarget[] | undefined {
-  const groupName = readSessionSharingStringParam(params.requestParams, "name");
-  return groupName
-    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
-    : undefined;
+function preparedGroupTargets(context: GatewayRequestContext) {
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Session group membership is unavailable during Gateway startup");
+  }
+  return projection.sessionGroupTargets();
 }
 
 function resolveSessionGroupsPutMutationTargets(
-  getCfg: () => OpenClawConfig,
+  context: GatewayRequestContext,
   requestParams: unknown,
 ): SessionMutationTarget[] | undefined {
   const names =
@@ -84,14 +77,14 @@ function resolveSessionGroupsPutMutationTargets(
   if (!Array.isArray(names)) {
     return undefined;
   }
-  const requested = new Set(normalizeGroupNames(names.filter((name) => typeof name === "string")));
+  const requested = new Set(normalizeUniqueTrimmedStringList(names));
   const dropped = listSessionGroups()
     .map((group) => group.name)
     .filter((name) => !requested.has(name));
   if (dropped.length === 0) {
     return [];
   }
-  const byName = resolveSessionGroupMutationTargetsByName(getCfg());
+  const byName = preparedGroupTargets(context);
   return dropped.flatMap((name) => byName.get(name) ?? []);
 }
 
@@ -111,10 +104,10 @@ function resolveApprovalSessionTarget(
       : method === "approval.resolve" && kind === "system-agent"
         ? context.systemAgentApprovalManager
         : context.execApprovalManager;
-  const resolvedId = manager?.lookupApprovalId(id, { includeResolved: true });
+  const resolvedId = manager?.lookupLocalApprovalId(id, { includeResolved: true });
   const recordId =
     resolvedId?.kind === "exact" || resolvedId?.kind === "prefix" ? resolvedId.id : id;
-  const request = manager?.getSnapshot(recordId)?.request;
+  const request = manager?.getLocalSnapshot(recordId)?.request;
   const sessionKey = readSessionSharingStringParam(request, "sessionKey");
   const agentId = readSessionSharingStringParam(request, "agentId");
   return sessionKey
@@ -170,7 +163,6 @@ export function resolveSessionMutationTargets(params: {
   method: string;
   requestParams: unknown;
   context: GatewayRequestContext;
-  getCfg: () => OpenClawConfig;
 }): SessionMutationTarget[] | undefined {
   if (params.method === "sessions.patchMany") {
     const targets =
@@ -192,13 +184,11 @@ export function resolveSessionMutationTargets(params: {
     params.method === "sessions.groups.delete" ||
     params.method === "sessions.groups.update"
   ) {
-    return resolveSessionGroupMutationTargets({
-      getCfg: params.getCfg,
-      requestParams: params.requestParams,
-    });
+    const groupName = readSessionSharingStringParam(params.requestParams, "name");
+    return groupName ? [...(preparedGroupTargets(params.context).get(groupName) ?? [])] : undefined;
   }
   if (params.method === "sessions.groups.put") {
-    return resolveSessionGroupsPutMutationTargets(params.getCfg, params.requestParams);
+    return resolveSessionGroupsPutMutationTargets(params.context, params.requestParams);
   }
   if (isApprovalSessionTargetMethod(params.method)) {
     const target = resolveApprovalSessionTarget(

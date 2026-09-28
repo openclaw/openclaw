@@ -1,18 +1,25 @@
 /** systemctl execution, user-manager routing, and availability probes. */
-import * as fsSync from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
-import { ServiceInspectionError } from "./service-inspection-error.js";
+import {
+  ServiceInspectionError,
+  ServiceOwnershipRefusalError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
+import {
+  resolveSystemdUserTransport,
+  SYSTEMD_TRANSPORT_DEADLINE,
+} from "./systemd-user-transport.js";
+
+type SystemdExecResult = ExecResult & { inspectionReason?: ServiceInspectionReason };
 
 export type SystemdUnitScope = "system" | "user";
 
@@ -23,7 +30,7 @@ async function execSystemdCommand(
   timeoutMs?: number,
 ): Promise<ExecResult> {
   return await execFileUtf8(command, args, {
-    env: env ? resolveSystemctlProcessEnv(env) : process.env,
+    env: env ? { ...process.env, ...env } : process.env,
     // A wedged systemd socket can leave manager commands blocked forever; the timeout
     // kills the child so status reads fail soft instead of hanging the command.
     ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
@@ -49,12 +56,25 @@ export function readSystemctlDetail(result: { stdout: string; stderr: string }):
 }
 
 export function systemdInspectionError(
-  result: ExecResult,
+  result: SystemdExecResult,
   fallback: string,
   scope: SystemdUnitScope = "user",
 ): Error {
+  if (result.inspectionReason) {
+    return new ServiceInspectionError(result.inspectionReason);
+  }
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+  }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");
+  }
+  if (
+    scope === "system" &&
+    result.termination === "exit" &&
+    readSystemctlDetail(result).includes("System has not been booted with systemd")
+  ) {
+    return new ServiceInspectionError("service-manager-unavailable");
   }
   if (
     scope === "user" &&
@@ -145,142 +165,31 @@ export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
 }
 
-function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
-  return env.USER?.trim() || env.LOGNAME?.trim() || null;
-}
-
-function readSystemctlEffectiveUser(): string | null {
-  try {
-    return os.userInfo().username;
-  } catch {
-    return null;
-  }
-}
-
-function readSystemctlEffectiveUid(): number | null {
-  if (typeof process.geteuid !== "function") {
-    return null;
-  }
-  try {
-    return process.geteuid();
-  } catch {
-    return null;
-  }
-}
-
-function resolveSystemctlProcessEnv(env: GatewayServiceEnv): NodeJS.ProcessEnv {
-  const processEnv = { ...process.env, ...env };
-  if (processEnv.XDG_RUNTIME_DIR?.trim() && processEnv.DBUS_SESSION_BUS_ADDRESS?.trim()) {
-    return processEnv;
-  }
-
-  const uid = readSystemctlEffectiveUid();
-  if (uid === null || uid === 0) {
-    return processEnv;
-  }
-
-  const runtimeDir = processEnv.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
-  const busPath = path.posix.join(runtimeDir, "bus");
-  if (!fsSync.existsSync(busPath)) {
-    return processEnv;
-  }
-
-  // In non-login shells the bus socket can exist while DBUS_SESSION_BUS_ADDRESS
-  // is missing. Fill it so systemctl --user reaches the right user manager.
-  return {
-    ...processEnv,
-    XDG_RUNTIME_DIR: runtimeDir,
-    DBUS_SESSION_BUS_ADDRESS: processEnv.DBUS_SESSION_BUS_ADDRESS?.trim() || `unix:path=${busPath}`,
-  };
-}
-
-function isNonRootUser(user: string | null): user is string {
-  return Boolean(user && user !== "root");
-}
-
-function hasRootUserManagerEnvironment(env: GatewayServiceEnv): boolean {
-  const home = env.HOME?.trim();
-  const runtimeDir = env.XDG_RUNTIME_DIR?.trim();
-  const dbusAddress = env.DBUS_SESSION_BUS_ADDRESS?.trim();
-  return (
-    home === "/root" &&
-    runtimeDir === "/run/user/0" &&
-    Boolean(dbusAddress?.includes("/run/user/0/bus"))
-  );
-}
-
-function resolveSystemctlUserScope(env: GatewayServiceEnv): {
-  machineUser: string | null;
-  preferMachineScope: boolean;
-} {
-  const sudoUser = env.SUDO_USER?.trim() || null;
-  const envUser = readSystemctlEnvUser(env);
-  const effectiveUid = readSystemctlEffectiveUid();
-  const effectiveUser = readSystemctlEffectiveUser();
-  const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
-  const hasRootUserManager = isEffectiveRoot && hasRootUserManagerEnvironment(env);
-  const isSudoToRoot = isEffectiveRoot && !hasRootUserManager && isNonRootUser(sudoUser);
-  const machineUser = hasRootUserManager
-    ? null
-    : isSudoToRoot
-      ? sudoUser
-      : isNonRootUser(envUser)
-        ? envUser
-        : isNonRootUser(sudoUser)
-          ? sudoUser
-          : effectiveUser || envUser || sudoUser || null;
-  return {
-    machineUser,
-    preferMachineScope: isSudoToRoot,
-  };
-}
-
-/** True when root-owned paths would be paired with the sudo caller's user manager. */
-export function hasSudoToRootSystemdUserManagerMismatch(env: GatewayServiceEnv): boolean {
-  return resolveSystemctlUserScope(env).preferMachineScope;
-}
-
-/**
- * Resolves the account whose user manager owns the service operation.
- * Keep linger diagnostics on this identity so sudo never checks root while
- * systemctl targets the invoking user's manager.
- */
-export function resolveSystemdUserServiceAccount(env: GatewayServiceEnv): string | null {
-  const { machineUser } = resolveSystemctlUserScope(env);
-  return machineUser ?? readSystemctlEffectiveUser() ?? readSystemctlEnvUser(env);
-}
-
-function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
-  const trimmedUser = user.trim();
-  if (!trimmedUser) {
-    return [];
-  }
-  return ["--machine", `${trimmedUser}@`, "--user"];
-}
-
-function shouldFallbackToMachineUserScope(detail: string): boolean {
-  if (!isSystemdUserBusUnavailableDetail(detail)) {
-    return false;
-  }
-  // "Permission denied" means the bus socket exists but this process cannot connect to it.
-  // The machine-scope approach targets the same bus infrastructure and will also fail,
-  // so do not trigger the fallback in this case.
-  return !detail.toLowerCase().includes("permission denied");
-}
-
 async function execSystemdUserCommand(
   command: "systemctl" | "busctl",
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
   assertCurrent?: () => void,
-): Promise<ExecResult> {
-  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
-  const deadline =
-    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? performance.now() + timeoutMs
-      : undefined;
-  const run = async (scopeArgs: string[]): Promise<ExecResult> => {
+): Promise<SystemdExecResult> {
+  const deadline = timeoutMs && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
+  try {
+    const transport = await resolveSystemdUserTransport(env, deadline, assertCurrent);
+    if (transport?.kind === "private" && command === "busctl") {
+      throw new ServiceInspectionError("systemd-user-bus-unavailable");
+    }
+    const childEnv =
+      !transport || transport.kind === "machine"
+        ? env
+        : {
+            ...env,
+            // systemctl otherwise prefers its private socket over the selected broker.
+            XDG_RUNTIME_DIR:
+              transport.kind === "private" || command === "busctl"
+                ? transport.runtimeDir
+                : undefined,
+            DBUS_SESSION_BUS_ADDRESS: transport.address,
+          };
     assertCurrent?.();
     const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
     if (remaining !== undefined && remaining <= 0) {
@@ -291,38 +200,22 @@ async function execSystemdUserCommand(
         stderr: "systemd user manager command deadline expired",
       };
     }
-    // The machine fallback is part of this operation, not a fresh timeout budget.
-    return await execSystemdCommand(command, [...scopeArgs, ...args], env, remaining ?? timeoutMs);
-  };
-
-  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
-  if (preferMachineScope && machineUser) {
-    const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
-    if (machineScopeArgs.length > 0) {
-      // Do not fall through to bare --user: under sudo that can target root's user manager.
-      return await run(machineScopeArgs);
+    const scope =
+      transport?.kind === "machine" ? ["--machine", `${transport.user}@`, "--user"] : ["--user"];
+    return await execSystemdCommand(command, [...scope, ...args], childEnv, remaining);
+  } catch (error) {
+    assertCurrent?.();
+    if (!(error instanceof ServiceInspectionError)) {
+      throw error;
     }
+    return {
+      code: 1,
+      termination: error === SYSTEMD_TRANSPORT_DEADLINE ? "timeout" : "error",
+      stdout: "",
+      stderr: error.message,
+      inspectionReason: error.reason,
+    };
   }
-
-  const directResult = await run(["--user"]);
-  if (directResult.code === 0) {
-    return directResult;
-  }
-
-  const detail = readSystemctlDetail(directResult);
-  if (
-    directResult.termination !== "exit" ||
-    !machineUser ||
-    !shouldFallbackToMachineUserScope(detail)
-  ) {
-    return directResult;
-  }
-
-  const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
-  if (machineScopeArgs.length === 0) {
-    return directResult;
-  }
-  return await run(machineScopeArgs);
 }
 
 export async function execSystemctlUser(
@@ -330,7 +223,7 @@ export async function execSystemctlUser(
   args: string[],
   timeoutMs?: number,
   assertCurrent?: () => void,
-): Promise<ExecResult> {
+): Promise<SystemdExecResult> {
   return await execSystemdUserCommand("systemctl", env, args, timeoutMs, assertCurrent);
 }
 
@@ -339,7 +232,7 @@ export async function execBusctlUser(
   args: string[],
   timeoutMs?: number,
   assertCurrent?: () => void,
-): Promise<ExecResult> {
+): Promise<SystemdExecResult> {
   return await execSystemdUserCommand("busctl", env, args, timeoutMs, assertCurrent);
 }
 
@@ -361,8 +254,9 @@ export async function disableSystemdUserUnitForRemoval(
 export async function reloadSystemdUserManager(
   env: GatewayServiceEnv,
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs);
+  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs, assertCurrent);
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,
@@ -424,8 +318,8 @@ export async function assertSystemdAvailable(
 }
 
 export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
-  const res = await execSystemctlUser(env, ["status"]);
-  // Cleanup uses false to permit file-only removal. An interrupted status probe
+  const res = await execSystemctl(["--version"], env);
+  // Cleanup uses false to permit file-only removal. An interrupted executable probe
   // must still attempt disable before removing a potentially loaded unit.
   return res.code === 0 || !isSystemctlMissing(res);
 }
@@ -482,15 +376,18 @@ export async function bindSystemdManagerOwner(
     managerUid >= 0xffffffff ||
     !Array.isArray(uid) ||
     uid.length !== 1 ||
-    uid[0] !== managerUid
+    !Number.isInteger(uid[0])
   ) {
     throw unavailable();
+  }
+  if (uid[0] !== managerUid) {
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {
     destination,
     async verify() {
       if (destination !== (await readOwner())) {
-        throw unavailable();
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
       }
     },
   };

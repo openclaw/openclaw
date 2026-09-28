@@ -54,12 +54,19 @@ function createCredentialBearingHttpUrl(): string {
 }
 
 describe("line outbound sendPayload", () => {
+  const cfg: OpenClawConfig = { channels: { line: {} } };
+  let mocks: ReturnType<typeof createRuntime>["mocks"];
+
+  beforeEach(() => {
+    const fixture = createRuntime();
+    mocks = fixture.mocks;
+    setLineRuntime(fixture.runtime);
+  });
+
   it.each([
     { name: "without quick replies", quickReplies: [] as string[] },
     { name: "with final quick replies", quickReplies: ["Continue"] },
   ])("sends oversized tables in their source position $name", async ({ quickReplies }) => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
     mocks.resolveTextChunkLimit.mockReturnValue(5000);
     mocks.chunkMarkdownText.mockImplementation((text: string) =>
       chunkMarkdownTextForLine(text, 5000),
@@ -74,7 +81,7 @@ describe("line outbound sendPayload", () => {
         ...(quickReplies.length > 0 ? { channelData: { line: { quickReplies } } } : {}),
       },
       accountId: "default",
-      cfg: { channels: { line: {} } } as OpenClawConfig,
+      cfg,
     });
 
     const messages = [
@@ -115,16 +122,13 @@ describe("line outbound sendPayload", () => {
     { name: "empty", text: "" },
     { name: "whitespace-only", text: "   " },
   ])("rejects a $name payload instead of fabricating a delivery", async ({ text }) => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-
     await expect(
       lineOutboundAdapter.sendPayload!({
         to: "line:user:U123",
         text,
         payload: { text },
         accountId: "default",
-        cfg: { channels: { line: {} } } as OpenClawConfig,
+        cfg,
       }),
     ).rejects.toThrow("Message must be non-empty for LINE sends");
     expect(mocks.pushMessageLine).not.toHaveBeenCalled();
@@ -135,9 +139,6 @@ describe("line outbound sendPayload", () => {
     { name: "title", title: " ", address: "1 Main Street" },
     { name: "address", title: "Meet here", address: " " },
   ])("delivers a blank-$name location instead of dropping it", async (location) => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-
     await lineOutboundAdapter.sendPayload!({
       to: "line:user:U123",
       text: "Meet me there.",
@@ -150,7 +151,7 @@ describe("line outbound sendPayload", () => {
         },
       },
       accountId: "default",
-      cfg: { channels: { line: {} } } as OpenClawConfig,
+      cfg,
     });
 
     // The pin LINE will not render still reaches the chat as the text it was
@@ -168,9 +169,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("keeps a degraded location in the quick-reply inline batch", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-
     await lineOutboundAdapter.sendPayload!({
       to: "line:user:U123",
       text: "",
@@ -189,7 +187,7 @@ describe("line outbound sendPayload", () => {
         },
       },
       accountId: "default",
-      cfg: { channels: { line: {} } } as OpenClawConfig,
+      cfg,
     });
 
     expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
@@ -212,8 +210,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("preserves the finalized receipt when its delivery observer rejects", async () => {
-    const { runtime } = createRuntime();
-    setLineRuntime(runtime);
     const onDeliveryResult = vi.fn(async () => {
       throw new Error("delivery observer unavailable");
     });
@@ -225,7 +221,7 @@ describe("line outbound sendPayload", () => {
         text: "Hello",
         payload: { text: "Hello" },
         accountId: "default",
-        cfg: { channels: { line: {} } } as OpenClawConfig,
+        cfg,
         onDeliveryResult,
       });
     } catch (error) {
@@ -245,15 +241,10 @@ describe("line outbound sendPayload", () => {
   });
 
   it("returns the provider receipt for a Flex-only legacy text send", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = {
+    const tokenCfg = {
       channels: { line: { channelAccessToken: "line-fixture-token" } },
     } as OpenClawConfig;
-    const providerResponse = new Response(JSON.stringify({ sentMessages: [{ id: "m-flex" }] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    const providerResponse = Response.json({ sentMessages: [{ id: "m-flex" }] });
     const fetch = vi.fn(async () => providerResponse);
     vi.stubGlobal("fetch", fetch);
     const onDeliveryResult = vi.fn();
@@ -262,7 +253,7 @@ describe("line outbound sendPayload", () => {
       to: "line:user:U123",
       text: "| Name | Status |\n|---|---|\n| OpenClaw | ready |",
       accountId: "default",
-      cfg,
+      cfg: tokenCfg,
       onDeliveryResult,
     });
 
@@ -276,20 +267,13 @@ describe("line outbound sendPayload", () => {
   });
 
   it("publishes completed Flex receipts before a later legacy text send fails", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = {
+    const tokenCfg = {
       channels: { line: { channelAccessToken: "line-fixture-token" } },
     } as OpenClawConfig;
     const laterFailure = new Error("second LINE Flex send failed");
     const fetch = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ sentMessages: [{ id: "m-first-flex" }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      )
+      .mockResolvedValueOnce(Response.json({ sentMessages: [{ id: "m-first-flex" }] }))
       .mockRejectedValueOnce(laterFailure);
     vi.stubGlobal("fetch", fetch);
     mocks.pushFlexMessage
@@ -302,7 +286,7 @@ describe("line outbound sendPayload", () => {
         to: "line:user:U123",
         text: "```js\nfirst()\n```\n\n```js\nsecond()\n```",
         accountId: "default",
-        cfg,
+        cfg: tokenCfg,
         onDeliveryResult,
       }),
     ).rejects.toThrow("second LINE Flex send failed");
@@ -318,10 +302,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("sends flex message without dropping text", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const payload = {
       text: "Now playing:",
       channelData: {
@@ -351,9 +331,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("reports each platform result for text and media payloads", async () => {
-    const { runtime } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
     const onDeliveryResult = vi.fn();
 
     await lineOutboundAdapter.sendPayload!({
@@ -376,9 +353,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("preserves every provider receipt and conversation for an inline LINE batch", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
     const providerMessageIds = ["line-provider-first", "line-provider-second"] as const;
     mocks.pushMessagesLine.mockResolvedValueOnce({
       messageId: providerMessageIds[0],
@@ -432,10 +406,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("sends template message without dropping text", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const payload = {
       text: "Choose one:",
       channelData: {
@@ -470,9 +440,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("attaches quick replies while preserving the provider's full Flex alternative-text limit", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
     const altText = "a".repeat(1600);
 
     const payload = {
@@ -512,10 +479,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("sends quick-reply-only payloads with fallback text", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const result = await lineOutboundAdapter.sendPayload!({
       to: "line:user:quick",
       text: "",
@@ -574,10 +537,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("sends media before quick-reply text so buttons stay visible", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const payload = {
       text: "Hello",
       mediaUrl: "https://example.com/img.jpg",
@@ -620,10 +579,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("forwards generic media payloads to the shared send path unresolved", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     await lineOutboundAdapter.sendPayload!({
       to: "line:user:4",
       text: "",
@@ -643,10 +598,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("uses LINE-specific media options for rich media payloads", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     await lineOutboundAdapter.sendPayload!({
       to: "line:user:5",
       text: "",
@@ -677,9 +628,7 @@ describe("line outbound sendPayload", () => {
   });
 
   it("uses configured text chunk limit for payloads", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: { textChunkLimit: 123 } } } as OpenClawConfig;
+    const chunkCfg = { channels: { line: { textChunkLimit: 123 } } } as OpenClawConfig;
 
     const payload = {
       text: "Hello world",
@@ -698,20 +647,16 @@ describe("line outbound sendPayload", () => {
       text: payload.text,
       payload,
       accountId: "primary",
-      cfg,
+      cfg: chunkCfg,
     });
 
-    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(cfg, "line", "primary", {
+    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(chunkCfg, "line", "primary", {
       fallbackLimit: 5000,
     });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
   });
 
   it("omits trackingId for non-user quick-reply inline video media", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const payload = {
       text: "",
       mediaUrl: "https://example.com/video.mp4",
@@ -748,10 +693,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("keeps generic quick-reply media on the validated media route", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     await lineOutboundAdapter.sendPayload!({
       to: "line:user:U123",
       text: "",
@@ -783,9 +724,6 @@ describe("line outbound sendPayload", () => {
   it("sends inline quick-reply media as the kind its URL proves", async () => {
     // The inline batch used to force every generic media URL onto the image
     // route, so an audio clip arrived as an empty image bubble.
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
 
     await lineOutboundAdapter.sendPayload!({
       to: "line:user:U123",
@@ -813,10 +751,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     await expect(
       lineOutboundAdapter.sendPayload!({
         to: "line:user:U123",
@@ -834,10 +768,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("keeps trackingId for user quick-reply inline video media", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const payload = {
       text: "",
       mediaUrl: "https://example.com/video.mp4",
@@ -875,10 +805,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("rejects quick-reply inline video media without previewImageUrl", async () => {
-    const { runtime } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const payload = {
       text: "",
       mediaUrl: "https://example.com/video.mp4",
@@ -902,10 +828,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("declares message adapter durable text, media, and reply-to with proofs", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
     const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "line",
       adapter: linePlugin.message!,

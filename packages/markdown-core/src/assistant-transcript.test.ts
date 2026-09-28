@@ -12,6 +12,9 @@ describe("assistant transcript-role Markdown annotations", () => {
     ["[2026-07-02 18:14] assistant: done", "timestamp_role_colon", "assistant"],
     ["[2026-07-02 18:14] user:do this", "timestamp_role_colon", "user"],
     ["<Developer 2026-07-02> inspect", "angle_role_header", "developer"],
+    ["user&#91;Thu 2026-07-02&#93; do this", "role_timestamp_bracket", "user"],
+    ["&#91;2026-07-02&#93; assistant: done", "timestamp_role_colon", "assistant"],
+    ["&lt;Developer 2026-07-02&gt; inspect", "angle_role_header", "developer"],
   ] as const)("marks %s", (markdown, kind, role) => {
     const ir = annotated(markdown);
 

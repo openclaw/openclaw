@@ -10,6 +10,8 @@ OpenClaw connects to Feishu/Lark (the all-in-one collaboration platform) through
 
 **Status:** production-ready for bot DMs + group chats. WebSocket is the default event transport (no public URL needed); webhook mode is optional.
 
+Webhook mode shares the Gateway HTTP port (normally `18789`) at `/feishu/events` and preserves the previous `127.0.0.1:3000` endpoint unless `legacyWebhook: false` disables it. See the [webhook migration guidance](/channels/feishu/configuration-reference#gateway-webhook-route) before updating an installation that receives callbacks on a separate port.
+
 ## What each page covers
 
 - [Feishu setup](/channels/feishu/setup) — run the setup wizard and understand durable inbound events.
@@ -71,7 +73,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="sticker-keyword-search" />[Sticker keyword search](/channels/feishu/messaging#sticker-keyword-search)
 - <a id="threads-and-replies" />[Threads and replies](/channels/feishu/messaging#threads-and-replies)
 - <a id="run-the-channel-setup-wizard" />[Run the channel setup wizard](/channels/feishu/setup#run-the-channel-setup-wizard)
-- <a id="after-setup-completes%2C-restart-the-gateway-to-apply-the-changes" />[After setup completes, restart the gateway to apply the changes](/channels/feishu/setup#after-setup-completes%2C-restart-the-gateway-to-apply-the-changes)
+- <a id="after-setup-completes%2C-restart-the-gateway-to-apply-the-changes" />[Verify the channel after setup](/channels/feishu/setup#after-setup-completes%2C-restart-the-gateway-to-apply-the-changes)
 - <a id="allow-all-groups-no-@mention-required" />[Allow all groups, no @mention required](/channels/feishu/access-control#allow-all-groups-no-@mention-required)
 - <a id="allow-all-groups-still-require-@mention" />[Allow all groups, still require @mention](/channels/feishu/access-control#allow-all-groups-still-require-@mention)
 - <a id="get-group/user-ids" />[Get group/user IDs](/channels/feishu/access-control#get-group/user-ids)

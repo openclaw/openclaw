@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -28,6 +29,8 @@ class ProviderAuthControllerTest {
       var saved = CompletableDeferred<Unit>()
       val fixture = Fixture(this)
       var written = false
+      val applied = CompletableDeferred<Unit>()
+      var applyRequests = 0
       fixture.reply = { method, params ->
         when (method) {
           "models.authStatus" -> {
@@ -41,6 +44,14 @@ class ProviderAuthControllerTest {
             saved.await()
             written = true
             """{"provider":"fixture","profileId":"fixture:default","warning":"Saved, but runtime auth refresh failed. Restart the Gateway to apply it."}"""
+          }
+
+          "models.authRefresh" -> {
+            assertEquals("writer", params.getValue("agentId").jsonPrimitive.content)
+            assertEquals("update", params.getValue("operation").jsonPrimitive.content)
+            applyRequests += 1
+            applied.await()
+            """{"refreshed":true}"""
           }
 
           else -> {
@@ -79,6 +90,18 @@ class ProviderAuthControllerTest {
       runCurrent()
       assertEquals(savedNotice, fixture.controller.state.value.noticeText)
       assertEquals(savedRevision, fixture.controller.state.value.apiKeySaveRevision)
+      assertEquals(nativeText("API key saved. Tap Refresh to apply it."), savedNotice)
+      fixture.changed = false
+      fixture.controller.refresh(refresh = true)
+      runCurrent()
+      assertEquals(1, applyRequests)
+      assertEquals(savedNotice, fixture.controller.state.value.noticeText)
+      assertFalse(fixture.changed)
+      applied.complete(Unit)
+      runCurrent()
+      assertEquals(nativeText("Sign-ins refreshed."), fixture.controller.state.value.noticeText)
+      assertEquals(savedRevision, fixture.controller.state.value.apiKeySaveRevision)
+      assertTrue(fixture.changed)
       saved = CompletableDeferred()
       fixture.controller.setApiKey("fixture", "fixture-secret")
       runCurrent()
@@ -206,9 +229,22 @@ class ProviderAuthControllerTest {
   fun unavailableAuthStatusDoesNotOfferLoginOrClaimReadiness() =
     runTest {
       val fixture = Fixture(this)
-      fixture.reply = { _, params ->
-        assertTrue(params.getValue("refresh").jsonPrimitive.boolean)
-        """{"ts":1,"providers":[],"unavailable":{"code":"PREPARED_MODEL_AUTH_UNAVAILABLE","message":"Preparing"}}"""
+      fixture.reply = { method, params ->
+        assertEquals("writer", params.getValue("agentId").jsonPrimitive.content)
+        when (method) {
+          "models.authRefresh" -> {
+            """{"refreshed":true}"""
+          }
+
+          "models.authStatus" -> {
+            assertFalse(params.containsKey("refresh"))
+            """{"ts":1,"providers":[],"unavailable":{"code":"PREPARED_MODEL_AUTH_UNAVAILABLE","message":"Preparing"}}"""
+          }
+
+          else -> {
+            error("Unexpected method: $method")
+          }
+        }
       }
       fixture.controller.refresh(refresh = true)
       runCurrent()
@@ -217,7 +253,7 @@ class ProviderAuthControllerTest {
       assertTrue(state.loginOptions.isEmpty())
       assertNotNull(state.errorText)
       assertNull(state.wizard)
-      assertFalse(fixture.changed)
+      assertTrue(fixture.changed)
     }
 
   @Test

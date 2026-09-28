@@ -60,6 +60,8 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
       ["EPERM", "ESRCH"].map((code) => ({ owner, name, code })),
     ),
   )("preserves failures and finishes safe $owner cleanup after $code", async ({ owner, code }) => {
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const primary = new Error("fixture assertion failed");
     const denied = Object.assign(new Error("injected kill failure"), { code });
     const scratchError = new Error("scratch removal failed");
@@ -99,6 +101,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
     };
     vi.doMock("node:fs", () => ({ ...fs, default: fs }));
     vi.doMock("node:child_process", () => ({
+      ...childProcess,
       spawn: () => {
         setImmediate(() => child.emit("spawn"));
         return child;

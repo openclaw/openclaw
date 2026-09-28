@@ -5,6 +5,7 @@ import {
   getPluginModuleLoaderStats,
 } from "../plugins/plugin-module-loader-cache.js";
 import {
+  getSessionEventWakeAbortSignal,
   requestSessionEventWakeAndWait,
   setSessionEventWakeHandler,
 } from "./session-event-wake.js";
@@ -23,7 +24,9 @@ it("shares the installed wake owner with a source-transformed runtime module", a
   );
 
   const observed: string[] = [];
-  const dispose = setSessionEventWakeHandler(async (request) => {
+  const dispose = setSessionEventWakeHandler(async (request, signal) => {
+    expect(getSessionEventWakeAbortSignal()).toBe(signal);
+    expect(transformed.getSessionEventWakeAbortSignal()).toBe(signal);
     observed.push(request.reason ?? "");
     return { status: "ran", durationMs: 0 };
   });

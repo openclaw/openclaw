@@ -1,4 +1,3 @@
-// Discord plugin module implements rest errors behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier, redactSensitiveFieldValue } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";

@@ -37,7 +37,7 @@ Details: [Plugins](/tools/plugin)
 4. Finish setup in OpenClaw. Synology Chat appears in the same channel setup list in both flows:
    - Guided: `openclaw onboard` or `openclaw channels add`
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url> --webhook-url <public-outgoing-webhook-url>`
-5. Restart the Gateway and send a DM to the Synology Chat bot.
+5. Check `openclaw channels status --probe`, then send a DM to the Synology Chat bot. Start the Gateway if it is offline; config changes follow [hot reload](/gateway/configuration/hot-reload).
 
 Webhook auth details:
 

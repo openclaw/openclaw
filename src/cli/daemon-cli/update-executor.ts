@@ -1,14 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  GATEWAY_UPDATE_EXECUTOR_CONTRACT,
-  withGatewayServiceUpdateAuthority,
-} from "../../daemon/service-update-authority.js";
+import { withGatewayServiceRebindCapture } from "../../daemon/service-rebind.js";
+import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "../update-cli/update-command-executor.js";
+import { writeGatewayServiceUpdateCapability } from "./update-capability.js";
 
 type NativeUpdateAction = "install" | "restart" | "stop";
 
@@ -24,9 +23,7 @@ export async function runGatewayServiceUpdateCommand(
     return;
   }
   if (mode === "check") {
-    process.stdout.write(
-      JSON.stringify({ updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT, targetRootBinding: true }),
-    );
+    await writeGatewayServiceUpdateCapability();
     return;
   }
   if (mode !== "run") {
@@ -57,7 +54,11 @@ export async function runGatewayServiceUpdateCommand(
       !isRecord(input.executor.originalParent) ||
       !isRecord(input.executor.databaseIdentity) ||
       typeof input.executor.originalChildKey !== "string" ||
-      !isRecord(input.executor.spawner)
+      !isRecord(input.executor.spawner) ||
+      ((Object.hasOwn(input.executor, "retainedParent") ||
+        Object.hasOwn(input.executor, "retainedChildKey")) &&
+        (!isRecord(input.executor.retainedParent) ||
+          typeof input.executor.retainedChildKey !== "string"))
     ) {
       throw new Error("Invalid native update executor input.");
     }
@@ -74,9 +75,32 @@ export async function runGatewayServiceUpdateCommand(
     }
     // Destination admission never replaces the original installation's live authority.
     await withDelegatedUpdateCommandExecutor(grant, grant.runId, grant.root, async (fence) =>
-      withGatewayServiceUpdateAuthority(fence.assertCurrent, async () => {
-        await operation();
-      }),
+      withGatewayServiceUpdateAuthority(
+        fence.assertCurrent,
+        async () => {
+          if (input.originalDefinition !== undefined) {
+            if (action !== "install" || typeof input.originalDefinition !== "string") {
+              throw new Error("Invalid rebind action.");
+            }
+            if (
+              input.originalRuntimePin !== undefined &&
+              typeof input.originalRuntimePin !== "string"
+            ) {
+              throw new Error("Invalid runtime intent binding.");
+            }
+            await withGatewayServiceRebindCapture(
+              input.originalDefinition,
+              operation,
+              input.originalRuntimePin,
+            );
+          } else {
+            await operation();
+          }
+        },
+        {
+          originalRoot: grant.retainedParent?.key ?? grant.originalParent?.key ?? grant.parent.key,
+        },
+      ),
     );
   } catch (cause) {
     throw new Error(

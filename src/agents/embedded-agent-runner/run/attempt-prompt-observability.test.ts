@@ -87,7 +87,6 @@ function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptO
     isRawModelRun: false,
     llmBoundaryPromptForPrecheck: "[boundary] model prompt",
     promptForModel: "model prompt",
-    promptSubmissionRuntimeOnly: false,
     reserveTokens: 4_096,
     runTrace: {
       traceId: "1".repeat(32),
@@ -205,4 +204,28 @@ describe("observeEmbeddedAttemptPrompt", () => {
     expect(hoisted.runLlmInput).not.toHaveBeenCalled();
     expect(hoisted.emitTrustedDiagnosticEvent).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "does not read unused trajectory tool metadata (compacted=%s)",
+    (toolSearchCompacted) => {
+      const tool = {
+        get name(): string {
+          throw new Error("unrecorded tool metadata must not be read");
+        },
+      };
+      const input = createInput({
+        effectiveTools: [tool],
+        uncompactedEffectiveTools: [tool],
+        toolSearchCompacted,
+        trajectoryRecorder: null,
+      });
+
+      expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: false });
+      expect(hoisted.recordStage).toHaveBeenCalledTimes(2);
+      expect(hoisted.recordTrajectoryEvent).not.toHaveBeenCalled();
+      expect(hoisted.emitTrustedDiagnosticEvent).toHaveBeenCalledOnce();
+      expect(hoisted.onExecutionPhase).toHaveBeenCalledOnce();
+      expect(hoisted.runLlmInput).toHaveBeenCalledOnce();
+    },
+  );
 });

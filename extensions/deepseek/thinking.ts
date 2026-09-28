@@ -1,15 +1,10 @@
-// Deepseek plugin module implements thinking behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { isDeepSeekV4ModelId } from "./models.js";
 
-const V4_THINKING_LEVEL_IDS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
-function buildDeepSeekV4ThinkingLevel(id: (typeof V4_THINKING_LEVEL_IDS)[number]) {
-  return { id };
-}
-
 const DEEPSEEK_V4_THINKING_PROFILE = {
-  levels: V4_THINKING_LEVEL_IDS.map(buildDeepSeekV4ThinkingLevel),
+  levels: (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((id) => ({
+    id,
+  })),
   defaultLevel: "high",
 } satisfies ProviderThinkingProfile;
 

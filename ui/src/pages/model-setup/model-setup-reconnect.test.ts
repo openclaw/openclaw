@@ -78,7 +78,7 @@ function createFixture() {
   const selection = { selectedId: "main", scopeId: "main" };
   const context = {
     gateway,
-    agentSelection: {
+    settingsAgentSelection: {
       state: selection,
       subscribe: (listener: () => void) => {
         selectionListeners.add(listener);

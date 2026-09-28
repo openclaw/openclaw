@@ -1,18 +1,19 @@
+import { createRequire } from "node:module";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Zalouser plugin module implements zca client behavior.
-import { TextStyle } from "./zca-constants.js";
+import { fetchWithZaloSendContext } from "./send-context.js";
+import type { ZaloEventMessage } from "./types.js";
 
-type ZcaJsRuntime = {
-  Zalo: unknown;
-};
+type ZcaJsRuntime = Pick<typeof import("zca-js"), "Zalo">;
+
+const require = createRequire(import.meta.url);
 
 // Keep zca-js behind a runtime boundary so bundled metadata/contracts can load
-// without resolving its optional WebSocket dependency tree.
-const loadZcaJsRuntime = createLazyRuntimeModule(() =>
-  import("zca-js").then((mod) => mod as unknown as ZcaJsRuntime),
-);
-
-export { TextStyle };
+// without resolving its optional WebSocket dependency tree. Its CommonJS export
+// supports tough-cookie 6; the ESM export still imports the removed default.
+const loadZcaJsRuntime = createLazyRuntimeModule(async () => {
+  const runtime: unknown = require("zca-js");
+  return runtime as ZcaJsRuntime;
+});
 
 export type Credentials = {
   imei: string;
@@ -102,9 +103,11 @@ export type LoginQRCallbackEvent =
     };
 
 type Listener = {
+  on(event: "connected", callback: () => void): void;
   on(event: "message", callback: (message: Message) => void): void;
   on(event: "error", callback: (error: unknown) => void): void;
   on(event: "closed", callback: (code: number, reason: string) => void): void;
+  off(event: "connected", callback: () => void): void;
   off(event: "message", callback: (message: Message) => void): void;
   off(event: "error", callback: (error: unknown) => void): void;
   off(event: "closed", callback: (code: number, reason: string) => void): void;
@@ -112,19 +115,17 @@ type Listener = {
   stop(): void;
 };
 
-type DeliveryEventMessage = {
-  msgId: string;
-  cliMsgId: string;
-  uidFrom: string;
-  idTo: string;
-  msgType: string;
-  st: number;
-  at: number;
-  cmd: number;
-  ts: string | number;
-};
-
-type DeliveryEventMessages = DeliveryEventMessage | DeliveryEventMessage[];
+type AttachmentSource =
+  | string
+  | {
+      data: Buffer;
+      filename: `${string}.${string}`;
+      metadata: {
+        totalSize: number;
+        width?: number;
+        height?: number;
+      };
+    };
 
 export type API = {
   listener: Listener;
@@ -168,29 +169,7 @@ export type API = {
     attachment?: Array<{ msgId?: string | number }>;
   }>;
   uploadAttachment(
-    sources:
-      | string
-      | {
-          data: Buffer;
-          filename: `${string}.${string}`;
-          metadata: {
-            totalSize: number;
-            width?: number;
-            height?: number;
-          };
-        }
-      | Array<
-          | string
-          | {
-              data: Buffer;
-              filename: `${string}.${string}`;
-              metadata: {
-                totalSize: number;
-                width?: number;
-                height?: number;
-              };
-            }
-        >,
+    sources: AttachmentSource | AttachmentSource[],
     threadId: string,
     type?: number,
   ): Promise<
@@ -229,13 +208,17 @@ export type API = {
   ): Promise<unknown>;
   sendDeliveredEvent(
     isSeen: boolean,
-    messages: DeliveryEventMessages,
+    messages: ZaloEventMessage | ZaloEventMessage[],
     type?: number,
   ): Promise<unknown>;
-  sendSeenEvent(messages: DeliveryEventMessages, type?: number): Promise<unknown>;
+  sendSeenEvent(messages: ZaloEventMessage | ZaloEventMessage[], type?: number): Promise<unknown>;
 };
 
-type ZaloCtor = new (options?: { logging?: boolean; selfListen?: boolean }) => {
+type ZaloCtor = new (options?: {
+  logging?: boolean;
+  selfListen?: boolean;
+  polyfill?: typeof fetch;
+}) => {
   login(credentials: Credentials): Promise<API>;
   loginQR(
     options?: { userAgent?: string; language?: string; qrPath?: string },
@@ -248,5 +231,5 @@ export async function createZalo(
 ): Promise<InstanceType<ZaloCtor>> {
   const zcaJs = await loadZcaJsRuntime();
   const Zalo = zcaJs.Zalo as ZaloCtor;
-  return new Zalo(options);
+  return new Zalo({ ...options, polyfill: fetchWithZaloSendContext });
 }

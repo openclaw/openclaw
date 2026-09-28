@@ -1,11 +1,15 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
   type InProcessGatewayCaller,
+  type AgentToolGatewayRequestCaller,
   runWithGatewayToolCleanupContext,
 } from "../agents/tools/in-process-gateway.js";
 import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
@@ -21,6 +25,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -30,13 +35,18 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  readGatewayDeviceSourceAuthority,
+} from "./device-revocation.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
 // ownership have dedicated coverage without cold-loading Browser's source graph here.
@@ -82,9 +92,16 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
         },
       );
     }
-    await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-      run(cfg),
-    );
+    const resources = new LegacyPluginSdkResourceHost();
+    try {
+      await resources.run(() =>
+        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
+          run(cfg),
+        ),
+      );
+    } finally {
+      await resources.close();
+    }
   }));
 }
 
@@ -115,19 +132,36 @@ describe("built-in session tool role authority", () => {
   it.each(["live", "missing", "retired"] as const)(
     "visible forks preserve an active first turn only with live requester authority (%s)",
     async (lifetime) => {
+      const runtimeChoice = vi
+        .spyOn(modelRuntimeChoice, "preparePublishedModelRuntimeChoice")
+        .mockImplementation(async ({ runtimeId, preferredRuntimeId }) => ({
+          kind: "ready",
+          runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
+          validate: () => undefined,
+        }));
+      onTestFinished(() => runtimeChoice.mockRestore());
       await withSessionToolsFixture(async (cfg) => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
           throw new Error("expected local Gateway context");
         }
         let current = true;
-        context.loadGatewayModelCatalog = async () => {
+        context.loadGatewayModelCatalogSnapshot = async () => {
           if (lifetime === "retired") {
             current = false;
           }
-          return [
+          const entries = [
             { id: "gpt-5.6-luna", name: "Test model", provider: "openai", contextWindow: 200_000 },
           ];
+          return {
+            entries,
+            routeVariants: entries,
+            agentId: "main",
+            agentDir: resolveAgentDir(cfg, "main"),
+            workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
+            config: cfg,
+            catalogComplete: true,
+          };
         };
         const sessionId = "session-tools-requester-id";
         const scope = { agentId: "main", sessionKey: REQUESTER, sessionId };
@@ -172,9 +206,9 @@ describe("built-in session tool role authority", () => {
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
         });
-        const { chatHandlers } = await import("./server-methods/chat.js");
+        const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
         const startChild = vi
-          .spyOn(chatHandlers, "chat.send")
+          .spyOn(chatSendOwner, "handleDirectExternalChatSend")
           .mockImplementation(async ({ respond }) => {
             respond(true, { status: "started", runId: "fork-child-run" });
           });
@@ -442,9 +476,9 @@ describe("built-in session tool role authority", () => {
     },
   );
 
-  it.each([false, true])(
-    "commits self-archive after caller closure (operator: %s)",
-    async (operator) => {
+  it.each(["system", "operator", "closed request", "revoked device"] as const)(
+    "settles self-archive with live source authority after caller closure (%s)",
+    async (caller) => {
       await withSessionToolsFixture(async (cfg) => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
@@ -466,6 +500,15 @@ describe("built-in session tool role authority", () => {
           assertAllowed: () => {},
         });
         let current = true;
+        const settled = createDeferredCore();
+        const client = roleClient("write");
+        const source = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "archive-device", role: "operator" },
+          () => current,
+          undefined,
+          { isCurrent: () => true, subscribe: () => () => {} },
+        );
         try {
           const archive = () =>
             withGatewayToolCallerIdentity(
@@ -482,31 +525,68 @@ describe("built-in session tool role authority", () => {
                     config: cfg,
                     agentSessionKey: REQUESTER,
                     agentSessionId: sessionId,
+                    callGateway: async <T>(
+                      request: Parameters<AgentToolGatewayRequestCaller>[0],
+                    ) => {
+                      try {
+                        const result = await callAgentToolGatewayRequest<T>(request);
+                        settled.resolve();
+                        return result;
+                      } catch (error) {
+                        settled.reject(error);
+                        throw error;
+                      }
+                    },
                   }).execute("archive-self", { action: "patch", archived: true }),
                 ),
             );
-          const client = roleClient("write");
           if (!client.authenticatedUserProfile) {
             throw new Error("expected operator profile");
           }
-          const result = await (operator
-            ? withOperatorToolGatewayAuthority(
+          const invoke = () =>
+            caller !== "system"
+              ? withOperatorToolGatewayAuthority(
+                  {
+                    authenticatedUserProfile: client.authenticatedUserProfile,
+                    scopes: client.connect.scopes ?? [],
+                  },
+                  archive,
+                )
+              : archive();
+          const result = await (caller === "closed request" || caller === "revoked device"
+            ? withPluginRuntimeGatewayRequestScope(
                 {
-                  authenticatedUserProfile: client.authenticatedUserProfile,
-                  scopes: client.connect.scopes ?? [],
+                  ...getPluginRuntimeGatewayRequestScope(),
+                  context,
+                  client,
+                  isWebchatConnect: () => false,
+                  hasCurrentClientAuthority: source.isCurrent,
                 },
-                archive,
+                invoke,
               )
-            : archive());
+            : invoke());
           expect(result.details).toMatchObject({ status: "scheduled", sessionKey: REQUESTER });
           expect(
             loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })?.archivedAt,
           ).toBeUndefined();
+          if (caller === "revoked device") {
+            invalidateGatewayDeviceRevocation(context, "archive-device", "operator");
+          }
         } finally {
           current = false;
+          source.release();
           admission.release();
         }
+        if (caller === "revoked device") {
+          await expect(settled.promise).rejects.toThrow(/authority.*no longer active/);
+          expect(
+            loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })?.archivedAt,
+          ).toBeUndefined();
+          return;
+        }
+        await settled.promise;
         await archived.promise;
+        expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
         expect(loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })).toMatchObject({
           sessionId,
           archivedAt: expect.any(Number),
@@ -657,10 +737,12 @@ describe("built-in session tool role authority", () => {
       if (!scope) {
         throw new Error("expected local Gateway scope");
       }
+      const reader = roleClient("view", "reader-profile");
+      reader.connect.scopes = ["operator.read"];
       await withPluginRuntimeGatewayRequestScope(
         {
           ...scope,
-          client: sharingPolicyClient({ user: "reader-profile", scopes: ["operator.read"] }),
+          client: reader,
         },
         async () => {
           await expect(

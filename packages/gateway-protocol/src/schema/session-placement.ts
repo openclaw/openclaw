@@ -212,6 +212,7 @@ const FailedSessionPlacementSchema = closedObject({
   ...TerminalSessionPlacementProperties,
   recoveryError: NonEmptyString,
   recoveryAction: Type.Optional(Type.Enum(["restart", "stop-first"] as const, { type: "string" })),
+  retryOnSend: Type.Optional(Type.Literal(true)),
 });
 
 /** Gateway-visible placement projection; `state` remains the closed discriminator. */
@@ -297,11 +298,16 @@ export const SessionsDispatchResultSchema = closedObject({
   placement: ActiveWorkerSessionPlacementSchema,
 });
 
-/** Requests safe workspace reconciliation and teardown of an active cloud worker. */
+/** Stops a worker or explicitly recovers one failed placement onto the Gateway. */
 export const SessionsReclaimParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    recoverToGateway: Type.Optional(
+      closedObject({
+        expectedGeneration: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+      }),
+    ),
   },
   { additionalProperties: false },
 );

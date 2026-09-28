@@ -1,5 +1,6 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
@@ -10,8 +11,9 @@ import type { GatewaySessionRow } from "./session-utils.js";
  * Project a catalog-less session row for websocket merge events.
  * Picker metadata comes from catalog-backed list/patch responses; emitting a
  * locally reconstructed subset here would replace richer client state.
+ * Null tombstones and false flags clear subscribed metadata during reconciliation.
  */
-export function buildGatewaySessionEventFields(params: {
+function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
   label?: string;
@@ -51,6 +53,7 @@ export function buildGatewaySessionEventFields(params: {
     markedUnreadAt: sessionRow.markedUnreadAt ?? null,
     agentStatus: sessionRow.agentStatus ?? null,
     observerDigest: sessionRow.observerDigest ?? null,
+    ...(sessionRow.activitySummary ? { activitySummary: sessionRow.activitySummary } : {}),
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
     controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
@@ -83,16 +86,14 @@ export function buildGatewaySessionEventFields(params: {
     label: params.label ?? sessionRow.label ?? null,
     autoLabel: sessionRow.autoLabel ?? null,
     icon: sessionRow.icon ?? null,
-    // Explicit null so subscribed clients drop a cleared color during merge-reconcile.
     color: sessionRow.color ?? null,
     channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
-    // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
+    boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
-    // Explicit null lets subscribed clients clear an override during merge-reconcile.
     thinkingLevel: sessionRow.thinkingLevel ?? null,
     fastMode: sessionRow.fastMode,
     effectiveFastMode: sessionRow.effectiveFastMode,
@@ -127,20 +128,17 @@ export function buildGatewaySessionEventFields(params: {
     activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
+    runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: params.status ?? sessionRow.status,
-    // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
-    // Explicit null lets a newer start evict the previous terminal run identity.
+    providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
-    // Explicit false lets subscribed clients drop the flag during merge-reconcile.
     hasAutomation: sessionRow.hasAutomation ?? false,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt ?? null,
     runtimeMs: sessionRow.runtimeMs ?? null,
-    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
   };
 }
@@ -150,7 +148,7 @@ export function buildGatewaySessionSnapshot(params: {
   agentId?: string;
   includeSession?: boolean;
   lifecycle?: boolean;
-  event?: AgentEventPayload;
+  event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
   label?: string;
   displayName?: string;
@@ -178,6 +176,9 @@ export function buildGatewaySessionSnapshot(params: {
       ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
       : {};
   const sessionRow = { ...storedRow, ...patch };
+  if (Object.hasOwn(patch, "lastActivityAt")) {
+    sessionRow.unread = deriveSessionUnread(sessionRow);
+  }
   for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
     delete sessionRow[key];
   }
@@ -213,6 +214,7 @@ export function buildGatewaySessionSnapshot(params: {
       "activeModel",
       "modelOverrideSource",
       "agentRuntime",
+      "runtimeSelectionLocked",
     ] as const) {
       delete sessionRow[field];
       delete eventFields[field];

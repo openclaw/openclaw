@@ -7,9 +7,9 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
-// Control UI module implements thinking behavior.
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
@@ -82,7 +82,7 @@ export function resolveThinkingProfileForSession(
     thinkingLevels:
       profile.thinkingLevels ??
       profile.thinkingOptions?.map((label) => ({
-        id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
+        id: normalizeThinkingOptionValue(label),
         label,
       })),
     thinkingDefault: profile.thinkingDefault,
@@ -139,7 +139,7 @@ export function resolveThinkingLevelInput(
   const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
   return resolveThinkingLevelOptionsForSession(session, defaults, catalog)
     .map((option) => ({
-      id: normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id),
+      id: normalizeThinkingOptionValue(option.id),
       label: normalizeLowercaseStringOrEmpty(option.label),
     }))
     .find((option) => option.id === rawKey || option.label === rawKey)?.id;
@@ -153,7 +153,7 @@ export function isThinkingLevelOptionForSession(
 ): boolean | undefined {
   return resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels?.some(
     (option) => {
-      const id = normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id);
+      const id = normalizeThinkingOptionValue(option.id);
       return id === level || normalizeThinkLevel(option.label) === level;
     },
   );
@@ -182,25 +182,13 @@ function buildThinkingOptions(
 ): Array<{ value: string; label: string }> {
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
-  const addOption = (value: string, label?: string) => {
-    const normalizedValue = normalizeThinkingOptionValue(value);
-    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
-      formatThinkingOverrideLabel(normalizedValue, label),
-    );
-  };
-
   for (const level of levels) {
-    addOption(level.id, level.label);
+    const normalizedValue = normalizeThinkingOptionValue(level.id);
+    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
+      formatThinkingOverrideLabel(normalizedValue, level.label),
+    );
   }
   return options;
-}
-
-function isOffThinkingOption(value: string | null | undefined): boolean {
-  return normalizeThinkingOptionValue(value ?? "") === "off";
-}
-
-function isOffOnlyThinkingLevels(levels: readonly GatewayThinkingLevelOption[]): boolean {
-  return levels.every((level) => isOffThinkingOption(level.id || level.label));
 }
 
 function resolveThinkingCatalogEntry(
@@ -208,17 +196,23 @@ function resolveThinkingCatalogEntry(
   provider: string | null,
   model: string | null,
   runtimeId?: string,
-): ModelCatalogEntry | undefined {
+): ModelRuntimeEntry | undefined {
   const runtime = runtimeId?.trim();
-  return catalog.find((entry) => {
-    const entryRuntime = entry.agentRuntime?.id?.trim();
+  const entry = catalog.find((candidate) => {
+    const entryRuntime = candidate.agentRuntime?.id?.trim();
     // Agent-scoped catalogs must not supply another runtime's session thinking profile.
     return (
-      entry.provider === provider &&
-      entry.id === model &&
-      (!runtime || !entryRuntime || runtime === entryRuntime)
+      candidate.provider === provider &&
+      candidate.id === model &&
+      (!runtime ||
+        !entryRuntime ||
+        runtime === entryRuntime ||
+        candidate.runtimeChoices?.some((choice) => choice.agentRuntime.id === runtime))
     );
   });
+  return runtime && (entry?.agentRuntime?.id || entry?.runtimeChoices?.length)
+    ? resolveModelRuntimeEntry(entry, runtime)
+    : entry;
 }
 
 export function resolveChatThinkingSelectState(params: {
@@ -244,7 +238,9 @@ export function resolveChatThinkingSelectState(params: {
   const nonReasoningOffOnly =
     profile?.reasoning === false &&
     supportedLevels.length > 0 &&
-    isOffOnlyThinkingLevels(supportedLevels);
+    supportedLevels.every(
+      (level) => normalizeThinkingOptionValue(level.id || level.label) === "off",
+    );
   const levels = nonReasoningOffOnly ? [] : supportedLevels;
   const defaultLevel = profile?.thinkingDefault ?? "";
   const effectiveOverride = nonReasoningOffOnly && currentOverride === "off" ? "" : currentOverride;

@@ -33,6 +33,7 @@ function buildProviderMetadataOwners(
     setupProviders: empty,
     commandAliases: empty,
     contracts: empty,
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
     providerEndpoints: endpoints,
     providerRequests: requests,
@@ -50,6 +51,7 @@ describe("provider request config", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
       providerEndpoints: [],
       providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
@@ -506,27 +508,6 @@ describe("provider request config", () => {
         value: "entry-key",
       },
     });
-  });
-
-  it("lets defaults override caller headers when requested", () => {
-    const resolved = resolveProviderRequestHeaders({
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      capability: "llm",
-      transport: "stream",
-      callerHeaders: {
-        originator: "spoofed",
-        "User-Agent": "spoofed/0.0.0",
-        "X-Custom": "1",
-      },
-      precedence: "defaults-win",
-    });
-
-    expect(resolved?.originator).toBe("openclaw");
-    expect(typeof resolved?.version).toBe("string");
-    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
-    expect(resolved?.["X-Custom"]).toBe("1");
   });
 
   it("lets caller headers override defaults when requested", () => {

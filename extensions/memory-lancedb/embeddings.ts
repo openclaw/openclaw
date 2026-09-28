@@ -7,11 +7,11 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
-import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 
 type OpenAiEmbeddingClient = {
@@ -310,49 +310,41 @@ class ProviderAdapterEmbeddings implements Embeddings {
   ): Promise<MemoryEmbeddingProvider> {
     return await runProviderAdapterLifecycle(async () => {
       await drainRetainedProviders();
-      return await this.createProviderAfterRetirement(config, agentDir, embedding);
+      const providerId = embedding.provider;
+      const { getMemoryEmbeddingProvider, registerRuntimeAuthProfileStoreMutationListener } =
+        await loadMemoryEmbeddingProviderModule();
+      if (!this.closed && !this.unregisterAuthMutationListener) {
+        // Auth profiles can rotate without replacing config. Observe their owner
+        // publication edge so cached clients never outlive the selected account.
+        this.unregisterAuthMutationListener = registerRuntimeAuthProfileStoreMutationListener(
+          (event) => this.invalidateProvidersForAuthMutation(event),
+        );
+      }
+      const adapter = getMemoryEmbeddingProvider(providerId, config);
+      if (!adapter) {
+        throw new Error(`Unknown memory embedding provider: ${providerId}`);
+      }
+      const remote =
+        embedding.apiKey || embedding.baseUrl
+          ? {
+              ...(embedding.apiKey ? { apiKey: embedding.apiKey } : {}),
+              ...(embedding.baseUrl ? { baseUrl: embedding.baseUrl } : {}),
+            }
+          : undefined;
+      const result = await adapter.create({
+        config,
+        agentDir,
+        provider: providerId,
+        fallback: "none",
+        model: embedding.model,
+        ...(remote ? { remote } : {}),
+        ...(typeof embedding.dimensions === "number" ? { dimensions: embedding.dimensions } : {}),
+      });
+      if (!result.provider) {
+        throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+      }
+      return result.provider;
     });
-  }
-
-  private async createProviderAfterRetirement(
-    config: OpenClawConfig,
-    agentDir: string,
-    embedding: EmbeddingConfig,
-  ): Promise<MemoryEmbeddingProvider> {
-    const providerId = embedding.provider;
-    const { getMemoryEmbeddingProvider, registerRuntimeAuthProfileStoreMutationListener } =
-      await loadMemoryEmbeddingProviderModule();
-    if (!this.closed && !this.unregisterAuthMutationListener) {
-      // Auth profiles can rotate without replacing config. Observe their owner
-      // publication edge so cached clients never outlive the selected account.
-      this.unregisterAuthMutationListener = registerRuntimeAuthProfileStoreMutationListener(
-        (event) => this.invalidateProvidersForAuthMutation(event),
-      );
-    }
-    const adapter = getMemoryEmbeddingProvider(providerId, config);
-    if (!adapter) {
-      throw new Error(`Unknown memory embedding provider: ${providerId}`);
-    }
-    const remote =
-      embedding.apiKey || embedding.baseUrl
-        ? {
-            ...(embedding.apiKey ? { apiKey: embedding.apiKey } : {}),
-            ...(embedding.baseUrl ? { baseUrl: embedding.baseUrl } : {}),
-          }
-        : undefined;
-    const result = await adapter.create({
-      config,
-      agentDir,
-      provider: providerId,
-      fallback: "none",
-      model: embedding.model,
-      ...(remote ? { remote } : {}),
-      ...(typeof embedding.dimensions === "number" ? { dimensions: embedding.dimensions } : {}),
-    });
-    if (!result.provider) {
-      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
-    }
-    return result.provider;
   }
 
   async embed(
@@ -512,11 +504,17 @@ export class MemoryRecallEmbeddingError extends Error {
   }
 }
 
-export function createEmbeddings(api: OpenClawPluginApi): Embeddings {
-  const provider = new ProviderAdapterEmbeddings(api);
+export function createEmbeddings(api: OpenClawPluginApi): Embeddings & { start(): void } {
+  let provider = new ProviderAdapterEmbeddings(api);
   let direct: { fingerprint: string; client: OpenAiCompatibleEmbeddings } | undefined;
   let closed = false;
   return {
+    start() {
+      if (closed) {
+        provider = new ProviderAdapterEmbeddings(api);
+        closed = false;
+      }
+    },
     async embed(agentId, text, embeddingConfig, timeoutMs) {
       if (closed) {
         throw new Error("memory-lancedb embeddings are closed");

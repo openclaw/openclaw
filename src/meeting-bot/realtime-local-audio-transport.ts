@@ -5,7 +5,11 @@ import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import { onDecodedOutput } from "../process/decoded-output.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
-import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import {
+  terminateMeetingBridgeProcess,
+  writeMeetingOutputChunk,
+  type MeetingOutputWriteWaiter,
+} from "./bridge-process.js";
 import { splitCommandArgv } from "./command-argv.js";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
@@ -51,11 +55,6 @@ type MeetingRealtimeAudioSpawn = (
 
 const STDERR_LINE_TRUNCATED_PREFIX = "[stderr line truncated] ";
 const MAX_STDERR_CHUNK_BYTES = 8 * 1024;
-
-type OutputWriteWaiter = {
-  proc: BridgeProcess;
-  release: () => void;
-};
 
 function attachStderrLineLogger(params: {
   stderr: BridgeProcess["stderr"];
@@ -108,9 +107,19 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();
-  const inputProcess = spawnFn(input.command, input.args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let inputProcess: BridgeProcess;
+  try {
+    inputProcess = spawnFn(input.command, input.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    // Output spawn errors can arrive after input construction has already failed.
+    outputProcess.on("error", () => {});
+    void terminateMeetingBridgeProcess(outputProcess, {
+      graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+    });
+    throw error;
+  }
   let bargeInInputProcess: BridgeProcess | undefined;
   let stopped = false;
   let inputStarted = false;
@@ -118,7 +127,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   let fatalHandler: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
   const retiredOutputStops = new Set<Promise<void>>();
-  const outputWriteWaiters = new Set<OutputWriteWaiter>();
+  const outputWriteWaiters = new Set<MeetingOutputWriteWaiter<BridgeProcess>>();
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
@@ -126,6 +135,11 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const signalFatal = () => {
     if (!fatalSignaled) {
       fatalSignaled = true;
+      void stop().catch((error: unknown) => {
+        params.logger.warn(
+          `${params.logScope} failed audio transport cleanup: ${formatErrorMessage(error)}`,
+        );
+      });
       fatalHandler?.();
     }
   };
@@ -163,39 +177,32 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
     });
   };
-  const writeOutputChunk = (proc: BridgeProcess, stdin: Writable, audio: Buffer): Promise<void> =>
-    new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        outputWriteWaiters.delete(waiter);
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      };
-      const waiter: OutputWriteWaiter = { proc, release: () => finish() };
-      outputWriteWaiters.add(waiter);
-      try {
-        stdin.write(audio, (error) => finish(error ?? undefined));
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
-        return;
-      }
-      if (stdin.destroyed || stdin.writableEnded) {
-        finish(new Error("audio output stream is closed"));
-      }
-    });
   const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
     for (const waiter of outputWriteWaiters) {
-      if (!proc || waiter.proc === proc) {
+      if (!proc || waiter.process === proc) {
         waiter.release();
       }
     }
+  };
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      outputLoopbackVerifier.cancelOutput();
+      releaseOutputWriteWaiters();
+      await Promise.all([
+        terminateMeetingBridgeProcess(inputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateMeetingBridgeProcess(outputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateMeetingBridgeProcess(bargeInInputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        ...retiredOutputStops,
+      ]);
+    })();
+    return stopPromise;
   };
   attachOutputProcessHandlers(outputProcess);
   inputProcess.on("error", fail("audio input command"));
@@ -236,26 +243,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       });
     },
     beginOutput: () => outputLoopbackVerifier.beginOutput(),
-    stop: () => {
-      stopPromise ??= (async () => {
-        stopped = true;
-        outputLoopbackVerifier.cancelOutput();
-        releaseOutputWriteWaiters();
-        await Promise.all([
-          terminateMeetingBridgeProcess(inputProcess, {
-            graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-          }),
-          terminateMeetingBridgeProcess(outputProcess, {
-            graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-          }),
-          terminateMeetingBridgeProcess(bargeInInputProcess, {
-            graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-          }),
-          ...retiredOutputStops,
-        ]);
-      })();
-      return stopPromise;
-    },
+    stop,
     writeOutput: async (audio) => {
       if (stopped) {
         return;
@@ -267,7 +255,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
       outputLoopbackVerifier.recordOutput(audio);
       try {
-        await writeOutputChunk(proc, stdin, audio);
+        await writeMeetingOutputChunk(outputWriteWaiters, proc, stdin, audio);
       } catch (error) {
         if (stopped || proc !== outputProcess || fatalSignaled) {
           return;

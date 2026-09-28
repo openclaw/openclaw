@@ -17,6 +17,7 @@ import {
   testing,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
+  inspectGenericCurrentConversationBinding,
   listGenericCurrentConversationBindingsBySession,
   resolveGenericCurrentConversationBinding,
   touchGenericCurrentConversationBinding,
@@ -226,6 +227,24 @@ describe("generic current-conversation bindings", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await fs.rm(testStateDir, { recursive: true, force: true });
+  });
+
+  it("inspects expired ownership without deleting the durable row", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_000_000));
+    const binding = await bindWorkspaceConversation("user:inspection", { ttlMs: 1_000 });
+    expect(binding).not.toBeNull();
+    vi.setSystemTime(new Date(1_002_000));
+    expect(
+      inspectGenericCurrentConversationBinding({
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:inspection",
+      }),
+    ).toBeNull();
+    // Rewinding exposes whether inspection pruned the existing SQLite row.
+    vi.setSystemTime(new Date(1_000_500));
+    expect(resolveWorkspaceConversation("user:inspection")).not.toBeNull();
   });
 
   it("advertises support only for channels that opt into current-conversation binds", () => {

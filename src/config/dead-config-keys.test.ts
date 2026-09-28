@@ -19,13 +19,17 @@ function expectUnknownKey(params: { config: Record<string, unknown>; path: strin
   }
 }
 
-function configWithPath(path: string): Record<string, unknown> {
+function configWithPath(
+  path: string,
+  value: unknown = 1,
+  siblings: Record<string, unknown> = {},
+): Record<string, unknown> {
   const segments = path.split(".");
-  const config = segments.reduceRight<unknown>(
-    (value, segment) => (segment === "0" ? [value] : { [segment]: value }),
-    1,
+  const key = segments.pop() ?? "";
+  return segments.reduceRight<unknown>(
+    (nested, segment) => (segment === "0" ? [nested] : { [segment]: nested }),
+    { ...siblings, [key]: value },
   ) as Record<string, unknown>;
-  return config;
 }
 
 describe("dead config keys", () => {
@@ -220,6 +224,7 @@ describe("dead config keys", () => {
   it.each([
     [
       "file provider insecure-path bypass",
+      "allowInsecurePath",
       {
         secrets: {
           providers: {
@@ -234,6 +239,7 @@ describe("dead config keys", () => {
     ],
     [
       "exec provider symlink bypass",
+      "allowSymlinkCommand",
       {
         secrets: {
           providers: {
@@ -246,15 +252,8 @@ describe("dead config keys", () => {
         },
       },
     ],
-  ] as const)("rejects retired secret provider %s", (_name, config) => {
-    const result = validateConfigObjectRaw(config, { validateBundledChannels: true });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual({
-        path: "secrets.providers.legacy",
-        message: "Invalid input",
-      });
-    }
+  ] as const)("rejects retired secret provider %s", (_name, key, config) => {
+    expectUnknownKey({ config, path: "secrets.providers.legacy", key });
   });
 
   it.each([
@@ -317,136 +316,42 @@ describe("dead config keys", () => {
   });
 
   it.each([
-    ["root canvasHost", { canvasHost: { enabled: true } }, "", "canvasHost"],
-    ["root tui", { tui: { footer: { showRemoteHost: true } } }, "", "tui"],
-    ["root defaultModel", { defaultModel: "openai/gpt-5.6" }, "", "defaultModel"],
-    ["agents list", { agents: { list: [{ id: "main" }] } }, "agents", "list"],
-    ["Slack identity", { channels: { slack: { identity: "bot" } } }, "channels.slack", "identity"],
-    [
-      "WhatsApp message prefix",
-      { channels: { whatsapp: { messagePrefix: "x" } } },
-      "channels.whatsapp",
-      "messagePrefix",
-    ],
-    [
-      "WhatsApp ack block",
-      { channels: { whatsapp: { ackReaction: { emoji: "x" } } } },
-      "channels.whatsapp",
-      "ackReaction",
-    ],
-    [
-      "iMessage coalesce",
-      { channels: { imessage: { coalesceSameSenderDms: true } } },
-      "channels.imessage",
-      "coalesceSameSenderDms",
-    ],
-    ["cron.webhook", { cron: { webhook: "https://example.com" } }, "cron", "webhook"],
-    ["commands.modelsWrite", { commands: { modelsWrite: true } }, "commands", "modelsWrite"],
-    ["messages.messagePrefix", { messages: { messagePrefix: "x" } }, "messages", "messagePrefix"],
-    [
-      "session reset dm",
-      { session: { resetByType: { dm: { mode: "idle" } } } },
-      "session.resetByType",
-      "dm",
-    ],
-    [
-      "session pruneDays",
-      { session: { maintenance: { pruneDays: 7 } } },
-      "session.maintenance",
-      "pruneDays",
-    ],
-    ["Talk realtime voice", { talk: { realtime: { voice: "alloy" } } }, "talk.realtime", "voice"],
-    [
-      "media async direct send",
-      { tools: { media: { asyncCompletion: { directSend: true } } } },
-      "tools.media",
-      "asyncCompletion",
-    ],
-    [
-      "message cross-context alias",
-      { tools: { message: { allowCrossContextSend: true } } },
-      "tools.message",
-      "allowCrossContextSend",
-    ],
-    [
-      "media Deepgram alias",
-      { tools: { media: { audio: { deepgram: { punctuate: true } } } } },
-      "tools.media.audio",
-      "deepgram",
-    ],
-    [
-      "MCP connect timeout alias",
-      { mcp: { servers: { docs: { command: "docs", connectTimeout: 2 } } } },
-      "mcp.servers.docs",
-      "connectTimeout",
-    ],
-    [
-      "MCP request timeout alias",
-      { mcp: { servers: { docs: { command: "docs", timeout: 2 } } } },
-      "mcp.servers.docs",
-      "timeout",
-    ],
-    [
-      "node-host MCP timeout alias",
-      { nodeHost: { mcp: { servers: { docs: { command: "docs", connect_timeout: 2 } } } } },
-      "nodeHost.mcp.servers.docs",
-      "connect_timeout",
-    ],
-    [
-      "Discord realtime voice alias",
-      { channels: { discord: { voice: { realtime: { voice: "alloy" } } } } },
-      "channels.discord.voice.realtime",
-      "voice",
-    ],
-    [
-      "Discord thread spawn alias",
-      { channels: { discord: { threadBindings: { spawnAcpSessions: true } } } },
-      "channels.discord.threadBindings",
-      "spawnAcpSessions",
-    ],
-    [
-      "Telegram thread spawn alias",
-      { channels: { telegram: { threadBindings: { spawnSubagentSessions: true } } } },
-      "channels.telegram.threadBindings",
-      "spawnSubagentSessions",
-    ],
-    [
-      "Matrix thread spawn alias",
-      { channels: { matrix: { threadBindings: { spawnAcpSessions: true } } } },
-      "channels.matrix.threadBindings",
-      "spawnAcpSessions",
-    ],
-    [
-      "LINE thread spawn alias",
-      { channels: { line: { threadBindings: { spawnSubagentSessions: true } } } },
-      "channels.line.threadBindings",
-      "spawnSubagentSessions",
-    ],
-    [
-      "Slack DM reply alias",
-      { channels: { slack: { dm: { replyToMode: "all" } } } },
-      "channels.slack.dm",
-      "replyToMode",
-    ],
-    [
-      "WhatsApp no-op",
-      { channels: { whatsapp: { exposeErrorText: true } } },
-      "channels.whatsapp",
-      "exposeErrorText",
-    ],
-    [
-      "Google Chat no-op",
-      { channels: { googlechat: { actions: { reactions: true } } } },
-      "channels.googlechat",
-      "actions",
-    ],
-    [
-      "Telegram DM topic config",
-      { channels: { telegram: { dm: { threadReplies: "always" } } } },
-      "channels.telegram",
-      "dm",
-    ],
-  ] as const)("rejects retired %s", (_name, config, path, key) => {
-    expectUnknownKey({ config, path, key });
+    ["canvasHost", { enabled: true }],
+    ["tui", { footer: { showRemoteHost: true } }],
+    ["defaultModel", "openai/gpt-5.6"],
+    ["agents.list", [{ id: "main" }]],
+    ["channels.slack.identity", "bot"],
+    ["channels.whatsapp.messagePrefix", "x"],
+    ["channels.whatsapp.ackReaction", { emoji: "x" }],
+    ["channels.imessage.coalesceSameSenderDms", true],
+    ["cron.webhook", "https://example.com"],
+    ["commands.modelsWrite", true],
+    ["messages.messagePrefix", "x"],
+    ["session.resetByType.dm", { mode: "idle" }],
+    ["session.maintenance.pruneDays", 7],
+    ["talk.realtime.voice", "alloy"],
+    ["tools.media.asyncCompletion", { directSend: true }],
+    ["tools.message.allowCrossContextSend", true],
+    ["tools.media.audio.deepgram", { punctuate: true }],
+    ["mcp.servers.docs.connectTimeout", 2, { command: "docs" }],
+    ["mcp.servers.docs.timeout", 2, { command: "docs" }],
+    ["nodeHost.mcp.servers.docs.connect_timeout", 2, { command: "docs" }],
+    ["channels.discord.voice.realtime.voice", "alloy"],
+    ["channels.discord.threadBindings.spawnAcpSessions", true],
+    ["channels.telegram.threadBindings.spawnSubagentSessions", true],
+    ["channels.matrix.threadBindings.spawnAcpSessions", true],
+    ["channels.line.threadBindings.spawnSubagentSessions", true],
+    ["channels.slack.dm.replyToMode", "all"],
+    ["channels.whatsapp.exposeErrorText", true],
+    ["channels.googlechat.actions", { reactions: true }],
+    ["channels.telegram.dm", { threadReplies: "always" }],
+  ] as const)("rejects retired %s", (fullPath, value, siblings?: Record<string, unknown>) => {
+    const segments = fullPath.split(".");
+    const key = segments.pop() ?? "";
+    expectUnknownKey({
+      config: configWithPath(fullPath, value, siblings),
+      path: segments.join("."),
+      key,
+    });
   });
 });

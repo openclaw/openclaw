@@ -158,6 +158,88 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
 }
 
 describe("runRemoteGatewayInferenceOnboarding", () => {
+  it.each([true, false])(
+    "preserves utility role through remote setup and rejects role drift (match=%s)",
+    async (matchingRole) => {
+      const call = vi.fn(async (options: CallGatewayCliOptions) => {
+        if (options.method === "openclaw.setup.detect") {
+          return {
+            ...detectResult(),
+            candidates: [
+              {
+                kind: "provider-auto:fixture",
+                label: "Utility",
+                detail: "Setup",
+                modelRef: "fixture/small",
+                modelTarget: "utility",
+                recommended: false,
+              },
+            ],
+            setupModel: "fixture/small",
+            utilityModel: "fixture/small",
+          };
+        }
+        if (options.method === "openclaw.setup.activate.start") {
+          expect(options.params).toMatchObject({
+            modelTarget: "utility",
+            modelRef: "fixture/small",
+          });
+          return {
+            sessionId: "fixture-session",
+            done: true,
+            status: "done",
+            modelActivation: { modelRef: "fixture/small", modelTarget: "utility" },
+          };
+        }
+        if (options.method === "openclaw.setup.verify") {
+          expect(options.params).toEqual({ modelTarget: "utility" });
+          return {
+            ok: true,
+            modelRef: "fixture/small",
+            ...(matchingRole ? { modelTarget: "utility" } : {}),
+            latencyMs: 10,
+          };
+        }
+        throw new Error(`Unexpected request: ${options.method}`);
+      });
+      const work = runRemoteGatewayInferenceOnboarding(
+        makeTarget(makeLocalConfig(), { token: "synthetic-token" }),
+        makeRuntime(),
+        {
+          callGateway: asGatewayCall(call),
+          createPrompter: () => createWizardPrompter(),
+          runGuidedOnboarding: async (_options, runtime, deps) => {
+            const detection = await deps?.detect?.();
+            expect(detection).toMatchObject({
+              setupComplete: false,
+              setupModel: "fixture/small",
+              utilityModel: "fixture/small",
+            });
+            const choice = detection?.candidates[0];
+            expect(choice?.modelTarget).toBe("utility");
+            const result = await deps?.activate?.({
+              kind: "provider-auto:fixture",
+              modelRef: "fixture/small",
+              modelTarget: choice?.modelTarget,
+              surface: "cli",
+              runtime,
+            });
+            expect(result).toMatchObject({
+              ok: true,
+              modelTarget: "utility",
+              modelRef: "fixture/small",
+            });
+          },
+        },
+      );
+      if (matchingRole) {
+        await work;
+      } else {
+        await expect(work).rejects.toThrow("different model role");
+      }
+    },
+  );
+
   it.each(["accept", "decline", "cancel"] as const)(
     "relays saved replacement confirmation through the Gateway wizard: %s",
     async (choice) => {
@@ -257,26 +339,48 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
   );
 
   it.each([
-    { label: "token", auth: { token: "selected-token" }, secret: "selected-token" },
+    {
+      label: "token",
+      auth: { token: "selected-token" },
+      secret: "selected-token",
+      configuredRemote: false,
+    },
     {
       label: "password",
       auth: { password: "selected-password" },
       secret: "selected-password",
+      configuredRemote: false,
+    },
+    {
+      label: "configured SSH token",
+      auth: { token: "selected-token" },
+      secret: "selected-token",
+      configuredRemote: true,
     },
   ])(
     "pins $label across detect, activate, verify, OpenClaw, and in-process TUI",
-    async ({ auth, secret }) => {
+    async ({ auth, secret, configuredRemote }) => {
       const localConfig = makeLocalConfig();
+      const gatewayUrl = configuredRemote ? "ws://127.0.0.1:18789" : "wss://selected.example/ws";
+      if (configuredRemote) {
+        localConfig.gateway = {
+          ...localConfig.gateway,
+          remote: { url: gatewayUrl, transport: "ssh", sshTarget: "me@studio", remotePort: 18789 },
+        };
+      }
       const localConfigBefore = structuredClone(localConfig);
       const order: string[] = [];
       const remoteConfig: { modelRef?: string } = {};
       const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-        expect(options.url).toBe("wss://selected.example/ws");
+        expect(options.url).toBe(configuredRemote ? undefined : gatewayUrl);
         expect(options.token).toBe(auth.token);
         expect(options.password).toBe(auth.password);
         expect(options.tlsFingerprint).toBe("sha256:selected");
         expect(options.ignoreEnvUrlOverride).toBe(true);
-        expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
+        expect(options.config?.gateway?.remote?.url).toBe(gatewayUrl);
+        expect(options.config?.gateway?.remote?.transport).toBe(
+          configuredRemote ? "ssh" : "direct",
+        );
         order.push(options.method);
 
         if (options.method === "openclaw.setup.detect") {
@@ -331,13 +435,14 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         expect(options).toEqual({
           config: expect.objectContaining({
             gateway: expect.objectContaining({
-              remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
+              remote: expect.objectContaining({ url: gatewayUrl }),
             }),
           }),
           deliver: false,
           message: "Wake up, my friend!",
           boundGateway: {
-            url: "wss://selected.example/ws",
+            url: gatewayUrl,
+            ...(configuredRemote ? { configuredRemote: true } : {}),
             ...auth,
             tlsFingerprint: "sha256:selected",
           },
@@ -348,12 +453,16 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       const prompter = createWizardPrompter({ text });
       const runtime = makeRuntime();
 
-      await runRemoteGatewayInferenceOnboarding(makeTarget(localConfig, auth), runtime, {
-        callGateway: asGatewayCall(callGatewayMock),
-        createPrompter: () => prompter,
-        runGuidedOnboarding: exerciseGuidedAdapters(),
-        runTui,
-      });
+      await runRemoteGatewayInferenceOnboarding(
+        { ...makeTarget(localConfig, auth), gatewayUrl, configuredRemote },
+        runtime,
+        {
+          callGateway: asGatewayCall(callGatewayMock),
+          createPrompter: () => prompter,
+          runGuidedOnboarding: exerciseGuidedAdapters(),
+          runTui,
+        },
+      );
 
       expect(order).toEqual([
         "openclaw.setup.detect",

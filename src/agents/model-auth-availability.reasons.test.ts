@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -252,11 +253,7 @@ describe("model auth unavailability reasons", () => {
       },
     };
     expect(availability()).toBe(false);
-    store.profiles["test-profile"] = {
-      type: "api_key",
-      provider: "anthropic-local",
-      key: "profile-key",
-    };
+    store.profiles["test-profile"] = createApiKeyCredential("anthropic-local", "profile-key");
     expect(availability()).toBe(true);
   });
 

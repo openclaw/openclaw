@@ -1,4 +1,3 @@
-// Session store types define durable per-session metadata and merge/usage helpers.
 import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
@@ -45,14 +44,15 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
+import type { PendingSessionWorktree } from "./session-worktree-intent.js";
 
 export type { SessionToolOverrides } from "./session-tool-overrides.js";
 export type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export type PersistedSessionRunStatus = SessionRunStatus;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
-type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionOrigin = {
   label?: string;
@@ -154,34 +154,6 @@ type AcpSessionBinding = {
   agentSessionId: string;
 };
 
-export type SessionCompactionCheckpointReason =
-  | "manual"
-  | "auto-threshold"
-  | "overflow-retry"
-  | "timeout-retry";
-
-type SessionCompactionTranscriptReference = {
-  sessionId: string;
-  sessionFile?: string;
-  leafId?: string;
-  entryId?: string;
-};
-
-export type SessionCompactionCheckpoint = {
-  checkpointId: string;
-  sessionKey: string;
-  sessionId: string;
-  createdAt: number;
-  reason: SessionCompactionCheckpointReason;
-  tokensBefore?: number;
-  tokensAfter?: number;
-  tokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
-  summary?: string;
-  firstKeptEntryId?: string;
-  preCompaction: SessionCompactionTranscriptReference;
-  postCompaction: SessionCompactionTranscriptReference;
-};
-
 type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
@@ -248,6 +220,8 @@ type SubagentRecoveryState = {
   lastAttemptAt?: number;
   /** Registry run id that triggered the latest automatic orphan-recovery resume. */
   lastRunId?: string;
+  /** Visible execution retained while the recovered run uses an internal transcript. */
+  sessionLifecycleRunId?: string;
   /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
   wedgedAt?: number;
   /** Human-readable reason automatic recovery was tombstoned. */
@@ -293,9 +267,9 @@ export type RestartRecoveryRun = {
 
 type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance &
-  Pick<SessionRow, "permissionMode" | "sessionRoot"> & {
+  Pick<SessionRow, "permissionMode" | "sandboxMode" | "nativeRuntimeConsent" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
-    visibility?: SessionVisibility;
+    visibility?: NonNullable<SessionRow["visibility"]>;
     /**
      * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
      * Stored on the main session entry.
@@ -325,6 +299,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     incognito?: true;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
+    /** Current provider precaution; only its acknowledged continuation may start work. */
+    providerReview?: import("./provider-review.types.js").SessionProviderReview;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
     // threads.archived_at: the boolean is always derived from the timestamp and
     // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
@@ -344,6 +320,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentStatus?: SessionAgentStatus;
     /** Latest utility-model status judgment for idle session status surfaces. */
     observerDigest?: SessionObserverDigest;
+    /** Versioned, reconstructible Activity recap; never authoritative task status. */
+    activitySummary?: import("./activity-summary.js").SessionActivitySummary;
     /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
@@ -436,7 +414,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
-    status?: SessionRunStatus;
+    status?: PersistedSessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
     /**
@@ -579,7 +557,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
-    compactionCheckpoints?: SessionCompactionCheckpoint[];
     memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
@@ -589,7 +566,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     label?: string;
     /** Automatic device name; never claims a custom label or overrides a generated title. */
     autoLabel?: string;
-    /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
+    /** Persistent sidebar emoji, named glyph, or canonical SVG image data URL. */
     icon?: string;
     /** Named sidebar tint (SESSION_COLOR_IDS); palette mirrors Claude Code /color for import. */
     color?: string;
@@ -597,6 +574,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */
     boardFace?: SessionBoardFace;
+    /** Shared dashboard presentation default; absence uses the built-in split view. */
+    boardPresentation?: NonNullable<SessionRow["boardPresentation"]>;
     displayName?: string;
     /** Canonical delivery state. Legacy delivery fields are migrated by `openclaw doctor --fix`. */
     delivery?: SessionDeliveryState;
@@ -623,7 +602,16 @@ type SessionEntryCore = SessionRestartRecoveryState &
 export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
+export type SessionProfileInvolvement = {
+  hidden: boolean;
+  updatedAt: number;
+  /** Original committed source ordering, retained when the person hides the session. */
+  lastMention?: { generation: string; sequence: number; timestamp: number };
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Personal discovery state, never participation, attribution, or sharing authority. */
+  profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
   cliHistoryBoundary?: import("./cli-history-boundary.js").CliHistoryBoundary;
   /** Explicit world-readable publication, bound to one transcript generation. */
@@ -637,14 +625,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */
-  pendingWorktree?: {
-    workspace?: string;
-    name?: string;
-    baseRef?: string;
-    /** Verified commit used for checkout while baseRef remains user-facing metadata. */
-    baseCommit?: string;
-    titleSource: string;
-  };
+  pendingWorktree?: PendingSessionWorktree;
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
   transcriptByteCompactionLatch?: {
     activeBytes: number;
@@ -661,7 +642,13 @@ export interface InternalSessionEntry extends InternalSessionEntryCore {}
 export function isTerminalSessionStatus(
   status: unknown,
 ): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+  return (
+    status === "done" ||
+    status === "failed" ||
+    status === "interrupted" ||
+    status === "killed" ||
+    status === "timeout"
+  );
 }
 
 function isSessionPluginTraceLine(line: string): boolean {
@@ -673,7 +660,6 @@ function resolveSessionPluginLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
   includeLine: (line: string) => boolean,
 ): string[] {
-  // Status and trace surfaces share the same plugin-owned lines but apply different filters.
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
@@ -753,41 +739,32 @@ export function setSessionRuntimeModel(
   return true;
 }
 
-type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
-
-type MergeSessionEntryOptions = {
-  policy?: SessionEntryMergePolicy;
-  now?: number;
-};
-
 function resolveMergedUpdatedAt(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
-  options?: MergeSessionEntryOptions,
+  preserveActivity: boolean,
 ): number {
-  const now = options?.now ?? Date.now();
+  const now = Date.now();
   const existingUpdatedAt = normalizeMergedUpdatedAt(existing?.updatedAt, now);
   const patchUpdatedAt = normalizeMergedUpdatedAt(patch.updatedAt, now);
-  if (options?.policy === "preserve-activity" && existing) {
+  if (preserveActivity && existing) {
     return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
   return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
 }
 
 function normalizeMergedUpdatedAt(value: number | undefined, now: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.min(value, now);
+  const normalized = asNonNegativeFiniteNumber(value);
+  return normalized === undefined ? undefined : Math.min(normalized, now);
 }
 
 function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
-  options?: MergeSessionEntryOptions,
+  preserveActivity = false,
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
+  const updatedAt = resolveMergedUpdatedAt(existing, patch, preserveActivity);
   if (!existing) {
     return stripRetiredSessionEntryLocators(
       normalizeSessionRuntimeModelFields({
@@ -815,6 +792,7 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }
+  next.inheritedGitContributorProfileIds = existing.inheritedGitContributorProfileIds;
   if (existing.sandbox === "required") {
     next.sandbox = existing.sandbox;
   } else {
@@ -863,9 +841,7 @@ export function mergeSessionEntryPreserveActivity(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
 ): SessionEntry {
-  return mergeSessionEntryWithPolicy(existing, patch, {
-    policy: "preserve-activity",
-  });
+  return mergeSessionEntryWithPolicy(existing, patch, true);
 }
 
 export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {

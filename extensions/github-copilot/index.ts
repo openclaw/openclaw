@@ -1,4 +1,3 @@
-// Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   definePluginEntry,
@@ -129,6 +128,9 @@ async function resolveInteractiveCopilotStarterModel(params: {
   githubToken: string;
   githubDomain: string;
 }): Promise<Pick<ProviderAuthResult, "defaultModel" | "notes">> {
+  if (params.ctx.credentialOnly) {
+    return {};
+  }
   try {
     const { resolveCopilotStarterModel } = await loadGithubCopilotRuntime();
     return {
@@ -441,12 +443,12 @@ export default definePluginEntry({
                   }),
             },
           ],
-          defaultModel: DEFAULT_COPILOT_MODEL,
+          ...(!ctx.credentialOnly ? { defaultModel: DEFAULT_COPILOT_MODEL } : {}),
           ...(configPatch ? { configPatch } : {}),
         };
       }
 
-      const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
+      const existing = ctx.credentialOnly ? null : resolveExistingCopilotAuthResult(ctx.agentDir);
       // Only offer to reuse the stored token when it was minted for the same
       // domain. A domain switch (either direction) must re-run the device flow so
       // the token is tenant-scoped to the domain being written to config.
@@ -498,6 +500,15 @@ export default definePluginEntry({
             if (ctx.isRemote) {
               await ctx.openUrl(verificationUrl);
             }
+            if (ctx.prompter.deviceCode) {
+              await ctx.prompter.deviceCode({
+                title: "Authorize GitHub Copilot",
+                code: userCode,
+                expiresInMinutes,
+                message: "Enter this one-time code to authorize Copilot.",
+              });
+              return;
+            }
             await ctx.prompter.note(
               [
                 "Open this URL in your browser and enter the code below.",
@@ -518,6 +529,7 @@ export default definePluginEntry({
                 },
               }),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
+          ...(ctx.assertCurrent ? { assertCurrent: ctx.assertCurrent } : {}),
         },
         normalizedDomain,
       );
@@ -574,10 +586,6 @@ export default definePluginEntry({
       };
     }
 
-    async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      return await runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN);
-    }
-
     async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
       const domain = await promptForEnterpriseDomain(ctx);
       if (!domain) {
@@ -608,15 +616,15 @@ export default definePluginEntry({
           hint: "Browser device-code flow",
           kind: "device_code",
           starterModel: DEFAULT_COPILOT_MODEL,
-          run: async (ctx) => await runGitHubCopilotAuth(ctx),
-          runNonInteractive: async (ctx) => await runGitHubCopilotNonInteractiveAuth(ctx),
+          run: (ctx) => runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN),
+          runNonInteractive: runGitHubCopilotNonInteractiveAuth,
         },
         {
           id: "device-enterprise",
           label: "GitHub Enterprise device login (data residency)",
           hint: "Device-code flow against your *.ghe.com tenant",
           kind: "device_code",
-          run: async (ctx) => await runGitHubCopilotEnterpriseAuth(ctx),
+          run: runGitHubCopilotEnterpriseAuth,
           wizard: {
             choiceId: "github-copilot-enterprise",
             choiceLabel: "GitHub Copilot (Enterprise / data residency)",

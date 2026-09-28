@@ -9,8 +9,8 @@ import { linkSync, readFileSync, readdirSync, renameSync, unlinkSync, type Diren
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -34,10 +34,8 @@ const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
 
-const log = createSubsystemLogger("agents/plugin-model-catalog");
-
 /** Recognizes canonical catalogs and recoverable atomic migration claims. */
-export function isPluginModelCatalogMigrationFile(filename: string): boolean {
+function isPluginModelCatalogMigrationFile(filename: string): boolean {
   return (
     filename === PLUGIN_MODEL_CATALOG_FILE ||
     filename.startsWith(`${PLUGIN_MODEL_CATALOG_FILE}.doctor-importing-`)
@@ -49,11 +47,6 @@ type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entri
 export type PersistedPluginModelCatalog = {
   pluginId: string;
   contents: string;
-};
-
-type PersistedPluginModelCatalogLoadResult = {
-  catalogs: PersistedPluginModelCatalog[];
-  warnings: string[];
 };
 
 function pluginModelCatalogDatabaseOptions(agentDir: string) {
@@ -106,10 +99,11 @@ export function loadPersistedPluginModelCatalogsReadOnly(
   return catalogs.filter(({ pluginId }) => allowed.has(pluginId));
 }
 
-function repairPersistedPluginModelCatalogs(params: {
+/** Applies Doctor's repair to unchanged persisted catalog bytes. */
+export function repairPersistedPluginModelCatalogs(params: {
   agentDir: string;
   catalogs: readonly PersistedPluginModelCatalog[];
-}): boolean {
+}): Array<{ pluginId: string; removedModelCount: number }> {
   const repairs = params.catalogs.flatMap((catalog) => {
     const repaired = repairPluginModelCatalogTransportMetadata(catalog.contents);
     return repaired.removedModelCount > 0
@@ -123,7 +117,7 @@ function repairPersistedPluginModelCatalogs(params: {
       : [];
   });
   if (repairs.length === 0) {
-    return false;
+    return [];
   }
 
   const updatedAt = Date.now();
@@ -148,14 +142,7 @@ function repairPersistedPluginModelCatalogs(params: {
     pluginModelCatalogDatabaseOptions(params.agentDir),
     { operationLabel: "plugin-model-catalog.repair" },
   );
-  for (const repair of applied) {
-    log.warn(
-      `Repaired generated model catalog for plugin ${repair.pluginId}: removed ${repair.removedModelCount} model row(s) without provider or model api metadata.`,
-    );
-  }
-  // A concurrent refresh can win the compare-and-set. The caller still needs
-  // to reread so this stale pre-transaction snapshot never reaches consumers.
-  return true;
+  return applied.map(({ pluginId, removedModelCount }) => ({ pluginId, removedModelCount }));
 }
 
 function readPersistedPluginModelCatalogMigrationPayloads(
@@ -379,43 +366,29 @@ function retireOrphanedPluginModelCatalogMigrations(params: {
   }
 }
 
-/** Migrates released sidecars before runtime can read or replace agent SQLite state. */
-export function migrateLegacyPluginModelCatalogs(params: {
-  agentDir: string;
-  expectedContents?: ReadonlyMap<string, string>;
-  beforeLegacyCatalogClaim?: (pathname: string) => void;
-}): PluginModelCatalogMigrationResult {
-  const agentDir = path.resolve(params.agentDir);
+/** Inspects released sidecars without creating, repairing, claiming, or removing state. */
+export function inspectLegacyPluginModelCatalogs(agentDir: string): {
+  catalogs: Array<{ pluginId: string; pathname: string; contents: string }>;
+  warnings: string[];
+  protectedPluginIds: ReadonlySet<string>;
+  directoryError?: unknown;
+} {
   const pluginsDir = path.join(agentDir, "plugins");
-  const warnings: string[] = [];
   let pluginDirs: Dirent[];
   try {
     pluginDirs = readdirSync(pluginsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      if (
-        params.expectedContents &&
-        !hasCommittedExpectedPluginModelCatalogs(agentDir, params.expectedContents)
-      ) {
-        throw new Error("Could not inspect expected legacy provider catalogs", { cause: error });
-      }
-      return {
-        detected: 0,
-        migrated: 0,
-        warnings: [`Could not inspect legacy provider catalogs: ${pluginsDir}`],
-      };
-    }
-    if (
-      params.expectedContents &&
-      params.expectedContents.size > 0 &&
-      !hasCommittedExpectedPluginModelCatalogs(agentDir, params.expectedContents)
-    ) {
-      throw new Error("Legacy provider catalogs disappeared before migration", { cause: error });
-    }
-    retireOrphanedPluginModelCatalogMigrations({ agentDir });
-    return { detected: 0, migrated: 0, warnings: [] };
+    return {
+      catalogs: [],
+      warnings:
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? []
+          : [`Could not inspect legacy provider catalogs: ${pluginsDir}`],
+      protectedPluginIds: new Set(),
+      directoryError: error,
+    };
   }
-
+  const warnings: string[] = [];
   const legacyCatalogs: Array<{ pluginId: string; pathname: string; contents: string }> = [];
   const protectedMigrationPluginIds = new Set<string>();
   for (const pluginDir of pluginDirs) {
@@ -499,6 +472,47 @@ export function migrateLegacyPluginModelCatalogs(params: {
       continue;
     }
     legacyCatalogs.push(...pluginLegacyCatalogs);
+  }
+
+  return { catalogs: legacyCatalogs, warnings, protectedPluginIds: protectedMigrationPluginIds };
+}
+
+/** Doctor-owned import of released sidecars into canonical agent SQLite state. */
+export function migrateLegacyPluginModelCatalogs(params: {
+  agentDir: string;
+  expectedContents?: ReadonlyMap<string, string>;
+  beforeLegacyCatalogClaim?: (pathname: string) => void;
+}): PluginModelCatalogMigrationResult {
+  const agentDir = path.resolve(params.agentDir);
+  const {
+    catalogs: legacyCatalogs,
+    warnings,
+    protectedPluginIds: protectedMigrationPluginIds,
+    directoryError,
+  } = inspectLegacyPluginModelCatalogs(agentDir);
+  if (directoryError) {
+    if (!hasErrnoCode(directoryError, "ENOENT")) {
+      if (
+        params.expectedContents &&
+        !hasCommittedExpectedPluginModelCatalogs(agentDir, params.expectedContents)
+      ) {
+        throw new Error("Could not inspect expected legacy provider catalogs", {
+          cause: directoryError,
+        });
+      }
+      return { detected: 0, migrated: 0, warnings };
+    }
+    if (
+      params.expectedContents &&
+      params.expectedContents.size > 0 &&
+      !hasCommittedExpectedPluginModelCatalogs(agentDir, params.expectedContents)
+    ) {
+      throw new Error("Legacy provider catalogs disappeared before migration", {
+        cause: directoryError,
+      });
+    }
+    retireOrphanedPluginModelCatalogMigrations({ agentDir });
+    return { detected: 0, migrated: 0, warnings: [] };
   }
 
   retireOrphanedPluginModelCatalogMigrations({
@@ -621,24 +635,6 @@ export function migrateLegacyPluginModelCatalogs(params: {
     migrated += 1;
   }
   return { detected: legacyCatalogs.length, migrated, warnings };
-}
-
-/** Reads available provider catalogs without discarding legacy migration diagnostics. */
-export function loadPersistedPluginModelCatalogs(
-  agentDir: string,
-): PersistedPluginModelCatalogLoadResult {
-  const migration = migrateLegacyPluginModelCatalogs({ agentDir });
-  let catalogs = readPersistedPluginModelCatalogs(agentDir);
-  if (
-    migration.warnings.length === 0 &&
-    repairPersistedPluginModelCatalogs({ agentDir, catalogs })
-  ) {
-    catalogs = readPersistedPluginModelCatalogs(agentDir);
-  }
-  return {
-    catalogs,
-    warnings: migration.warnings,
-  };
 }
 
 /** Replaces rebuildable provider catalogs in the existing per-agent SQLite cache. */

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -74,16 +75,8 @@ function prepareAuthFailoverRun(
   mockedEnsureAuthProfileStore.mockReturnValue({
     version: 1,
     profiles: {
-      [failedProfile]: {
-        type: "api_key",
-        provider: "openai",
-        key: "failed-api-key",
-      },
-      [backupProfile]: {
-        type: "api_key",
-        provider: "openai",
-        key: "backup-api-key",
-      },
+      [failedProfile]: createApiKeyCredential("openai", "failed-api-key"),
+      [backupProfile]: createApiKeyCredential("openai", "backup-api-key"),
     },
     order: { openai: [failedProfile, backupProfile] },
   });

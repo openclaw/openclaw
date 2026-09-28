@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { parseWorkerSlotSummary } from "../shared/node-list-parse.js";
+
+export { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
@@ -15,7 +18,6 @@ export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
-export const NODE_WORKER_CAPACITY_MAX = 1_024;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -41,6 +43,7 @@ export type NodeWorkerHostDeclaration =
       portalStream?: typeof NODE_WORKER_PORTAL_STREAM_VERSION;
       environmentSession?: typeof NODE_WORKER_ENVIRONMENT_SESSION_VERSION;
       preparedWorkspace?: typeof NODE_WORKER_PREPARED_WORKSPACE_VERSION;
+      capturedExecPolicy?: true;
     };
 
 export type NodeRunnerInventoryDeclaration =
@@ -55,28 +58,6 @@ export type NodeRunnerInventoryDeclaration =
       workerHost: NodeWorkerHostDeclaration;
     };
 
-function parseCapacitySnapshot(value: unknown): NodeWorkerCapacitySnapshot | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= NODE_WORKER_CAPACITY_MAX &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : null;
-}
-
 function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
   if (!isRecord(value) || typeof value.enabled !== "boolean") {
     return null;
@@ -85,11 +66,11 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (!value.enabled) {
     return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
   }
-  const capacity = parseCapacitySnapshot(value.capacity);
+  const capacity = parseWorkerSlotSummary(value.capacity);
   if (
     !capacity ||
     keys.length < 2 ||
-    keys.length > 8 ||
+    keys.length > 9 ||
     !keys.includes("enabled") ||
     !keys.includes("capacity") ||
     keys.some(
@@ -101,7 +82,8 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "bundleStatus" &&
         key !== "portalStream" &&
         key !== "environmentSession" &&
-        key !== "preparedWorkspace",
+        key !== "preparedWorkspace" &&
+        key !== "capturedExecPolicy",
     ) ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
@@ -114,6 +96,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       value.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) ||
     (value.preparedWorkspace !== undefined &&
       value.preparedWorkspace !== NODE_WORKER_PREPARED_WORKSPACE_VERSION) ||
+    (value.capturedExecPolicy !== undefined && value.capturedExecPolicy !== true) ||
     (value.bundleStatus !== undefined && value.bundleRetention === undefined)
   ) {
     return null;
@@ -139,6 +122,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
     ...(value.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION
       ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
       : {}),
+    ...(value.capturedExecPolicy === true ? { capturedExecPolicy: true } : {}),
   };
 }
 
@@ -183,4 +167,13 @@ export function formatNodeRunnerUpdateRequired(
   issue: NodeRunnerInventoryIssue,
 ): string {
   return `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
+}
+
+/** Worker execution requires the node to preserve the Gateway's captured exec policy. */
+export function resolveNodeWorkerExecutionIssue(
+  workerHost: NodeWorkerHostDeclaration,
+): NodeRunnerInventoryIssue | undefined {
+  return workerHost.enabled && workerHost.capturedExecPolicy !== true
+    ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+    : undefined;
 }

@@ -1,5 +1,3 @@
-// Qa Lab plugin module implements qa channel transport behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
 import {
@@ -8,7 +6,6 @@ import {
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
 import type {
-  QaTransportActionName,
   QaTransportGatewayConfig,
   QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
@@ -75,12 +72,9 @@ function createQaChannelReportNotes(params: QaTransportReportParams) {
   ];
 }
 
-async function handleQaChannelAction(params: {
-  action: QaTransportActionName;
-  args: Record<string, unknown>;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}) {
+async function handleQaChannelAction(
+  params: Parameters<QaStateBackedTransportAdapter["handleAction"]>[0],
+) {
   const { qaChannelPlugin } = await import("openclaw/plugin-sdk/qa-channel");
   return await qaChannelPlugin.actions?.handleAction?.({
     channel: QA_CHANNEL_ID,
@@ -114,11 +108,14 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       accountId: QA_CHANNEL_ACCOUNT_ID,
       channel: QA_CHANNEL_ID,
     });
-  buildAgentDelivery = ({ target }: { target: string }) => ({
-    channel: QA_CHANNEL_ID,
-    replyChannel: QA_CHANNEL_ID,
-    replyTo: target,
-  });
+  buildAgentDelivery = ({ target, threadId }: { target: string; threadId?: string }) => {
+    return {
+      channel: QA_CHANNEL_ID,
+      replyChannel: QA_CHANNEL_ID,
+      replyTo: target,
+      ...(threadId ? { threadId } : {}),
+    };
+  };
   async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
     const { command, ...message } = input;
     await this.sendInbound({

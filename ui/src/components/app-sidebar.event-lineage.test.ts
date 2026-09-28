@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -6,6 +7,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -16,6 +18,7 @@ describe("selected lineage after a full sessions.changed event", () => {
   it.each(["filtered omitted", "unfiltered metadata", "managed member"] as const)(
     "%s keeps accepted event fields visible after list refresh failures",
     async (mode) => {
+      vi.useFakeTimers();
       const filtered = mode !== "unfiltered metadata";
       const managedMember = mode === "managed member";
       const reparent = mode !== "unfiltered metadata";
@@ -140,14 +143,7 @@ describe("selected lineage after a full sessions.changed event", () => {
       };
       try {
         if (filtered) {
-          sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-          await sidebar.updateComplete;
-          sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-            new CustomEvent("wa-select", {
-              bubbles: true,
-              detail: { item: { value: "involving-me" } },
-            }),
-          );
+          await activateSessionMenuValue(sidebar, "involving-me");
           await waitForFast(() => {
             expect(sidebar.sessionData.sessionsLoading).toBe(false);
             expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual(
@@ -217,6 +213,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           activeRunIds: [],
           status: "done",
         });
+        await vi.advanceTimersByTimeAsync(5_000);
         await waitForFast(() =>
           expect(sessions.state.result?.sessions.find((entry) => entry.key === key)).toMatchObject({
             sessionId: child.sessionId,
@@ -232,7 +229,9 @@ describe("selected lineage after a full sessions.changed event", () => {
         });
         await sidebar.updateComplete;
         expect(sessions.canonicalListRevision).toBe(revisionBefore);
-        expect(controllerChildReads).toBe(1);
+        // A retained parent query refreshes its changed member; reparenting
+        // retires the old query before its scheduled refresh runs.
+        expect(controllerChildReads).toBe(reparent ? 1 : 2);
         if (mode === "filtered omitted") {
           expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
             p1,
@@ -256,6 +255,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           expect(directParent()).toBe(expectedParent);
         });
       } finally {
+        vi.useRealTimers();
         failedLists = false;
         provider.remove();
         sessions.dispose();

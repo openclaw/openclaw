@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COPILOT_INTEGRATION_ID } from "../agents/copilot-dynamic-headers.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
+import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -92,7 +93,7 @@ describe("Copilot cache completion", () => {
           await expect(pending).resolves.toMatchObject({
             token: operation === "load" ? "synthetic-cached-token" : "synthetic-exchanged-token",
           });
-          pluginState.closePluginStateDatabase();
+          closePluginStateDatabase();
           await expect(cache.load()).resolves.toMatchObject({
             token: operation === "load" ? "synthetic-cached-token" : "synthetic-exchanged-token",
           });

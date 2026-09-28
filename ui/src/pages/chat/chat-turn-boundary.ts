@@ -20,12 +20,17 @@ export function safeNormalizeMessage(message: unknown): NormalizedMessage | null
 export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => {
     const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+    return (
+      (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
+      (provenance?.kind === "internal_system" &&
+        provenance.sourceTool === "cron" &&
+        Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey))
+    );
   });
 }
 
 // Display attribution also accepts projected source metadata; turn ownership
-// above still requires the original sessions_send provenance.
+// above requires the original forwarded-input provenance.
 export function hasForwardedSource(group: MessageGroup): boolean {
   return Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group);
 }

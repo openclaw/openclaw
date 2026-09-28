@@ -83,6 +83,7 @@ export type TabAccessPolicy = {
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
     tab: BrowserTabSnapshot | undefined,
+    change: { url?: string; groupId?: number; status?: string },
   ): TabAccessEpoch | undefined;
   invalidateGroup(group?: TabGroupSnapshot, removed?: boolean): void;
   invalidateAll(): void;
@@ -97,10 +98,10 @@ export type TabAccessPolicy = {
     operation: CreatedTabOperation,
   ): Promise<void>;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
-  requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
-  requireTabAfterNavigation(
+  requireTab(
     tabId: number,
-    epoch: TabAccessEpoch,
+    epoch?: TabAccessEpoch,
+    afterNavigation?: boolean,
   ): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;

@@ -1,9 +1,9 @@
-// Voice Call plugin module implements cli behavior.
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { MAX_TCP_PORT } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isRecord,
   normalizeOptionalLowercaseString,
@@ -36,12 +36,6 @@ import {
   getTailscaleSelfInfo,
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
-
-type Logger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
 
 type SetupCheck = {
   id: string;
@@ -137,7 +131,7 @@ export function registerVoiceCallCli(params: {
   coreConfig: OpenClawConfig;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
   stateRuntime?: VoiceCallStateRuntime["state"];
-  logger: Logger;
+  logger: PluginLogger;
 }) {
   const { program, config, coreConfig, ensureRuntime, stateRuntime } = params;
   const ensureHistoryStateRuntime = (): void => {
@@ -389,13 +383,13 @@ export function registerVoiceCallCli(params: {
       ensureHistoryStateRuntime();
       const storePath = path.dirname(resolveDefaultStorePath(config));
       if (options.callId) {
-        const call = findCallInStore(storePath, options.callId);
+        const call = await findCallInStore(storePath, options.callId);
         writeCliJson(call ?? { found: false });
         return;
       }
       writeCliJson({
         found: true,
-        calls: Array.from(loadActiveCallsFromStore(storePath).activeCalls.values()),
+        calls: Array.from((await loadActiveCallsFromStore(storePath)).activeCalls.values()),
       });
     });
 

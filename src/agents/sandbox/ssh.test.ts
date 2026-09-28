@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT } from "./remote-shell-command.js";
 import {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -14,7 +15,6 @@ import {
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
-  ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 describe("sandbox ssh helpers", () => {
-  it("materializes inline ssh auth data into a temp config", async () => {
+  it("materializes inline SSH auth data into a temp config", async () => {
     // Inline key/cert/known-host material is written to private temp files and
     // referenced from the generated ssh config.
     const session = await createSshSandboxSessionFromSettings({

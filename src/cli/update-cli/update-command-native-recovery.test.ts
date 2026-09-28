@@ -2,14 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import * as gatewayService from "../../daemon/service.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 const mocks = vi.hoisted(() => ({
   state: vi.fn(),
@@ -64,7 +68,9 @@ it.each([
       const env = { HOME: dir, OPENCLAW_STATE_DIR: path.join(dir, "state") };
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
       const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env };
+      const onGatewayStartAttempted = vi.fn();
       const opts = {
+        onGatewayStartAttempted,
         jsonMode: true,
         updateRun: scenario === "ordinary" ? undefined : run,
         preManagedServiceStop: {
@@ -115,6 +121,8 @@ it.each([
         return { healthy: true, runtime: { status: "running" } };
       });
       mocks.restart.mockImplementation(async (params) => {
+        params.onGatewayStartAttempted?.();
+        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
         expect(params.opts.run).toBe(opts.updateRun);
         if (opts.updateRun) {
           params.assertCurrent();
@@ -160,7 +168,107 @@ it.each([
         await work;
         expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
       }
+      expect(onGatewayStartAttempted).toHaveBeenCalledTimes(
+        scenario === "missing executor" || scenario === "revoked at service" ? 0 : 1,
+      );
       // Helper recovery and executor settlement never publish a terminal ledger fact.
       expect(getUpdateRun(runId, { env })?.status).toBe("running");
     }),
 );
+
+it("retains the live update run while recovering a failed update before reporting", async () => {
+  await withTestDir({ prefix: "failed-update-recovery-owner-" }, async (dir) => {
+    const home = await fs.realpath(dir);
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    const control = path.join(home, "leases");
+    await fs.mkdir(control);
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const env = { HOME: home, OPENCLAW_STATE_DIR: home };
+    await fs.writeFile(path.join(home, "package.json"), JSON.stringify({ version: "1.0.0" }));
+    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+    const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env };
+    const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(verification.verifyUpdatedGateway);
+    const observation = vi
+      .spyOn(await import("./update-command-readiness.js"), "observeUpdateGatewayReadiness")
+      .mockImplementationOnce(async (params) => {
+        params.assertCurrent?.();
+        expect(params.expectedVersion).toBe("1.0.0");
+        expect(getUpdateRun(runId, { env })?.status).toBe("running");
+        return {
+          health: {
+            healthy: true,
+            runtime: { status: "running", pid: 4242 },
+            gatewayVersion: "1.0.0",
+            expectedVersion: "1.0.0",
+            portUsage: { port: params.gatewayPort, status: "busy", listeners: [], hints: [] },
+            staleGatewayPids: [],
+          },
+          readyz: true,
+          http: undefined,
+          launchAgentRecovery: null,
+        };
+      });
+    const service = gatewayService.resolveGatewayService();
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+      ...service,
+      readRuntime: async () => ({ status: "stopped" }),
+    });
+    let recoveryRun: typeof run | undefined;
+    const recoverService = vi
+      .spyOn(
+        await import("./update-command-service.js"),
+        "maybeRestartServiceAfterFailedMutableUpdate",
+      )
+      .mockImplementation(async (request) => {
+        recoveryRun = request.updateRun;
+        recoveryRun?.executorFence?.assertCurrent();
+        return "healthy";
+      });
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      run.executorFence = await executor.enter(home);
+      await expect(
+        finishSuccessfulPackageSwitch(
+          { packageRoot: home, restartEnvironment: env, run },
+          {
+            mutationStarted: false,
+            result: {
+              status: "error",
+              mode: "npm",
+              root: home,
+              reason: "fixture-install-failed",
+              steps: [],
+              durationMs: 1,
+              recovery: { serviceRestartSafe: true, version: "1.0.0" },
+            },
+          },
+        ),
+      ).rejects.toMatchObject({
+        name: "UpdateCommandFailure",
+        result: { reason: "fixture-install-failed", recovery: { service: "healthy" } },
+      });
+      expect(recoverService).toHaveBeenCalledOnce();
+      expect(recoveryRun).toBe(run);
+      expect(observation).toHaveBeenCalledOnce();
+      const recorded = getUpdateRun(runId, { env });
+      expect(recorded?.verification).toEqual({
+        serviceRunning: true,
+        pid: 4242,
+        port: 18789,
+        runningVersion: "1.0.0",
+        versionMatch: true,
+        pluginErrors: [],
+        channelsReady: true,
+        settled: true,
+        readyz: true,
+        recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
+      });
+      expect(
+        recorded?.steps.filter((step) => step.step === "gateway recovery verification"),
+      ).toEqual([{ step: "gateway recovery verification", status: "completed", exitCode: 0 }]);
+    });
+  });
+});

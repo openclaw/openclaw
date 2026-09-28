@@ -123,12 +123,11 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const status = readToolStringParam(params, "status", { required: true });
-      if (
-        !MODEL_UPDATABLE_SESSION_GOAL_STATUSES.includes(
-          status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
-        )
-      ) {
+      const requestedStatus = readToolStringParam(params, "status", { required: true });
+      const status = MODEL_UPDATABLE_SESSION_GOAL_STATUSES.find(
+        (candidate) => candidate === requestedStatus,
+      );
+      if (status === undefined) {
         throw new ToolInputError(
           `status must be one of ${MODEL_UPDATABLE_SESSION_GOAL_STATUSES.join(", ")}`,
         );
@@ -139,7 +138,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         const goal = await updateSessionGoalStatus({
           ...scope,
           actor: { type: "agent", id: scope.sessionKey },
-          status: status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
+          status,
           ...(note ? { note } : {}),
         });
         return jsonResult({

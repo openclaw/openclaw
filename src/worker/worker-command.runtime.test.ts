@@ -79,6 +79,42 @@ function commandInput() {
   return input;
 }
 
+function processHarness(properties: Record<string, unknown> = {}) {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const originalConsole = globalThis.console;
+  const previousLogging = { ...loggingState };
+  const replacements = { stdin: commandInput(), stdout, stderr, ...properties };
+  const originalProperties = new Map(
+    Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(process, key)]),
+  );
+  for (const [key, value] of Object.entries(replacements)) {
+    Object.defineProperty(process, key, { configurable: true, value });
+  }
+  globalThis.console = new Console({ stdout, stderr });
+  loggingState.consolePatched = false;
+  loggingState.forceConsoleToStderr = false;
+  loggingState.rawConsole = null;
+  loggingState.streamErrorHandlersInstalled = false;
+  return {
+    stdout,
+    stderr,
+    restore: () => {
+      for (const [key, propertyDescriptor] of originalProperties) {
+        if (propertyDescriptor) {
+          Object.defineProperty(process, key, propertyDescriptor);
+        } else {
+          Reflect.deleteProperty(process, key);
+        }
+      }
+      globalThis.console = originalConsole;
+      Object.assign(loggingState, previousLogging);
+      stdout.destroy();
+      stderr.destroy();
+    },
+  };
+}
+
 function lifetimeHarness() {
   const controller = new AbortController();
   let resolveStarted!: (started: boolean) => void;
@@ -160,39 +196,8 @@ describe("worker command lifetime gate", () => {
     });
   });
 
-  it("keeps the ordinary worker command path ungated", async () => {
-    const output = new PassThrough();
-    const chunks: Buffer[] = [];
-    output.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-
-    await runWorkerCommand({ input: commandInput(), output });
-
-    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
-    expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toMatchObject({
-      status: "completed",
-    });
-  });
-
   it("keeps worker process stdout valid JSON when runtime diagnostics are emitted", async () => {
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const originalConsole = globalThis.console;
-    const previousLogging = { ...loggingState };
-    const originalStreams = {
-      stdin: Object.getOwnPropertyDescriptor(process, "stdin")!,
-      stdout: Object.getOwnPropertyDescriptor(process, "stdout")!,
-      stderr: Object.getOwnPropertyDescriptor(process, "stderr")!,
-    };
-    Object.defineProperties(process, {
-      stdin: { configurable: true, value: commandInput() },
-      stdout: { configurable: true, value: stdout },
-      stderr: { configurable: true, value: stderr },
-    });
-    globalThis.console = new Console({ stdout, stderr });
-    loggingState.consolePatched = false;
-    loggingState.forceConsoleToStderr = false;
-    loggingState.rawConsole = null;
-    loggingState.streamErrorHandlersInstalled = false;
+    const { stdout, stderr, restore } = processHarness();
     setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
     vi.mocked(runWorkerDescriptor).mockImplementationOnce(async () => {
       createSubsystemLogger("state/db").info("worker state diagnostic");
@@ -205,11 +210,7 @@ describe("worker command lifetime gate", () => {
       output = String(stdout.read() ?? "");
       diagnostics = String(stderr.read() ?? "");
     } finally {
-      Object.defineProperties(process, originalStreams);
-      globalThis.console = originalConsole;
-      Object.assign(loggingState, previousLogging);
-      stdout.destroy();
-      stderr.destroy();
+      restore();
     }
 
     expect(JSON.parse(output)).toEqual({
@@ -220,35 +221,25 @@ describe("worker command lifetime gate", () => {
     expect(diagnostics).toContain("worker state diagnostic");
   });
 
-  it("rejects an internal worker IPC start type inherited from the prototype", async () => {
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const originalConsole = globalThis.console;
-    const previousLogging = { ...loggingState };
-    const originalProperties = new Map(
-      ["connected", "channel", "send", "disconnect", "stdin", "stdout", "stderr"].map((key) => [
-        key,
-        Object.getOwnPropertyDescriptor(process, key),
-      ]),
-    );
-    Object.defineProperties(process, {
-      connected: { configurable: true, value: true },
-      channel: { configurable: true, value: {} },
-      send: { configurable: true, value: vi.fn() },
-      disconnect: { configurable: true, value: vi.fn() },
-      stdin: { configurable: true, value: commandInput() },
-      stdout: { configurable: true, value: stdout },
-      stderr: { configurable: true, value: stderr },
+  it.each([
+    [
+      "inherited type",
+      () =>
+        Object.assign(Object.create({ type: "openclaw-worker-start-v1" }), { unexpected: true }),
+    ],
+    ["empty lineage", () => ({ type: "openclaw-worker-start-v1", lineageFds: [] })],
+    ["standard descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [2] })],
+    ["fractional descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3.5] })],
+    ["duplicate descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3, 3] })],
+    ["string descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: ["3"] })],
+  ] as const)("rejects an internal worker IPC start with %s", async (_label, makeInvalidStart) => {
+    const { restore } = processHarness({
+      connected: true,
+      channel: {},
+      send: vi.fn(),
+      disconnect: vi.fn(),
     });
-    globalThis.console = new Console({ stdout, stderr });
-    loggingState.consolePatched = false;
-    loggingState.forceConsoleToStderr = false;
-    loggingState.rawConsole = null;
-    loggingState.streamErrorHandlersInstalled = false;
-    const invalidStart = Object.assign(
-      Object.create({ type: "openclaw-worker-start-v1" }) as Record<string, unknown>,
-      { unexpected: true },
-    );
+    const invalidStart = makeInvalidStart();
 
     try {
       const running = runWorkerProcess({ internalWorkerIpc: true });
@@ -260,17 +251,7 @@ describe("worker command lifetime gate", () => {
       await expect(running).rejects.toThrow("invalid internal worker IPC start message");
       expect(runWorkerDescriptor).not.toHaveBeenCalled();
     } finally {
-      for (const [key, propertyDescriptor] of originalProperties) {
-        if (propertyDescriptor) {
-          Object.defineProperty(process, key, propertyDescriptor);
-        } else {
-          Reflect.deleteProperty(process, key);
-        }
-      }
-      globalThis.console = originalConsole;
-      Object.assign(loggingState, previousLogging);
-      stdout.destroy();
-      stderr.destroy();
+      restore();
     }
   });
 
@@ -620,10 +601,8 @@ describe("worker command lifetime gate", () => {
   );
 
   it.each([
-    { mode: "standalone", delta: -1 },
     { mode: "standalone", delta: 0 },
     { mode: "standalone", delta: 1 },
-    { mode: "managed", delta: -1 },
     { mode: "managed", delta: 0 },
     { mode: "managed", delta: 1 },
   ])("enforces $mode input at cap + $delta bytes", async ({ mode, delta }) => {

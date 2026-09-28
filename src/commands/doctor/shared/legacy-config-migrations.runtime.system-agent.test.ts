@@ -1,5 +1,5 @@
 // System-agent legacy config migration tests.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type {
@@ -10,12 +10,19 @@ import type {
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
 import {
   findLegacySystemAgentOwnerIssue,
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT,
 } from "./legacy-config-migrations.runtime.system-agent.js";
 
 const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT[0];
+let restoreMigrationRuntime: (() => void) | undefined;
+
+beforeAll(async () => {
+  restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
+});
+afterAll(() => restoreMigrationRuntime?.());
 
 describe("system-agent config migration", () => {
   it("removes the retired config block", () => {
@@ -63,7 +70,7 @@ describe("legacy ambient owner migration", () => {
       expect(findLegacyConfigIssues(raw)).not.toContainEqual(
         expect.objectContaining({ path: "agents" }),
       );
-      const result = migrateLegacyConfig(raw);
+      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
       expect(result.config).not.toBeNull();
       const migrated = result.config!;
       expect(migrated.agents?.defaults?.systemAgent?.agentId).toBe("main");
@@ -73,7 +80,9 @@ describe("legacy ambient owner migration", () => {
       expect(result.changes).toContain(
         "Set agents.defaults.systemAgent.agentId to main for legacy ambient operations.",
       );
-      expect(applyLegacyDoctorMigrations(migrated)).toEqual({ next: null, changes: [] });
+      expect(
+        applyLegacyDoctorMigrations(migrated, { sourceConfigBeforeMigrations: migrated }),
+      ).toEqual({ next: null, changes: [] });
       expect(raw.agents?.defaults).toBeUndefined();
     },
   );
@@ -98,12 +107,14 @@ describe("legacy ambient owner migration", () => {
       };
       expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
       expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
-      const result = applyLegacyDoctorMigrations(raw);
+      const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
       const migrated = (result.next ?? raw) as OpenClawConfig;
       expect(migrated.agents?.defaults?.systemAgent).toBeUndefined();
       expect(migrated.agents?.defaults?.heartbeat).toBeUndefined();
       expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
-      expect(applyLegacyDoctorMigrations(migrated)).toEqual({ next: null, changes: [] });
+      expect(
+        applyLegacyDoctorMigrations(migrated, { sourceConfigBeforeMigrations: migrated }),
+      ).toEqual({ next: null, changes: [] });
     });
   });
 
@@ -119,7 +130,7 @@ describe("legacy ambient owner migration", () => {
         },
       };
       expect(() => resolveAmbientOwnerAgentId(raw)).toThrow("no explicit owner");
-      const result = applyLegacyDoctorMigrations(raw);
+      const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
       expect(result.next).toHaveProperty("agents.defaults.systemAgent.agentId", "ops");
     },
   );
@@ -151,7 +162,7 @@ describe("legacy ambient owner migration", () => {
   ])("preserves heartbeat $label", ({ defaults, entries, owners }) => {
     const raw: OpenClawConfig = { agents: { defaults, entries } };
     expect(resolveHeartbeatAgents(raw).map(({ agentId }) => agentId)).toEqual(owners);
-    const result = applyLegacyDoctorMigrations(raw);
+    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
     const migrated = result.next as OpenClawConfig;
     expect(migrated.agents?.defaults?.systemAgent?.agentId).toBe("main");
     expect(migrated.agents?.defaults?.heartbeat).toEqual(defaults.heartbeat);
@@ -162,12 +173,14 @@ describe("legacy ambient owner migration", () => {
     { agents: { entries: { ops: {}, worker: {} } } },
     { agents: { entries: { main: {}, ops: {} }, defaults: { systemAgent: { agentId: "ops" } } } },
   ])("stamps explicit roster ownership without changing ambient owners: %j", (raw) => {
-    const result = applyLegacyDoctorMigrations(raw);
+    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
     expect(result).toEqual({
       next: { agents: { ...raw.agents, ownership: "explicit" } },
       changes: ["Stamped the multi-agent roster for explicit per-surface ownership."],
     });
-    expect(applyLegacyDoctorMigrations(result.next)).toEqual({ next: null, changes: [] });
+    expect(
+      applyLegacyDoctorMigrations(result.next, { sourceConfigBeforeMigrations: result.next }),
+    ).toEqual({ next: null, changes: [] });
   });
 
   it.each([
@@ -175,6 +188,9 @@ describe("legacy ambient owner migration", () => {
     { agents: { entries: { main: { default: true }, ops: { default: true } } } },
     { agents: { entries: { main: {} }, defaults: { systemAgent: null } } },
   ])("leaves absent defaults and explicit owners alone: %j", (raw) => {
-    expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
+    expect(applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw })).toEqual({
+      next: null,
+      changes: [],
+    });
   });
 });

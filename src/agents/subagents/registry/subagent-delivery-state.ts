@@ -1,9 +1,98 @@
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
+  PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
+  SubagentRunReadRecord,
+} from "./subagent-registry-read.types.js";
+import type {
+  RequesterSettleWakeState,
   SubagentCompletionState,
+  SubagentRunMaintenanceRecord,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+
+export function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  return {
+    runId: entry.runId,
+    ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
+    ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
+    ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
+    childSessionKey: entry.childSessionKey,
+    ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
+    requesterSessionKey: entry.requesterSessionKey,
+    requesterStorePath: entry.requesterStorePath,
+    controllerStorePath: entry.controllerStorePath,
+    ...(entry.collect
+      ? {
+          collect: true,
+          groupId: entry.groupId,
+          swarmRequesterSessionKey: entry.swarmRequesterSessionKey,
+        }
+      : {}),
+    ...(entry.collectorCompletion
+      ? { collectorCompletion: { status: entry.collectorCompletion.status } }
+      : {}),
+    ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
+    ...(entry.model ? { model: entry.model } : {}),
+    ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
+    createdAt: entry.createdAt,
+    execution: {
+      status: entry.execution.status,
+      ...(entry.execution.interruptionReason
+        ? { interruptionReason: entry.execution.interruptionReason }
+        : {}),
+      ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
+      ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
+      ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
+    },
+    ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
+    ...(entry.accumulatedRuntimeMs !== undefined
+      ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
+      : {}),
+    ...(entry.runTimeoutSeconds !== undefined
+      ? { runTimeoutSeconds: entry.runTimeoutSeconds }
+      : {}),
+    ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
+    ...(entry.cleanupCompletedAt !== undefined
+      ? { cleanupCompletedAt: entry.cleanupCompletedAt }
+      : {}),
+    ...(entry.delivery
+      ? {
+          delivery: {
+            status: entry.delivery.status,
+            ...(entry.delivery.disposition === "intentional_non_delivery"
+              ? { disposition: entry.delivery.disposition }
+              : {}),
+            ...(entry.delivery.suspendedAt !== undefined
+              ? { suspendedAt: entry.delivery.suspendedAt }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Copy only protection facts; live memory retains its existing, unnormalized semantics. */
+export function projectSubagentRunForMaintenance(
+  entry: SubagentRunRecord,
+): SubagentRunMaintenanceRecord {
+  return {
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    createdAt: entry.createdAt,
+    cleanupCompletedAt: entry.cleanupCompletedAt,
+    expectsCompletionMessage: entry.expectsCompletionMessage,
+    killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
+    killReconciliation: entry.killReconciliation
+      ? { ...entry.killReconciliation }
+      : entry.killReconciliation,
+    execution: { status: entry.execution.status, endedAt: entry.execution.endedAt },
+    delivery: entry.delivery
+      ? { status: entry.delivery.status, suspendedAt: entry.delivery.suspendedAt }
+      : undefined,
+  };
+}
 
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
@@ -125,6 +214,17 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
+/** A finished requester without its required message receipt must not execute again implicitly. */
+export function isCompletedRequesterDeliveryBlocked(
+  entry: Pick<SubagentRunRecord, "delivery">,
+): boolean {
+  return (
+    isDeliverySuspended(entry) &&
+    entry.delivery?.suspendedReason === "permanent_failure" &&
+    entry.delivery.lastDropReason === "message_tool_delivery_missing"
+  );
+}
+
 /** Returns true when required delivery still owns the row after its child session is gone. */
 export function hasRetainedRequiredCompletionDelivery(
   entry: Pick<
@@ -166,3 +266,59 @@ export function getDeliveryLastError(entry: SubagentRunRecord): string | undefin
   const error = entry.delivery?.lastError;
   return typeof error === "string" && error.trim() ? error : undefined;
 }
+
+export const markRequesterSettleWakePending = (
+  entry: SubagentRunRecord,
+  options?: { retireAfterSettle?: boolean },
+) => {
+  const existing = entry.requesterSettleWake;
+  entry.requesterSettleWake = {
+    ...structuredClone(existing),
+    status: existing?.status ?? "pending",
+    attemptCount: existing?.attemptCount ?? 0,
+    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
+      ? { retireAfterSettle: true }
+      : {}),
+  } satisfies RequesterSettleWakeState;
+};
+
+export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
+  const delivery = ensureDeliveryState(entry);
+  delivery.payload = undefined;
+  delivery.createdAt = undefined;
+  delivery.lastAttemptAt = undefined;
+  delivery.nextAttemptAt = undefined;
+  delivery.attemptCount = undefined;
+  delivery.lastError = undefined;
+  delivery.suspendedAt = undefined;
+  delivery.suspendedReason = undefined;
+  if (delivery.status !== "delivered" && delivery.status !== "failed") {
+    clearDeliveryState(entry);
+  }
+};
+
+export const loadPendingFinalDeliveryPayload = (
+  entry: SubagentRunRecord,
+): PendingFinalDeliveryPayload => {
+  return {
+    requesterSessionKey: entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
+    requesterOrigin: entry.delivery?.payload?.requesterOrigin ?? entry.requesterOrigin,
+    requesterDisplayKey: entry.delivery?.payload?.requesterDisplayKey ?? entry.requesterDisplayKey,
+    childSessionKey: entry.delivery?.payload?.childSessionKey ?? entry.childSessionKey,
+    childRunId: entry.delivery?.payload?.childRunId ?? entry.runId,
+    task: entry.delivery?.payload?.task ?? entry.task,
+    label: entry.delivery?.payload?.label ?? entry.label,
+    startedAt: entry.delivery?.payload?.startedAt ?? entry.execution.startedAt,
+    endedAt: entry.delivery?.payload?.endedAt ?? entry.execution.endedAt,
+    outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
+    expectsCompletionMessage:
+      entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+    completionTarget: entry.completionTarget,
+    completionRequesterSessionId: entry.completionRequesterSessionId,
+    spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
+    wakeOnDescendantSettle:
+      entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
+    // Completion is the terminal-reply owner; a retry payload can predate its final receipt.
+    terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
+  };
+};

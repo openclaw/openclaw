@@ -84,44 +84,42 @@ export function setCliSessionBinding(
       ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
       : undefined;
   const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
+  const nextBinding: CliSessionBinding = {
+    sessionId: trimmed,
+    ...(normalizeOptionalString(binding.resumeCheckpointId)
+      ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
+      : {}),
+    ...(binding.forceReuse === true ? { forceReuse: true } : {}),
+    ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
+    ...(normalizeOptionalString(binding.authProfileId)
+      ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
+      : {}),
+    ...(normalizeOptionalString(binding.authEpoch)
+      ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
+      : {}),
+    ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
+      ? { authEpochVersion: binding.authEpochVersion }
+      : {}),
+  };
+  for (const field of [
+    "extraSystemPromptHash",
+    "messageToolPolicyHash",
+    "promptToolNamesHash",
+    "cwdHash",
+    "mcpConfigHash",
+    "mcpResumeHash",
+  ] as const) {
+    const value = normalizeOptionalString(binding[field]);
+    if (value) {
+      nextBinding[field] = value;
+    }
+  }
+  if (reseedReceipt) {
+    nextBinding.reseedReceipt = reseedReceipt;
+  }
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
-    [normalized]: {
-      sessionId: trimmed,
-      ...(normalizeOptionalString(binding.resumeCheckpointId)
-        ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
-        : {}),
-      ...(binding.forceReuse === true ? { forceReuse: true } : {}),
-      ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
-      ...(normalizeOptionalString(binding.authProfileId)
-        ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
-        : {}),
-      ...(normalizeOptionalString(binding.authEpoch)
-        ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
-        : {}),
-      ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
-        ? { authEpochVersion: binding.authEpochVersion }
-        : {}),
-      ...(normalizeOptionalString(binding.extraSystemPromptHash)
-        ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.messageToolPolicyHash)
-        ? { messageToolPolicyHash: normalizeOptionalString(binding.messageToolPolicyHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.promptToolNamesHash)
-        ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.cwdHash)
-        ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.mcpConfigHash)
-        ? { mcpConfigHash: normalizeOptionalString(binding.mcpConfigHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.mcpResumeHash)
-        ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
-        : {}),
-      ...(reseedReceipt ? { reseedReceipt } : {}),
-    },
+    [normalized]: nextBinding,
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
 }
@@ -144,10 +142,19 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
+/** Cancellation invalidates an unfinished replacement, not established continuity. */
+export function shouldClearInterruptedCliSessionBinding(params: {
+  interrupted: boolean;
+  bindingReplacedDuringRun: boolean;
+}): boolean {
+  return params.interrupted && params.bindingReplacedDuringRun;
+}
+
 /** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
 export function shouldClearFailedCliSessionBinding(params: {
   error: unknown;
   binding?: CliSessionBinding;
+  bindingReplacedDuringRun?: boolean;
   hasNewGeneratedMediaTask?: boolean;
 }): boolean {
   if (!normalizeOptionalString(params.binding?.sessionId)) {
@@ -160,8 +167,10 @@ export function shouldClearFailedCliSessionBinding(params: {
   if (isFailoverError(params.error)) {
     return isCliSessionInvalidatingFailoverReason(params.error.reason);
   }
-  // A pre-successor fork abort keeps its one-shot marker for the next turn.
-  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
+  return shouldClearInterruptedCliSessionBinding({
+    interrupted: readErrorName(params.error) === "AbortError",
+    bindingReplacedDuringRun: params.bindingReplacedDuringRun === true,
+  });
 }
 
 /** Stable reason used when recording why a failed reused CLI session was cleared. */

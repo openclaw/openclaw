@@ -1,13 +1,20 @@
 // Context engine host compatibility tests cover doctor warnings for host/context mismatches.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
   getContextEngineRegistration,
+  registerContextEngineInRegistry,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
 import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
+import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import {
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
@@ -99,6 +106,77 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
+  it.each([false, true])(
+    "settles context engine custody before returning (disposal fails: %s)",
+    async (disposalFails) => {
+      const id = uniqueEngineId();
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(id, { record, registry });
+      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      resources.attach(registry);
+      const retired = vi.fn();
+      resources.register("fixture", { id: "doctor-resource", dispose: retired });
+      const disposalStarted = createDeferred();
+      const disposalGate = createDeferred();
+      class DoctorEngine extends LegacyContextEngine {
+        override readonly info = {
+          id,
+          name: "Doctor custody fixture",
+          get hostRequirements(): ContextEngine["info"]["hostRequirements"] {
+            return undefined;
+          },
+        };
+        async dispose() {
+          expect(retired).not.toHaveBeenCalled();
+          disposalStarted.resolve();
+          await disposalGate.promise;
+          if (disposalFails) {
+            throw new Error("doctor engine disposal failed");
+          }
+        }
+      }
+      registerContextEngineInRegistry(
+        registry,
+        id,
+        instance.wrap(() => new DoctorEngine()),
+        `plugin:${id}`,
+      );
+      vi.mocked(acquirePluginRegistryForInspection).mockResolvedValue({
+        registry,
+        release: () => resources.release(),
+      });
+      const pending = collectContextEngineHostCompatibilityWarnings({
+        cfg: configWithEngine(id),
+        doctorFixCommand: "openclaw doctor --fix",
+      });
+      try {
+        expect(
+          await Promise.race([
+            disposalStarted.promise.then(() => "disposing"),
+            pending.then(() => "returned"),
+          ]),
+        ).toBe("disposing");
+        expect(retired).not.toHaveBeenCalled();
+        disposalGate.resolve();
+        const warnings = await pending;
+        if (disposalFails) {
+          expect(warnings.join("\n")).toContain("doctor engine disposal failed");
+        } else {
+          expect(warnings).toEqual([]);
+        }
+        expect(retired).toHaveBeenCalledOnce();
+      } finally {
+        disposalGate.resolve();
+        await pending.catch(() => {});
+        await resources.release();
+        await instance.dispose();
+        vi.mocked(acquirePluginRegistryForInspection).mockReset();
+      }
+    },
+  );
+
   it.each([true, false])(
     "reports offline inspection availability without activating or repairing an engine (discovered=%s)",
     async (discovered) => {

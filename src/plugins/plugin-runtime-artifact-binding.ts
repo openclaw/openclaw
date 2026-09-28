@@ -1,5 +1,7 @@
+import type { PluginRuntimeRecovery } from "./loader-types.js";
 /** Binds selected artifacts and completed registration to their loaded runtime record. */
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolvePluginRuntimeArtifactSelection,
   resolvePluginRuntimeExecutionArtifact,
@@ -56,6 +58,22 @@ export function hasCompletedPluginRuntimeRegistration(record: ArtifactBoundRecor
 
 export function getPluginRuntimeEntrySource(record: ArtifactBoundRecord): string | undefined {
   return record[RUNTIME_ARTIFACT_SELECTION]?.runtimeEntry.source;
+}
+
+/** Acquire recovery custody before shutdown revokes the previous runtime's module loader. */
+export function capturePluginRuntimeRecovery(
+  record: ArtifactBoundRecord,
+): PluginRuntimeRecovery | undefined {
+  const instance = getPluginInstance(record);
+  const selection = record[RUNTIME_ARTIFACT_SELECTION];
+  if (!instance || !selection) {
+    return undefined;
+  }
+  return {
+    module: instance.captureModuleLoaderRecovery(),
+    runtimeEntry: { ...selection.runtimeEntry },
+    ...(selection.setupEntry ? { setupEntry: { ...selection.setupEntry } } : {}),
+  };
 }
 
 export function matchesPluginRuntimeArtifactSelection(

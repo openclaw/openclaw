@@ -85,4 +85,4 @@ The official `lark-cli` VC agent skill currently marks meeting-bot actions as a 
 
 1. Reset the App Secret in Feishu Open Platform / Lark Developer
 2. Update the value in your config
-3. Restart the gateway: `openclaw gateway restart`
+3. Verify that [hot reload](/gateway/configuration/hot-reload) applied the new credentials with `openclaw channels status --probe`.

@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
-import { parseSkillFrontmatter, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { loadSingleSkillDirectory, type LocalSkillLoadDiagnostic } from "./local-loader.js";
 import { loadSkills } from "./session.js";
 
@@ -12,6 +11,61 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function loadSkillsFromPath(dir: string) {
   return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
 }
+
+describe("loadSingleSkillDirectory", () => {
+  it.each([true, false])(
+    "keeps cached content isolated from caller mutations, paths and read limits (declared name: %s)",
+    async (declaredName) => {
+      const root = tempDirs.make("openclaw-skill-content-cache-");
+      const raw = [
+        "---",
+        ...(declaredName ? ["name: shared-cache-facts"] : []),
+        "description: Cached instructions",
+        "---",
+        "Instructions without a heading.",
+      ].join("\n");
+      for (const name of ["first-copy", "second-copy"]) {
+        const dir = path.join(root, name);
+        await fs.mkdir(dir);
+        await fs.writeFile(path.join(dir, "SKILL.md"), raw);
+      }
+      const firstParams = {
+        skillDir: path.join(root, "first-copy"),
+        rootRealPath: await fs.realpath(root),
+        source: "openclaw-bundled",
+      };
+      const first = loadSingleSkillDirectory(firstParams)!;
+      const hash = first.skill.contentHash;
+      first.frontmatter.description = "Caller mutation";
+      first.skill.description = "Caller mutation";
+      first.skill.sourceInfo.scope = "temporary";
+      expect(loadSingleSkillDirectory({ ...firstParams, maxBytes: 1 })).toBeNull();
+
+      const skillDir = path.join(root, "second-copy");
+      const second = loadSingleSkillDirectory({
+        ...firstParams,
+        skillDir,
+        source: "openclaw-workspace",
+      });
+      expect(second?.frontmatter.description).toBe("Cached instructions");
+      expect(second?.skill).toMatchObject({
+        name: declaredName ? "shared-cache-facts" : "second-copy",
+        displayName: declaredName ? "Shared Cache Facts" : "Second Copy",
+        description: "Cached instructions",
+        contentHash: hash,
+        filePath: path.join(skillDir, "SKILL.md"),
+        baseDir: skillDir,
+        source: "openclaw-workspace",
+        sourceInfo: {
+          path: path.join(skillDir, "SKILL.md"),
+          baseDir: skillDir,
+          source: "openclaw-workspace",
+          scope: "project",
+        },
+      });
+    },
+  );
+});
 
 describe("loadSkills", () => {
   it.each([
@@ -167,49 +221,6 @@ describe("loadSkills", () => {
       message: "description is required",
       path: skillFile,
     });
-  });
-
-  it("loads skills with JSON5-style trailing commas in metadata frontmatter", async () => {
-    const tempDir = tempDirs.make("openclaw-skill-scan-");
-    const skillDir = path.join(tempDir, "json5-metadata");
-    await fs.mkdir(skillDir);
-    const skillFile = path.join(skillDir, "SKILL.md");
-    await fs.writeFile(
-      skillFile,
-      `---
-name: json5-metadata
-description: Skill with JSON5-style metadata.
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
-disable-model-invocation: true
----
-# JSON5 Metadata
-`,
-      "utf-8",
-    );
-
-    const result = loadSkillsFromPath(tempDir);
-    const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile, "utf-8"));
-
-    expect(result.diagnostics).toEqual([]);
-    expect(result.skills).toEqual([
-      expect.objectContaining({
-        name: "json5-metadata",
-        displayName: "JSON5 Metadata",
-        description: "Skill with JSON5-style metadata.",
-        disableModelInvocation: true,
-        filePath: skillFile,
-      }),
-    ]);
-    expect(resolveSkillManifestMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {

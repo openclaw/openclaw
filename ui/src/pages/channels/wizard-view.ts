@@ -15,7 +15,6 @@ type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
   channelLabel: (channelId: string) => string;
   channelIconUrl?: (channelId: string) => string | undefined;
-  channelHasPluginIcon?: (channelId: string) => boolean;
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
@@ -83,6 +82,10 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
           : step.initialValue,
     busy: stepIsBusy(props),
     inputId: "channel-wizard-text-input",
+    validationErrorId:
+      props.wizard.phase === "step" && props.wizard.validationError
+        ? "channel-wizard-validation-error"
+        : undefined,
     presentation: "channels",
     channelSelect: props.wizard.phase === "step" && props.wizard.channel === null,
     answerLabel: t("channels.setup.continue"),
@@ -100,12 +103,12 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
 function renderWhatsAppLinking(props: ChannelWizardViewProps) {
   const connected = props.whatsappConnected === true;
   return html`
-    <div class="channels-wizard__message">
+    <div class="channels-wizard__message" role="status">
       ${connected ? t("channels.setup.whatsappLinked") : t("channels.setup.whatsappScanTitle")}
     </div>
     ${
       props.whatsappMessage
-        ? html`<div class="channels-wizard__note">${props.whatsappMessage}</div>`
+        ? html`<div class="channels-wizard__note" role="status">${props.whatsappMessage}</div>`
         : nothing
     }
     ${
@@ -179,7 +182,7 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   }
   const changed = channels.length > 0;
   return html`
-    <div class="channels-wizard__message">
+    <div class="channels-wizard__message" role="status">
       ${t(changed ? "channels.setup.doneTitle" : "channels.setup.doneNoChangesTitle")}
     </div>
     <div class="channels-wizard__note">
@@ -229,7 +232,7 @@ export function renderChannelWizard(
     </div>`;
   } else if (wizard.phase === "error") {
     body = html`
-      <div class="channels-wizard__error">${wizard.message}</div>
+      <div class="channels-wizard__error" role="alert">${wizard.message}</div>
       <div class="channels-wizard__footer">
         <button type="button" class="btn" @click=${() => props.onClose()}>
           ${t("common.close")}
@@ -242,7 +245,13 @@ export function renderChannelWizard(
     body = html`
       ${
         wizard.phase === "step" && wizard.validationError
-          ? html`<div class="channels-wizard__error">${wizard.validationError}</div>`
+          ? html`<div
+              id="channel-wizard-validation-error"
+              class="channels-wizard__error"
+              role="alert"
+            >
+              ${wizard.validationError}
+            </div>`
           : nothing
       }
       ${renderStepBody(step, props)}
@@ -260,7 +269,6 @@ export function renderChannelWizard(
             channel
               ? renderChannelIcon(channel, label, "tile", {
                   pluginIconUrl: props.channelIconUrl?.(channel),
-                  preferPluginIcon: props.channelHasPluginIcon?.(channel),
                 })
               : nothing
           }

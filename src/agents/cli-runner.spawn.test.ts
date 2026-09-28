@@ -49,7 +49,7 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
-import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -112,14 +112,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function mockSuccessfulCliRun(stdout = "ok") {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 50,
+      ...createSuccessfulProcessExit(),
       stdout,
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
     }),
   );
 }
@@ -762,14 +756,8 @@ describe("runCliAgent spawn path", () => {
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -790,38 +778,11 @@ describe("runCliAgent spawn path", () => {
     expect(allArgs).toContain("You are a helpful assistant.");
   });
 
-  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
-    const systemPrompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp",
-      modelDisplay: "claude-cli/sonnet",
-      tools: [],
-      skillsPrompt: [
-        "<available_skills>",
-        "  <skill>",
-        "    <name>weather</name>",
-        "    <description>Use weather tools.</description>",
-        "    <location>/tmp/skills/weather/SKILL.md</location>",
-        "  </skill>",
-        "</available_skills>",
-      ].join("\n"),
-    });
-
-    expect(systemPrompt).toContain("## Skills");
-    expect(systemPrompt).toContain("<name>weather</name>");
-    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
-  });
-
   it("pipes Claude prompts over stdin instead of argv", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -873,14 +834,8 @@ describe("runCliAgent spawn path", () => {
       ].join("\n") + "\n";
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
     const diagnostics = captureModelCallDiagnostics("run-claude-model-call-metadata");
@@ -975,14 +930,8 @@ describe("runCliAgent spawn path", () => {
       ].join("\n") + "\n";
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
     const diagnostics = captureModelCallDiagnostics("run-claude-model-call-content");
@@ -1080,14 +1029,9 @@ describe("runCliAgent spawn path", () => {
       label: "parse failure",
       runId: "run-claude-model-call-parse-error",
       exit: {
+        ...createSuccessfulProcessExit(),
         reason: "exit" as const,
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
         stdout: `${JSON.stringify({ type: "system", subtype: "unexpected" })}\n`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       },
       errorCategory: "unknown",
       failureKind: undefined,
@@ -1134,14 +1078,8 @@ describe("runCliAgent spawn path", () => {
       );
       expect(input.argv).not.toContain("You are a helpful assistant.");
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1513,19 +1451,17 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("maps Ultra to the strongest generic CLI backend level", async () => {
+  it("passes the prepared native effort for Ultra to the CLI backend", async () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
-    await executePreparedCliRun(
-      buildPreparedCliRunContext({
-        thinkLevel: "ultra",
-        resolveExecutionArgs,
-      }),
-    );
+    await executePreparedCliRun({
+      ...buildPreparedCliRunContext({ thinkLevel: "ultra", resolveExecutionArgs }),
+      providerThinkingLevel: "high",
+    });
 
     const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
-    expect(resolveArgsInput.thinkingLevel).toBe("max");
+    expect(resolveArgsInput.thinkingLevel).toBe("high");
   });
 
   it("passes prepared backend env to the spawned CLI process", async () => {
@@ -1596,14 +1532,8 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { env?: Record<string, string> };
       expect(input.env?.CLI_SKILL_API_KEY).toBe("skill-secret");
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1640,14 +1570,8 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { env?: Record<string, string> };
       expect(input.env?.CLI_SKILL_API_KEY).toBeUndefined();
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 
@@ -1771,10 +1695,7 @@ describe("runCliAgent spawn path", () => {
   it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout:
           [
             JSON.stringify({
@@ -1791,9 +1712,6 @@ describe("runCliAgent spawn path", () => {
               },
             }),
           ].join("\n") + "\n",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 

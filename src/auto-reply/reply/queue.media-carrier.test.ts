@@ -1,5 +1,5 @@
 // Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -7,19 +7,29 @@ import {
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
 import {
+  configureExecutionIdentityAdmissionSink,
+  type ExecutionIdentityAdmissionWork,
+} from "../../audit/execution-identity-admission.js";
+import {
   compareChannelAdmissionParticipants,
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
+import {
+  attachGatewayLocalUserIngress,
+  getGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../gateway/local-user-ingress.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
+import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupDeliveryContextKey,
-} from "./queue/drain.js";
+} from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -178,8 +188,8 @@ describe("followup prompt metadata carrier", () => {
   });
 
   it("keeps participant evidence out of sender-scoped collect routing", () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    evidenceCleanups.add(clearCollection);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
     const runs = ["person-1", "person-2"].map((senderId) => {
       const item = createQueueTestRun({
         prompt: `from ${senderId}`,
@@ -187,6 +197,7 @@ describe("followup prompt metadata carrier", () => {
         originatingTo: "channel:A",
       });
       item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "slack",
         accountId: "default",
         participantId: senderId,
@@ -205,8 +216,8 @@ describe("followup prompt metadata carrier", () => {
     );
   });
   it("keeps collected prompt bytes and ordered facts stable across deferred admission", async () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    evidenceCleanups.add(clearCollection);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
     const key = `prompt-media-collect-${Date.now()}`;
     queueKeys.add(key);
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
@@ -239,6 +250,7 @@ describe("followup prompt metadata carrier", () => {
         { name: sharedSkillName, path: "/tmp/skills/shared/SKILL.md" },
       ];
       run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId: "person-1",
       });
@@ -362,8 +374,8 @@ describe("followup prompt metadata carrier", () => {
   );
 
   it("removes sender authority when collected evidence identifies mixed participants", async () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    evidenceCleanups.add(clearCollection);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
     const key = `prompt-metadata-mixed-${Date.now()}`;
     queueKeys.add(key);
     const done = createDeferred();
@@ -383,6 +395,7 @@ describe("followup prompt metadata carrier", () => {
         { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
       ];
       run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId,
       });
@@ -427,8 +440,8 @@ describe("followup prompt metadata carrier", () => {
   });
 
   it("preserves facts when an overflow source is rebuilt for retry", () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    evidenceCleanups.add(clearCollection);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
     const source = createQueueTestRun({
       prompt: "[media attached: /tmp/retry.png (image/png)]\nretry me",
     });
@@ -438,6 +451,7 @@ describe("followup prompt metadata carrier", () => {
     source.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     source.explicitSkillSelections = [{ name: "retry", path: "/tmp/skills/retry/SKILL.md" }];
     source.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+      audit,
       channelId: "test",
       participantId: "person-1",
     });
@@ -451,5 +465,153 @@ describe("followup prompt metadata carrier", () => {
     expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
     expect(retry.channelAdmissionEvidence).toBe(source.channelAdmissionEvidence);
     expectCombinedCarrierFacts(retry);
+  });
+});
+
+describe("queued Gateway attach evidence", () => {
+  installQueueRuntimeErrorSilencer();
+  const admissions: ExecutionIdentityAdmissionWork[] = [];
+
+  beforeEach(() => {
+    admissions.length = 0;
+    evidenceCleanups.add(
+      configureExecutionIdentityAdmissionSink((work) => {
+        admissions.push(work);
+        return true;
+      }),
+    );
+  });
+
+  async function admit(run: FollowupRun) {
+    const prepared = prepareChannelRunAdmission({
+      cfg: { logging: { audit: { executionIdentity: true } } },
+      runId: "queued-attach",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "auto-reply.agent-runner",
+      evidence: run.channelAdmissionEvidence,
+      gatewayLocalUserIngress: run.gatewayLocalUserIngress,
+    });
+    try {
+      await prepared.admit("embedded");
+    } finally {
+      prepared.close();
+    }
+  }
+
+  const prepareIngress = (profileId: string) =>
+    prepareGatewayLocalUserIngress({
+      authMethod: "token",
+      authenticatedUserExpected: true,
+      profile: { profileId },
+      isLocalClient: false,
+    });
+
+  it.each(["matching", "mixed", "missing"] as const)(
+    "collects %s attach snapshots without changing sender authority",
+    async (kind) => {
+      const key = `gateway-attach-collect-${kind}`;
+      queueKeys.add(key);
+      const done = createDeferred<FollowupRun>();
+      for (const index of [0, 1]) {
+        const run = createQueueTestRun({ prompt: `queued ${index}` });
+        run.gatewayLocalUserIngress =
+          kind === "missing" && index === 1
+            ? undefined
+            : prepareIngress(kind === "mixed" && index === 1 ? "person-2" : "person-1");
+        run.run = { ...run.run, senderId: "transport", senderIsOwner: true };
+        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+      }
+      scheduleFollowupDrain(key, async (run) => {
+        done.resolve(run);
+      });
+      const collected = await done.promise;
+      expect(collected.prompt).toContain("queued 0");
+      expect(collected.prompt).toContain("queued 1");
+      await admit(collected);
+      expect(admissions).toMatchObject([
+        {
+          kind: "capture",
+          envelope:
+            kind === "matching"
+              ? {
+                  ingress: {
+                    kind: "gateway-client",
+                    boundary: "gateway.ws.authenticated-connect",
+                    state: "present",
+                    rawSourceRef: "person-1",
+                  },
+                  invoker: { state: "present", kind: "person", rawPrincipalRef: "person-1" },
+                  assurance: [
+                    {
+                      kind: "durable-profile",
+                      rawEvidenceRef: "person-1",
+                      strength: "boundary-verified",
+                    },
+                  ],
+                }
+              : {
+                  ingress: {
+                    kind: "gateway-client",
+                    boundary: "gateway.ws.authenticated-connect",
+                    state: "unknown",
+                  },
+                  invoker: { state: "unknown" },
+                },
+        },
+      ]);
+      const captured = admissions[0];
+      if (kind !== "matching" && captured?.kind === "capture") {
+        expect(captured.envelope.assurance).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
+        );
+      }
+      expect(collected.run).toMatchObject({ senderId: "transport", senderIsOwner: true });
+    },
+  );
+
+  it("retains the original attach snapshot when overflow delivery retries after profile replacement", async () => {
+    const key = "gateway-attach-overflow-retry";
+    queueKeys.add(key);
+    const client = {};
+    attachGatewayLocalUserIngress(client, prepareIngress("original-person"));
+    const source = createQueueTestRun({ prompt: "overflow source" });
+    source.gatewayLocalUserIngress = getGatewayLocalUserIngress(client);
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    enqueueFollowupRun(key, source, settings);
+    enqueueFollowupRun(key, createQueueTestRun({ prompt: "surviving source" }), settings);
+    const done = createDeferred();
+    let attempts = 0;
+    scheduleFollowupDrain(key, async (run) => {
+      if (!run.prompt.includes("overflow source")) {
+        done.resolve();
+        return;
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        attachGatewayLocalUserIngress(client, prepareIngress("replacement-person"));
+        throw new Error("Synthetic pre-admission delivery failure");
+      }
+      await admit(run);
+    });
+    await done.promise;
+
+    expect(attempts).toBe(2);
+    expect(admissions).toHaveLength(1);
+    expect(admissions).toMatchObject([
+      {
+        kind: "capture",
+        envelope: {
+          ingress: { kind: "gateway-client", state: "present", rawSourceRef: "original-person" },
+          invoker: { state: "present", kind: "person", rawPrincipalRef: "original-person" },
+          assurance: [{ kind: "durable-profile", rawEvidenceRef: "original-person" }],
+        },
+      },
+    ]);
   });
 });

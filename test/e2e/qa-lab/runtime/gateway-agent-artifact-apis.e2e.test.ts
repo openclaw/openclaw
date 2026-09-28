@@ -26,8 +26,10 @@ import {
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import type { WorkerEnvironmentServiceRecord } from "../../../../src/gateway/worker-environments/service-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../../src/state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
@@ -39,6 +41,8 @@ const injectedWorkerService = vi.hoisted(() => {
   const service = {
     list: () => [...records.values()],
     get: (environmentId: string) => records.get(environmentId),
+    readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
+    readReadyWorkerTarget: () => 1,
     create: async (profileId: string, idempotencyKey: string) => {
       const existingId = idempotency.get(idempotencyKey);
       if (existingId) {
@@ -56,6 +60,7 @@ const injectedWorkerService = vi.hoisted(() => {
         ownerEpoch: 1,
         createdAtMs: 1_800_000_000_000,
         idleSinceAtMs: null,
+        destroyRequestedAtMs: null,
         attachedSessionIds: [],
         desktopAvailable: false,
         desktopApps: [],
@@ -137,8 +142,6 @@ describe("Gateway agent and artifact APIs", () => {
     for (const step of cleanup.splice(0).toReversed()) {
       await step();
     }
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     clearSessionStoreCacheForTest();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -146,7 +149,12 @@ describe("Gateway agent and artifact APIs", () => {
 
   it("composes agent, environment, and artifact RPCs over one real Gateway", async () => {
     const envSnapshot = captureEnv([...ENV_KEYS]);
-    cleanup.push(() => envSnapshot.restore());
+    cleanup.push(async () => {
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+    });
 
     const tempHome = tempDirs.make("gateway-agent-artifacts-");
     const stateDir = path.join(tempHome, ".openclaw");
@@ -345,23 +353,6 @@ describe("Gateway agent and artifact APIs", () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    const task = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      agentId: "main",
-      requesterAgentId: "main",
-      task: "produce a managed artifact",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    cleanup.push(() => {
-      deleteTaskRecordById(task.taskId);
-    });
     const documentFixtures = [
       {
         name: "artifact.json",
@@ -394,7 +385,7 @@ describe("Gateway agent and artifact APIs", () => {
     expect(managedBlocks).toHaveLength(2);
     // Startup maintenance may run after preparation but before transcript commit.
     await cleanupManagedOutgoingMediaRecords({ stateDir });
-    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     await appendTranscriptMessage(scope, {
       eventId: messageId,
       message: {
@@ -404,7 +395,6 @@ describe("Gateway agent and artifact APIs", () => {
         __openclaw: {
           id: messageId,
           seq: 1,
-          messageTaskId: task.taskId,
         },
       } as never,
     });
@@ -424,7 +414,6 @@ describe("Gateway agent and artifact APIs", () => {
       artifacts: Array<{
         id: string;
         sessionKey: string;
-        taskId?: string;
         type: string;
         title: string;
         mimeType?: string;
@@ -432,26 +421,25 @@ describe("Gateway agent and artifact APIs", () => {
       }>;
     };
     const reloadedArtifactList = await client.request<ArtifactList>("artifacts.list", {
-      taskId: task.taskId,
+      sessionKey,
     });
     expect(reloadedArtifactList.artifacts.map((artifact) => artifact.title)).toEqual([
       "artifact.json",
       "report.pdf",
     ]);
     expect(reloadedArtifactList.artifacts.every((artifact) => artifact.type === "file")).toBe(true);
-    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
 
     await restartGateway("gateway artifact APIs after document restart");
-    expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     const artifactList = await client.request<ArtifactList>("artifacts.list", {
-      taskId: task.taskId,
+      sessionKey,
     });
     expect(artifactList.artifacts).toHaveLength(2);
     for (const fixture of documentFixtures) {
       const artifact = artifactList.artifacts.find((entry) => entry.title === fixture.name);
       expect(artifact).toMatchObject({
         sessionKey,
-        taskId: task.taskId,
         type: "file",
         title: fixture.name,
         mimeType: fixture.mimeType,
@@ -459,10 +447,10 @@ describe("Gateway agent and artifact APIs", () => {
       });
       await expect(
         client.request("artifacts.get", {
-          taskId: task.taskId,
+          sessionKey,
           artifactId: artifact?.id,
         }),
-      ).resolves.toMatchObject({ artifact: { id: artifact?.id, taskId: task.taskId } });
+      ).resolves.toMatchObject({ artifact: { id: artifact?.id, sessionKey } });
 
       const download = await client.request<{ url: string; expiresAt: string }>(
         "artifacts.download",
@@ -495,7 +483,7 @@ describe("Gateway agent and artifact APIs", () => {
     ).rejects.toThrow(/artifact not found/i);
     await expect(
       client.request("artifacts.get", {
-        taskId: task.taskId,
+        sessionKey,
         agentId: "other",
         artifactId: artifact.id,
       }),

@@ -177,7 +177,9 @@ it.each([false, true])(
       await sessions.refresh({ agentId: "main", force: true });
       await sessions.refreshList(query);
       expect(request).toHaveBeenCalledTimes(2);
-      expect(sessions.state.result?.sessions).toEqual(primaryRows);
+      expect(sessions.state.result?.sessions).toEqual(
+        newerOverlap ? [primary, managed] : [primary],
+      );
       expect(sessions.listSnapshot(query).result?.sessions).toEqual([managed]);
       const initialPrimary = sessions.state.result;
 

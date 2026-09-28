@@ -31,16 +31,6 @@ private struct ApprovalNotificationUTF8Key: Hashable {
     }
 }
 
-private enum ApprovalNotificationID {
-    static func validated(_ rawValue: String?) -> String? {
-        ExecApprovalIdentifier.exact(rawValue)
-    }
-
-    static func key(_ rawValue: String?) -> ApprovalNotificationUTF8Key? {
-        self.validated(rawValue).map(ApprovalNotificationUTF8Key.init)
-    }
-}
-
 struct ApprovalNotificationPrompt: Codable, Equatable, Hashable {
     let approvalId: String
     let gatewayDeviceId: String?
@@ -281,19 +271,14 @@ enum ApprovalNotificationBridge {
         }
     }
 
-    private static func approvalID(from userInfo: [AnyHashable: Any]) -> String? {
-        let raw = self.openClawPayload(userInfo: userInfo)?["approvalId"] as? String
-        return ApprovalNotificationID.validated(raw)
-    }
-
     private static func parsePush(
         userInfo: [AnyHashable: Any],
         expectedKind: String,
         configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
     {
         guard let payload = openClawPayload(userInfo: userInfo),
-              payloadKind(userInfo: userInfo) == expectedKind,
-              let approvalId = approvalID(from: userInfo)
+              (payload["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == expectedKind,
+              let approvalId = ExecApprovalIdentifier.exact(payload["approvalId"] as? String)
         else {
             return nil
         }
@@ -317,18 +302,13 @@ enum ApprovalNotificationBridge {
         configuration: ApprovalNotificationConfiguration) -> String?
     {
         let owner = push.gatewayDeviceId ?? "legacy"
-        guard let approvalComponent = ApprovalNotificationID.key(push.approvalId)?.notificationComponent else {
+        guard let approvalID = ExecApprovalIdentifier.exact(push.approvalId) else {
             return nil
         }
+        let approvalComponent = ApprovalNotificationUTF8Key(approvalID).notificationComponent
         let ownerComponent = ApprovalNotificationUTF8Key(owner).notificationComponent
         return "\(configuration.encodedRequestPrefix)\(ownerComponent.utf8.count):" +
             "\(ownerComponent).\(approvalComponent)"
-    }
-
-    private static func payloadKind(userInfo: [AnyHashable: Any]) -> String {
-        let raw = self.openClawPayload(userInfo: userInfo)?["kind"] as? String
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "unknown" : trimmed
     }
 
     private static func openClawPayload(userInfo: [AnyHashable: Any]) -> [String: Any]? {
@@ -366,32 +346,9 @@ enum ExecApprovalNotificationBridge {
             configuration: self.configuration)
     }
 
-    static func parsePrompt(
-        actionIdentifier: String,
-        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
-    {
-        ApprovalNotificationBridge.parsePrompt(
-            actionIdentifier: actionIdentifier,
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
     static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseRequestedPush(
             userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    @MainActor
-    static func removeNotifications(
-        for push: ApprovalNotificationPrompt,
-        notificationCenter: NotificationCentering,
-        includingLegacyOwnerless: Bool = false) async
-    {
-        await ApprovalNotificationBridge.removeNotifications(
-            for: push,
-            notificationCenter: notificationCenter,
-            includingLegacyOwnerless: includingLegacyOwnerless,
             configuration: self.configuration)
     }
 }
@@ -417,16 +374,6 @@ enum PluginApprovalNotificationBridge {
             configuration: self.configuration)
     }
 
-    static func parsePrompt(
-        actionIdentifier: String,
-        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
-    {
-        ApprovalNotificationBridge.parsePrompt(
-            actionIdentifier: actionIdentifier,
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
     static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseRequestedPush(
             userInfo: userInfo,
@@ -436,19 +383,6 @@ enum PluginApprovalNotificationBridge {
     static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseResolvedPush(
             userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    @MainActor
-    static func removeNotifications(
-        for push: ApprovalNotificationPrompt,
-        notificationCenter: NotificationCentering,
-        includingLegacyOwnerless: Bool = false) async
-    {
-        await ApprovalNotificationBridge.removeNotifications(
-            for: push,
-            notificationCenter: notificationCenter,
-            includingLegacyOwnerless: includingLegacyOwnerless,
             configuration: self.configuration)
     }
 }

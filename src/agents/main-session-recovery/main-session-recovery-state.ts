@@ -13,7 +13,11 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import { interruptAdmittedMainSessionRecovery } from "./main-session-recovery-admitted-interruption.js";
+import {
+  buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
+} from "./main-session-recovery-clear.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -161,6 +165,16 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
+/** Failed foreground admission can leave an unfinished recovery cycle behind. */
+export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
+  return (
+    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
+    entry.abortedLastRun !== true &&
+    entry.mainRestartRecovery !== undefined &&
+    !entry.mainRestartRecovery.tombstone
+  );
+}
+
 type MainRestartRecoveryRolloverEligibility =
   | { eligible: true }
   | {
@@ -215,11 +229,13 @@ export function isMainRestartRecoveryAggregateTerminalOnly(entry: SessionEntry):
 // A healthy session can retain lifecycle fences after its final recovery owner
 // clears. With no active delivery or aggregate, those fences no longer own work.
 function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
+  if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+    return false;
+  }
   return (
     (entry.status === "running" &&
       entry.abortedLastRun !== true &&
       entry.restartRecoveryDeliveryRunId === undefined &&
-      isMainRestartRecoveryCandidate(entry, sessionKey) &&
       ((entry.restartRecoveryRuns !== undefined && entry.mainRestartRecovery === undefined) ||
         // Terminal-only aggregate: every run settled, nothing owns work (#118873).
         isMainRestartRecoveryAggregateTerminalOnly(entry))) ||
@@ -231,7 +247,6 @@ function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: s
     // so it must not gate the cleanup the way it does for the running case above.
     (entry.status !== "running" &&
       entry.mainRestartRecovery === undefined &&
-      isMainRestartRecoveryCandidate(entry, sessionKey) &&
       (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
   );
 }
@@ -262,11 +277,9 @@ function inspectMainSessionRecovery(params: {
   if (
     entry.status !== "running" ||
     entry.abortedLastRun !== true ||
-    !isMainRestartRecoveryCandidate(entry, params.sessionKey)
+    !isMainRestartRecoveryCandidate(entry, params.sessionKey) ||
+    !state
   ) {
-    return { status: "inactive" };
-  }
-  if (!state) {
     return { status: "inactive" };
   }
   const observation = {
@@ -343,6 +356,7 @@ export function transitionMainSessionRecovery(
         });
       }
       entry.status = "running";
+      entry.activeWriterRunId = undefined;
       entry.lifecycleRunId = undefined;
       entry.lastRunId = undefined;
       entry.abortedLastRun = true;
@@ -549,38 +563,19 @@ export function transitionMainSessionRecovery(
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }
       }
-      return { kind: "admitted_recovery" };
+      return {
+        kind: "admitted_recovery",
+        admission: {
+          cycleId: state.cycleId,
+          attempt: state.chargedAttempts,
+          lifecycleGeneration: command.lifecycleGeneration,
+          runId: command.runId,
+          sessionId: command.sessionId,
+        },
+      };
     }
-    case "mark_admitted_recovery_interrupted": {
-      const state = entry.mainRestartRecovery;
-      if (entry.sessionId !== command.sessionId) {
-        return { kind: "rejected", reason: "session_replaced" };
-      }
-      if (
-        !state ||
-        state.reservation ||
-        !entry.restartRecoveryRuns?.some(
-          (run) =>
-            run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        )
-      ) {
-        return { kind: "rejected", reason: "stale_reservation" };
-      }
-      entry.status = "running";
-      entry.lifecycleRunId = undefined;
-      entry.lastRunId = undefined;
-      entry.abortedLastRun = true;
-      entry.startedAt = undefined;
-      entry.endedAt = undefined;
-      entry.runtimeMs = undefined;
-      if (entry.restartRecoveryDeliveryRunId === command.runId) {
-        // Gateway accepted this RPC id before setup failed. Rotate it on retry
-        // or the dedupe cache replays that terminal pre-dispatch failure.
-        entry.restartRecoveryDeliveryRunId = undefined;
-      }
-      entry.updatedAt = command.now;
-      return { kind: "applied" };
-    }
+    case "mark_admitted_recovery_interrupted":
+      return interruptAdmittedMainSessionRecovery(entry, command);
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&
@@ -606,18 +601,14 @@ export function transitionMainSessionRecovery(
         // the matching tombstone. Admitting here can race that reconciliation.
         return { kind: "rejected", reason: "recovery_exhausted" };
       }
-      const currentTokens =
+      const currentClaims =
         state.foregroundClaims?.lifecycleGeneration === command.lifecycleGeneration
-          ? state.foregroundClaims.tokens
-          : [];
-      const tokens = [...new Set([...currentTokens, command.claimId])].toSorted();
-      const currentRunIds =
-        state.foregroundClaims?.lifecycleGeneration === command.lifecycleGeneration
-          ? state.foregroundClaims.runIdsByClaimId
+          ? state.foregroundClaims
           : undefined;
+      const tokens = [...new Set([...(currentClaims?.tokens ?? []), command.claimId])].toSorted();
       const runIdsByClaimId = command.runId
-        ? { ...currentRunIds, [command.claimId]: command.runId }
-        : currentRunIds;
+        ? { ...currentClaims?.runIdsByClaimId, [command.claimId]: command.runId }
+        : currentClaims?.runIdsByClaimId;
       if (command.runId) {
         recordLifecycleFence(entry, {
           lifecycleGeneration: command.lifecycleGeneration,
@@ -678,26 +669,15 @@ export function transitionMainSessionRecovery(
       if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
-      const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
-      const runIdsByClaimId = Object.fromEntries(
-        Object.entries(claims.runIdsByClaimId ?? {}).filter(
-          ([token]) => token !== command.claim.claimId,
-        ),
+      const foregroundClaims = removeMainSessionRecoveryForegroundClaim(
+        claims,
+        command.claim.claimId,
       );
-      if (tokens.length === 0 && entry.abortedLastRun !== true) {
+      if (!foregroundClaims && entry.abortedLastRun !== true) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
       }
-      updateRecoveryState(entry, state, {
-        foregroundClaims:
-          tokens.length > 0
-            ? {
-                lifecycleGeneration: command.claim.lifecycleGeneration,
-                tokens,
-                ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
-              }
-            : undefined,
-      });
+      updateRecoveryState(entry, state, { foregroundClaims });
       return { kind: "applied" };
     }
     case "tombstone": {

@@ -3,14 +3,15 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex, sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
-import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
+import { FsSafeError, root as createFsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
   serializeMemoryHostEventExport,
@@ -120,36 +121,27 @@ async function readMemoryHostEventExportOwnership(
     return { kind: "foreign" };
   }
   if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    (parsed as { schemaVersion?: unknown }).schemaVersion !== 3 ||
-    (parsed as { kind?: unknown }).kind !== "openclaw-memory-host-events-export" ||
-    (parsed as { stateHash?: unknown }).stateHash !== owner.stateHash ||
-    (parsed as { workspaceHash?: unknown }).workspaceHash !== owner.workspaceHash ||
-    ((parsed as { contentSha256?: unknown }).contentSha256 !== undefined &&
-      typeof (parsed as { contentSha256?: unknown }).contentSha256 !== "string") ||
-    ((parsed as { pendingContentSha256?: unknown }).pendingContentSha256 !== undefined &&
-      typeof (parsed as { pendingContentSha256?: unknown }).pendingContentSha256 !== "string") ||
-    ((parsed as { contentSha256?: unknown }).contentSha256 === undefined &&
-      (parsed as { pendingContentSha256?: unknown }).pendingContentSha256 === undefined) ||
-    ((parsed as { fileDev?: unknown }).fileDev === undefined) !==
-      ((parsed as { fileIno?: unknown }).fileIno === undefined) ||
-    ((parsed as { fileDev?: unknown }).fileDev !== undefined &&
-      (typeof (parsed as { fileDev?: unknown }).fileDev !== "string" ||
-        !/^\d+$/u.test((parsed as { fileDev: string }).fileDev) ||
-        typeof (parsed as { fileIno?: unknown }).fileIno !== "string" ||
-        !/^\d+$/u.test((parsed as { fileIno: string }).fileIno)))
+    !isRecord(parsed) ||
+    parsed.schemaVersion !== 3 ||
+    parsed.kind !== "openclaw-memory-host-events-export" ||
+    parsed.stateHash !== owner.stateHash ||
+    parsed.workspaceHash !== owner.workspaceHash ||
+    (parsed.contentSha256 !== undefined && typeof parsed.contentSha256 !== "string") ||
+    (parsed.pendingContentSha256 !== undefined &&
+      typeof parsed.pendingContentSha256 !== "string") ||
+    (parsed.contentSha256 === undefined && parsed.pendingContentSha256 === undefined) ||
+    (parsed.fileDev === undefined) !== (parsed.fileIno === undefined) ||
+    (parsed.fileDev !== undefined &&
+      (typeof parsed.fileDev !== "string" ||
+        !/^\d+$/u.test(parsed.fileDev) ||
+        typeof parsed.fileIno !== "string" ||
+        !/^\d+$/u.test(parsed.fileIno)))
   ) {
     return { kind: "foreign" };
   }
   const storedIdentity =
-    typeof (parsed as { fileDev?: unknown }).fileDev === "string" &&
-    typeof (parsed as { fileIno?: unknown }).fileIno === "string"
-      ? {
-          dev: BigInt((parsed as { fileDev: string }).fileDev),
-          ino: BigInt((parsed as { fileIno: string }).fileIno),
-        }
+    typeof parsed.fileDev === "string" && typeof parsed.fileIno === "string"
+      ? { dev: BigInt(parsed.fileDev), ino: BigInt(parsed.fileIno) }
       : undefined;
   let openedExport: Awaited<ReturnType<typeof workspaceRoot.open>> | undefined;
   try {
@@ -164,7 +156,7 @@ async function readMemoryHostEventExportOwnership(
     }
   }
   if (!openedExport) {
-    return typeof (parsed as { pendingContentSha256?: unknown }).pendingContentSha256 === "string"
+    return typeof parsed.pendingContentSha256 === "string"
       ? { kind: "pending-missing", ownerContent: content }
       : { kind: "orphan", ownerContent: content };
   }
@@ -175,7 +167,8 @@ async function readMemoryHostEventExportOwnership(
   };
   const identityOwned =
     storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
-  try {
+  {
+    await using exportOwner = openedExport;
     if (openedExport.stat.size > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
       return identityOwned
         ? {
@@ -187,13 +180,11 @@ async function readMemoryHostEventExportOwnership(
           }
         : { kind: "foreign" };
     }
-    exportContent = await openedExport.handle.readFile({ encoding: "utf8" });
-  } finally {
-    await openedExport.handle.close().catch(() => undefined);
+    exportContent = await exportOwner.handle.readFile({ encoding: "utf8" });
   }
   const exportSha256 = sha256Hex(exportContent);
-  const currentSha256 = (parsed as { contentSha256?: string }).contentSha256;
-  const pendingSha256 = (parsed as { pendingContentSha256?: string }).pendingContentSha256;
+  const currentSha256 = parsed.contentSha256;
+  const pendingSha256 = parsed.pendingContentSha256;
   // Hash-only markers never reach the owned branch; only the persisted inode
   // identity authorizes later mutation of this workspace artifact.
   return identityOwned
@@ -223,22 +214,6 @@ export type {
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 export { resolveSessionAgentId } from "./agent-scope-runtime.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-
-async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFilesRecursive(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
-  }
-  return files.toSorted((left, right) => left.localeCompare(right));
-}
 
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
@@ -281,53 +256,33 @@ async function materializeMemoryHostEventExport(params: {
       const content = storedEvents.length > 0 ? serializeMemoryHostEventExport(storedEvents) : "";
       const contentSha256 = sha256Hex(content);
       let publishedIdentity: FileIdentityStat | undefined;
-      if (ownership.kind === "missing") {
-        const existing = await workspaceRoot
-          .readText(owner.relativePath)
-          .catch((error: unknown) => {
-            if (isMissingPathError(error)) {
-              return undefined;
-            }
-            if (isRejectedWorkspaceArtifactPath(error)) {
-              return null;
-            }
-            throw error;
-          });
-        if (existing !== undefined) {
-          return undefined;
+      if (ownership.kind !== "owned") {
+        if (ownership.kind === "missing") {
+          const existing = await workspaceRoot
+            .readText(owner.relativePath)
+            .catch((error: unknown) => {
+              if (isMissingPathError(error)) {
+                return undefined;
+              }
+              if (isRejectedWorkspaceArtifactPath(error)) {
+                return null;
+              }
+              throw error;
+            });
+          if (existing !== undefined) {
+            return undefined;
+          }
         }
         try {
           const pendingOwnerContent = memoryHostEventExportOwnerContent(owner, {
             pendingSha256: contentSha256,
           });
-          await workspaceRoot.create(owner.ownerRelativePath, pendingOwnerContent, {
-            mkdir: true,
-            mode: 0o600,
-          });
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-          publishedIdentity = await publishMemoryHostEventArtifact({
-            workspaceRoot,
-            owner,
-            absolutePath,
-            expectedOwnerContent: pendingOwnerContent,
-            content,
-            contentSha256,
-          });
-          if (!publishedIdentity) {
-            return undefined;
-          }
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
-          }
-          throw error;
-        }
-      } else if (ownership.kind === "pending-missing" || ownership.kind === "orphan") {
-        try {
-          const pendingOwnerContent = memoryHostEventExportOwnerContent(owner, {
-            pendingSha256: contentSha256,
-          });
-          if (
+          if (ownership.kind === "missing") {
+            await workspaceRoot.create(owner.ownerRelativePath, pendingOwnerContent, {
+              mkdir: true,
+              mode: 0o600,
+            });
+          } else if (
             !(await rewriteMemoryHostEventArtifactIfUnchanged({
               workspaceRoot,
               relativePath: owner.ownerRelativePath,
@@ -474,7 +429,13 @@ async function listMemoryWorkspacePublicArtifacts(params: {
   }
 
   const memoryDir = path.join(params.workspaceDir, "memory");
-  for (const absolutePath of await listMarkdownFilesRecursive(memoryDir)) {
+  const memoryFiles = await walkDirectory(memoryDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const { path: absolutePath } of memoryFiles.entries.toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
     const relativePath = path.relative(params.workspaceDir, absolutePath).replace(/\\/g, "/");
     artifacts.push({
       kind: relativePath.startsWith("memory/dreaming/") ? "dream-report" : "daily-note",

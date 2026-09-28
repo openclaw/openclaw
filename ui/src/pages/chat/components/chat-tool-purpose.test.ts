@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderToolCard, resolveToolRowText } from "./chat-tool-cards.ts";
+import { renderToolCard } from "./chat-tool-cards.ts";
 
 describe("execution purpose cards", () => {
   it.each([
@@ -37,7 +37,6 @@ describe("execution purpose cards", () => {
       );
       expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
-      expect(resolveToolRowText(card, true)).toBe("Check the workspace");
 
       render(
         renderToolCard({ ...card, completed: true }, { ...options, expanded: true }),
@@ -93,9 +92,27 @@ describe("execution purpose cards", () => {
       container,
     );
     expect(container.querySelector(".chat-tool-row__cmd")?.textContent).toBe("pnpm test");
-    expect(resolveToolRowText(card)).toBe("$ pnpm test");
     expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain(
       card.args.command,
     );
+  });
+
+  it("keeps multiline command previews readable and bounded without changing the source", () => {
+    const container = document.createElement("div");
+    const command =
+      "printf '\n--- recovery ---\n'\ncat recovery.md\n" + "echo example\n".repeat(100);
+    const card = { id: "multiline-command", name: "exec", args: { command } };
+    render(
+      renderToolCard(card, {
+        messageKey: "multiline-command",
+        expanded: true,
+        onToggleExpanded: vi.fn(),
+      }),
+      container,
+    );
+    const preview = container.querySelector(".chat-tool-row__cmd")?.textContent ?? "";
+    expect(preview).toContain("printf ' --- recovery --- ' cat recovery.md");
+    expect(preview.length).toBeLessThanOrEqual(200);
+    expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain(command);
   });
 });

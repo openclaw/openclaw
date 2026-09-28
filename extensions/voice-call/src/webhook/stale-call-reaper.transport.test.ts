@@ -1,6 +1,7 @@
 // Voice Call tests cover stale-call reaping through a real provider HTTP boundary.
 import type { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { endCall } from "../manager/outbound.js";
@@ -86,6 +87,7 @@ describe("stale-call reaper provider transport", () => {
           processedEventIds: [],
         } satisfies CallRecord;
         const context: Parameters<typeof endCall>[0] = {
+          mutationQueue: new KeyedAsyncQueue(),
           activeCalls: new Map([[call.callId, call]]),
           providerCallIdMap: new Map([[call.providerCallId, call.callId]]),
           provider,

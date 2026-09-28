@@ -1,5 +1,6 @@
 // Control UI E2E tests cover browser Talk start and stop through a real page.
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -233,6 +234,20 @@ suite.define(() => {
       await gateway.deliverLatest({ setupComplete: {} });
       const stopVoice = page.getByRole("button", { name: "Stop voice input" });
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
+      await page.mouse.move(0, 0);
+      await stopVoice.evaluate(finishElementAnimations);
+      const voiceAppearance = await stopVoice.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const meter = element.querySelector(".agent-chat__voice-activity")?.getBoundingClientRect();
+        return {
+          width: bounds.width,
+          background: getComputedStyle(element).backgroundColor,
+          meterContained: meter != null && meter.left >= bounds.left && meter.right <= bounds.right,
+        };
+      });
+      expect(voiceAppearance.width).toBeGreaterThanOrEqual(64);
+      expect(voiceAppearance.background).toBe("rgba(0, 0, 0, 0)");
+      expect(voiceAppearance.meterContained).toBe(true);
       await page.evaluate(() => {
         const state = (
           window as Window & {
@@ -673,6 +688,7 @@ suite.define(() => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-transcript";
       const gateway = await installMockGateway(page, {
+        deferredMethods: ["talk.client.create"],
         methodResponses: {
           "talk.client.create": {
             provider: "openai",
@@ -695,20 +711,33 @@ suite.define(() => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
-      // The request is recorded before its mock response is delivered. Wait for
-      // microphone setup before probing relay readiness below.
+      // Microphone acquisition precedes relay admission and cannot prove readiness.
+      expect(
+        await page.evaluate(() => {
+          const state = (
+            window as Window & {
+              openclawTalkE2eState?: { constraints: unknown[]; inputProcessor: unknown };
+            }
+          ).openclawTalkE2eState;
+          return {
+            microphoneRequests: state?.constraints.length,
+            inputReady: state?.inputProcessor != null,
+          };
+        }),
+      ).toEqual({ microphoneRequests: 1, inputReady: false });
+      await gateway.resolveDeferred("talk.client.create");
       await expect
         .poll(() =>
           page.evaluate(
             () =>
               (
                 window as Window & {
-                  openclawTalkE2eState?: { constraints: unknown[] };
+                  openclawTalkE2eState?: { inputProcessor: unknown };
                 }
-              ).openclawTalkE2eState?.constraints.length,
+              ).openclawTalkE2eState?.inputProcessor != null,
           ),
         )
-        .toBe(1);
+        .toBe(true);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
@@ -753,7 +782,7 @@ suite.define(() => {
     });
   });
 
-  it("shows a visible error when relay microphone appends fall behind", async () => {
+  it("keeps the call alive while relay microphone appends stall", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-input-backpressure";
       const gateway = await installMockGateway(page, {
@@ -814,18 +843,16 @@ suite.define(() => {
         }
       });
 
+      // Five 256 ms frames stay inside the 3 s in-flight budget, so every frame is
+      // sent while the deferred appends stall and the session is not torn down.
       await expect
         .poll(() =>
           gateway.getRequests("talk.session.appendAudio").then((requests) => requests.length),
         )
-        .toBe(4);
-      await expect
-        .poll(() => page.getByRole("alert").textContent())
-        .toContain("Realtime Talk audio input fell behind");
-      await expect
-        .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
-        .toBe(1);
-      await captureComposerProof(suite, page, "relay-input-backpressure-error.png");
+        .toBe(5);
+      expect(await page.getByRole("alert").count()).toBe(0);
+      expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+      await captureComposerProof(suite, page, "relay-input-backpressure-alive.png");
     });
   });
 

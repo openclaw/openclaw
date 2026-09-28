@@ -4,13 +4,15 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractCurrentPackageChangelog } from "./package-changelog.mjs";
+import {
+  extractCurrentPackageChangelog,
+  readCurrentPackageChangelog,
+} from "./package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "./package-source-dependencies.mjs";
 
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/u;
 const ROOT_MANIFEST_PATH = "package.json";
 const AI_MANIFEST_PATH = "packages/ai/package.json";
-const CHANGELOG_PATH = "CHANGELOG.md";
 
 function parseArgs(argv) {
   const options = {
@@ -116,11 +118,16 @@ function readGitFile(ref, file, { optional = false } = {}) {
 }
 
 export function validatePackageSourceRef(ref, options = {}) {
+  const rootManifestContent = readGitFile(ref, ROOT_MANIFEST_PATH);
   return validatePackageSource({
     aiManifestContent: readGitFile(ref, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
-    changelogContent: readGitFile(ref, CHANGELOG_PATH),
-    rootManifestContent: readGitFile(ref, ROOT_MANIFEST_PATH),
+    changelogContent: readCurrentPackageChangelog(
+      process.cwd(),
+      parseManifest(rootManifestContent, ROOT_MANIFEST_PATH).version,
+      { ref, allowUnreleased: options.allowUnreleasedChangelog },
+    ),
+    rootManifestContent,
   });
 }
 
@@ -137,11 +144,16 @@ function readSourceFile(sourceDir, file, { optional = false } = {}) {
 
 export function validatePackageSourceDir(sourceDir, options = {}) {
   const resolvedSourceDir = path.resolve(sourceDir);
+  const rootManifestContent = readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH);
   return validatePackageSource({
     aiManifestContent: readSourceFile(resolvedSourceDir, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
-    changelogContent: readSourceFile(resolvedSourceDir, CHANGELOG_PATH),
-    rootManifestContent: readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH),
+    changelogContent: readCurrentPackageChangelog(
+      resolvedSourceDir,
+      parseManifest(rootManifestContent, ROOT_MANIFEST_PATH).version,
+      { allowUnreleased: options.allowUnreleasedChangelog },
+    ),
+    rootManifestContent,
   });
 }
 

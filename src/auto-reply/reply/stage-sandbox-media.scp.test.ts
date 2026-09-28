@@ -2,28 +2,34 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  detectAndLoadPromptImages,
+  materializeProviderContext,
+} from "../../agents/embedded-agent-runner/run/images.js";
+import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import * as globals from "../../globals.js";
 import * as mediaRoots from "../../media/channel-inbound-roots.js";
 import * as mediaReference from "../../media/media-reference.js";
+import { getMediaDir } from "../../media/store.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as execSpawn from "../../process/exec-spawn.js";
 import * as processExec from "../../process/exec.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  killPidIfAlive,
-  readPidFile,
-  waitForPidFile,
-  waitForPidToExit,
-} from "../../test-utils/process-tree.js";
+import { killPidIfAlive, readPidFile } from "../../test-utils/process-tree.js";
+import { pinConfigDir } from "../../utils.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
@@ -181,6 +187,111 @@ function releaseInstalledOwnerSnapshot(): void {
 afterEach(() => vi.restoreAllMocks());
 
 describe("stageSandboxMedia SCP", () => {
+  it.each(["transfer", "document-only", "stopped-document-only"])(
+    "stages and hydrates channel attachments: %s",
+    async (mode) => {
+      const canTransfer = mode === "transfer";
+      const previousEnv = { ...process.env };
+      try {
+        await withOpenClawTestState({ label: "scp-remote-workspace" }, async (state) => {
+          pinConfigDir();
+          const params = remoteStageParams(state);
+          const image = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+          const video = Buffer.from(
+            "0000001c6674797069736f6d0000000069736f6d0000000000000000",
+            "hex",
+          );
+          params.ctx.media!.push(
+            { path: "/synthetic/attachments/photo.png", contentType: "image/png" },
+            { path: "/synthetic/attachments/clip.mp4", contentType: "video/mp4" },
+          );
+          params.sessionCtx.media = structuredClone(params.ctx.media);
+          const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+            ...(canTransfer ? { prepareTurnAttachments: vi.fn(async () => undefined) } : {}),
+            bridge: {
+              readFile: async () => {
+                throw new Error("unexpected workspace read");
+              },
+              writeFile: async () => {
+                throw new Error("unexpected workspace write");
+              },
+              stat: async () => {
+                throw new Error("unexpected workspace stat");
+              },
+            },
+          });
+          if (mode === "stopped-document-only") {
+            release();
+          }
+          vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
+            const target = argv.at(-1)!;
+            const source = argv.at(-2)!;
+            await fs.writeFile(
+              target,
+              source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
+            );
+            return SUCCESS;
+          });
+          try {
+            const result = await stageSandboxMedia(params);
+            const cached = result.staged.get(0)!;
+            if (canTransfer) {
+              expect(cached.startsWith(path.join(getMediaDir(), "remote-cache") + path.sep)).toBe(
+                true,
+              );
+              expect(await fs.readFile(cached, "utf8")).toBe("cached input");
+            } else {
+              const fact = params.ctx.media![0]!;
+              expect(fact.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
+              expect(await fs.readFile(path.join(fact.workspaceDir!, cached), "utf8")).toBe(
+                "cached input",
+              );
+            }
+            expect(params.ctx.media?.[0]?.path).toBe(cached);
+            expect(params.sessionCtx.media).toEqual(params.ctx.media);
+            expect(existsSync(state.path("sandbox"))).toBe(!canTransfer);
+            const root = params.ctx.media![0]!.workspaceDir!;
+            const sandbox = canTransfer
+              ? undefined
+              : { root, bridge: createHostSandboxFsBridge(root) };
+            const options = {
+              workspaceDir: state.workspaceDir,
+              agentWorkspaceDir: state.workspaceDir,
+              sandbox,
+            };
+            const hydrated = await detectAndLoadPromptImages({
+              ...options,
+              prompt: "",
+              media: params.ctx.media,
+              model: { input: ["text", "image"] },
+            });
+            expect(hydrated.images).toEqual([
+              { type: "image", data: image.toString("base64"), mimeType: "image/png" },
+            ]);
+            const persisted = buildPersistedUserTurnMessage({
+              text: "inspect attachments",
+              media: params.ctx.media,
+            });
+            const replay = await materializeProviderContext({
+              ...options,
+              context: { systemPrompt: "system", tools: [], messages: [persisted] },
+            });
+            expect(replay.messages[0]?.content).toEqual(
+              expect.arrayContaining([
+                { type: "image", data: image.toString("base64"), mimeType: "image/png" },
+                { type: "video", data: video.toString("base64"), mimeType: "video/mp4" },
+              ]),
+            );
+          } finally {
+            release();
+          }
+        });
+      } finally {
+        pinConfigDir(previousEnv);
+      }
+    },
+  );
+
   it("stages bytes and both contexts through the strict bounded SCP command", async () => {
     await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
       const params = remoteStageParams(state);
@@ -570,7 +681,7 @@ describe("stageSandboxMedia SCP", () => {
 
   it.runIf(process.platform !== "win32")(
     "owns the real SCP tree through cancellation and cleanup",
-    async () => {
+    async ({ signal }) => {
       await withOpenClawTestState({ label: "scp-process-tree" }, async (state) => {
         const params = remoteStageParams(state);
         const before = structuredClone([params.ctx, params.sessionCtx]);
@@ -603,7 +714,7 @@ describe("stageSandboxMedia SCP", () => {
             "process.on('SIGTERM', () => {});",
             `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
             `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
-            `child.once('message', () => fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)));`,
+            `child.once('message', () => { fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)); process.stdout.write('R'); });`,
             "setInterval(() => {}, 1000);",
           ].join("\n"),
           { mode: 0o700 },
@@ -614,8 +725,24 @@ describe("stageSandboxMedia SCP", () => {
           async () => {
             const controller = new AbortController();
             const reason = "synthetic operator cancellation";
-            params.abortSignal = controller.signal;
-            const spawn = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+            params.abortSignal = AbortSignal.any([controller.signal, signal]);
+            const ready = createDeferred<string>();
+            const cancelled = createDeferred<never>();
+            const onTestAbort = () => cancelled.reject(signal.reason);
+            signal.throwIfAborted();
+            signal.addEventListener("abort", onTestAbort, { once: true });
+            const realSpawn = execSpawn.spawnCommandWithInvocation;
+            const spawn = vi
+              .spyOn(execSpawn, "spawnCommandWithInvocation")
+              .mockImplementation((...args) => {
+                const result = realSpawn(...args);
+                if (args[0][0] === "scp") {
+                  result.child.nodeChildProcess.stdout?.once("data", (chunk: Buffer) => {
+                    ready.resolve(chunk.toString("utf8"));
+                  });
+                }
+                return result;
+              });
             let parentPid: number | undefined;
             let descendantPid: number | undefined;
             const alive = () =>
@@ -627,17 +754,26 @@ describe("stageSandboxMedia SCP", () => {
             let exitedBeforeCleanup: boolean[] = [];
             let temporaryDirectoryRemoved = false;
             try {
-              parentPid = await waitForPidFile(parentPidPath);
-              descendantPid = await waitForPidFile(descendantPidPath);
-              expect(await waitForPidFile(readyPath)).toBe(parentPid);
+              // Readiness follows the descendant's signal handlers, not a wall-clock startup budget.
+              expect(
+                await Promise.race([
+                  ready.promise,
+                  cancelled.promise,
+                  settled.then(() => {
+                    throw new Error("SCP settled before the fixture became ready");
+                  }),
+                ]),
+              ).toBe("R");
+              parentPid = await readPidFile(parentPidPath);
+              descendantPid = await readPidFile(descendantPidPath);
+              expect(await readPidFile(readyPath)).toBe(parentPid);
               expect(isPidAlive(parentPid)).toBe(true);
               expect(isPidAlive(descendantPid)).toBe(true);
               controller.abort(reason);
-              exitedBeforeCleanup = await Promise.all([
-                waitForPidToExit(parentPid),
-                waitForPidToExit(descendantPid),
-              ]);
+              await Promise.race([settled, cancelled.promise]);
+              exitedBeforeCleanup = [parentPid, descendantPid].map((pid) => !isPidAlive(pid));
             } finally {
+              signal.removeEventListener("abort", onTestAbort);
               // Stop any late attempt, then drain the owner before removing its fixture.
               await fs.writeFile(cleanupPath, "cleanup");
               for (const [index, result] of spawn.mock.results.entries()) {

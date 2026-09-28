@@ -1,4 +1,5 @@
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
@@ -8,12 +9,14 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 export type ChatMetadataProjectionFacts = {
   agentId: string;
@@ -23,14 +26,8 @@ export type ChatMetadataProjectionFacts = {
   modelCatalog: ModelCatalogSnapshot;
 };
 
-export type PreparedAgentProjection<T = ChatMetadataResult> = {
-  modelCatalog: ModelCatalogEntry[];
-  read: () => T;
-  isCurrent: () => boolean;
-};
-
 export async function prepareChatMetadataModelProjection(params: {
-  context: GatewayRequestContext;
+  context: GatewayModelCatalogContext;
   facts: ChatMetadataProjectionFacts;
   requesterProfileId?: string;
   preferredProfileId?: string;
@@ -38,7 +35,11 @@ export async function prepareChatMetadataModelProjection(params: {
   profileProvider?: string;
   runtimeOverride?: string;
   assertCurrent?: () => void;
-}): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
+}): Promise<{
+  modelCatalog: ModelCatalogEntry[];
+  read: () => { models?: ModelChoice[] };
+  isCurrent: () => boolean;
+}> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
@@ -122,6 +123,30 @@ export function resolveSessionCatalogProfiles(
   };
 }
 
+export function sessionProjectionKey(
+  agentId: string,
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
+): string {
+  return [
+    normalizeAgentId(agentId),
+    profiles.preferredProfileId ?? "",
+    profiles.pinnedProfileId ?? "",
+    profiles.profileProvider ?? "",
+    profiles.runtimeOverride ?? "",
+  ].join("\0");
+}
+
+export function hasSessionCatalogContext(
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
+) {
+  return (
+    profiles.preferredProfileId !== undefined ||
+    profiles.pinnedProfileId !== undefined ||
+    profiles.profileProvider !== undefined ||
+    profiles.runtimeOverride !== undefined
+  );
+}
+
 // Read native ownership after profile projection; never cache this session overlay.
 export function projectSessionModelCatalog(
   readParams: ChatMetadataReadParams,
@@ -157,7 +182,25 @@ export function projectChatSessionMetadata(
   metadata: ChatMetadataResult,
   config: OpenClawConfig,
 ): ChatMetadataResult {
-  return metadata.models
+  const projected = metadata.models
     ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
     : metadata;
+  if (!readParams.sessionKey) {
+    return projected;
+  }
+  const entry = readParams.sessionEntry;
+  const acpMeta =
+    entry?.acp ??
+    (entry
+      ? readAcpSessionMetaForEntry({
+          cfg: config,
+          sessionKey: readParams.sessionKey,
+          agentId: readParams.agentId,
+          entry,
+        })
+      : undefined);
+  return {
+    ...projected,
+    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
+  };
 }

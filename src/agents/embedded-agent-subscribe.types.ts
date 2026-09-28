@@ -44,6 +44,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
+  assistantErrorTranscript?: EmbeddedRunAttemptParams["assistantErrorTranscript"];
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;

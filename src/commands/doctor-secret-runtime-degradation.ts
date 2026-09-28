@@ -5,7 +5,7 @@ import {
   redactSecretDegradationReason,
   SECRET_DEGRADATION_RETRY_HINT,
 } from "../secrets/runtime-degraded-state.js";
-import type { StatusSummary } from "../status/types.js";
+import type { StatusSummary } from "../status/summary.js";
 
 const DOCTOR_SECRET_OWNER_ID_MAX_CHARS = 96;
 const DOCTOR_SECRET_OWNER_PATH_MAX_CHARS = 120;

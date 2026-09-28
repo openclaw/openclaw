@@ -22,7 +22,7 @@ Configure an explicit reader agent before enabling the plugin. Preserve existing
       main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         sandbox: {
           mode: "all",
           scope: "session",

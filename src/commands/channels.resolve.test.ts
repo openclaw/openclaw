@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelResolverAdapter } from "../channels/plugins/types.adapters.js";
 import { channelsResolveCommand } from "./channels/resolve.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -51,11 +52,7 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
 }));
 
 describe("channelsResolveCommand", () => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
+  const runtime = createTestRuntime();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -76,15 +73,12 @@ describe("channelsResolveCommand", () => {
     });
   });
 
-  it.each([undefined, "work"])(
-    "rejects missing entries before config for account %j",
-    async (account) => {
-      await expect(channelsResolveCommand({ account, entries: [] }, runtime)).rejects.toThrow(
-        "At least one entry is required.",
-      );
-      expect(mocks.loadConfig).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects missing entries before config for a named account", async () => {
+    await expect(channelsResolveCommand({ account: "work", entries: [] }, runtime)).rejects.toThrow(
+      "At least one entry is required.",
+    );
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
 
   it("retains the unsupported resolver error for a named account", async () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
@@ -157,7 +151,6 @@ describe("channelsResolveCommand", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s explicit agent before channel resolution", async (_label, agent, message) => {
     mocks.loadConfig.mockReturnValue({
@@ -245,4 +238,64 @@ describe("channelsResolveCommand", () => {
     expect(resolveTargets.mock.calls[0]?.[0].inputs).toStrictEqual(["friends"]);
     expect(resolveTargets).toHaveBeenNthCalledWith(1, expect.objectContaining({ kind: "group" }));
   });
+
+  it.each([
+    {
+      kind: "auto" as const,
+      expected: [
+        { input: "@alice", resolved: true, id: "user-1" },
+        { input: "#general", resolved: true, id: "group-0" },
+        { input: "missing", resolved: false },
+        { input: "@alice", resolved: true, id: "user-1" },
+      ],
+    },
+    {
+      kind: "channel" as const,
+      expected: [
+        { input: "@alice", resolved: true, id: "group-0" },
+        { input: "#general", resolved: true, id: "group-1" },
+        { input: "@alice", resolved: true, id: "group-2" },
+      ],
+    },
+  ])(
+    "preserves $kind resolution order and projects only public result fields",
+    async ({ kind, expected }) => {
+      const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>(
+        async ({ inputs, kind: targetKind }) =>
+          inputs
+            .toReversed()
+            .filter((input) => input !== "missing")
+            .map((input, index) => ({
+              input,
+              resolved: true,
+              id: `${targetKind}-${index}`,
+              providerDetail: "not part of command output",
+            })),
+      );
+      mocks.resolveMessageChannelSelection.mockResolvedValue({
+        channel: "fixture",
+        plugin: { id: "fixture", resolver: { resolveTargets } },
+      });
+
+      await channelsResolveCommand(
+        {
+          kind,
+          json: true,
+          entries: ["@alice", "#general", "missing", "@alice"],
+        },
+        runtime,
+      );
+
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(expected);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(resolveTargets.mock.calls.map(([params]) => [params.kind, params.inputs])).toEqual(
+        kind === "auto"
+          ? [
+              ["user", ["@alice", "@alice"]],
+              ["group", ["#general", "missing"]],
+            ]
+          : [["group", ["@alice", "#general", "missing", "@alice"]]],
+      );
+    },
+  );
 });

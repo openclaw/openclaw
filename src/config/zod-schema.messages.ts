@@ -115,7 +115,38 @@ export const MessagesSchema = z
   .strict()
   .optional();
 
+const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
+const BroadcastGroupSchema = z.strictObject({
+  agents: z.array(z.string()).max(16),
+  mentionGating: z.boolean().optional(),
+  maxRounds: z.number().int().min(1).max(4).optional(),
+  maxTurns: z.number().int().min(1).max(32).optional(),
+});
+
 export const BroadcastSchema = z
-  .object({ strategy: z.enum(["parallel", "sequential"]).optional() })
-  .catchall(z.array(z.string()))
+  .object({
+    strategy: BroadcastStrategySchema.optional(),
+  })
+  .catchall(z.union([z.array(z.string()), BroadcastGroupSchema]))
+  .superRefine((broadcast, ctx) => {
+    for (const [peerId, entry] of Object.entries(broadcast)) {
+      if (typeof entry !== "object") {
+        continue;
+      }
+      const qualified = /^[a-z][a-z0-9_-]*:.+$/i.test(peerId);
+      if (!Array.isArray(entry) && !qualified) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [peerId],
+          message: "Group options require a channel-qualified key (<channel>:<peerId>).",
+        });
+      } else if (Array.isArray(entry) && qualified && entry.length > 16) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [peerId],
+          message: "Agent group threads support at most 16 agents.",
+        });
+      }
+    }
+  })
   .optional();

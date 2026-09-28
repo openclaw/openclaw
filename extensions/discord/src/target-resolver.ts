@@ -1,12 +1,10 @@
-// Discord plugin module implements target resolver behavior.
 import { buildMessagingTarget, type MessagingTarget } from "openclaw/plugin-sdk/channel-targets";
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveDiscordAccount, resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 import { allowFromContainsDiscordUserId } from "./normalize.js";
-import { parseDiscordSendTarget } from "./send-target-parsing.js";
-import type { DiscordTargetParseOptions } from "./target-parsing.js";
+import { parseDiscordTarget, type DiscordTargetParseOptions } from "./target-parsing.js";
 
 /**
  * Resolve a Discord username to user ID using the directory lookup.
@@ -41,7 +39,7 @@ export async function resolveDiscordTarget(
   }
 
   if (!shouldLookup) {
-    return directParse ?? parseDiscordSendTarget(trimmed, parseOptions);
+    return directParse ?? parseDiscordTarget(trimmed, parseOptions);
   }
 
   try {
@@ -69,7 +67,7 @@ export async function resolveDiscordTarget(
     // Preserve legacy fallback behavior for channel names and direct ids.
   }
 
-  return parseDiscordSendTarget(trimmed, parseOptions);
+  return parseDiscordTarget(trimmed, parseOptions);
 }
 
 export async function parseAndResolveDiscordTarget(
@@ -77,9 +75,7 @@ export async function parseAndResolveDiscordTarget(
   options: DirectoryConfigParams,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<MessagingTarget> {
-  const resolved =
-    (await resolveDiscordTarget(raw, options, parseOptions)) ??
-    parseDiscordSendTarget(raw, parseOptions);
+  const resolved = await resolveDiscordTarget(raw, options, parseOptions);
   if (!resolved) {
     throw new Error("Recipient is required for Discord sends");
   }
@@ -91,7 +87,7 @@ function safeParseDiscordTarget(
   options: DiscordTargetParseOptions,
 ): MessagingTarget | undefined {
   try {
-    return parseDiscordSendTarget(input, options);
+    return parseDiscordTarget(input, options);
   } catch {
     return undefined;
   }

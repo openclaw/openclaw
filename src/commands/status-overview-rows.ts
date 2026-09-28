@@ -3,17 +3,18 @@
 
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveIsNixMode } from "../config/paths.js";
+import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import type { StatusSummary } from "../status/types.js";
+import type { BackupRunFreshness } from "../state/backup-run-records.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
-import { buildBackupStatusValue, readBackupFreshness } from "./backup-health.js";
+import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
-import {
-  buildStatusOverviewRowsFromSurface,
-  type StatusOverviewSurface,
-} from "./status-overview-surface.ts";
+import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
   buildStatusEventsValue,
@@ -29,14 +30,19 @@ import {
   buildStatusHeartbeatValue,
   buildStatusLastHeartbeatValue,
   buildStatusMemoryValue,
-  buildStatusTasksValue,
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
-import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 type StatusDegradationSummary = Pick<
   StatusSummary,
-  "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning" | "secretEgressProxy"
+  | "degradedSecretOwners"
+  | "degradedPlugins"
+  | "startupMigrationWarning"
+  | "startupRecoveryWarning"
+  | "installationReplacementWarning"
+  | "childRuntime"
+  | "secretEgressProxy"
 >;
 
 function buildStatusDegradationRows(
@@ -46,6 +52,21 @@ function buildStatusDegradationRows(
   const rows: Array<{ Item: string; Value: string }> = [];
   if (summary.startupMigrationWarning) {
     rows.push({ Item: "Startup migrations", Value: decorate(summary.startupMigrationWarning) });
+  }
+  if (summary.startupRecoveryWarning) {
+    rows.push({ Item: "Session recovery", Value: decorate(summary.startupRecoveryWarning) });
+  }
+  const childRuntimeWarning = summary.childRuntime
+    ? formatMissingChildRuntimeWarning(summary.childRuntime)
+    : undefined;
+  if (childRuntimeWarning) {
+    rows.push({ Item: "Gateway runtime", Value: decorate(childRuntimeWarning) });
+  }
+  if (summary.installationReplacementWarning) {
+    rows.push({
+      Item: "Installation replaced",
+      Value: decorate(summary.installationReplacementWarning),
+    });
   }
   if (summary.secretEgressProxy) {
     const status = summary.secretEgressProxy;
@@ -82,6 +103,7 @@ function buildStatusDegradationRows(
 export function buildStatusCommandOverviewRows(
   params: {
     env: NodeJS.ProcessEnv;
+    backupFreshness: BackupRunFreshness;
     opts: {
       deep?: boolean;
     };
@@ -115,11 +137,6 @@ export function buildStatusCommandOverviewRows(
   const eventsValue = buildStatusEventsValue({
     queuedSystemEvents: params.summary.queuedSystemEvents,
   });
-  const tasksValue = buildStatusTasksValue({
-    summary: params.summary,
-    warn: params.warn,
-    muted: params.muted,
-  });
   const probesValue = buildStatusProbesValue({
     health: params.health,
     ok: params.ok,
@@ -129,6 +146,7 @@ export function buildStatusCommandOverviewRows(
   const lastHeartbeatValue = buildStatusLastHeartbeatValue({
     deep: params.opts.deep,
     gatewayReachable: params.surface.gatewayReachable,
+    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     lastHeartbeat: params.lastHeartbeat,
     warn: params.warn,
     muted: params.muted,
@@ -163,8 +181,8 @@ export function buildStatusCommandOverviewRows(
         ? params.ok("enabled · anonymous feature stats")
         : params.muted("disabled · update checks only");
   const hostDesktopValue = formatHostDesktopStatus(params.summary.hostDesktop);
-  return buildStatusOverviewRowsFromSurface({
-    surface: params.surface,
+  return buildStatusOverviewSurfaceRows({
+    ...params.surface,
     decorateOk: params.ok,
     decorateWarn: params.warn,
     decorateTailscaleOff: params.muted,
@@ -187,11 +205,10 @@ export function buildStatusCommandOverviewRows(
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
-      { Item: "Tasks", Value: tasksValue },
       {
         Item: "Backups",
         Value: buildBackupStatusValue({
-          freshness: readBackupFreshness(params.env),
+          freshness: params.backupFreshness,
           formatTimeAgo: params.formatTimeAgo,
         }),
       },
@@ -227,12 +244,9 @@ export function buildStatusAllOverviewRows(params: {
       lastActiveAgeMs?: number | null;
     }>;
   };
-  tailscaleBackendState?: string | null;
 }) {
-  return buildStatusOverviewRowsFromSurface({
-    surface: params.surface,
-    tailscaleBackendState: params.tailscaleBackendState,
-    includeBackendStateWhenOff: true,
+  return buildStatusOverviewSurfaceRows({
+    ...params.surface,
     includeBackendStateWhenOn: true,
     includeDnsNameWhenOff: true,
     prefixRows: [

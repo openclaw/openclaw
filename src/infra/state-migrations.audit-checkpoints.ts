@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import type {
   LegacyAuditLogSource,
@@ -93,44 +94,16 @@ function legacyAuditRawCheckpointIsCurrent(
   let fd: number | undefined;
   try {
     fd = fs.openSync(sourcePath, "r");
-    const beforeStat = fs.fstatSync(fd);
-    const before = {
-      dev: beforeStat.dev,
-      ino: beforeStat.ino,
-      mtimeMs: beforeStat.mtimeMs,
-      size: beforeStat.size,
-    };
-    if (!beforeStat.isFile() || !legacyAuditRawCheckpointsMatch(checkpoint, before)) {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || !legacyAuditRawCheckpointsMatch(checkpoint, before)) {
       return false;
     }
-    const hash = createHash("sha256");
-    const chunk = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    while (offset < checkpoint.size) {
-      const bytesRead = fs.readSync(
-        fd,
-        chunk,
-        0,
-        Math.min(chunk.byteLength, checkpoint.size - offset),
-        offset,
-      );
-      if (bytesRead === 0) {
-        return false;
-      }
-      hash.update(chunk.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-    const afterStat = fs.fstatSync(fd);
-    const after = {
-      dev: afterStat.dev,
-      ino: afterStat.ino,
-      mtimeMs: afterStat.mtimeMs,
-      size: afterStat.size,
-    };
+    const hash = sha256FileSync(fd, { maxBytes: checkpoint.size });
+    const after = fs.fstatSync(fd);
     return (
       legacyAuditRawCheckpointsMatch(before, after) &&
-      offset === checkpoint.size &&
-      hash.digest("hex") === checkpoint.contentHash
+      hash.bytes === checkpoint.size &&
+      hash.digest === checkpoint.contentHash
     );
   } catch {
     return false;
@@ -198,17 +171,21 @@ export function detectLegacyAuditLogs(params: {
       `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
       "u",
     );
-    const rawArchives = directoryEntries
-      .flatMap((entry) => {
-        const match = rawArchivePattern.exec(entry);
-        return match ? [{ entry, generation: BigInt(match[1] ?? "1") }] : [];
-      })
-      .toSorted(
-        (left, right) =>
-          (left.generation < right.generation ? -1 : left.generation > right.generation ? 1 : 0) ||
-          left.entry.localeCompare(right.entry),
-      );
-    for (const { entry } of rawArchives) {
+    const generations = (pattern: RegExp) =>
+      directoryEntries
+        .flatMap((entry) => {
+          const match = pattern.exec(entry);
+          return match ? [{ entry, generation: BigInt(match[1] ?? "1") }] : [];
+        })
+        .toSorted(
+          (left, right) =>
+            (left.generation < right.generation
+              ? -1
+              : left.generation > right.generation
+                ? 1
+                : 0) || left.entry.localeCompare(right.entry),
+        );
+    for (const { entry } of generations(rawArchivePattern)) {
       const rawPath = path.join(path.dirname(logical.sourcePath), entry);
       const rawRelativePath = path.relative(path.resolve(params.stateDir), rawPath);
       const generationKey = legacyAuditSourceGenerationKey(rawRelativePath);
@@ -239,17 +216,7 @@ export function detectLegacyAuditLogs(params: {
     }
     // Claims reserve their archive generation across a crash. An older
     // sanitized-only generation cannot be reused by a later claim.
-    const claims = directoryEntries
-      .flatMap((entry) => {
-        const match = claimPattern.exec(entry);
-        return match ? [{ entry, generation: BigInt(match[1] ?? "1") }] : [];
-      })
-      .toSorted(
-        (left, right) =>
-          (left.generation < right.generation ? -1 : left.generation > right.generation ? 1 : 0) ||
-          left.entry.localeCompare(right.entry),
-      );
-    for (const { entry, generation } of claims) {
+    for (const { entry, generation } of generations(claimPattern)) {
       const generationSuffix = generation === 1n ? "" : `.${generation}`;
       const sanitizedArchivePath = `${logical.sourcePath}.migrated${generationSuffix}`;
       sources.push({

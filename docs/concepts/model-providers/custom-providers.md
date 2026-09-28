@@ -15,6 +15,10 @@ Many of the bundled provider plugins below already publish a default catalog. Us
 
 Bundled and catalog-known routes take their `compat` capabilities from the owning provider plugin. A config `compat` block is for a custom provider/model or a different `api`/`baseUrl` route whose endpoint contract you have verified; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations). Doctor removes legacy values that merely repeat the catalog and leaves divergent values visible for operator review.
 
+A custom endpoint does not inherit the original catalog route's preferred Code Mode tier. With automatic Code Mode and no custom `compat.codeMode` declaration, the embedded runtime keeps its normal tool surface. Set `compat.codeMode: "preferred"` only after verifying Code Mode on that endpoint.
+
+Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep their canonical catalog capabilities.
+
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
 
 `agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
@@ -236,6 +240,43 @@ openclaw plugins install @openclaw/llama-cpp-provider
 Both use `llama-cpp/<model>` references. See [llama.cpp](/plugins/llama-cpp) for setup,
 discovery, authentication, and managed local embeddings.
 
+### llmman
+
+llmman is configured via `models.providers` as an OpenAI-compatible local server. It pulls models as OCI artifacts and serves them through upstream `llama-server`, `vllm`, or `mlx-lm`, and can pair a local model with a hosted one under a single model id:
+
+- Provider: `llmman` (custom; `api: "openai-completions"`)
+- Auth: none enforced; set `LLMMAN_API_KEY=llmman-local` and use `apiKey: "${LLMMAN_API_KEY}"`
+- Default base URL: `http://127.0.0.1:17434/v1`
+- Example model: `llmman/qwen3.8`
+- Hybrid example: `llmman/llmman.hybrid/qwen3.8,openai/gpt-5.6-luna`
+
+```bash
+llmman pull qwen3.8
+llmman serve
+```
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "llmman/qwen3.8" } },
+  },
+  models: {
+    providers: {
+      llmman: {
+        baseUrl: "http://127.0.0.1:17434/v1",
+        apiKey: "${LLMMAN_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "qwen3.8", name: "Qwen3.8 (llmman)", reasoning: true, input: ["text", "image"] },
+        ],
+      },
+    },
+  },
+}
+```
+
+See [/providers/llmman](/providers/llmman) for setup, hybrid local + hosted routing, vision, and troubleshooting.
+
 ### LM Studio
 
 LM Studio ships as a bundled provider plugin which uses the native API:
@@ -376,6 +417,8 @@ Example (OpenAI-compatible):
     - `input: ["text"]`
     - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
     - `maxTokens`: no fixed default. For OpenAI-compatible Completions, an unknown output limit omits both `max_tokens` and `max_completion_tokens`, letting the provider apply its default.
+
+    Anthropic and Mistral requests preserve an explicit request output limit when the model's `maxTokens` is unknown. Anthropic manual thinking must fit within that request limit when no model output capacity is available.
 
     An omitted `contextWindow` remains unset so authored native-window metadata is unambiguous. When neither discovery nor per-model context metadata is available, context-budget callers use the standard `200000`-token fallback.
 

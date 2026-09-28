@@ -1,6 +1,6 @@
-import type fs from "node:fs";
-import type JSON5 from "json5";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigIoDeps, ConfigSnapshotReadMeasure } from "./io.read.types.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
   ConfigWriteAfterWrite,
@@ -9,11 +9,15 @@ import type {
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
-export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+export const configWriteCommittedSnapshot = Symbol("configWriteCommittedSnapshot");
 
 export type ConfigWriteResult = {
   persistedHash: string;
   persistedConfig: OpenClawConfig;
+  /** Exact resolved source accepted before commit; absent for legacy custom writers. */
+  persistedSourceConfig?: OpenClawConfig;
+  /** Internal receipt from the committed inputs, independent of later filesystem reads. */
+  [configWriteCommittedSnapshot]?: { hash: string; sourceConfig: OpenClawConfig };
 };
 
 export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };
@@ -21,7 +25,10 @@ export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => void;
+  };
 };
 
 export type ConfigWriteAuditOrigin =
@@ -44,7 +51,7 @@ export type ConfigWriteOptions = {
   ownedConfigPathForWrite?: string;
   /** Rechecks that the config path captured at mutation start is still active. */
   assertConfigPathForWrite?: () => void;
-  /** Internal synchronous live-owner assertion; unlike path provenance, requires rename-only writes. */
+  /** Internal synchronous live-owner assertion checked at guarded publication effects. */
   assertCurrent?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
@@ -84,7 +91,7 @@ export type ConfigWriteOptions = {
   lastTouchedVersionOverride?: string;
   /** Optional runtime candidate preflight; the runtime writer composes its own preflight. */
   preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
-  /** Revalidate authority at the final root-file publication; requires atomic rename. */
+  /** Prepare authority before the synchronous root-file publication phase. */
   beforeCommit?: () => void | Promise<void>;
   /** Snapshot-time hashes for include files that mutation writers may update. */
   includeFileHashesForWrite?: Record<string, string>;
@@ -98,7 +105,6 @@ export type ReadConfigFileSnapshotForWriteResult = {
 };
 
 export type ConfigWriteNotification = RuntimeConfigWriteNotification;
-export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
 export class ConfigRuntimeRefreshError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -107,28 +113,16 @@ export class ConfigRuntimeRefreshError extends Error {
   }
 }
 
-export type ConfigIoDeps = {
-  fs?: typeof fs;
-  json5?: typeof JSON5;
-  env?: NodeJS.ProcessEnv;
-  lowerPrecedenceEnv?: Readonly<Record<string, string>>;
-  homedir?: () => string;
-  configPath?: string;
-  logger?: Pick<typeof console, "error" | "warn">;
-  measure?: ConfigSnapshotReadMeasure;
-  suppressFutureVersionWarning?: boolean;
-  observe?: boolean;
-};
-
-export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
-
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
+  /** Admission can prepare migration facts before their checkpoint is writable. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   shellEnvFallback?: "load" | "defer";
 };
 
 export type ConfigSnapshotReadOptions = {
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
   isolateEnv?: boolean;
@@ -146,7 +140,13 @@ export type ConfigSnapshotReadOptions = {
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
+  /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
+  prepareValidation?: "runtime" | "strict";
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
@@ -155,6 +155,7 @@ export type ReadConfigFileSnapshotInternalResult = {
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };

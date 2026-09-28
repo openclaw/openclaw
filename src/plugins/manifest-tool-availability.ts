@@ -12,8 +12,6 @@ import type {
 } from "./manifest.js";
 
 type ToolMetadata = NonNullable<PluginManifestRecord["toolMetadata"]>[string];
-type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
-type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
 
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {
@@ -31,36 +29,6 @@ function readPath(root: unknown, path: string | undefined): unknown {
     current = current[key];
   }
   return current;
-}
-
-function readStringAtPath(root: unknown, path: string): string | undefined {
-  return normalizeOptionalString(readPath(root, path));
-}
-
-function readEffectiveConfigs(params: {
-  config?: OpenClawConfig;
-  rootPath: string;
-  overlayPath?: string;
-  overlayMapPath?: string;
-}): Array<Record<string, unknown>> {
-  const root = readPath(params.config, params.rootPath);
-  if (!isRecord(root)) {
-    return [];
-  }
-  const overlay = readPath(root, params.overlayPath);
-  const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
-  if (params.overlayMapPath?.trim()) {
-    const overlayMap = readPath(baseConfig, params.overlayMapPath);
-    if (!isRecord(overlayMap)) {
-      return [];
-    }
-    return Object.entries(overlayMap)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .flatMap(([, mapOverlay]) =>
-        isRecord(mapOverlay) ? [{ ...baseConfig, ...mapOverlay }] : [],
-      );
-  }
-  return [baseConfig];
 }
 
 function hasConfiguredValue(params: {
@@ -100,24 +68,30 @@ function hasConfiguredValue(params: {
 export function manifestConfigSignalPasses(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  signal: ManifestConfigAvailabilitySignal;
+  signal: PluginManifestCapabilityProviderConfigSignal;
 }): boolean {
-  const effectiveConfigs = readEffectiveConfigs({
-    config: params.config,
-    rootPath: params.signal.rootPath,
-    overlayPath: params.signal.overlayPath,
-    overlayMapPath: params.signal.overlayMapPath,
-  });
-  if (effectiveConfigs.length === 0) {
+  const root = readPath(params.config, params.signal.rootPath);
+  if (!isRecord(root)) {
     return false;
   }
-  return effectiveConfigs.some((effectiveConfig) =>
+  const overlay = readPath(root, params.signal.overlayPath);
+  const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
+  const passes = (effectiveConfig: Record<string, unknown>) =>
     manifestEffectiveConfigSignalPasses({
       config: params.config,
       env: params.env,
       effectiveConfig,
       signal: params.signal,
-    }),
+    });
+  if (!params.signal.overlayMapPath?.trim()) {
+    return passes(baseConfig);
+  }
+  const overlayMap = readPath(baseConfig, params.signal.overlayMapPath);
+  return (
+    isRecord(overlayMap) &&
+    Object.entries(overlayMap)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .some(([, mapOverlay]) => isRecord(mapOverlay) && passes({ ...baseConfig, ...mapOverlay }))
   );
 }
 
@@ -125,12 +99,13 @@ function manifestEffectiveConfigSignalPasses(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   effectiveConfig: Record<string, unknown>;
-  signal: ManifestConfigAvailabilitySignal;
+  signal: PluginManifestCapabilityProviderConfigSignal;
 }): boolean {
   const modeSignal = params.signal.mode;
   if (modeSignal) {
     const modePath = modeSignal.path?.trim() || "mode";
-    const mode = readStringAtPath(params.effectiveConfig, modePath) ?? modeSignal.default;
+    const mode =
+      normalizeOptionalString(readPath(params.effectiveConfig, modePath)) ?? modeSignal.default;
     if (!mode) {
       return false;
     }
@@ -141,31 +116,17 @@ function manifestEffectiveConfigSignalPasses(params: {
       return false;
     }
   }
-  for (const requiredPath of params.signal.required ?? []) {
-    if (
-      !hasConfiguredValue({
-        config: params.config,
-        env: params.env,
-        value: readPath(params.effectiveConfig, requiredPath),
-      })
-    ) {
-      return false;
-    }
-  }
+  const hasValue = (path: string) =>
+    hasConfiguredValue({
+      config: params.config,
+      env: params.env,
+      value: readPath(params.effectiveConfig, path),
+    });
   const requiredAny = params.signal.requiredAny ?? [];
-  if (
-    requiredAny.length > 0 &&
-    !requiredAny.some((path) =>
-      hasConfiguredValue({
-        config: params.config,
-        env: params.env,
-        value: readPath(params.effectiveConfig, path),
-      }),
-    )
-  ) {
-    return false;
-  }
-  return true;
+  return (
+    (params.signal.required ?? []).every(hasValue) &&
+    (requiredAny.length === 0 || requiredAny.some(hasValue))
+  );
 }
 
 function normalizeBaseUrlForManifestGuard(value: string): string {
@@ -174,7 +135,7 @@ function normalizeBaseUrlForManifestGuard(value: string): string {
 
 export function manifestProviderBaseUrlGuardPasses(params: {
   config?: OpenClawConfig;
-  guard: ManifestAuthAvailabilitySignal["providerBaseUrl"];
+  guard: PluginManifestCapabilityProviderAuthSignal["providerBaseUrl"];
 }): boolean {
   const guard = params.guard;
   if (!guard) {
@@ -211,7 +172,7 @@ export function hasNonEmptyManifestEnvCandidate(
   });
 }
 
-function listToolAuthSignals(metadata: ToolMetadata): ManifestAuthAvailabilitySignal[] {
+function listToolAuthSignals(metadata: ToolMetadata): PluginManifestCapabilityProviderAuthSignal[] {
   if (metadata.authSignals?.length) {
     return metadata.authSignals;
   }
@@ -242,28 +203,18 @@ function toolMetadataPasses(params: {
   ) {
     return true;
   }
-  for (const signal of authSignals) {
-    if (
-      !manifestProviderBaseUrlGuardPasses({
+  return authSignals.some(
+    (signal) =>
+      manifestProviderBaseUrlGuardPasses({
         config: params.config,
         guard: signal.providerBaseUrl,
-      })
-    ) {
-      continue;
-    }
-    if (params.hasAuthForProvider?.(signal.provider)) {
-      return true;
-    }
-    if (
-      hasNonEmptyManifestEnvCandidate(
-        params.env,
-        manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
+      }) &&
+      (params.hasAuthForProvider?.(signal.provider) ||
+        hasNonEmptyManifestEnvCandidate(
+          params.env,
+          manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
+        )),
+  );
 }
 
 export function hasManifestToolAvailability(params: {
@@ -273,12 +224,10 @@ export function hasManifestToolAvailability(params: {
   env: NodeJS.ProcessEnv;
   hasAuthForProvider?: (providerId: string) => boolean;
 }): boolean {
-  for (const toolName of params.toolNames) {
+  return params.toolNames.some((toolName) => {
     const metadata = params.plugin.toolMetadata?.[toolName];
-    if (!metadata) {
-      return true;
-    }
-    if (
+    return (
+      !metadata ||
       toolMetadataPasses({
         plugin: params.plugin,
         metadata,
@@ -286,9 +235,6 @@ export function hasManifestToolAvailability(params: {
         env: params.env,
         hasAuthForProvider: params.hasAuthForProvider,
       })
-    ) {
-      return true;
-    }
-  }
-  return false;
+    );
+  });
 }

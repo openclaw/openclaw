@@ -1,17 +1,24 @@
 // Update runtime observation must not load units while discovering their state.
+import * as fsSync from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
 
 const busctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlUser>());
+const systemBusctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlSystem>());
 const systemctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctlUser>());
 vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   execBusctlUser: busctl,
+  execBusctlSystem: systemBusctl,
   execSystemctlUser: systemctl,
   assertSystemdAvailable: async () => {},
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: async () => null }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+}));
 
+import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 
 const env = {
@@ -37,6 +44,7 @@ const properties = {
   KillMode: { type: "s", data: "control-group" },
   TasksCurrent: { type: "t", data: 8 },
   MemoryCurrent: { type: "t", data: 2048 },
+  ControlGroup: { type: "s", data: "/user.slice/openclaw-owned.service" },
 };
 
 function success(stdout: string): ExecResult {
@@ -67,12 +75,48 @@ function managerReply(args: string[], overrides: Record<string, unknown> = {}): 
 
 beforeEach(() => {
   busctl.mockReset().mockImplementation(async (_env, args) => managerReply(args));
+  systemBusctl
+    .mockReset()
+    .mockImplementation(async (args) =>
+      args.includes("GetConnectionUnixUser")
+        ? success(JSON.stringify({ type: "u", data: [0] }))
+        : managerReply(args),
+    );
   systemctl
     .mockReset()
     .mockResolvedValue(success("Id=openclaw-owned.service\nLoadState=loaded\nActiveState=active"));
 });
 
 describe("loaded-only systemd runtime", () => {
+  it.each([0, 2001])("authenticates the selected system manager UID %s", async (uid) => {
+    systemBusctl.mockImplementation(async (args) =>
+      args.includes("GetConnectionUnixUser")
+        ? success(JSON.stringify({ type: "u", data: [uid] }))
+        : managerReply(args),
+    );
+    const observation = readSystemdServiceRuntime(env, {
+      requireLoaded: true,
+      systemdReadTarget: { scope: "system", unitName, unitPath: `/etc/systemd/system/${unitName}` },
+    });
+    if (uid === 0) {
+      const runtime = await observation;
+      expect(runtime).toMatchObject({
+        status: "running",
+        systemd: { scope: "system", unit: unitName, managerUid: 0 },
+      });
+      expect(runtime.systemd?.transport).toBeUndefined();
+    } else {
+      await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+    }
+    expect(busctl).not.toHaveBeenCalled();
+    expect(systemctl).not.toHaveBeenCalled();
+    expect(
+      systemBusctl.mock.calls.every(
+        ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
+      ),
+    ).toBe(true);
+  });
+
   it("reads the owned loaded unit without systemctl show or unit activation", async () => {
     const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 1000 });
     expect(runtime).toMatchObject({
@@ -88,6 +132,7 @@ describe("loaded-only systemd runtime", () => {
         nRestarts: 2,
         tasksCurrent: 8,
         memoryCurrent: 2048,
+        controlGroup: "/user.slice/openclaw-owned.service",
       },
     });
     expect(systemctl).not.toHaveBeenCalled();
@@ -111,6 +156,43 @@ describe("loaded-only systemd runtime", () => {
       ),
     ).toBe(true);
   });
+
+  it.each(["bus", "show"])(
+    "does not infer absent containment from empty %s metadata over a non-root cgroup",
+    async (transport) => {
+      busctl.mockImplementation(async (_env, args) =>
+        managerReply(args, { ControlGroup: { type: "s", data: "" } }),
+      );
+      systemctl.mockResolvedValue(
+        success(`Id=${unitName}\nLoadState=loaded\nActiveState=active\nMainPID=412\nControlGroup=`),
+      );
+      const read = fsSync.readFileSync;
+      const observation = vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
+        if (file === `/proc/${process.pid}/cgroup` || file === "/proc/412/cgroup") {
+          return "0::/container.scope\n";
+        }
+        if (file === `/proc/${process.pid}/stat`) {
+          return `${process.pid} (caller) S 1 901\n`;
+        }
+        if (file === "/proc/412/stat") {
+          return "412 (gateway) S 1 900\n";
+        }
+        return read(file, options);
+      });
+      try {
+        const runtime = await readSystemdServiceRuntime(env, {
+          requireLoaded: transport === "bus",
+          commandInspection: { kind: "present" },
+        });
+        expect(runtime).toMatchObject({ status: "running", pid: 412 });
+        expect(
+          inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
+        ).toBe("unknown");
+      } finally {
+        observation.mockRestore();
+      }
+    },
+  );
 
   it.each([[], [2001.5], [-1], 2001].map((uid) => ({ uid })))(
     "refuses an invalid manager UID reply $uid",
@@ -169,7 +251,9 @@ describe("loaded-only systemd runtime", () => {
         ? success(JSON.stringify({ type: "s", data: [":1.43"] }))
         : managerReply(args),
     );
-    expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe("unknown");
+    await expect(readSystemdServiceRuntime(env, { requireLoaded: true })).rejects.toMatchObject({
+      reason: "systemd-manager-changed",
+    });
     expect(systemctl).not.toHaveBeenCalled();
   });
 
@@ -272,9 +356,15 @@ describe("loaded-only systemd runtime", () => {
         });
       });
       try {
-        expect(
-          (await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 1000 })).status,
-        ).toBe("unknown");
+        const observation = readSystemdServiceRuntime(env, {
+          requireLoaded: true,
+          timeoutMs: 1000,
+        });
+        if (changed === "owner") {
+          await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+        } else {
+          expect((await observation).status).toBe("unknown");
+        }
         expect(enumerated).toBe(true);
         expect(systemctl).not.toHaveBeenCalled();
       } finally {
@@ -416,7 +506,7 @@ describe("owned inspection refuses foreign or unverified collected units", () =>
     "busy",
     "inventory-error",
     "terminated",
-  ] as const)("keeps %s unknown without enabling or starting anything", async (fault) => {
+  ] as const)("preserves the %s refusal without enabling or starting anything", async (fault) => {
     let loaded = false;
     let owners = 0;
     const assertCurrent = () => {
@@ -453,11 +543,15 @@ describe("owned inspection refuses foreign or unverified collected units", () =>
         TasksCurrent: { type: "t", data: Number("18446744073709551615") },
       });
     });
-    const runtime = await readSystemdServiceRuntime(env, {
+    const observation = readSystemdServiceRuntime(env, {
       requireLoaded: true,
       loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
     });
-    expect(runtime.status).toBe("unknown");
+    if (fault === "uid" || fault === "manager-change") {
+      await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+    } else {
+      expect((await observation).status).toBe("unknown");
+    }
     expect(loaded).toBe(!["uid", "revoked-before"].includes(fault));
     expect(systemctl).not.toHaveBeenCalled();
     expect(
@@ -548,6 +642,47 @@ describe("bounded owned runtime inspection", () => {
       } finally {
         clock.mockRestore();
       }
+    },
+  );
+});
+
+describe("retained original-manager transport", () => {
+  it.each([false, true])(
+    "reads through the retained peer and rejects replacement=%s without another bus lookup",
+    async (replaced) => {
+      busctl.mockResolvedValue({
+        code: 1,
+        termination: "exit",
+        stdout: "",
+        stderr: "Failed to connect to bus",
+      });
+      const binding = {
+        unit: unitName,
+        managerUid: 2001,
+        destination: ":1.42",
+        verify: vi.fn(() => {
+          if (replaced) {
+            throw new Error("original manager replaced");
+          }
+        }),
+        close: vi.fn(async () => {}),
+        query: vi.fn(async (args: string[]) =>
+          managerReply(args)
+            .stdout.split("\n")
+            .map((line) => JSON.parse(line).data as unknown),
+        ),
+      };
+      const runtime = await readSystemdServiceRuntime(
+        { ...env, DBUS_SESSION_BUS_ADDRESS: "unix:path=/unavailable-authored-bus" },
+        { requireLoaded: true, timeoutMs: 1000, systemdReadBinding: binding },
+      );
+      expect(runtime.status).toBe(replaced ? "unknown" : "running");
+      if (!replaced) {
+        expect(runtime.systemd).toMatchObject({ unit: unitName, managerUid: 2001 });
+      }
+      expect(busctl).not.toHaveBeenCalled();
+      expect(systemctl).not.toHaveBeenCalled();
+      expect(binding.close).not.toHaveBeenCalled();
     },
   );
 });

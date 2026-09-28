@@ -1,6 +1,7 @@
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
@@ -54,13 +55,16 @@ function runOnFlush(entries: Array<Record<string, unknown>>): Promise<void> {
 }
 
 function createContext() {
-  return {
+  const ctx = {
     cfg: {},
     accountId: "default",
     app: { client: {} },
     runtime: {},
     rememberSlackChannelType: () => {},
   } as unknown as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
+  ctx.readRuntimeContext = async () => ctx;
+  ctx.isRuntimePolicyCurrent = () => true;
+  return ctx;
 }
 
 beforeEach(() => {
@@ -70,14 +74,56 @@ beforeEach(() => {
 });
 
 describe("Slack duplicate wait admission", () => {
+  it("releases every acquired claim when cancellation interrupts the next claim", async () => {
+    const controller = new AbortController();
+    const pending = createDeferred<{
+      kind: "claimed";
+      handle: { keys: readonly [string]; commit: () => Promise<boolean>; release: () => void };
+    }>();
+    const first = { keys: ["first"] as const, commit: vi.fn(async () => true), release: vi.fn() };
+    const second = { keys: ["second"] as const, commit: vi.fn(async () => true), release: vi.fn() };
+    const claim = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: "claimed", handle: first })
+      .mockReturnValueOnce(pending.promise);
+    const { createChannelReplayGuard } = await import("openclaw/plugin-sdk/persistent-dedupe");
+    const guard = createChannelReplayGuard<{ keys: readonly string[] }>({
+      dedupe: { ttlMs: 0, memoryMaxSize: 10 },
+      buildReplayKey: (event) => event.keys,
+    });
+    guard.claim = claim;
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      abortSignal: controller.signal,
+      dispatchReplayGuard: guard,
+    });
+    for (const ts of ["1709000000.004001", "1709000000.004002"]) {
+      await handler(
+        { type: "message", channel: "C_TEST", user: "U_TEST", ts, text: "hello" },
+        { source: "message" },
+      );
+    }
+    const entries = enqueueMock.mock.calls.map(([entry]) => entry).filter(isRecord);
+    expect(entries).toHaveLength(2);
+    const flushing = runOnFlush(entries);
+    const rejected = expect(flushing).rejects.toThrow("cancelled during claim");
+    await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(2));
+    controller.abort(new Error("cancelled during claim"));
+    pending.resolve({ kind: "claimed", handle: second });
+    await rejected;
+    expect(first.release).toHaveBeenCalledOnce();
+    expect(second.release).toHaveBeenCalledOnce();
+    expect(first.commit).not.toHaveBeenCalled();
+    expect(second.commit).not.toHaveBeenCalled();
+    expect(prepareSlackMessageMock).not.toHaveBeenCalled();
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
+
   it("defers ingress before waiting for a duplicate's dispatch claim", async () => {
     const duplicate = createDeferred<boolean>();
     const onDispatchWaiting = vi.fn();
     const handler = createSlackMessageHandler({
       ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
       dispatchReplayGuard: {
         claim: async () => ({ kind: "inflight", pending: duplicate.promise }),
       } as unknown as NonNullable<
@@ -139,9 +185,6 @@ describe("Slack duplicate wait admission", () => {
       .mockResolvedValueOnce({ kind: "inflight", pending: owner.promise });
     const handler = createSlackMessageHandler({
       ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
       dispatchReplayGuard: { claim } as unknown as NonNullable<
         Parameters<typeof createSlackMessageHandler>[0]["dispatchReplayGuard"]
       >,

@@ -1,12 +1,13 @@
 // Preserve one failed update as bounded diagnostics across the updater's fresh CLI handoff.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveStateDir } from "../config/paths.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
-import { writeTextAtomic } from "../infra/json-files.js";
+import { UpdateDoctorLintFindingSchema } from "../infra/update-doctor-lint-schema.js";
+import { normalizeUpdateDoctorLintFindings } from "../infra/update-doctor-lint.js";
+import { normalizeUpdateFailureFacts } from "../infra/update-failure-facts.js";
+import { UpdateFailureFactSchema } from "../infra/update-run-schema.js";
+import { formatUpdateDoctorLintReceipt, isFailedUpdateStep } from "../infra/update-run-step.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
@@ -20,112 +21,126 @@ const updateIdentitySchema = z.object({
   sha: z.string().nullish(),
   version: z.string().nullish(),
 });
-export const updateFailureSchema = z
-  .union([
-    z.object({
-      result: z.object({
-        status: z.enum(["ok", "error", "skipped"]),
-        mode: z.enum(["git", "pnpm", "bun", "npm", "unknown"]),
-        root: z.string().optional(),
-        reason: z.string().optional(),
-        before: updateIdentitySchema.optional(),
-        after: updateIdentitySchema.optional(),
-        steps: z.array(
-          z.object({
-            name: z.string(),
-            exitCode: z.number().int().nullable(),
-            stdoutTail: z.string().nullish(),
-            stderrTail: z.string().nullish(),
-            termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
-            advisory: z
-              .object({
-                kind: z.enum([
-                  "package-post-install-doctor",
-                  "candidate-runtime-unavailable",
-                  "recoverable-maintenance",
-                ]),
-                message: z.string(),
-                details: z.array(z.string()).optional(),
-              })
-              .optional(),
-          }),
-        ),
-        recovery: z
-          .object({
-            serviceRestartSafe: z.boolean(),
-            reason: z.string().optional(),
-            packageRollbackVerified: z.boolean().optional(),
-            version: z.string().optional(),
-            buildId: z.string().optional(),
-            service: z.enum(["healthy", "failed"]).optional(),
-          })
-          .optional(),
-        postUpdate: z
-          .object({
-            plugins: z
-              .object({
-                status: z.enum(["ok", "warning", "skipped", "error"]),
-                reason: z.string().optional(),
-                sync: z.object({ errors: z.array(z.string()) }).optional(),
-                npm: z
-                  .object({
-                    outcomes: z.array(
+const createUpdateFailureSchema = <T extends z.ZodRawShape>(stepFields: T) =>
+  z
+    .union([
+      z.object({
+        result: z.object({
+          runId: z.uuid().optional().catch(undefined),
+          status: z.enum(["ok", "error", "skipped"]),
+          mode: z.enum(["git", "pnpm", "bun", "npm", "unknown"]),
+          root: z.string().optional(),
+          reason: z.string().optional(),
+          before: updateIdentitySchema.optional(),
+          after: updateIdentitySchema.optional(),
+          steps: z.array(
+            z.object({
+              name: z.string(),
+              exitCode: z.number().int().nullable(),
+              stdoutTail: z.string().nullish(),
+              stderrTail: z.string().nullish(),
+              failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
+              termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
+              advisory: z
+                .object({
+                  kind: z.enum([
+                    "package-post-install-doctor",
+                    "candidate-runtime-unavailable",
+                    "recoverable-maintenance",
+                  ]),
+                  message: z.string(),
+                  details: z.array(z.string()).optional(),
+                })
+                .optional(),
+              ...stepFields,
+            }),
+          ),
+          recovery: z
+            .object({
+              serviceRestartSafe: z.boolean(),
+              reason: z.string().optional(),
+              packageRollbackVerified: z.boolean().optional(),
+              version: z.string().optional(),
+              buildId: z.string().optional(),
+              service: z.enum(["healthy", "failed"]).optional(),
+            })
+            .optional(),
+          postUpdate: z
+            .object({
+              plugins: z
+                .object({
+                  status: z.enum(["ok", "warning", "skipped", "error"]),
+                  reason: z.string().optional(),
+                  sync: z.object({ errors: z.array(z.string()) }).optional(),
+                  npm: z
+                    .object({
+                      outcomes: z.array(
+                        z.object({
+                          pluginId: z.string(),
+                          status: z.enum(["updated", "unchanged", "skipped", "error"]),
+                          message: z.string(),
+                        }),
+                      ),
+                    })
+                    .optional(),
+                  integrityDrifts: z
+                    .array(
                       z.object({
                         pluginId: z.string(),
-                        status: z.enum(["updated", "unchanged", "skipped", "error"]),
+                        spec: z.string(),
+                        expectedIntegrity: z.string(),
+                        actualIntegrity: z.string(),
+                      }),
+                    )
+                    .optional(),
+                  warnings: z
+                    .array(
+                      z.object({
+                        pluginId: z.string().optional(),
+                        reason: z.string(),
                         message: z.string(),
                       }),
-                    ),
-                  })
-                  .optional(),
-                integrityDrifts: z
-                  .array(
-                    z.object({
-                      pluginId: z.string(),
-                      spec: z.string(),
-                      expectedIntegrity: z.string(),
-                      actualIntegrity: z.string(),
-                    }),
-                  )
-                  .optional(),
-                warnings: z
-                  .array(
-                    z.object({
-                      pluginId: z.string().optional(),
-                      reason: z.string(),
-                      message: z.string(),
-                    }),
-                  )
-                  .optional(),
-              })
-              .optional(),
-          })
-          .optional(),
-      }),
-      error: z.string().trim().min(1).optional(),
-      omittedDetails: z.number().int().nonnegative().optional(),
-    }),
-    z
-      .object({
-        error: z.string().trim().min(1),
+                    )
+                    .optional(),
+                })
+                .optional(),
+            })
+            .optional(),
+        }),
+        error: z.string().trim().min(1).optional(),
         omittedDetails: z.number().int().nonnegative().optional(),
-      })
-      .strict(),
-  ])
-  .refine(
-    (failure) =>
-      Boolean(failure.error) ||
-      ("result" in failure && classifyUpdateOutcome(failure.result) === "failed"),
-  );
+      }),
+      z
+        .object({
+          error: z.string().trim().min(1),
+          omittedDetails: z.number().int().nonnegative().optional(),
+        })
+        .strict(),
+    ])
+    .refine(
+      (failure) =>
+        Boolean(failure.error) ||
+        ("result" in failure && classifyUpdateOutcome(failure.result) === "failed"),
+    );
+
+export const updateFailureSchema = createUpdateFailureSchema({});
+// Artifact inventories stay out of the repair-worker wire and bounded prompt contracts.
+const updateFailureArtifactSchema = createUpdateFailureSchema({
+  doctorLintFindings: z.array(UpdateDoctorLintFindingSchema).optional(),
+  signal: z.string().max(32).nullable().optional(),
+  killed: z.boolean().optional(),
+  outputLimitExceeded: z.boolean().optional(),
+});
 
 /** Full UpdateRunResult values satisfy this diagnostic-only projection. */
-export type TriageUpdateFailure = z.infer<typeof updateFailureSchema>;
+export type TriageUpdateFailure = z.infer<typeof updateFailureArtifactSchema>;
 
 export function sanitizeTriageUpdateFailure(
   input: unknown,
   redaction: SupportRedactionContext,
+  format: "prompt" | "artifact" | "inventory" = "prompt",
 ): TriageUpdateFailure {
-  const parsed = updateFailureSchema.safeParse(input);
+  const parsed = updateFailureArtifactSchema.safeParse(input);
   if (!parsed.success) {
     throw new Error("Invalid update failure diagnostics: expected a failed result or error.");
   }
@@ -168,7 +183,7 @@ export function sanitizeTriageUpdateFailure(
       budget = Math.floor((budget * (maxBytes - 5)) / (bytes - 5));
     }
   }
-  const error = text(failure.error, 768, "ends");
+  let error = text(failure.error, 768, "ends");
   if (!("result" in failure)) {
     if (!error) {
       throw new Error("Update failure diagnostics contain no readable error.");
@@ -176,6 +191,29 @@ export function sanitizeTriageUpdateFailure(
     return { error, ...(failure.omittedDetails ? { omittedDetails: failure.omittedDetails } : {}) };
   }
   const result = failure.result;
+  const lintReceipt = (step: (typeof result.steps)[number]) =>
+    formatUpdateDoctorLintReceipt(
+      {
+        ...step,
+        signal: step.signal === null ? null : text(step.signal, 32),
+        doctorLintFindings: step.doctorLintFindings
+          ? normalizeUpdateDoctorLintFindings(step.doctorLintFindings, redaction.env)
+          : undefined,
+      },
+      384,
+    );
+  if (format === "artifact") {
+    const lint =
+      result.steps.findLast((step) => step.doctorLintFindings && isFailedUpdateStep(step)) ??
+      result.steps.findLast((step) => step.doctorLintFindings);
+    if (lint) {
+      // Released 9.4 keeps only 160-byte step tails, but preserves this 768-byte field.
+      const receipt = ` Doctor lint receipt: ${lintReceipt(lint)}`;
+      error = `${text(error ?? result.reason ?? "Update failed", 768 - Buffer.byteLength(JSON.stringify(receipt)), "ends")}${receipt}`;
+    }
+  }
+  const preserveFindings =
+    format !== "prompt" && result.steps.some((step) => step.doctorLintFindings !== undefined);
   const identity = (value: typeof result.before) =>
     value ? { sha: text(value.sha, 48), version: text(value.version, 48) } : undefined;
   let omittedDetails = failure.omittedDetails ?? 0;
@@ -264,11 +302,18 @@ export function sanitizeTriageUpdateFailure(
       }
     : undefined;
   takePluginErrors(pluginWarnings?.slice(0, -1), true, warnings);
-  const failedSteps = result.steps.filter((step) => step.exitCode !== 0 && !step.advisory);
-  omittedDetails += Math.max(0, failedSteps.length - 3);
+  const failedSteps = result.steps.filter(isFailedUpdateStep);
+  const latest = new Set(failedSteps.slice(-3));
+  const retained = new Set(
+    result.steps.filter(
+      (step) => latest.has(step) || (preserveFindings && step.doctorLintFindings !== undefined),
+    ),
+  );
+  omittedDetails += failedSteps.filter((step) => !retained.has(step)).length;
   const sanitized = {
     ...(error ? { error } : {}),
     result: {
+      ...(result.runId ? { runId: result.runId } : {}),
       status: result.status,
       mode: result.mode,
       reason: text(result.reason, 128),
@@ -290,49 +335,58 @@ export function sanitizeTriageUpdateFailure(
               : {}),
           }
         : undefined,
-      // Successful steps are not the failure. Keep the latest failures in execution order.
-      steps: failedSteps.slice(-3).map((step) => ({
+      // Prompt context keeps recent failures; artifacts also retain every lint inventory.
+      steps: Array.from(retained, (step) => ({
         name: text(step.name, 64),
         exitCode: step.exitCode,
         termination: step.termination,
+        signal:
+          format !== "prompt" ? (step.signal === null ? null : text(step.signal, 32)) : undefined,
+        killed: format !== "prompt" ? step.killed : undefined,
+        outputLimitExceeded: format !== "prompt" ? step.outputLimitExceeded : undefined,
         // Failed-step stderr leads with the triggering error: keep both ends. The 384-byte cap's
         // tail half is wider than the previous tail-only window, so previously visible excerpts
         // remain visible; stdout keeps its tail-only outcome excerpt.
-        stderrTail: text(step.stderrTail, 384, "ends"),
+        stderrTail:
+          format === "artifact" && step.doctorLintFindings
+            ? lintReceipt(step)
+            : text(step.stderrTail, 384, "ends"),
         stdoutTail: text(step.stdoutTail, 160, "tail"),
+        failureFacts: step.failureFacts?.length
+          ? normalizeUpdateFailureFacts(step.failureFacts, redaction.env)
+          : undefined,
+        doctorLintFindings:
+          format === "inventory" && step.doctorLintFindings
+            ? normalizeUpdateDoctorLintFindings(step.doctorLintFindings, redaction.env)
+            : undefined,
+        advisory:
+          preserveFindings && step.advisory
+            ? { kind: step.advisory.kind, message: text(step.advisory.message, 500) }
+            : undefined,
       })),
     },
     omittedDetails,
   };
   // Fit whole records, retaining the latest failed step and at least one plugin cause.
   // Field caps reserve room for these plus identity and restart safety even after JSON escaping.
-  while (Buffer.byteLength(JSON.stringify(sanitized)) > UPDATE_FAILURE_PROMPT_MAX_BYTES) {
+  if (format === "inventory" && preserveFindings) {
+    return sanitized;
+  }
+  const maxBytes =
+    format === "artifact" ? UPDATE_FAILURE_MAX_BYTES - 1 : UPDATE_FAILURE_PROMPT_MAX_BYTES;
+  while (Buffer.byteLength(JSON.stringify(sanitized)) > maxBytes) {
     if (sanitized.result.steps.length > 1) {
       sanitized.result.steps.shift();
     } else if (removePluginDetails.length > 1) {
       removePluginDetails.pop()?.();
+    } else if ((sanitized.result.steps[0]?.failureFacts?.length ?? 0) > 1) {
+      sanitized.result.steps[0]?.failureFacts?.pop();
     } else {
-      throw new Error("Update failure diagnostics exceed the 4 KiB prompt limit.");
+      throw new Error(`Update failure diagnostics exceed the ${maxBytes}-byte limit.`);
     }
     sanitized.omittedDetails += 1;
   }
   return sanitized;
-}
-
-export async function writeTriageUpdateFailure(
-  failure: TriageUpdateFailure,
-  options: { env?: NodeJS.ProcessEnv; outputPath?: string } = {},
-): Promise<string> {
-  const env = options.env ?? process.env;
-  const stateDir = resolveStateDir(env);
-  const sanitized = sanitizeTriageUpdateFailure(failure, { env, stateDir });
-  const body = `${JSON.stringify(sanitized)}\n`;
-  const outputPath =
-    options.outputPath ??
-    path.join(stateDir, "logs", "support", `openclaw-update-failure-${randomUUID()}.json`);
-  // The managed helper's private handoff keeps the latest complete outcome after cleanup.
-  await writeTextAtomic(outputPath, body, { mode: 0o600, dirMode: 0o700 });
-  return outputPath;
 }
 
 export async function readTriageUpdateFailure(
@@ -351,8 +405,50 @@ export async function readTriageUpdateFailure(
     } catch {
       throw new Error("Invalid update failure diagnostics JSON.");
     }
-    return sanitizeTriageUpdateFailure(input, redaction);
+    return sanitizeTriageUpdateFailure(input, redaction, "artifact");
   } finally {
     await file.close();
   }
+}
+
+export async function readPendingTriageUpdateFailure(
+  env: NodeJS.ProcessEnv,
+  redaction: SupportRedactionContext,
+): Promise<TriageUpdateFailure | undefined> {
+  // Diagnostic evidence only; the resolution owner selects current ledger history.
+  const { readRestartSentinelReadOnly } = await import("../infra/restart-sentinel.js");
+  const sentinel = await readRestartSentinelReadOnly(env);
+  if (sentinel?.payload.kind !== "update") {
+    return undefined;
+  }
+  const { payload } = sentinel;
+  const stats = payload.stats;
+  if (
+    classifyUpdateOutcome({ status: payload.status, reason: stats?.reason ?? undefined }) !==
+    "failed"
+  ) {
+    return undefined;
+  }
+  return sanitizeTriageUpdateFailure(
+    {
+      result: {
+        ...(stats?.runId ? { runId: stats.runId } : {}),
+        status: payload.status,
+        mode: stats?.mode ?? "unknown",
+        root: stats?.root,
+        reason: stats?.reason ?? undefined,
+        before: stats?.before ?? undefined,
+        after: stats?.after ?? undefined,
+        recovery: stats?.recovery,
+        steps: (stats?.steps ?? []).map((step) => ({
+          name: step.name,
+          exitCode: step.log?.exitCode ?? null,
+          stderrTail: step.log?.stderrTail,
+          stdoutTail: step.log?.stdoutTail,
+          failureFacts: step.failureFacts,
+        })),
+      },
+    },
+    redaction,
+  );
 }

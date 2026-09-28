@@ -192,4 +192,31 @@ describe("native browser bridge wire contract", () => {
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 5, tabs: [tab, tab] });
     expect(readNativeBrowserState()).toBeNull();
   });
+
+  it.each([
+    { name: "PNG", favicon: "data:image/png;base64,eA==", accepted: true },
+    { name: "mixed-case image type", favicon: "data:image/SVG+xml;base64,eA==", accepted: true },
+    { name: "size limit", favicon: "data:image/png;base64," + "A".repeat(98_282), accepted: true },
+    { name: "HTTP URL", favicon: "https://example.com/favicon.ico", accepted: false },
+    { name: "non-image", favicon: "data:text/html;base64,eA==", accepted: false },
+    { name: "oversized", favicon: "data:image/png;base64," + "A".repeat(98_283), accepted: false },
+    { name: "non-string", favicon: 42, accepted: false },
+    { name: "null", favicon: null, accepted: false },
+    { name: "empty payload", favicon: "data:image/png;base64,", accepted: false },
+    { name: "invalid base64", favicon: "data:image/png;base64,???", accepted: false },
+  ])("validates $name favicon on initial reads and pushes", ({ favicon, accepted }) => {
+    install();
+    const state = { revision: 1, tabs: [{ ...tab, favicon }] };
+    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
+    expect(readNativeBrowserState()).toEqual(accepted ? state : null);
+    const listener = vi.fn();
+    const unsubscribe = subscribeNativeBrowserState(listener);
+    try {
+      const next = { ...state, revision: 2 };
+      window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: next }));
+      expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
+    } finally {
+      unsubscribe();
+    }
+  });
 });

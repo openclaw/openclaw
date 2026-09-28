@@ -4,10 +4,14 @@ import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { resolveCatalogOwnedModelCompat } from "../agents/model-compat-catalog.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
@@ -29,6 +33,7 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
+  env?: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
@@ -37,7 +42,7 @@ const defaultWarnState: WarnState = { warned: false };
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-5",
+  opus: "anthropic/claude-opus-5-5",
   sonnet: "anthropic/claude-sonnet-5",
 
   // OpenAI
@@ -115,16 +120,13 @@ type SessionDefaultsOptions = {
 
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
-  const hasAckScope = messages?.ackReactionScope !== undefined;
-  if (hasAckScope) {
+  if (messages?.ackReactionScope !== undefined) {
     return cfg;
   }
 
-  const nextMessages = messages ? { ...messages } : {};
-  nextMessages.ackReactionScope = "group-mentions";
   return {
     ...cfg,
-    messages: nextMessages,
+    messages: { ...messages, ackReactionScope: "group-mentions" },
   };
 }
 
@@ -157,6 +159,8 @@ export function applySessionDefaults(
 /** Catalog metadata eligible to fill fields the operator did not author. */
 type CatalogSeedModel = Pick<
   ModelDefinitionConfig,
+  | "api"
+  | "baseUrl"
   | "input"
   | "reasoning"
   | "cost"
@@ -176,6 +180,7 @@ type CatalogSeedModel = Pick<
 function buildManifestCatalogModelLookup(
   manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined,
   policies: ReturnType<typeof collectManifestModelIdNormalizationPolicies> | undefined,
+  configuredProviderIds: ReadonlySet<string>,
 ): (providerId: string, modelId: string) => Partial<CatalogSeedModel> | undefined {
   const plugins = manifestRegistry?.plugins;
   if (!plugins || plugins.length === 0) {
@@ -193,11 +198,19 @@ function buildManifestCatalogModelLookup(
         for (const [catalogProviderId, provider] of Object.entries(
           plugin.modelCatalog?.providers ?? {},
         )) {
+          if (!configuredProviderIds.has(normalizeProviderId(catalogProviderId))) {
+            continue;
+          }
           for (const model of provider.models) {
             const key = keyFor(catalogProviderId, model.id);
             if (!index.has(key)) {
               // SAFETY: ModelCatalogModel's seed fields are a structural subset of ModelDefinitionConfig; only the picked metadata fields are read from this entry.
-              index.set(key, model as Partial<CatalogSeedModel>);
+              const metadata = model as Partial<CatalogSeedModel>;
+              index.set(key, {
+                ...metadata,
+                api: model.api ?? provider.api,
+                baseUrl: model.baseUrl ?? provider.baseUrl,
+              });
             }
           }
         }
@@ -223,6 +236,7 @@ export function applyModelDefaults(
     const resolveCatalogModel = buildManifestCatalogModelLookup(
       manifestRegistry,
       modelIdNormalizationPolicies,
+      new Set(Object.keys(providerConfig).map(normalizeProviderId)),
     );
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
@@ -249,8 +263,7 @@ export function applyModelDefaults(
       }
       const providerApi = normalizedProvider.api;
       const providerMaxTokens = asPositiveFiniteNumber(normalizedProvider.maxTokens);
-      const nextProvider = normalizedProvider;
-      if (nextProvider !== provider) {
+      if (normalizedProvider !== provider) {
         mutated = true;
       }
       let providerMutated = false;
@@ -306,8 +319,12 @@ export function applyModelDefaults(
             ? catalogModel.thinkingLevelMap
             : undefined;
         const compat =
-          raw.compat === undefined && catalogModel?.compat !== undefined
-            ? catalogModel.compat
+          raw.compat === undefined
+            ? resolveCatalogOwnedModelCompat({
+                catalogRoute: catalogModel,
+                catalogCompat: catalogModel?.compat,
+                configuredRoute: { api, baseUrl: raw.baseUrl ?? normalizedProvider.baseUrl },
+              })
             : undefined;
         const modelMutated =
           raw.reasoning !== reasoning ||
@@ -340,14 +357,12 @@ export function applyModelDefaults(
         ) as ModelDefinitionConfig;
       });
 
-      if (!providerMutated) {
-        if (nextProvider !== provider) {
-          nextProviders[providerId] = nextProvider;
-        }
-        continue;
+      if (providerMutated) {
+        nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
+        mutated = true;
+      } else if (normalizedProvider !== provider) {
+        nextProviders[providerId] = normalizedProvider;
       }
-      nextProviders[providerId] = { ...nextProvider, models: nextModels };
-      mutated = true;
     }
 
     if (mutated) {
@@ -465,14 +480,9 @@ export function applyModelDefaults(
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
-  const hasMax =
-    typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
-  const hasSubMax =
-    typeof defaults?.subagents?.maxConcurrent === "number" &&
-    Number.isFinite(defaults.subagents.maxConcurrent);
-  const hasSubArchive =
-    typeof defaults?.subagents?.archiveAfterMinutes === "number" &&
-    Number.isFinite(defaults.subagents.archiveAfterMinutes);
+  const hasMax = asFiniteNumber(defaults?.maxConcurrent) !== undefined;
+  const hasSubMax = asFiniteNumber(defaults?.subagents?.maxConcurrent) !== undefined;
+  const hasSubArchive = asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) !== undefined;
   if (hasMax && hasSubMax && hasSubArchive) {
     return cfg;
   }
@@ -502,7 +512,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+export function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
     return true;
   }
@@ -535,18 +545,17 @@ export function applyContextPruningDefaults(
   if (!cfg.agents?.defaults) {
     return cfg;
   }
-  if (!hasAnthropicDefaultSignal(cfg, process.env)) {
+  const env = options.env ?? process.env;
+  if (!hasAnthropicDefaultSignal(cfg, env)) {
     return cfg;
   }
-  return (
-    applyProviderConfigDefaultsForConfig({
-      provider: "anthropic",
-      config: cfg,
-      env: process.env,
-      manifestRegistry: options.manifestRegistry,
-      loadManifestRegistry: options.loadManifestRegistry,
-    }) ?? cfg
-  );
+  return applyProviderConfigDefaultsForConfig({
+    provider: "anthropic",
+    config: cfg,
+    env,
+    manifestRegistry: options.manifestRegistry,
+    loadManifestRegistry: options.loadManifestRegistry,
+  });
 }
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {

@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import "../styles/cron-jobs-pagination.css";
+import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+
+registerCronEnglish();
 
 export function renderCronJobsPagination(params: {
   jobsShown: number;

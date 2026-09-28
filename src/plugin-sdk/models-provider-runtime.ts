@@ -4,18 +4,21 @@
 import {
   buildPreparedModelsProviderData,
   type ModelsProviderData,
-} from "../auto-reply/reply/commands-models.js";
+} from "../auto-reply/reply/commands-models-catalog.js";
 
 export {
   buildPreparedModelsProviderData,
-  formatModelsAvailableHeader,
   getModelsRuntimeChoices,
+} from "../auto-reply/reply/commands-models-catalog.js";
+export {
+  formatModelsAvailableHeader,
+  MODEL_PICKER_CHANGED_MESSAGE,
   resolveModelsCommandReply,
 } from "../auto-reply/reply/commands-models.js";
 export type {
   ModelsProviderData,
   ModelsRuntimeChoice,
-} from "../auto-reply/reply/commands-models.js";
+} from "../auto-reply/reply/commands-models-catalog.js";
 
 // v2026.7.1-2 plugins construct old-shape results and typed builder adapters.
 // Keep this signature until an explicitly approved SDK-breaking boundary.

@@ -2,16 +2,24 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
+  findServiceOwnershipRefusal,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+export type SystemdUserTransport =
+  | { kind: "session-bus" | "runtime-bus" | "private"; address: string; runtimeDir: string }
+  | { kind: "machine"; user: string };
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 type GatewayServiceSystemdRuntime = {
+  scope?: "user" | "system";
+  transport?: SystemdUserTransport;
   unit?: string;
-  /** Native D-Bus credential of the observed user-manager connection, not the CLI UID. */
+  /** Native D-Bus credential of the observed manager, not the service account or CLI UID. */
   managerUid?: number;
+  controlGroup?: string;
   killMode?: string;
   tasksCurrent?: number;
   memoryCurrent?: number;
@@ -60,7 +68,16 @@ const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection fai
 export function createServiceRuntimeInspectionFailure(
   error: unknown,
   timeoutMs?: number,
-): GatewayServiceRuntime {
+): GatewayServiceRuntime & {
+  inspectionFailure: NonNullable<GatewayServiceRuntime["inspectionFailure"]>;
+} {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  const refusal = findServiceOwnershipRefusal(error);
+  if (refusal) {
+    throw refusal;
+  }
   const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",
@@ -87,24 +104,12 @@ const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
 // is stale from earlier crashes and must not drive start-limit detection.
 const SYSTEMD_NO_RESTART_EXIT_STATUS = 78;
 
-function isRiskySystemdKillMode(value: string | undefined): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized === "process" || normalized === "none";
-}
-
-function formatBytesAsGiB(value: number): string {
-  const gib = value / 1024 / 1024 / 1024;
-  const formatted = gib >= 1 ? gib.toFixed(1).replace(/\.0$/, "") : `${value}B`;
-  return gib >= 1 ? `${formatted}GiB` : formatted;
-}
-
-function describeSystemdCgroupLoadWarnings(runtime?: GatewayServiceSystemdRuntime): string[] {
-  if (!runtime) {
-    return [];
-  }
-  const killMode = runtime?.killMode;
-  if (!isRiskySystemdKillMode(killMode)) {
-    return [];
+export function getSystemdCgroupHygieneSummary(
+  runtime?: GatewayServiceSystemdRuntime,
+): string | null {
+  const killMode = normalizeLowercaseStringOrEmpty(runtime?.killMode);
+  if (!runtime || (killMode !== "process" && killMode !== "none")) {
+    return null;
   }
   // KillMode=process/none only becomes noisy when the cgroup is visibly large.
   const details: string[] = [];
@@ -120,18 +125,9 @@ function describeSystemdCgroupLoadWarnings(runtime?: GatewayServiceSystemdRuntim
     Number.isSafeInteger(runtime.memoryCurrent) &&
     runtime.memoryCurrent >= SYSTEMD_MEMORY_CURRENT_WARNING_BYTES
   ) {
-    details.push(`memory=${formatBytesAsGiB(runtime.memoryCurrent)}`);
+    const gib = (runtime.memoryCurrent / 1024 ** 3).toFixed(1).replace(/\.0$/, "");
+    details.push(`memory=${gib}GiB`);
   }
-  return details;
-}
-
-export function getSystemdCgroupHygieneSummary(
-  runtime?: GatewayServiceSystemdRuntime,
-): string | null {
-  if (!runtime || !runtime.killMode) {
-    return null;
-  }
-  const details = describeSystemdCgroupLoadWarnings(runtime);
   if (details.length === 0) {
     return null;
   }

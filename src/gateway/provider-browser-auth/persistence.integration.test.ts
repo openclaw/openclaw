@@ -8,7 +8,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profile
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { runModelsAuthLoginFlowCore } from "../../commands/models/auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { pluginLoaderCacheState } from "../../plugins/registry-lifecycle.js";
+import { getPluginLoaderCacheState } from "../../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -102,7 +102,7 @@ describe("provider browser HTTP callback persistence", () => {
       });
       let login: ReturnType<typeof runModelsAuthLoginFlowCore> | undefined;
       try {
-        pluginLoaderCacheState.clear();
+        getPluginLoaderCacheState().clear();
         resetPluginRuntimeStateForTest();
         await writeBrowserProvider(state.workspaceDir, authorizationState);
         await new Promise<void>((resolve) => {
@@ -215,7 +215,7 @@ describe("provider browser HTTP callback persistence", () => {
             server.close((error) => (error ? reject(error) : resolve()));
           });
         }
-        pluginLoaderCacheState.clear();
+        getPluginLoaderCacheState().clear();
         resetPluginRuntimeStateForTest();
         clearRuntimeAuthProfileStoreSnapshots();
         clearAuthProfileMigrationDiagnostics();

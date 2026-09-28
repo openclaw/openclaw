@@ -9,6 +9,8 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
+const BUILD_ID = "build-info-unicode-e2e";
+
 const suite = createControlUiE2eSuite({
   name: "Control UI Unicode build identity mocked Gateway E2E",
   startServer: () =>
@@ -20,7 +22,7 @@ const suite = createControlUiE2eSuite({
       branch: RAW_BRANCH,
       dirty: true,
       release: false,
-      buildId: "build-info-unicode-e2e",
+      buildId: BUILD_ID,
     }),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
@@ -58,7 +60,10 @@ function containsBrokenSurrogate(value: string): boolean {
 async function openBuildDetails(page: Page) {
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
-  const buildLink = sidebar.getByRole("link", { name: "Control UI build details", exact: true });
+  const buildLink = sidebar.getByRole("menuitem", {
+    name: "Control UI build details",
+    exact: true,
+  });
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);
@@ -105,7 +110,7 @@ async function assertFullBranchLabel(page: Page) {
 suite.define(() => {
   it("keeps slow build-link navigation intact across Unicode boundaries and reload", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await installMockGateway(page);
+      await installMockGateway(page, { serverBuildId: BUILD_ID, serverVersion: "2026.7.10" });
 
       const response = await page.goto(`${suite.server.baseUrl}chat`);
       expect(response?.status()).toBe(200);

@@ -89,14 +89,13 @@ enum MacChatTranscriptCache {
         let mode = ConnectionModeResolver.resolve(root: root).mode
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let sshTarget = CommandResolver.connectionSettings(configRoot: root).target
-        // Mirror the tunnel's remote-port resolution (RemotePortTunnel.create)
-        // so the identity matches the gateway the forward actually reaches.
-        let defaultRemotePort = GatewayEnvironment.gatewayPort(root: root)
-        let sshHost = CommandResolver.parseSSHTarget(sshTarget)?.host ?? ""
-        let sshRemotePort = RemotePortTunnel.resolveRemotePortOverride(
-            defaultRemotePort: defaultRemotePort,
-            for: sshHost,
-            root: root) ?? defaultRemotePort
+        let sshRemotePort: Int = if mode == .remote, resolution.transport == .ssh {
+            RemotePortTunnel.ports(
+                root: root,
+                sshHost: CommandResolver.parseSSHTarget(sshTarget)?.host ?? "").remote
+        } else {
+            18789
+        }
         return self.gatewayID(
             mode: mode,
             localStateDir: OpenClawConfigFile.stateDirURL(),

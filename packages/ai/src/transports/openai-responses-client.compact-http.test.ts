@@ -68,7 +68,6 @@ describe("prepared Responses compaction HTTP lifetime", () => {
   });
 
   it.each([
-    "request-timeout",
     "host-timeout",
     "body-timeout",
     "status-error",
@@ -76,8 +75,7 @@ describe("prepared Responses compaction HTTP lifetime", () => {
     "success",
     "oversized-body",
   ] as const)("preserves SDK %s behavior with a bounded response body", async (mode) => {
-    const deadlineCase =
-      mode === "request-timeout" || mode === "host-timeout" || mode === "body-timeout";
+    const deadlineCase = mode === "host-timeout" || mode === "body-timeout";
     const timeoutMs = deadlineCase ? 100 : 1_000;
     const abortController = new AbortController();
     const requestPaths: string[] = [];

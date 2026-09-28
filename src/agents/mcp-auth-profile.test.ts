@@ -1,6 +1,7 @@
 /** Tests auth-profile backed MCP bearer projection. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuthProfileStoreFixture } from "./auth-profiles/credential-fixtures.test-support.js";
 import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import * as mcpHttpFetch from "./mcp-http-fetch.js";
 
@@ -21,6 +22,33 @@ vi.mock("./auth-profiles/oauth.js", () => ({
 vi.mock("./mcp-oauth.js", () => ({
   resolveMcpOAuthAccessToken: authMocks.resolveMcpOAuthAccessToken,
 }));
+
+function oauthProfile(provider: string, access: string, expires: number) {
+  return {
+    type: "oauth",
+    provider,
+    access,
+    refresh: "refresh-token-must-not-project",
+    expires,
+  };
+}
+
+function authProfileStore(provider: string) {
+  return {
+    version: 1,
+    profiles: { [`${provider}:mcp`]: oauthProfile(provider, "expired-access", 1) },
+  };
+}
+
+function resolvedProfile(provider: string, access: string, apiKey = access) {
+  return {
+    apiKey,
+    provider,
+    profileId: `${provider}:mcp`,
+    profileType: "oauth",
+    credential: oauthProfile(provider, access, Date.now() + 60_000),
+  };
+}
 
 describe("mcp auth profile bearer projection", () => {
   beforeEach(() => {
@@ -108,31 +136,12 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("resolves refreshable OAuth profiles into env-backed CLI bearer headers", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(
+      authProfileStore("ducktape"),
+    );
+    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce(
+      resolvedProfile("ducktape", "fresh-access-token"),
+    );
 
     const resolved = await resolveMcpBearerBundleConfig({
       config: {
@@ -173,17 +182,16 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("rejects static token profiles instead of pretending they are refreshable", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(
+      createAuthProfileStoreFixture({
         "ducktape:static": {
           type: "token",
           provider: "ducktape",
           token: "expired-static-token",
           expires: 1,
         },
-      },
-    });
+      }),
+    );
 
     await expect(
       resolveMcpBearerBundleConfig({
@@ -201,34 +209,14 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("projects the raw OAuth access token even when provider formatting returns structured auth", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "google:mcp": {
-          type: "oauth",
-          provider: "google",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: JSON.stringify({
-        token: "raw-google-access-token",
-        projectId: "demo-project",
-      }),
-      provider: "google",
-      profileId: "google:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "google",
-        access: "raw-google-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(authProfileStore("google"));
+    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce(
+      resolvedProfile(
+        "google",
+        "raw-google-access-token",
+        JSON.stringify({ token: "raw-google-access-token", projectId: "demo-project" }),
+      ),
+    );
 
     const resolved = await resolveMcpBearerBundleConfig({
       config: {
@@ -253,31 +241,10 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("injects fresh bearer headers only for same-origin embedded MCP requests", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValue({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue(authProfileStore("ducktape"));
+    authMocks.resolveApiKeyForProfile.mockResolvedValue(
+      resolvedProfile("ducktape", "fresh-access-token"),
+    );
     const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
     const wrapped = withMcpAuthProfileBearer({
       fetchFn: async (url, init) => {

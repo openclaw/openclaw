@@ -4,6 +4,7 @@
 // triggers pointless model rotation.
 import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
@@ -40,8 +41,8 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
 const model = {
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
+  id: "test-responses",
+  name: "Test Responses",
   api: "openai-responses",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
@@ -104,7 +105,7 @@ describe("managed Responses transport terminal errors", () => {
         response: new Response(null, { status: 200 }),
       });
       const stream = await createOpenAIResponsesTransportStreamFn()(
-        { ...model, id: "gpt-6-astra" },
+        model,
         { messages: [], tools: [] },
         {
           apiKey: "test-key",
@@ -139,9 +140,13 @@ describe("managed Responses transport terminal errors", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains usage when truncated tool output has an item-done event: %s",
-    async (itemDone) => {
+  it.each(
+    ["incomplete", "completed", "failed", "cancelled", "in_progress", "queued", undefined].flatMap(
+      (status) => [false, true].map((itemDone) => ({ status, itemDone })),
+    ),
+  )(
+    "retains usage and only recovers coherent output limits (status: $status, item done: $itemDone)",
+    async ({ status, itemDone }) => {
       const partialCall = {
         type: "function_call",
         id: "fc_truncated",
@@ -171,7 +176,7 @@ describe("managed Responses transport terminal errors", () => {
             response: {
               id: "resp_truncated",
               model: "served-model",
-              status: "incomplete",
+              ...(status === undefined ? {} : { status }),
               incomplete_details: { reason: "max_output_tokens" },
               output: [partialCall],
               usage: {
@@ -208,14 +213,41 @@ describe("managed Responses transport terminal errors", () => {
         reasoningTokens: 3,
       });
       expect(result.errorCode).toBe("incomplete_tool_call");
+      expect(isResponsesOutputLimitToolCallError(result)).toBe(
+        status === undefined || status === "incomplete",
+      );
       expect(result.responseId).toBe("resp_truncated");
       expect(result.responseModel).toBe("served-model");
+      expect(result.diagnostics).toContainEqual({
+        type: "openai_responses_terminal",
+        timestamp: expect.any(Number),
+        details: {
+          eventType: "response.incomplete",
+          stopReason:
+            status === undefined || status === "incomplete"
+              ? "length"
+              : status === "failed" || status === "cancelled"
+                ? "error"
+                : "toolUse",
+          incompleteReason: "max_output_tokens",
+          endTurn: "absent",
+        },
+      });
     },
   );
 
-  it.each([false, true])(
-    "preserves the provider incomplete_reason with an active tool: %s",
-    async (activeTool) => {
+  it.each(
+    [
+      "max_output_tokens",
+      "max_messages",
+      "content_filter",
+      "steered",
+      "provider-private-reason",
+      undefined,
+    ].flatMap((reason) => [false, true].map((activeTool) => ({ reason, activeTool }))),
+  )(
+    "preserves bounded incomplete diagnostics for $reason (active tool: $activeTool)",
+    async ({ reason, activeTool }) => {
       sseState.outcomes.push({
         data: (async function* () {
           if (activeTool) {
@@ -237,7 +269,7 @@ describe("managed Responses transport terminal errors", () => {
             response: {
               id: "resp_filtered",
               status: "incomplete",
-              incomplete_details: { reason: "content_filter" },
+              incomplete_details: { reason },
             },
           };
         })(),
@@ -254,8 +286,27 @@ describe("managed Responses transport terminal errors", () => {
         options,
       );
       const result = await stream.result();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
+      expect(result.stopReason).toBe(
+        activeTool || reason === "content_filter" ? "error" : "length",
+      );
+      expect(result.errorCode).toBe(
+        activeTool && reason !== "content_filter" ? "incomplete_tool_call" : undefined,
+      );
+      if (reason === "content_filter") {
+        expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
+      }
+      expect(result.diagnostics).toContainEqual({
+        type: "openai_responses_terminal",
+        timestamp: expect.any(Number),
+        details: {
+          eventType: "response.incomplete",
+          stopReason: reason === "content_filter" ? "error" : "length",
+          incompleteReason:
+            reason === undefined || reason === "provider-private-reason" ? "unknown" : reason,
+          endTurn: "absent",
+        },
+      });
+      expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
     },
   );
 });

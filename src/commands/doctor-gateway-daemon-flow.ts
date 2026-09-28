@@ -15,6 +15,7 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
+import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import {
@@ -43,17 +44,18 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
+import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   confirmDoctorServiceRepair,
-  EXTERNAL_SERVICE_REPAIR_NOTE,
-  isServiceRepairExternallyManaged,
+  formatServiceRepairDeferredNote,
+  isServiceRepairDeferred,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 
@@ -68,7 +70,7 @@ function noteGatewayRuntime(
   serviceRuntime: GatewayServiceRuntime | undefined,
   env: Record<string, string | undefined>,
 ): void {
-  const summary = formatGatewayRuntimeSummary(serviceRuntime);
+  const summary = formatRuntimeStatus(serviceRuntime);
   const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
   const sqliteLibrary = ensureSqliteLibrarySelected();
@@ -89,7 +91,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   title: string;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
-  serviceRepairExternal: boolean;
+  serviceRepairDeferred: boolean;
 }): Promise<LaunchAgentBootstrapDoctorOutcome> {
   if (
     process.platform !== "darwin" ||
@@ -100,8 +102,8 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   }
 
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
-  if (params.serviceRepairExternal) {
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, `${params.title} LaunchAgent`);
+  if (params.serviceRepairDeferred) {
+    note(formatServiceRepairDeferredNote(), `${params.title} LaunchAgent`);
     return { status: "not-loaded" };
   }
 
@@ -245,12 +247,12 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!(await shouldManageGatewayService())) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    note(formatServiceRepairDeferredNote(), "Gateway");
     return;
   }
 
   const serviceRepairPolicy = resolveServiceRepairPolicy();
-  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+  const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
   const service = resolveGatewayService();
   const restartGatewayService = async () => {
     try {
@@ -264,7 +266,11 @@ export async function maybeRepairGatewayDaemon(params: {
   const isLocalDarwinGateway = process.platform === "darwin";
   const serviceState = await readGatewayServiceState(service, { env: process.env });
   if (serviceState.loadState.status === "unknown") {
-    await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    if (service.unsupportedReason) {
+      note(service.unsupportedReason, "Gateway");
+    } else {
+      await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    }
     return;
   }
   let loaded = serviceState.loadState.status === "loaded";
@@ -285,7 +291,7 @@ export async function maybeRepairGatewayDaemon(params: {
           title: "Gateway",
           runtime: params.runtime,
           prompter: params.prompter,
-          serviceRepairExternal,
+          serviceRepairDeferred,
         });
     await maybeRepairLaunchAgentBootstrap({
       env: {
@@ -295,7 +301,7 @@ export async function maybeRepairGatewayDaemon(params: {
       title: "Node",
       runtime: params.runtime,
       prompter: params.prompter,
-      serviceRepairExternal,
+      serviceRepairDeferred,
     });
     if (gatewayRepair.status === "not-loaded") {
       return;
@@ -353,8 +359,8 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
     }
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Gateway");
       return;
     }
     const install = await confirmDoctorServiceRepair(
@@ -373,14 +379,19 @@ export async function maybeRepairGatewayDaemon(params: {
       );
     }
     if (install) {
-      const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
-        {
-          message: "Gateway service runtime",
-          options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-          initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-        },
-        DEFAULT_GATEWAY_DAEMON_RUNTIME,
-      );
+      const selection = await resolveGatewaySetupRuntime({
+        env: process.env,
+        existingCommand: serviceState.command,
+        selectRuntime: () =>
+          params.prompter.select<GatewayDaemonRuntime>(
+            {
+              message: "Gateway service runtime",
+              options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+              initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            },
+            DEFAULT_GATEWAY_DAEMON_RUNTIME,
+          ),
+      });
       const tokenResolution = await resolveGatewayInstallToken({
         config: params.cfg,
         env: process.env,
@@ -400,23 +411,21 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
       const port = resolveGatewayPort(params.cfg, process.env);
-      const { programArguments, workingDirectory, environment, environmentValueSources } =
-        await buildGatewayInstallPlan({
-          env: process.env,
-          port,
-          runtime: daemonRuntime,
-          existingCommand: serviceState.command,
-          warn: (message, title) => note(message, title),
-          config: params.cfg,
-        });
+      const plan = await buildGatewayInstallPlan({
+        env: selection.env,
+        port,
+        runtime: selection.runtime,
+        pinnedRuntimePath: selection.pinnedRuntimePath,
+        existingCommand: serviceState.command,
+        warn: (message, title) => note(message, title),
+        config: params.cfg,
+      });
       try {
         await service.install({
           env: process.env,
           stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
-          environmentValueSources,
+          ...plan,
+          runtimePinUpdate: selection.runtimePinUpdate,
         });
       } catch (err) {
         note(`Gateway service install failed: ${String(err)}`, "Gateway");
@@ -432,8 +441,8 @@ export async function maybeRepairGatewayDaemon(params: {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
       return;
     }
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Gateway");
       return;
     }
     const start = await confirmDoctorServiceRepair(
@@ -470,19 +479,19 @@ export async function maybeRepairGatewayDaemon(params: {
     if (params.healthSkipped) {
       return;
     }
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Gateway");
       return;
     }
 
-    // Check if the gateway was recently restarted (e.g., via SIGUSR1 after an update).
+    // Check if the gateway was recently restarted (e.g., via SIGUSR2 after an update).
     // If a restart handoff exists and the gateway reports healthy, skip the restart prompt
     // to avoid racing with the system supervisor and causing a restart loop.
     const recentRestart = readGatewayRestartHandoffSync(serviceEnv);
     if (recentRestart) {
       try {
-        await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, params.runtime);
-        note("Gateway is healthy after recent restart; skipping restart prompt.", "Gateway");
+        await healthCommandNonExiting({ json: false, config: params.cfg }, params.runtime);
+        note("Preserving the recent Gateway restart; skipping restart prompt.", "Gateway");
         return;
       } catch {
         // Health probe failed — fall through to the restart prompt below.
@@ -511,9 +520,8 @@ export async function maybeRepairGatewayDaemon(params: {
         note(restartStatus.message, "Gateway");
         return;
       }
-      await sleep(1500);
       try {
-        await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, params.runtime);
+        await healthCommandNonExiting({ json: false, config: params.cfg }, params.runtime);
       } catch (err) {
         // A trapped ExitError means healthCommand already printed its own
         // reachable-gateway diagnostic; re-formatting it would only add noise.

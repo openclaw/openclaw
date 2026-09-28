@@ -15,7 +15,7 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
+import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-recovery-delivery.js";
 import {
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
@@ -172,7 +172,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         readConsistency: "latest",
-      }) as SessionEntry | undefined;
+      });
       const state = current?.mainRestartRecovery;
       if (
         !current ||

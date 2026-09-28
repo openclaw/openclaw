@@ -82,6 +82,10 @@ The hook dispatch can release its Gateway admission while that plugin work is
 still in progress. Plugins that own long-running work must provide their own
 cancellation and shutdown lifecycle.
 
+Prompt-building handlers can use `ctx.hookInvocation.assertActive()` to reject
+side effects after their result becomes ineligible. See
+[Handler lifetime](/plugins/hooks/prompt-and-session#handler-lifetime).
+
 The standard runner applies these defaults **per handler**:
 
 | Hooks                                                                                                          | Default timeout                     | On thrown error or timeout                                       |

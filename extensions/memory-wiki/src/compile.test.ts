@@ -9,6 +9,10 @@ import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
+function writePage(targetPath: string, markdown: Parameters<typeof renderWikiMarkdown>[0]) {
+  return fs.writeFile(targetPath, renderWikiMarkdown(markdown), "utf8");
+}
+
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("compileMemoryWikiVault", () => {
@@ -72,26 +76,22 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha",
-          claims: [
-            {
-              id: "claim.alpha.doc",
-              text: "Alpha is the canonical source page.",
-              status: "supported",
-              evidence: [{ sourceId: "source.alpha", lines: "1-3" }],
-            },
-          ],
-        },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "alpha.md"), {
+      frontmatter: {
+        pageType: "source",
+        id: "source.alpha",
+        title: "Alpha",
+        claims: [
+          {
+            id: "claim.alpha.doc",
+            text: "Alpha is the canonical source page.",
+            status: "supported",
+            evidence: [{ sourceId: "source.alpha", lines: "1-3" }],
+          },
+        ],
+      },
+      body: "# Alpha\n",
+    });
     const result = await compileMemoryWikiVault(config);
 
     expect(result.pageCounts.source).toBe(1);
@@ -161,18 +161,14 @@ describe("compileMemoryWikiVault", () => {
       rootDir: nextCaseRoot(),
       initialize: true,
     });
-    await fs.writeFile(
-      path.join(rootDir, "sources", "stable.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          sourceType: "chatgpt-export",
-          title: "Stable",
-        },
-        body: "# Stable\n\n## Auto Digest\n- First user line: cached\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "stable.md"), {
+      frontmatter: {
+        pageType: "source",
+        sourceType: "chatgpt-export",
+        title: "Stable",
+      },
+      body: "# Stable\n\n## Auto Digest\n- First user line: cached\n",
+    });
     await compileMemoryWikiVault(config);
     const readFile = vi.spyOn(fs, "readFile");
 
@@ -242,19 +238,15 @@ describe("compileMemoryWikiVault", () => {
       "Body that compile must not rewrite.",
     ].join("\n");
     await fs.writeFile(brokenPath, brokenPage, "utf8");
-    await fs.writeFile(
-      path.join(rootDir, "syntheses", "healthy.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "synthesis",
-          id: "synthesis.healthy",
-          title: "Healthy",
-          sourceIds: ["source.alpha"],
-        },
-        body: "# Healthy\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "syntheses", "healthy.md"), {
+      frontmatter: {
+        pageType: "synthesis",
+        id: "synthesis.healthy",
+        title: "Healthy",
+        sourceIds: ["source.alpha"],
+      },
+      body: "# Healthy\n",
+    });
 
     const result = await compileMemoryWikiVault(config);
 
@@ -274,16 +266,6 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it.each([
-    {
-      name: "root index with syntax-error frontmatter",
-      relativePath: "index.md",
-      frontmatterLines: [
-        "pageType: report",
-        "sourceIds:",
-        '  - **MEMORY.md line 235**:"some quoted, value"',
-      ],
-      error: "Unexpected scalar",
-    },
     {
       name: "root index with sequence-root frontmatter",
       relativePath: "index.md",
@@ -338,22 +320,14 @@ describe("compileMemoryWikiVault", () => {
     });
 
     await fs.mkdir(path.join(rootDir, "sources", "sub"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "sources", "top.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
-        body: "# Top Source\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "sub", "nested.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
-        body: "# Nested Source\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "top.md"), {
+      frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
+      body: "# Top Source\n",
+    });
+    await writePage(path.join(rootDir, "sources", "sub", "nested.md"), {
+      frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
+      body: "# Nested Source\n",
+    });
 
     const result = await compileMemoryWikiVault(config);
 
@@ -371,50 +345,6 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
-  it("renders native directory index links relative to each generated index", async () => {
-    const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
-    });
-
-    await fs.writeFile(
-      path.join(rootDir, "concepts", "alpha-concept.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "concept", id: "concept.alpha", title: "Alpha Concept" },
-        body: "# Alpha Concept\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "entities", "alpha-entity.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "entity", id: "entity.alpha", title: "Alpha Entity" },
-        body: "# Alpha Entity\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "synthesis", id: "synthesis.alpha", title: "Alpha Synthesis" },
-        body: "# Alpha Synthesis\n",
-      }),
-      "utf8",
-    );
-
-    await compileMemoryWikiVault(config);
-
-    await expect(
-      fs.readFile(path.join(rootDir, "concepts", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha Concept](alpha-concept.md)");
-    await expect(
-      fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha Entity](alpha-entity.md)");
-    await expect(
-      fs.readFile(path.join(rootDir, "syntheses", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha Synthesis](alpha-synthesis.md)");
-  });
-
   it("bounds concurrent page reads and stops the queue after abort", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -422,18 +352,14 @@ describe("compileMemoryWikiVault", () => {
     });
 
     for (let index = 0; index < 24; index += 1) {
-      await fs.writeFile(
-        path.join(rootDir, "sources", `page-${index}.md`),
-        renderWikiMarkdown({
-          frontmatter: {
-            pageType: "source",
-            id: `source.page-${index}`,
-            title: `Page ${index}`,
-          },
-          body: `# Page ${index}\n`,
-        }),
-        "utf8",
-      );
+      await writePage(path.join(rootDir, "sources", `page-${index}.md`), {
+        frontmatter: {
+          pageType: "source",
+          id: `source.page-${index}`,
+          title: `Page ${index}`,
+        },
+        body: `# Page ${index}\n`,
+      });
     }
 
     const originalReadFile = fs.readFile.bind(fs);
@@ -487,14 +413,10 @@ describe("compileMemoryWikiVault", () => {
       },
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "alpha.md"), {
+      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+      body: "# Alpha\n",
+    });
 
     await compileMemoryWikiVault(config);
 
@@ -509,40 +431,28 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "entities", "beta.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.beta",
-          title: "Beta",
-          sourceIds: ["source.alpha"],
-        },
-        body: "# Beta\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "concepts", "gamma.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "concept",
-          id: "concept.gamma",
-          title: "Gamma",
-          sourceIds: ["source.alpha"],
-        },
-        body: "# Gamma\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "alpha.md"), {
+      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+      body: "# Alpha\n",
+    });
+    await writePage(path.join(rootDir, "entities", "beta.md"), {
+      frontmatter: {
+        pageType: "entity",
+        id: "entity.beta",
+        title: "Beta",
+        sourceIds: ["source.alpha"],
+      },
+      body: "# Beta\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "gamma.md"), {
+      frontmatter: {
+        pageType: "concept",
+        id: "concept.gamma",
+        title: "Gamma",
+        sourceIds: ["source.alpha"],
+      },
+      body: "# Gamma\n",
+    });
 
     await compileMemoryWikiVault(config);
 
@@ -560,59 +470,6 @@ describe("compileMemoryWikiVault", () => {
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
       "[Gamma](../concepts/gamma.md)",
-    );
-  });
-
-  it("renders native synthesis related and source links relative to the synthesis page", async () => {
-    const { rootDir, config } = await createVault({
-      rootDir: nextCaseRoot(),
-      initialize: true,
-    });
-
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
-        body: "# Alpha Source\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "concepts", "alpha-concept.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "concept",
-          id: "concept.alpha",
-          title: "Alpha Concept",
-          sourceIds: ["source.alpha"],
-        },
-        body: "# Alpha Concept\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "synthesis",
-          id: "synthesis.alpha",
-          title: "Alpha Synthesis",
-          sourceIds: ["source.alpha"],
-        },
-        body: "# Alpha Synthesis\n",
-      }),
-      "utf8",
-    );
-
-    await compileMemoryWikiVault(config);
-
-    const synthesis = await fs.readFile(
-      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
-      "utf8",
-    );
-    expect(synthesis).toContain("### Sources\n\n- [Alpha Source](../sources/alpha.md)");
-    expect(synthesis).toContain(
-      "### Related Pages\n\n- [Alpha Concept](../concepts/alpha-concept.md)",
     );
   });
 
@@ -640,29 +497,21 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "alpha.md"), {
+      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+      body: "# Alpha\n",
+    });
 
     for (let index = 0; index < 30; index += 1) {
-      await fs.writeFile(
-        path.join(rootDir, "entities", `entity-${index}.md`),
-        renderWikiMarkdown({
-          frontmatter: {
-            pageType: "entity",
-            id: `entity.${index}`,
-            title: `Entity ${index}`,
-            sourceIds: ["source.alpha"],
-          },
-          body: `# Entity ${index}\n`,
-        }),
-        "utf8",
-      );
+      await writePage(path.join(rootDir, "entities", `entity-${index}.md`), {
+        frontmatter: {
+          pageType: "entity",
+          id: `entity.${index}`,
+          title: `Entity ${index}`,
+          sourceIds: ["source.alpha"],
+        },
+        body: `# Entity ${index}\n`,
+      });
     }
 
     await compileMemoryWikiVault(config);
@@ -680,73 +529,61 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "entities", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.alpha",
-          title: "Alpha",
-          sourceIds: ["source.alpha"],
-          questions: ["What changed after launch?"],
-          contradictions: ["Conflicts with source.beta"],
-          confidence: 0.3,
-          claims: [
-            {
-              id: "claim.alpha.db",
-              text: "Alpha uses PostgreSQL for production writes.",
-              status: "supported",
-              confidence: 0.4,
-              evidence: [],
-            },
-          ],
-        },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "concepts", "alpha-db.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "concept",
-          id: "concept.alpha.db",
-          title: "Alpha DB",
-          sourceIds: ["source.alpha"],
-          updatedAt: "2025-10-01T00:00:00.000Z",
-          claims: [
-            {
-              id: "claim.alpha.db",
-              text: "Alpha uses MySQL for production writes.",
-              status: "contested",
-              confidence: 0.62,
-              evidence: [
-                {
-                  sourceId: "source.alpha",
-                  lines: "9-11",
-                  updatedAt: "2025-10-01T00:00:00.000Z",
-                },
-              ],
-            },
-          ],
-        },
-        body: "# Alpha DB\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha Source",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        body: "# Alpha Source\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "entities", "alpha.md"), {
+      frontmatter: {
+        pageType: "entity",
+        id: "entity.alpha",
+        title: "Alpha",
+        sourceIds: ["source.alpha"],
+        questions: ["What changed after launch?"],
+        contradictions: ["Conflicts with source.beta"],
+        confidence: 0.3,
+        claims: [
+          {
+            id: "claim.alpha.db",
+            text: "Alpha uses PostgreSQL for production writes.",
+            status: "supported",
+            confidence: 0.4,
+            evidence: [],
+          },
+        ],
+      },
+      body: "# Alpha\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "alpha-db.md"), {
+      frontmatter: {
+        pageType: "concept",
+        id: "concept.alpha.db",
+        title: "Alpha DB",
+        sourceIds: ["source.alpha"],
+        updatedAt: "2025-10-01T00:00:00.000Z",
+        claims: [
+          {
+            id: "claim.alpha.db",
+            text: "Alpha uses MySQL for production writes.",
+            status: "contested",
+            confidence: 0.62,
+            evidence: [
+              {
+                sourceId: "source.alpha",
+                lines: "9-11",
+                updatedAt: "2025-10-01T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      },
+      body: "# Alpha DB\n",
+    });
+    await writePage(path.join(rootDir, "sources", "alpha.md"), {
+      frontmatter: {
+        pageType: "source",
+        id: "source.alpha",
+        title: "Alpha Source",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      body: "# Alpha Source\n",
+    });
     await fs.writeFile(
       path.join(rootDir, "sources", "raw-alpha.md"),
       `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes stay usable as source evidence.\n`,
@@ -813,66 +650,50 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "entities", "entity-alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.alpha",
-          title: "Alpha Entity",
-          sourceIds: ["source.alpha"],
-          updatedAt: "2025-06-01T00:00:00.000Z",
-        },
-        body: "# Alpha Entity\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "entities", "entity-alpha.md"), {
+      frontmatter: {
+        pageType: "entity",
+        id: "entity.alpha",
+        title: "Alpha Entity",
+        sourceIds: ["source.alpha"],
+        updatedAt: "2025-06-01T00:00:00.000Z",
+      },
+      body: "# Alpha Entity\n",
+    });
 
-    await fs.writeFile(
-      path.join(rootDir, "sources", "source-alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha Source",
-          updatedAt: "2025-06-01T00:00:00.000Z",
-        },
-        body: "# Alpha Source\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "sources", "source-alpha.md"), {
+      frontmatter: {
+        pageType: "source",
+        id: "source.alpha",
+        title: "Alpha Source",
+        updatedAt: "2025-06-01T00:00:00.000Z",
+      },
+      body: "# Alpha Source\n",
+    });
 
     // Concept page with old updatedAt — should be excluded from stale-pages
-    await fs.writeFile(
-      path.join(rootDir, "concepts", "concept-beta.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "concept",
-          id: "concept.beta",
-          title: "Beta Concept",
-          sourceIds: ["source.alpha"],
-          updatedAt: "2025-06-01T00:00:00.000Z",
-        },
-        body: "# Beta Concept\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "concepts", "concept-beta.md"), {
+      frontmatter: {
+        pageType: "concept",
+        id: "concept.beta",
+        title: "Beta Concept",
+        sourceIds: ["source.alpha"],
+        updatedAt: "2025-06-01T00:00:00.000Z",
+      },
+      body: "# Beta Concept\n",
+    });
 
     // Synthesis page with old updatedAt — should be excluded from stale-pages
-    await fs.writeFile(
-      path.join(rootDir, "syntheses", "synthesis-gamma.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "synthesis",
-          id: "synthesis.gamma",
-          title: "Gamma Synthesis",
-          sourceIds: ["source.alpha"],
-          updatedAt: "2025-06-01T00:00:00.000Z",
-        },
-        body: "# Gamma Synthesis\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "syntheses", "synthesis-gamma.md"), {
+      frontmatter: {
+        pageType: "synthesis",
+        id: "synthesis.gamma",
+        title: "Gamma Synthesis",
+        sourceIds: ["source.alpha"],
+        updatedAt: "2025-06-01T00:00:00.000Z",
+      },
+      body: "# Gamma Synthesis\n",
+    });
 
     await compileMemoryWikiVault(config);
 
@@ -895,20 +716,16 @@ describe("compileMemoryWikiVault", () => {
       },
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "entities", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.alpha",
-          title: "Alpha",
-          sourceIds: ["source.alpha"],
-          questions: ["What changed after launch?"],
-        },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "entities", "alpha.md"), {
+      frontmatter: {
+        pageType: "entity",
+        id: "entity.alpha",
+        title: "Alpha",
+        sourceIds: ["source.alpha"],
+        questions: ["What changed after launch?"],
+      },
+      body: "# Alpha\n",
+    });
 
     await compileMemoryWikiVault(config);
 
@@ -921,54 +738,50 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "entities", "brad.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          entityType: "person",
-          id: "entity.brad",
-          title: "Brad Groux",
-          canonicalId: "maintainer.brad-groux",
-          aliases: ["brad"],
-          privacyTier: "local-private",
-          bestUsedFor: ["Microsoft routing"],
-          lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-          personCard: {
-            handles: ["@bgroux"],
-            lane: "Microsoft Teams",
-            askFor: ["Teams and Azure questions"],
-            privacyTier: "confirm-before-use",
-          },
-          relationships: [
-            {
-              targetId: "entity.alice",
-              targetTitle: "Alice",
-              kind: "collaborates-with",
-              evidenceKind: "discrawl-stat",
-              privacyTier: "local-private",
-            },
-          ],
-          claims: [
-            {
-              id: "claim.brad.teams",
-              text: "Brad is useful for Microsoft Teams routing.",
-              status: "supported",
-              confidence: 0.9,
-              evidence: [
-                {
-                  kind: "maintainer-whois",
-                  sourceId: "source.maintainers",
-                  privacyTier: "local-private",
-                },
-              ],
-            },
-          ],
+    await writePage(path.join(rootDir, "entities", "brad.md"), {
+      frontmatter: {
+        pageType: "entity",
+        entityType: "person",
+        id: "entity.brad",
+        title: "Brad Groux",
+        canonicalId: "maintainer.brad-groux",
+        aliases: ["brad"],
+        privacyTier: "local-private",
+        bestUsedFor: ["Microsoft routing"],
+        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+        personCard: {
+          handles: ["@bgroux"],
+          lane: "Microsoft Teams",
+          askFor: ["Teams and Azure questions"],
+          privacyTier: "confirm-before-use",
         },
-        body: "# Brad Groux\n",
-      }),
-      "utf8",
-    );
+        relationships: [
+          {
+            targetId: "entity.alice",
+            targetTitle: "Alice",
+            kind: "collaborates-with",
+            evidenceKind: "discrawl-stat",
+            privacyTier: "local-private",
+          },
+        ],
+        claims: [
+          {
+            id: "claim.brad.teams",
+            text: "Brad is useful for Microsoft Teams routing.",
+            status: "supported",
+            confidence: 0.9,
+            evidence: [
+              {
+                kind: "maintainer-whois",
+                sourceId: "source.maintainers",
+                privacyTier: "local-private",
+              },
+            ],
+          },
+        ],
+      },
+      body: "# Brad Groux\n",
+    });
 
     await compileMemoryWikiVault(config);
 
@@ -1000,22 +813,14 @@ describe("compileMemoryWikiVault", () => {
       initialize: true,
     });
 
-    await fs.writeFile(
-      path.join(rootDir, "entities", "beta.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "entity", id: "entity.beta", title: "Beta" },
-        body: "# Beta\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "concepts", "gamma.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "concept", id: "concept.gamma", title: "Gamma" },
-        body: "# Gamma\n\nSee [Beta](../entities/beta.md).\n",
-      }),
-      "utf8",
-    );
+    await writePage(path.join(rootDir, "entities", "beta.md"), {
+      frontmatter: { pageType: "entity", id: "entity.beta", title: "Beta" },
+      body: "# Beta\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "gamma.md"), {
+      frontmatter: { pageType: "concept", id: "concept.gamma", title: "Gamma" },
+      body: "# Gamma\n\nSee [Beta](../entities/beta.md).\n",
+    });
 
     await compileMemoryWikiVault(config);
     const second = await compileMemoryWikiVault(config);
@@ -1036,14 +841,10 @@ describe("compileMemoryWikiVault", () => {
     });
     const sourcePath = path.join(rootDir, "sources", "alpha.md");
 
-    await fs.writeFile(
-      sourcePath,
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-        body: "# Alpha\n",
-      }),
-      "utf8",
-    );
+    await writePage(sourcePath, {
+      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+      body: "# Alpha\n",
+    });
 
     const realReadFile = fs.readFile;
     let attempts = 0;

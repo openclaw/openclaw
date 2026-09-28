@@ -7,11 +7,12 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
@@ -52,6 +53,49 @@ describe("plugin host cleanup session stores", () => {
 
     expect(result).toEqual({ cleanupCount: 0, failures: [] });
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(before);
+  });
+
+  it("cleans healthy agent state without opening a refused agent store", async () => {
+    stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cleanup-admission-"),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const storePath = path.join(stateDir, "sessions.json");
+    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
+    await replaceSessionEntry(scope, {
+      sessionId: "healthy",
+      updatedAt: 1,
+      pluginExtensions: { fixture: { active: true } },
+    });
+    recordAgentDatabaseAdmissions([
+      {
+        agentId: "cleaner",
+        paths: [path.join(stateDir, "cleaner.sqlite")],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch",
+        reason: "Refused agent cleaner",
+        repairHint: "Inspect the copy.",
+      },
+    ]);
+    try {
+      const result = await runPluginHostCleanup({
+        cfg: {},
+        registry: createEmptyPluginRegistry(),
+        pluginId: "fixture",
+        reason: "disable",
+        sessionStoreTargets: [
+          { agentId: "cleaner", storePath: path.join(stateDir, "cleaner.sqlite") },
+          { agentId: "main", storePath },
+        ],
+      });
+      expect(result).toEqual({ cleanupCount: 1, failures: [] });
+      expect(loadSessionEntry(scope)?.pluginExtensions).toBeUndefined();
+      await expect(fs.stat(path.join(stateDir, "cleaner.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      recordAgentDatabaseAdmissions([]);
+    }
   });
 
   it.each(["cancelled", "already-cleared", "locked", "revoked", "committed"] as const)(
@@ -339,7 +383,10 @@ describe("plugin host cleanup session stores", () => {
         pluginId: "cleanup",
         reason: "disable",
         sessionKey: runtimeSessionId.toUpperCase(),
-        sessionStorePaths: [firstStorePath, secondStorePath],
+        sessionStoreTargets: [
+          { agentId: "a", storePath: firstStorePath },
+          { agentId: "b", storePath: secondStorePath },
+        ],
       });
 
       expect(result).toEqual({ cleanupCount: 2, failures: [] });
@@ -505,7 +552,7 @@ describe("plugin host cleanup session stores", () => {
       registry,
       pluginId: "fixture-plugin",
       reason: "disable",
-      sessionStorePaths: [storePath],
+      sessionStoreTargets: [{ agentId: "main", storePath }],
     });
 
     expect(result).toEqual({ cleanupCount: 2, failures: [] });

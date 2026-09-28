@@ -1,5 +1,6 @@
 // Covers provider usage summary loading across auth and plugin paths.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
@@ -18,7 +19,6 @@ import {
 import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
-const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
@@ -27,45 +27,197 @@ describe("provider-usage.load", () => {
     vi.restoreAllMocks();
     resetProviderUsageSnapshotWithPluginMock();
   });
+  afterEach(() => vi.useRealTimers());
 
-  it("loads snapshots for copilot gemini codex and Xiaomi providers", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
-      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
-        switch (provider) {
-          case "github-copilot":
-            return {
-              provider,
-              displayName: "GitHub Copilot",
-              windows: [{ label: "Chat", usedPercent: 20 }],
-            };
-          case googleGeminiCliProvider:
-            return {
-              provider,
-              displayName: "Gemini CLI",
-              windows: [{ label: "Pro", usedPercent: 40 }],
-            };
-          case "openai":
-            return {
-              provider,
-              displayName: "Codex",
-              windows: [{ label: "3h", usedPercent: 12 }],
-            };
-          case "xiaomi":
-            return {
-              provider,
-              displayName: "Xiaomi",
-              windows: [],
-            };
-          case "xiaomi-token-plan":
-            return {
-              provider,
-              displayName: "Xiaomi Token Plan",
-              windows: [{ label: "Token Plan", usedPercent: 15 }],
-            };
-          default:
-            return null;
+  it.each([false, true])(
+    "returns Timeout without auth or fetch dispatch for an exhausted budget (synthetic: %s)",
+    async (synthetic) => {
+      vi.useFakeTimers();
+      const provider = synthetic ? "openai" : "anthropic";
+      const fetch = vi.fn(async () => new Response("{}"));
+      resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "fixture-token" });
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
+        await context.fetchFn("https://usage.example.test");
+        return { provider, displayName: provider, windows: [] };
+      });
+
+      const pending = loadProviderUsageSummary({
+        providers: [provider],
+        ...(synthetic
+          ? { auth: [{ provider, token: "codex-app-server", hookProvider: "codex" }] }
+          : {}),
+        config: {},
+        env: { ANTHROPIC_API_KEY: "fixture-token" },
+        now: usageNow,
+        timeoutMs: 0,
+        fetch,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({
+        updatedAt: usageNow,
+        providers: [
+          { provider, displayName: synthetic ? "OpenAI" : "Claude", windows: [], error: "Timeout" },
+        ],
+      });
+      expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
+      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["init", false],
+    ["request", false],
+    ["init", true],
+    ["request", true],
+  ] as const)(
+    "cancels the usage fetch (%s signal, caller abort: %s)",
+    async (signalSource, callerAbort) => {
+      vi.useFakeTimers();
+      const scope = new AsyncWorkScope();
+      const started = createDeferredCore();
+      const response = createDeferredCore<Response>();
+      const caller = new AbortController();
+      const aborted = vi.fn();
+      let fetchSignal: AbortSignal | null | undefined;
+      const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        fetchSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+        fetchSignal?.addEventListener(
+          "abort",
+          () => {
+            aborted();
+            response.reject(fetchSignal?.reason);
+          },
+          { once: true },
+        );
+        started.resolve();
+        return response.promise;
+      });
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
+        await (signalSource === "init"
+          ? context.fetchFn("https://usage.example.test", { signal: caller.signal })
+          : context.fetchFn(new Request("https://usage.example.test", { signal: caller.signal })));
+        return { provider: "anthropic", displayName: "Claude", windows: [] };
+      });
+      const pending = scope.track(() =>
+        loadProviderUsageSummary({
+          auth: [{ provider: "anthropic", token: "fixture-token" }],
+          config: {},
+          env: {},
+          timeoutMs: 1,
+          fetch,
+        }),
+      );
+      try {
+        await started.promise;
+        if (callerAbort) {
+          caller.abort(new Error("Caller cancelled"));
         }
+        await vi.advanceTimersByTimeAsync(callerAbort ? 0 : 1);
+        expect(fetchSignal?.aborted).toBe(true);
+        expect(aborted).toHaveBeenCalledOnce();
+        expect(caller.signal.aborted).toBe(callerAbort);
+        expect((await pending).providers).toEqual([
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            error: callerAbort ? "Caller cancelled" : "Timeout",
+          },
+        ]);
+        await scope.drain();
+        expect(scope.hasPendingWork).toBe(false);
+      } finally {
+        response.resolve(new Response("{}"));
+        await pending;
+        await scope.drain();
+      }
+    },
+  );
+
+  it.each(["key", "candidates", "oauth"])(
+    "rejects a retained %s auth helper after the usage deadline",
+    async (helper) => {
+      vi.useFakeTimers();
+      const scope = new AsyncWorkScope();
+      const captured = createDeferredCore<ProviderResolveUsageAuthContext>();
+      const release = createDeferredCore();
+      resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ context }) => {
+        captured.resolve(context);
+        await release.promise;
+        return { handled: true };
+      });
+      const pending = scope.track(() =>
+        loadProviderUsageSummary({
+          providers: ["anthropic"],
+          config: {},
+          env: { ANTHROPIC_API_KEY: "fixture-token" },
+          timeoutMs: 1,
+        }),
+      );
+      try {
+        const context = await captured.promise;
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await pending).providers[0]?.error).toBe("Timeout");
+        expect(context.signal?.aborted).toBe(true);
+        await expect(
+          Promise.resolve().then(async () => {
+            if (helper === "key") {
+              context.resolveApiKeyFromConfigAndStore();
+            } else if (helper === "candidates") {
+              await context.resolveApiKeyCandidatesFromConfigAndStore?.();
+            } else {
+              await context.resolveOAuthToken();
+            }
+          }),
+        ).rejects.toBe(context.signal?.reason);
+        expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
+        await scope.drain();
+      }
+    },
+  );
+
+  it("does not dispatch usage after auth completes beyond the deadline", async () => {
+    vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const auth = createDeferredCore<{ token: string }>();
+    resolveProviderUsageAuthWithPluginMock.mockReturnValue(auth.promise);
+    const pending = scope.track(() =>
+      loadProviderUsageSummary({
+        providers: ["anthropic"],
+        config: {},
+        env: { ANTHROPIC_API_KEY: "fixture-token" },
+        timeoutMs: 1,
+      }),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await pending).providers[0]?.error).toBe("Timeout");
+      expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+      auth.resolve({ token: "fixture-token" });
+      await scope.drain();
+      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+    } finally {
+      auth.resolve({ token: "fixture-token" });
+      await pending;
+      await scope.drain();
+    }
+  });
+
+  it("loads populated and empty plugin snapshots without using legacy fetch", async () => {
+    const snapshots: ProviderUsageSnapshot[] = [
+      { provider: "xiaomi", displayName: "Xiaomi", windows: [] },
+      {
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
       },
+    ];
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }) => snapshots.find((snapshot) => snapshot.provider === provider) ?? null,
     );
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("legacy fetch should not run");
@@ -74,38 +226,20 @@ describe("provider-usage.load", () => {
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
       [
-        { provider: "github-copilot", token: "copilot-token" },
-        { provider: googleGeminiCliProvider, token: "gemini-token" },
-        { provider: "openai", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
-        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
+        { provider: "openai", token: "codex-token", accountId: "acc-1" },
       ],
       mockFetch,
     );
 
-    expect(summary.providers.map((provider) => provider.provider)).toEqual([
-      "github-copilot",
-      googleGeminiCliProvider,
-      "openai",
-      "xiaomi",
-      "xiaomi-token-plan",
+    expect(summary.providers).toEqual([
+      { provider: "xiaomi", displayName: "Xiaomi", windows: [] },
+      {
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
+      },
     ]);
-    expect(
-      summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
-    ).toEqual([{ label: "Chat", usedPercent: 20 }]);
-    expect(
-      summary.providers.find((provider) => provider.provider === googleGeminiCliProvider)
-        ?.windows[0]?.label,
-    ).toBe("Pro");
-    expect(
-      summary.providers.find((provider) => provider.provider === "openai")?.windows[0]?.label,
-    ).toBe("3h");
-    expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
-      [],
-    );
-    expect(
-      summary.providers.find((provider) => provider.provider === "xiaomi-token-plan")?.windows,
-    ).toEqual([{ label: "Token Plan", usedPercent: 15 }]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

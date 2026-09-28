@@ -267,7 +267,7 @@ function selectSlashCommand(
   requestUpdate: () => void,
   completeOnly = false,
 ): void {
-  if (!completeOnly && host.activateComposerMode?.(cmd)) {
+  if (host.activateComposerMode?.(cmd)) {
     return;
   }
   if (
@@ -317,7 +317,12 @@ function selectSlashCommand(
     host.commitDraft(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
     resetSlashMenuState(state);
     requestUpdate();
-  } else if (cmd.executeLocal && !cmd.args) {
+  } else if (
+    cmd.executeLocal &&
+    !cmd.args &&
+    // Catalog continuations and viewer suggestions do not dispatch live chat commands.
+    (cmd.key !== "btw" || host.canRun(true, cmd))
+  ) {
     resetSlashMenuState(state);
     host.commitDraft(`/${cmd.name}`);
     host.runCommand();
@@ -408,7 +413,7 @@ function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHo
   const current = host.getTextarea()?.value ?? host.getDraft();
   const caret = host.getTextarea()?.selectionStart ?? current.length;
   const invocation = findDirectInlineSlashArgumentInvocation(current, caret);
-  if (!invocation || !host.canRun(true, invocation.command)) {
+  if (!invocation) {
     return false;
   }
   state.slashMenuMode = "freeform-args";
@@ -447,7 +452,8 @@ export function handleInlineSlashArgKeydown(
     return false;
   }
   event.preventDefault();
-  return submitInlineSlashArgument(state, host, requestUpdate);
+  submitInlineSlashArgument(state, host, requestUpdate);
+  return true;
 }
 
 export function handleSlashMenuKeydown(

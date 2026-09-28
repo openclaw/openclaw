@@ -60,9 +60,13 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   400 falls back to a legacy reply. New recoveries go into the shared
   predicates (`send-error-predicates.ts`, `reply-parameters.ts`), never into
   one funnel only.
-- Outbound flood waits honor `retry_after` up to
-  `TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS`; do not re-clamp Telegram sends to the
-  generic channel retry ceiling.
+- Outbound flood waits have one owner: the per-token account limiter in
+  `account-throttler.ts`. A 429 pauses every call for that bot token until
+  `retry_after` (one fixed 1 s pause when it is missing; a shorter concurrent
+  429 never shortens an active pause).
+  Final replies wait and retry within `TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS`;
+  stream previews and typing run as replaceable requests and are skipped, not
+  queued. Send retry runners must not retry 429 themselves.
 - Webhook security ordering. The secret header is validated first
   (constant-time compare, single-header enforcement, connection close on 401);
   the request rate limit budgets only failed-auth attempts so Telegram's own
@@ -134,3 +138,12 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   validation.
 - Reliability PRs (spool, drain, retry, ack, offset paths) need crash-window
   or restart-replay test proof, not just happy-path tests.
+- Give each contract one primary test owner; another layer needs a distinct
+  Telegram transport or lifecycle risk. Extend a stronger existing case instead
+  of replaying shared retry policy or registering the same helper suite twice.
+- Require independent expected outcomes: do not derive them with the tested
+  helper, or let a mock implement the behavior being asserted. Capability proofs
+  must exercise delivery or acknowledgement rather than repeat declared flags.
+- Make negative controls discriminate their named guard; an unrelated denial
+  must not make them pass. Keep test access private when no production caller
+  needs it.

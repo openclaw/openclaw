@@ -14,6 +14,8 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
+import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -63,6 +65,8 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   /** Final synchronous check after transport preparation and before each request or redirect. */
   beforeRequest?: () => void | undefined;
+  /** Observes response headers for each hop, including redirects, before cleanup. */
+  onResponse?: (status: number) => void;
   init?: RequestInit;
   capture?:
     | false
@@ -296,11 +300,11 @@ async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
   }
-  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
+  const { prepareHttpCaptureForTransport, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
   return {
     fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
-    capture: prepareHttpCapture(),
+    capture: prepareHttpCaptureForTransport(),
   };
 }
 
@@ -362,9 +366,11 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   return nextHeaders;
 }
 
-function rewriteRedirectInitForMethod(params: {
+function rewriteRedirectInit(params: {
   init?: RequestInit;
   status: number;
+  crossOrigin: boolean;
+  allowUnsafeReplay: boolean;
 }): RequestInit | undefined {
   const { init, status } = params;
   if (!init) {
@@ -377,34 +383,18 @@ function rewriteRedirectInitForMethod(params: {
       ? currentMethod !== "GET" && currentMethod !== "HEAD"
       : (status === 301 || status === 302) && currentMethod === "POST";
 
-  if (!shouldForceGet) {
+  const shouldDropUnsafeBody =
+    params.crossOrigin &&
+    !params.allowUnsafeReplay &&
+    currentMethod !== "GET" &&
+    currentMethod !== "HEAD";
+  if (!shouldForceGet && !shouldDropUnsafeBody) {
     return init;
   }
 
   return {
     ...init,
-    method: "GET",
-    body: undefined,
-    headers: dropBodyHeaders(init.headers),
-  };
-}
-
-function rewriteRedirectInitForCrossOrigin(params: {
-  init?: RequestInit;
-  allowUnsafeReplay: boolean;
-}): RequestInit | undefined {
-  const { init, allowUnsafeReplay } = params;
-  if (!init || allowUnsafeReplay) {
-    return init;
-  }
-
-  const currentMethod = init.method?.toUpperCase() ?? "GET";
-  if (currentMethod === "GET" || currentMethod === "HEAD") {
-    return init;
-  }
-
-  return {
-    ...init,
+    ...(shouldForceGet ? { method: "GET" } : {}),
     body: undefined,
     headers: dropBodyHeaders(init.headers),
   };
@@ -436,6 +426,7 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  const assertCurrent = captureGuardedFetchRequestAuthority();
   const globalFetch = globalThis.fetch;
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
@@ -656,12 +647,13 @@ async function fetchWithSsrFGuardInternal(
         void Promise.resolve(beforeRequestResult).catch(() => undefined);
         throw new TypeError("beforeRequest must be synchronous.");
       }
+      assertCurrent?.();
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
+        signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody:
-          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+        requestBody: currentInit?.body ?? null,
         transport: "http" as const,
         flowId: params.capture === false ? undefined : params.capture?.flowId,
         meta: {
@@ -679,10 +671,11 @@ async function fetchWithSsrFGuardInternal(
           ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
           : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
       } catch (error) {
-        captureAdmission.capture?.({ ...captureParams, error });
+        void captureAdmission.capture?.({ ...captureParams, error });
         throw error;
       }
-      captureAdmission.capture?.({ ...captureParams, response });
+      params.onResponse?.(response.status);
+      void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;
@@ -700,12 +693,14 @@ async function fetchWithSsrFGuardInternal(
           nextUrl: nextParsedUrl,
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
-        currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
-        if (nextParsedUrl.origin !== parsedUrl.origin) {
-          currentInit = rewriteRedirectInitForCrossOrigin({
-            init: currentInit,
-            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
-          });
+        const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
+        currentInit = rewriteRedirectInit({
+          init: currentInit,
+          status: response.status,
+          crossOrigin,
+          allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+        });
+        if (crossOrigin) {
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
           currentInit = restoreRedirectAuthorization({
             init: currentInit,
@@ -722,8 +717,15 @@ async function fetchWithSsrFGuardInternal(
         continue;
       }
 
+      // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
+      // TODO: Remove this wrapper once Bun propagates post-header aborts through
+      // installed Undici response and clone body streams.
+      const returnedResponse =
+        process.versions.bun && !(response instanceof Response)
+          ? responseWithAbortSignal(response, init.signal ?? undefined)
+          : response;
       return {
-        response,
+        response: returnedResponse,
         finalUrl: currentUrl,
         release: async () => finishRequest(releaseDispatcher),
         refreshTimeout: refresh,

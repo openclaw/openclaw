@@ -1,10 +1,11 @@
 // Defines the plugin prerelease validation surface and matching test lanes.
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mts";
+import type { ExtensionTestPlanGroup } from "./extension-test-plan.mts";
 
 type PrereleaseSurfaceEntry = { surfaces: readonly string[] };
 
 /** Required behavioral surfaces that plugin prerelease validation must cover. */
-export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
+const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "package-artifact",
   "bundled-lifecycle",
   "external-plugins",
@@ -142,6 +143,36 @@ function coveredSurfaces(entries: readonly PrereleaseSurfaceEntry[]): string[] {
         .filter((surface) => typeof surface === "string" && surface.length > 0),
     ),
   ].toSorted((a, b) => a.localeCompare(b));
+}
+
+/** Keep each release batch on Node and add only its qualified Bun groups. */
+export async function resolvePluginPrereleaseExtensionRuntime({
+  planGroups,
+  fullReleaseValidation,
+  vitestArgs = [],
+}: {
+  planGroups: readonly Pick<ExtensionTestPlanGroup, "config" | "roots">[];
+  fullReleaseValidation: boolean;
+  vitestArgs?: readonly string[];
+}): Promise<{ test_runtime_policy: "dual" | "node"; requires_bun: boolean }> {
+  if (!fullReleaseValidation) {
+    return { test_runtime_policy: "node", requires_bun: false };
+  }
+  // Static release plans also run from bounded tooling copies without test inventories.
+  const { ciTestShardRequiresBun } = await import("./ci-test-runtime.mts");
+  const requiresBun = ciTestShardRequiresBun(
+    {
+      groups: planGroups.map(({ config, roots }) => ({
+        configs: [config],
+        includePatterns: roots.map((root) =>
+          /\.test\.tsx?$/u.test(root) ? root : `${root}/**/*.test.ts`,
+        ),
+        vitestArgs,
+      })),
+    },
+    "dual",
+  );
+  return { test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun };
 }
 
 /** Build the plugin prerelease plan from Docker lanes and static checks. */

@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
@@ -20,9 +21,9 @@ import { createAgentForAddCommandTest } from "./agents.add.test-fixtures.js";
 import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
+type SetupChannels = typeof import("../flows/channel-setup.js").setupChannels;
 type EnsureWorkspaceAndSessions = typeof import("./onboard-helpers.js").ensureWorkspaceAndSessions;
-type PrepareAuthChoice = typeof import("./auth-choice.js").prepareAuthChoice;
+type PrepareAuthChoice = typeof import("./auth-choice.apply.js").prepareAuthChoice;
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -160,8 +161,11 @@ vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
   isTerminalInteractive: terminalMocks.isTerminalInteractive,
 }));
 
-vi.mock("./auth-choice.js", () => ({
+vi.mock("./auth-choice.apply.js", () => ({
   prepareAuthChoice: authChoiceMocks.prepareAuthChoice,
+}));
+
+vi.mock("./auth-choice.model-check.js", () => ({
   warnIfModelConfigLooksOff: authChoiceMocks.warnIfModelConfigLooksOff,
 }));
 
@@ -173,7 +177,8 @@ vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
   persistAuthProfileBatch: authProfileMocks.persistBatch,
 }));
 
-vi.mock("./onboard-channels.js", () => ({
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: onboardChannelsMocks.setupChannels,
 }));
 
@@ -557,11 +562,7 @@ describe("agents add command", () => {
         const sourceStore: AuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:api-key": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-test",
-            },
+            "openai:api-key": createApiKeyCredential("openai", "sk-test"),
             "openai:oauth": {
               type: "oauth",
               provider: "openai",
@@ -596,7 +597,8 @@ describe("agents add command", () => {
 
   it.each([
     { source: "__skip__", copy: false, systemAgent: undefined },
-    { source: "ops", copy: true, systemAgent: { agentId: "main" } },
+    { source: "ops", copy: true, systemAgent: { agentId: "ops" } },
+    { source: "ops", copy: true, systemAgent: undefined },
     { source: "ops", copy: false, systemAgent: undefined },
   ])("adds to an explicit fleet with optional auth copy: %j", async (testCase) => {
     await withAgentsAddStateRoot("openclaw-agents-add-explicit-", async (root) => {
@@ -623,6 +625,13 @@ describe("agents add command", () => {
 
       await agentsAddCommand({}, runtime);
 
+      if (testCase.systemAgent) {
+        expect(wizard.select).not.toHaveBeenCalled();
+        expect(wizard.confirm).toHaveBeenCalledWith({
+          message: 'Copy portable auth profiles from "ops"?',
+          initialValue: false,
+        });
+      }
       expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
       const copied = loadPersistedAuthProfileStore(path.join(root, "agents", "work", "agent"));
       expect(copied?.profiles["openai:portable"] !== undefined).toBe(testCase.copy);
@@ -704,16 +713,8 @@ describe("agents add command", () => {
       await seedAgentAuthStore(root, "main", {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:api-key": {
-            type: "api_key",
-            provider: "openai",
-            key: "portable-conflict",
-          },
-          "openai:portable": {
-            type: "api_key",
-            provider: "openai",
-            key: "portable-retained",
-          },
+          "openai:api-key": createApiKeyCredential("openai", "portable-conflict"),
+          "openai:portable": createApiKeyCredential("openai", "portable-retained"),
         },
         order: { openai: ["openai:api-key", "openai:portable"] },
       });
@@ -873,20 +874,6 @@ describe("agents add command", () => {
     });
   });
 
-  it("runs channel post-write hooks only after fresh agent creation", async () => {
-    const hook = vi.fn(async () => {});
-    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
-    useFreshAgentWizard({ workspaceDir: "/tmp/workspace-work", confirmValues: [false] });
-    stageChannelPostWriteHook(hook);
-
-    await agentsAddCommand({}, runtime);
-
-    expect(hook).toHaveBeenCalledOnce();
-    expect(createAgentMock.mock.invocationCallOrder[0]!).toBeLessThan(
-      hook.mock.invocationCallOrder[0]!,
-    );
-  });
-
   it("passes canonical created config to fresh-agent post-write hooks", async () => {
     const persistedConfig = {
       agents: { entries: { work: { id: "work", workspace: "/tmp/canonical-workspace" } } },
@@ -909,7 +896,10 @@ describe("agents add command", () => {
 
     await agentsAddCommand({}, runtime);
 
-    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ cfg: persistedConfig }));
+    expect(hook).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cfg: persistedConfig }));
+    expect(createAgentMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("does not run channel post-write hooks when fresh agent creation fails", async () => {

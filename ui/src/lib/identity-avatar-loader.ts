@@ -166,6 +166,10 @@ export class IdentityAvatarController implements ReactiveController {
     this.connected = false;
     this.unsubscribeGatewayReset?.();
     this.unsubscribeGatewayReset = undefined;
+    this.clearRoutes();
+  }
+
+  private clearRoutes(): void {
     for (const route of this.routes.values()) {
       route.release?.();
     }
@@ -209,10 +213,7 @@ export class IdentityAvatarController implements ReactiveController {
       return null;
     }
     if (this.generation !== identityAvatarGeneration) {
-      for (const route of this.routes.values()) {
-        route.release?.();
-      }
-      this.routes.clear();
+      this.clearRoutes();
       this.generation = identityAvatarGeneration;
     }
     this.activeRoutes?.add(value);
@@ -222,7 +223,8 @@ export class IdentityAvatarController implements ReactiveController {
       return cached.url;
     }
     const route: { url: string | null; result: typeof result; release?: () => void } = {
-      url: null,
+      // Keep the configured source visible to renderers until the shared fetch settles.
+      url: value,
       result,
       release: retainAvatarImageUrl(result),
     };

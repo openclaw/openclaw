@@ -1,4 +1,3 @@
-// Terminal progress reporter used by long-running CLI commands.
 import { log, spinner, symbol } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
@@ -73,7 +72,6 @@ export function createProgressSpinner(
   };
 }
 
-const DEFAULT_DELAY_MS = 0;
 // Only one active progress renderer may own the terminal line at a time.
 let activeProgress = 0;
 
@@ -87,7 +85,6 @@ type ProgressOptions = {
   fallback?: "spinner" | "line" | "log" | "none";
 };
 
-/** Minimal progress API exposed to CLI work callbacks. */
 export type ProgressReporter = {
   setLabel: (label: string) => void;
   setPercent: (percent: number) => void;
@@ -95,22 +92,11 @@ export type ProgressReporter = {
   done: () => void;
 };
 
-/** Completed/total progress update shape used by totals-based commands. */
 export type ProgressTotalsUpdate = {
   completed: number;
   total: number;
   label?: string;
 };
-
-/** Decide whether the interactive spinner is safe for the current terminal state. */
-export function shouldUseInteractiveProgressSpinner(params: {
-  fallback?: ProgressOptions["fallback"];
-  streamIsTty?: boolean;
-  stdinIsRaw?: boolean;
-}): boolean {
-  const spinnerRequested = params.fallback === undefined || params.fallback === "spinner";
-  return spinnerRequested && params.streamIsTty === true && params.stdinIsRaw !== true;
-}
 
 const noopReporter: ProgressReporter = {
   setLabel: () => {},
@@ -119,32 +105,26 @@ const noopReporter: ProgressReporter = {
   done: () => {},
 };
 
-/** Create a no-op, spinner, line, log, and OSC-capable progress reporter. */
 export function createCliProgress(options: ProgressOptions): ProgressReporter {
-  if (options.enabled === false) {
-    return noopReporter;
-  }
-  if (activeProgress > 0) {
+  if (options.enabled === false || activeProgress > 0) {
     return noopReporter;
   }
 
   const stream = options.stream ?? process.stderr;
   const isTty = stream.isTTY;
-  const allowLog = !isTty && options.fallback === "log";
+  const fallback = options.fallback;
+  const allowLog = !isTty && fallback === "log";
   if (!isTty && !allowLog) {
     return noopReporter;
   }
 
-  const delayMs = resolveTimerTimeoutMs(options.delayMs, DEFAULT_DELAY_MS, 0);
+  const delayMs = resolveTimerTimeoutMs(options.delayMs, 0, 0);
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
   const stdinIsRaw = process.stdin.isRaw;
-  const allowSpinner = shouldUseInteractiveProgressSpinner({
-    fallback: options.fallback,
-    streamIsTty: isTty,
-    stdinIsRaw,
-  });
-  const allowLine = isTty && options.fallback === "line";
-  if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
+  const wantsSpinner = fallback === undefined || fallback === "spinner";
+  const allowSpinner = wantsSpinner && isTty && !stdinIsRaw;
+  const allowLine = isTty && fallback === "line";
+  if (isTty && stdinIsRaw && wantsSpinner) {
     // Raw stdin usually means an interactive prompt owns cursor movement.
     return noopReporter;
   }
@@ -217,12 +197,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       }
     }
     spin?.message(label);
-    if (renderLine) {
-      renderLine();
-    }
-    if (renderLog) {
-      renderLog();
-    }
+    renderLine?.();
+    renderLog?.();
   };
 
   const start = () => {
@@ -270,18 +246,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       clearTimeout(timer);
       timer = null;
     }
-    if (!started) {
-      if (isTty) {
-        unregisterActiveProgressLine(stream);
-      }
-      activeProgress = Math.max(0, activeProgress - 1);
-      return;
+    if (started) {
+      controller?.clear();
+      spin?.stop("");
+      clearActiveProgressLine();
     }
-    if (controller) {
-      controller.clear();
-    }
-    spin?.stop("");
-    clearActiveProgressLine();
     if (isTty) {
       unregisterActiveProgressLine(stream);
     }

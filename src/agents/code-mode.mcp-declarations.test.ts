@@ -2,8 +2,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { expectDefined } from "@openclaw/normalization-core";
-import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -40,6 +40,16 @@ describe("Code Mode MCP declarations", () => {
       input?: Record<string, unknown>;
       expected?: Record<string, unknown>;
     }[] = [
+      {
+        name: "commentKey",
+        schema: {
+          type: "object",
+          properties: { "path */ segment": { type: "string", description: "Fixture route" } },
+          required: ["path */ segment"],
+          additionalProperties: false,
+        },
+        input: { "path */ segment": "synthetic" },
+      },
       {
         name: "defaulted",
         schema: defaultedSchema,
@@ -199,9 +209,7 @@ describe("Code Mode MCP declarations", () => {
     expect(value.file.bytes).toBe(Buffer.byteLength(value.file.content));
     // Compile real accepted calls against the advertised header, not a parallel expected renderer.
     const fileName = "/mcp-declaration-consumer.ts";
-    const source = ts.createSourceFile(
-      fileName,
-      `${value.file.content}\n${calls.join(";\n")};
+    const source = `${value.file.content}\n${calls.join(";\n")};
 // @ts-expect-error Dictionary values are strings.
 MCP.fixture.dictionary({ topic: 42 });
 // @ts-expect-error Closed objects have no extra properties.
@@ -230,20 +238,7 @@ MCP.fixture.nullable();
 // @ts-expect-error An enum beyond the literal-rendering cap still excludes null.
 MCP.fixture.nullableKeyword({ ...nullableFields, oversized: null });
 // @ts-expect-error Nested dictionary values retain their enum type.
-MCP.fixture.nested({ values: [{ topic: 42 }] });`,
-      ts.ScriptTarget.ESNext,
-      true,
-    );
-    const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-    const host = ts.createCompilerHost(options);
-    const getSourceFile = host.getSourceFile.bind(host);
-    host.getSourceFile = (name, ...args) =>
-      name === fileName ? source : getSourceFile(name, ...args);
-    const program = ts.createProgram([fileName], options, host);
-    expect(
-      ts
-        .getPreEmitDiagnostics(program)
-        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-    ).toEqual([]);
+MCP.fixture.nested({ values: [{ topic: 42 }] });`;
+    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
   });
 });

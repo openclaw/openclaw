@@ -27,7 +27,7 @@ title: "Configuration — messages and talk"
       },
     },
     inbound: {
-      debounceMs: 2000, // 0 disables
+      debounceMs: 2000, // 0 disables ordinary burst batching
       byChannel: {
         whatsapp: 5000,
         slack: 1500,
@@ -85,7 +85,13 @@ Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 ### Inbound debounce
 
-Batches rapid text-only messages from the same sender into a single agent turn. Media/attachments flush immediately. Control commands bypass debouncing. Default `debounceMs`: `2000`.
+Batches rapid text-only messages from the same sender into a single agent turn after a quiet window. Media/attachments flush immediately. Control commands bypass debouncing.
+
+- `messages.inbound.byChannel.<channel>` overrides `messages.inbound.debounceMs`.
+- With neither set, Telegram uses `300` milliseconds; other channels have no generic debounce delay.
+- `0` disables ordinary burst batching. Telegram still automatically assembles near-limit long-paste fragments, allowing up to `1500` milliseconds for continuations.
+
+Batching is a bounded timing heuristic, not a guarantee that every part of a long message becomes one turn. See [Inbound debouncing](/concepts/messages#inbound-debouncing) and [Telegram inbound text batching](/channels/telegram/messaging#inbound-text-batching).
 
 ### Other message keys
 

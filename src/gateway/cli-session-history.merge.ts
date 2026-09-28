@@ -504,23 +504,6 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
   addTimestampToSummary(summary, entry);
 }
 
-function findRoleTextCandidate(
-  index: RoleTextIndex,
-  entry: ComparableHistoryMessage,
-  consumed: Set<ComparableHistoryMessage>,
-  minimumOrder: number,
-): ComparableHistoryMessage | undefined {
-  if (!entry.role || !entry.text) {
-    return undefined;
-  }
-  return findTimestampMatch(
-    index.get(entry.role)?.get(entry.text),
-    entry.timestamp,
-    consumed,
-    minimumOrder,
-  );
-}
-
 function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
   if (entry.role !== "user") {
     return false;
@@ -572,7 +555,7 @@ export function mergeImportedChatHistoryMessages(params: {
   const exactExternalIdentityIndex = new Map<string, ComparableHistoryMessage>();
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
-  const roleTextMinimumOrder = new Map<string, number>();
+  const roleTextMinimumOrder = new Map<string, Map<string, number>>();
   const localImageMediaCandidates = new Map<string, ConsumableCandidates>();
   const consumedLocalCandidates = new Set<ComparableHistoryMessage>();
   const advanceRoleTextMinimumOrder = (
@@ -589,11 +572,12 @@ export function mergeImportedChatHistoryMessages(params: {
       if (!text) {
         continue;
       }
-      const key = JSON.stringify([entry.role, text]);
-      roleTextMinimumOrder.set(
-        key,
-        Math.max(roleTextMinimumOrder.get(key) ?? 0, matched.order + 1),
-      );
+      let byText = roleTextMinimumOrder.get(entry.role);
+      if (!byText) {
+        byText = new Map();
+        roleTextMinimumOrder.set(entry.role, byText);
+      }
+      byText.set(text, Math.max(byText.get(text) ?? 0, matched.order + 1));
     }
   };
   const indexEntry = (entry: ComparableHistoryMessage) => {
@@ -643,53 +627,33 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
     const imageCandidates = turnKey ? localImageMediaCandidates.get(turnKey) : undefined;
-    let imageDuplicate: ComparableHistoryMessage | undefined;
-    if (imageCandidates) {
-      imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      while (imageDuplicate && consumedLocalCandidates.has(imageDuplicate)) {
-        imageCandidates.cursor += 1;
-        imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      }
-      if (imageDuplicate) {
-        imageCandidates.cursor += 1;
-      }
-    }
-    if (imageDuplicate) {
-      // Each local image turn suppresses one import while retaining the native
-      // identity on the media-bearing row that remains visible.
-      const projected = projectImportedIdentity(imageDuplicate.message, imported.message);
-      if (projected !== imageDuplicate.message) {
-        imageDuplicate.message = projected;
-        imageDuplicate.externalIdentityKey = resolveImportedExternalIdentityKey(projected);
-        if (imageDuplicate.externalIdentityKey) {
-          exactExternalIdentityIndex.set(imageDuplicate.externalIdentityKey, imageDuplicate);
-        }
-        changed = true;
-      }
-      consumedLocalCandidates.add(imageDuplicate);
-      advanceRoleTextMinimumOrder(imported, imageDuplicate);
-      continue;
-    }
     let duplicate: ComparableHistoryMessage | undefined;
-    if (!imported.hasCliImageMentions) {
+    if (imageCandidates) {
+      duplicate = imageCandidates.entries[imageCandidates.cursor];
+      while (duplicate && consumedLocalCandidates.has(duplicate)) {
+        imageCandidates.cursor += 1;
+        duplicate = imageCandidates.entries[imageCandidates.cursor];
+      }
+      if (duplicate) {
+        imageCandidates.cursor += 1;
+      }
+    }
+    if (!duplicate && !imported.hasCliImageMentions) {
       const index = imported.externalIdentityKey
         ? identitylessRoleTextIndex
         : allMessageRoleTextIndex;
-      const importedMinimumOrder =
-        roleTextMinimumOrder.get(JSON.stringify([imported.role, imported.text])) ?? 0;
+      const byText = imported.role ? roleTextMinimumOrder.get(imported.role) : undefined;
+      const importedMinimumOrder = imported.text ? (byText?.get(imported.text) ?? 0) : 0;
       // A user can quote the complete note. Prefer that literal local turn
       // before comparing the text after an OpenClaw-generated note.
       for (const text of [imported.text, imported.driftNoteText]) {
         if (!imported.role || !text) {
           continue;
         }
-        const minimumOrder = Math.max(
-          importedMinimumOrder,
-          roleTextMinimumOrder.get(JSON.stringify([imported.role, text])) ?? 0,
-        );
-        duplicate = findRoleTextCandidate(
-          index,
-          { ...imported, text },
+        const minimumOrder = Math.max(importedMinimumOrder, byText?.get(text) ?? 0);
+        duplicate = findTimestampMatch(
+          index.get(imported.role)?.get(text),
+          imported.timestamp,
           consumedLocalCandidates,
           minimumOrder,
         );

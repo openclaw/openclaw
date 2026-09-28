@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { markRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
@@ -11,6 +11,7 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -189,7 +190,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
       auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
-      release: vi.fn(),
+      async [Symbol.asyncDispose]() {},
     });
     completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
@@ -379,8 +380,12 @@ describe("compactEmbeddedRunForRecovery", () => {
         expect(recorder?.requestBudget).toBe(requestBudget);
         expect(runtimeContext).not.toHaveProperty("requestBudget");
         recorder?.recordUsage?.({ input: 100, output: 50, total: 150 });
-        recorder?.recordCompaction?.(40);
-        state.observeContextAccounting({ kind: "model", contextTokens: 20 });
+        recorder?.recordCompaction?.({
+          tokensBefore: 120,
+          tokensAfter: 40,
+          compactionKind: "context-engine",
+        });
+        state.observeContextAccounting({ kind: "model", contextTokens: 20, successful: false });
         if (outcome === "failed") {
           throw error;
         }
@@ -523,11 +528,12 @@ describe("createEmbeddedRunCompactionRuntime", () => {
       sessionTarget: currentTarget,
       sessionManager: SessionManager.inMemory(baseRunParams.workspaceDir),
     };
-    const sessionPromptState = createEmbeddedRunSessionPromptState({
+    const sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
       sessionAgentId: "main",
       resolvedSessionKey: baseRunParams.sessionKey,
       lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      onInterrupt: () => {},
     });
     const runtime = createEmbeddedRunCompactionRuntime({
       runParams,
@@ -581,17 +587,20 @@ describe("createEmbeddedRunCompactionRuntime", () => {
 
   it("retires MCP predecessors when an in-memory compaction rotates identity", async () => {
     const fixture = await createRuntime();
-    const { getOrCreateSessionMcpRuntime } =
+    const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
       await import("../agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting } =
+    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
       await import("../agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const manager = getSessionMcpRuntimeManagerForTesting();
     const create = (sessionId: string) =>
       getOrCreateSessionMcpRuntime({
         sessionId,
         sessionKey: fixture.currentTarget.sessionKey,
         workspaceDir: path.dirname(fixture.currentTarget.storePath),
-        cfg: { mcp: { servers: {} } },
+        cfg: unopenedMcpConfig,
         manifestRegistry: { plugins: [] },
       });
     try {

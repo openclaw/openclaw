@@ -9,6 +9,7 @@ type BoardSessionSurfaceProps = {
   session: BoardGetParams;
   snapshot: BoardSnapshot;
   activeTabId: string;
+  pageWidgetName?: string;
   canMutate: boolean;
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
@@ -34,6 +35,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .session=${props.session}
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
+        .pageWidgetName=${props.pageWidgetName ?? ""}
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
         .canMutate=${props.canMutate}

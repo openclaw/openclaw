@@ -1,0 +1,128 @@
+.composer-context-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-strong) 14%, transparent);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.composer-context-strip__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 60%;
+  font-weight: 600;
+}
+
+.composer-context-strip__label-text,
+.composer-context-strip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-context-strip__people {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+}
+
+.composer-context-strip__person {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.composer-context-strip__person[hidden],
+.composer-context-strip__more[hidden] {
+  display: none;
+}
+
+.composer-context-strip__person-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-context-strip__person .chat-author-avatar {
+  flex-basis: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.composer-context-strip__more {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-context-strip__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.composer-context-strip__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.composer-context-strip__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.composer-context-strip__dismiss {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--chat-stack-trailing-control-size, 24px);
+  height: var(--chat-stack-trailing-control-size, 24px);
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.composer-context-strip__dismiss:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.composer-context-strip__dismiss svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .composer-context-strip {
+    /* Keep adjacent dismiss targets from overlapping when contexts stack. */
+    padding-block: 10px;
+  }
+
+  .composer-context-strip__dismiss::before {
+    position: absolute;
+    inset: -10px;
+    content: "";
+  }
+}

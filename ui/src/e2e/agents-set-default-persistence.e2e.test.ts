@@ -1,6 +1,7 @@
 // Control UI tests cover Agents page Set Default persistence behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -27,7 +28,11 @@ suite.define(() => {
         agents: { entries: { main: { default: true }, kimi: {} } },
       };
       const savedConfig = {
-        agents: { entries: { main: {}, kimi: { default: true } } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "kimi" } },
+          entries: { main: {}, kimi: {} },
+        },
       };
       const gateway = await installMockGateway(page, {
         assistantName: "Main agent",
@@ -61,7 +66,7 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}agents`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
       expect(response?.status()).toBe(200);
 
       // Click auto-waits for the elements to be actionable (enabled), so
@@ -80,4 +85,68 @@ suite.define(() => {
       expect(requireRecord(JSON.parse(String(raw))).agents).not.toHaveProperty("list");
     });
   });
+
+  it.each([true, false])(
+    "uses Gateway ownership for Set Default state (selection required: %s)",
+    async (selectionRequired) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const defaultId = selectionRequired ? "main" : "research";
+        const config = {
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, research: {} },
+            ...(!selectionRequired ? { defaults: { systemAgent: { agentId: "research" } } } : {}),
+          },
+        };
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: defaultId,
+          methodResponses: {
+            "agents.list": {
+              agents: [
+                { id: "main", name: "Main agent" },
+                { id: "research", name: "Research agent" },
+              ],
+              defaultId,
+              ownership: "explicit",
+              selectionRequired,
+              mainKey: "main",
+              scope: "per-sender",
+            },
+            "config.get": {
+              config,
+              sourceConfig: config,
+              hash: "roster-hash",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/agents`);
+        await gateway.waitForRequest("agents.list");
+        await page.locator(".agent-select__trigger").click();
+        await page.getByRole("menuitemradio", { name: /Research agent/ }).waitFor();
+        await page.screenshot({
+          path: path.join(
+            suite.artifactDir,
+            selectionRequired ? "ownerless.png" : "designated.png",
+          ),
+        });
+        expect(await page.locator("wa-dropdown-item .agent-select__badge").count()).toBe(0);
+        await page
+          .getByRole("menuitemradio", {
+            name: selectionRequired ? "Main agent" : "Research agent",
+            exact: true,
+          })
+          .click();
+        const defaultAction = page.getByRole("button", {
+          name: selectionRequired ? "Set Default" : "Default",
+          exact: true,
+        });
+        await defaultAction.waitFor();
+        await expect.poll(() => defaultAction.isDisabled()).toBe(!selectionRequired);
+      });
+    },
+  );
 });

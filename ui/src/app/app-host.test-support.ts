@@ -1,4 +1,8 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
+import type { ApplicationRouter, RouteId } from "../app-routes.ts";
+import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
 
 export type ShellKeyboardState = {
@@ -55,4 +59,76 @@ export function stubRenderedWhenDefined(shell: object): void {
     value: (tagName: string) =>
       customElements.get(tagName) ? document.createElement(tagName) : null,
   });
+}
+
+export function committedRouterState(
+  routeId: RouteId,
+  pathname: string,
+  data?: unknown,
+): ReturnType<ApplicationRouter["getState"]> {
+  const location = { pathname, search: "", hash: "" } satisfies RouteLocation;
+  return {
+    location,
+    resolvedLocation: location,
+    status: "success",
+    matches: [{ routeId, location, data }],
+    pendingMatches: [],
+    cachedMatches: [],
+  } as unknown as ReturnType<ApplicationRouter["getState"]>;
+}
+
+export function createShellConfigFixture() {
+  const config = createApplicationConfigCapability({ resourceBasePath: "" });
+  config.refresh = vi.fn(async () => null);
+  return config;
+}
+
+export function createRosterRefreshContext(params: {
+  previous: AgentsListResult;
+  next: AgentsListResult;
+  selectedId: string;
+}) {
+  const agentsState = { agentsList: params.previous };
+  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
+  const refreshList = vi.fn(async () => {
+    agentsState.agentsList = params.next;
+    return params.next;
+  });
+  const invalidateFiles = vi.fn();
+  const invalidateIdentity = vi.fn();
+  const ensureIdentity = vi.fn(async () => undefined);
+  const setSelection = vi.fn((agentId: string) => {
+    selectionState.selectedId = agentId;
+    selectionState.scopeId = agentId;
+  });
+  const refreshConfig = vi.fn(async () => null);
+  const context = {
+    config: createShellConfigFixture(),
+    agents: {
+      state: agentsState,
+      refreshList,
+      invalidateFiles,
+    },
+    agentIdentity: {
+      invalidate: invalidateIdentity,
+      ensure: ensureIdentity,
+    },
+    agentSelection: {
+      state: selectionState,
+      set: setSelection,
+    },
+    runtimeConfig: {
+      state: { configFormDirty: false },
+      refresh: refreshConfig,
+    },
+  } as unknown as ApplicationContext;
+  return {
+    context,
+    refreshList,
+    invalidateFiles,
+    invalidateIdentity,
+    ensureIdentity,
+    setSelection,
+    refreshConfig,
+  };
 }

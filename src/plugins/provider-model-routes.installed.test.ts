@@ -3,9 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
-import { resolveConfiguredModelCatalogOverrides } from "../agents/model-catalog-route.js";
+import { createConfiguredModelCatalogOverridesResolver } from "../agents/model-catalog-route.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getModelRefStatus, resolveModelRefFromString } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import { materializePreparedModelCatalog } from "../agents/prepared-model-runtime.full-catalog.js";
+import type { PreparedRuntimeCapabilityModel } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
@@ -232,6 +235,130 @@ describe("installed Arcee catalog identity", () => {
     });
   });
 
+  function catalogEntry(provider: string, id: string): ModelCatalogEntry {
+    return { provider, id, name: id, reasoning: false };
+  }
+
+  function runtimeCapability(provider: string, modelId: string): PreparedRuntimeCapabilityModel {
+    return {
+      provider,
+      modelId,
+      model: {
+        provider: "fixture-runtime",
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        baseUrl: "https://fixture.example.test/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1024,
+        maxTokens: 256,
+        params: { runtimeModel: modelId },
+      },
+    };
+  }
+
+  it("materializes catalog identities with the policy selected for each invocation", () => {
+    installed(true, (_root, metadataSnapshot) => {
+      const canonical = catalogEntry("arcee", "trinity-large-thinking");
+      const variant = catalogEntry("arcee", "arcee-ai/trinity-large-thinking@personal");
+      const distinct = [
+        catalogEntry("fixture-none", "Reader"),
+        catalogEntry("fixture-none", "reader"),
+        catalogEntry("fixture-none", "Reader@variant"),
+        catalogEntry("fixture/a", "b"),
+        catalogEntry("fixture", "a/b"),
+      ];
+      const catalog: ModelCatalogSnapshot = {
+        entries: [canonical, ...distinct],
+        routeVariants: [variant],
+        staticEntries: [canonical, ...distinct],
+      };
+      const configured = {
+        ...catalogEntry("arcee", "arcee-ai/trinity-large-thinking@work"),
+        name: "Configured",
+      };
+      const runtimes = [
+        runtimeCapability(" Arcee ", "arcee-ai/trinity-large-thinking@work"),
+        runtimeCapability("fixture-none", "Reader"),
+        runtimeCapability("fixture/a", "b"),
+      ];
+      const materialize = (metadata: PluginMetadataSnapshot) =>
+        withPluginMetadataSnapshotScope(metadata, () =>
+          materializePreparedModelCatalog(catalog, runtimes, [configured]),
+        );
+      const empty = createPluginMetadataSnapshotFixture();
+      const before = materialize(empty);
+      expect(before.entries[0]).toBe(canonical);
+      expect(before.routeVariants[0]).toBe(variant);
+      expect(before.staticEntries).toHaveLength(7);
+
+      const prepared = materialize(metadataSnapshot);
+      expect(prepared.entries.map(({ id, reasoning }) => [id, reasoning])).toEqual([
+        ["trinity-large-thinking", true],
+        ["Reader", true],
+        ["reader", false],
+        ["Reader@variant", false],
+        ["b", true],
+        ["a/b", false],
+      ]);
+      expect(prepared.routeVariants[0]).toMatchObject({
+        id: "arcee-ai/trinity-large-thinking@personal",
+        reasoning: true,
+        thinkingPolicyProvider: "fixture-runtime",
+      });
+      expect(prepared.staticEntries).toHaveLength(6);
+      expect(prepared.staticEntries?.[0]).toMatchObject({
+        id: "arcee-ai/trinity-large-thinking@work",
+        name: "Configured",
+        reasoning: true,
+      });
+      expect(materialize(empty)).toEqual(before);
+    });
+  });
+
+  it("captures catalog rows before capabilities and rereads changed row identities", () => {
+    installed(true, () => {
+      let prepared = false;
+      const shared = catalogEntry("fixture-none", "Before");
+      const catalog: ModelCatalogSnapshot = {
+        get entries() {
+          return prepared ? [catalogEntry("fixture-none", "Decoy")] : [shared];
+        },
+        get routeVariants() {
+          if (prepared) {
+            shared.id = "After";
+          }
+          return [shared];
+        },
+      };
+      const before = runtimeCapability("fixture-none", "Before");
+      const first: PreparedRuntimeCapabilityModel = {
+        provider: before.provider,
+        modelId: before.modelId,
+        get model() {
+          prepared = true;
+          return before.model;
+        },
+      };
+
+      const result = materializePreparedModelCatalog(catalog, [
+        first,
+        runtimeCapability("fixture-none", "After"),
+      ]);
+
+      expect(result.entries[0]).toMatchObject({
+        id: "Before",
+        params: { runtimeModel: "Before" },
+      });
+      expect(result.routeVariants[0]).toMatchObject({
+        id: "After",
+        params: { runtimeModel: "After" },
+      });
+    });
+  });
+
   it("uses installed identity for authored catalog and endpoint auth", () => {
     installed(true, (_root, metadataSnapshot) => {
       const cfg: OpenClawConfig = {
@@ -257,9 +384,9 @@ describe("installed Arcee catalog identity", () => {
         },
       };
       expect(
-        resolveConfiguredModelCatalogOverrides({
-          cfg,
-          entry: { provider: "arcee", id: "trinity-large-thinking" },
+        createConfiguredModelCatalogOverridesResolver({ cfg })({
+          provider: "arcee",
+          id: "trinity-large-thinking",
         }),
       ).toMatchObject({ name: "Authored route", contextWindow: 32768 });
       const projected = resolveModelProviderAuthConfig({

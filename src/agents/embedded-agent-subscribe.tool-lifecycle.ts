@@ -19,6 +19,7 @@ type ToolTerminal = {
 type EmbeddedToolLifecycleParams<T> = {
   toolName: string;
   toolCallId: string;
+  parentToolCallId?: string;
   args: unknown;
   replaySafe?: boolean;
   hideFromChannelProgress?: boolean;
@@ -37,6 +38,7 @@ export function createEmbeddedToolLifecycleRunner(
       type: "tool_execution_start",
       toolName: toolParams.toolName,
       toolCallId: toolParams.toolCallId,
+      parentToolCallId: toolParams.parentToolCallId,
       args: toolParams.args,
       replaySafe: toolParams.replaySafe,
       hideFromChannelProgress: toolParams.hideFromChannelProgress,

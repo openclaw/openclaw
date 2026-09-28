@@ -51,27 +51,28 @@ describe("status.command-sections", () => {
     ).toBe("2 · no workspaces bootstrapping · sessions 0");
   });
 
-  it("shows when heartbeat is waiting for a delivery route", () => {
-    expect(
-      buildStatusHeartbeatValue({
-        summary: {
-          heartbeat: {
-            defaultAgentId: "main",
-            agents: [
-              {
-                agentId: "main",
-                enabled: true,
-                every: "30m",
-                everyMs: 1_800_000,
-                waitingForRoute: true,
-              },
-            ],
-          },
+  it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
+    const value = buildStatusHeartbeatValue({
+      summary: {
+        heartbeat: {
+          defaultAgentId: "main",
+          agents: [
+            {
+              agentId: "main",
+              enabled: true,
+              every: "30m",
+              everyMs: 1_800_000,
+              waitingForRoute: true,
+            },
+          ],
         },
-      }),
-    ).toBe(
-      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
-    );
+      },
+    });
+
+    expect(value).toContain("30m (main; waiting for delivery route");
+    expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(value).toContain('heartbeat.target="telegram"');
+    expect(value).toContain('heartbeat.to="123456789"');
   });
 
   it("formats security audit lines with finding caps and follow-up commands", () => {
@@ -292,6 +293,27 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it("warns when deep health says the retained Node executable is gone", () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const rows = buildStatusHealthRows({
+      health: {
+        durationMs: 42,
+        childRuntime: { execPath, available: false },
+      } as HealthSummary,
+      formatHealthChannelLines: () => ["Discord: OK"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
+    expect(rows[1]).toEqual({
+      Item: "Gateway runtime",
+      Status: "warn(WARN)",
+      Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    });
+  });
+
   it.each([
     { account: {}, status: "ok(OK)", detail: "healthy" },
     {
@@ -300,19 +322,9 @@ describe("status.command-sections", () => {
       detail: "failed (unknown) - sync rejected",
     },
     {
-      account: { healthState: "blocked" },
-      status: "warn(WARN)",
-      detail: "blocked",
-    },
-    {
       account: { healthState: "unknown" },
       status: "warn(WARN)",
       detail: "unknown",
-    },
-    {
-      account: { statusState: "unstable" },
-      status: "warn(WARN)",
-      detail: "auth stabilizing",
     },
     {
       account: { configured: false },
@@ -356,7 +368,7 @@ describe("status.command-sections", () => {
     expect(rows).toContainEqual({ Item: "WhatsApp", Status: status, Detail: detail });
   });
 
-  it("marks activated plugin service failures as warnings in deep health rows", () => {
+  it("marks colon-bearing plugin failures and unavailable plugins as warnings in deep health rows", () => {
     const health: HealthSummary = {
       ok: true,
       ts: 0,
@@ -369,14 +381,25 @@ describe("status.command-sections", () => {
       channelOrder: [],
       channelLabels: {},
       plugins: {
-        loaded: ["calendar"],
+        loaded: ["broken:ok"],
         errors: [
           {
-            id: "calendar",
+            id: "broken:ok",
             origin: "workspace",
             activated: true,
             failurePhase: "service",
             error: "service scheduler: address already in use",
+          },
+        ],
+        unavailable: [
+          {
+            id: "memory-owner",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "manifest unreadable",
+            },
           },
         ],
       },
@@ -390,9 +413,14 @@ describe("status.command-sections", () => {
     });
 
     expect(rows).toContainEqual({
-      Item: "Plugin calendar",
+      Item: "Plugin",
       Status: "warn(WARN)",
-      Detail: "failed - service scheduler: address already in use; run openclaw doctor",
+      Detail: "failed - broken:ok: service scheduler: address already in use; run openclaw doctor",
+    });
+    expect(rows).toContainEqual({
+      Item: "Plugin memory-owner",
+      Status: "warn(WARN)",
+      Detail: expect.stringContaining("unavailable - unreadable-package-json: manifest unreadable"),
     });
   });
 

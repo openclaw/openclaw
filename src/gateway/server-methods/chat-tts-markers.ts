@@ -7,7 +7,7 @@ import {
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import {
-  extractAssistantDisplayTextFromContent,
+  extractAssistantDisplayText,
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
 import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
@@ -29,7 +29,7 @@ function resolveTtsSupplementMarkerText(text: string): string {
     ? (projected.content as AssistantDisplayContentBlock[])
     : undefined;
   return (
-    extractAssistantDisplayTextFromContent(projectedContent) ??
+    extractAssistantDisplayText(projectedContent) ??
     (typeof projected?.text === "string" ? projected.text.trim() : undefined) ??
     trimmed
   );

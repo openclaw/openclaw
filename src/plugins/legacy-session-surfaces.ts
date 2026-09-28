@@ -142,7 +142,6 @@ function loadLegacySessionSurface(params: {
   fs.closeSync(opened.fd);
   const moduleExport = getCachedPluginModuleLoader({
     modulePath: safeSource,
-    rootDir: moduleRoot,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
   })(safeSource);
@@ -161,34 +160,33 @@ export function prepareLegacySessionSurfaces(params: {
       config: params.config,
       env: params.env,
     });
-  const manifestRecords = context.manifestRegistry?.plugins ?? [];
-  const selectedPluginIds = new Set(
-    resolveConfiguredChannelPluginIds({
-      config: context.config,
-      activationSourceConfig: context.activationSourceConfig,
-      workspaceDir: context.workspaceDir,
-      env: context.env,
-      manifestRecords,
-    }),
+  const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
+    (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
   );
   const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
-  for (const record of manifestRecords) {
+  let selectedPluginIds: Set<string> | undefined;
+  const declaringRecords = manifestRecords.filter((record) => {
     if (
-      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true &&
       isEnabledLegacySurfaceOwner({
         record,
         config: context.activationSourceConfig,
         normalizedConfig,
       })
     ) {
-      selectedPluginIds.add(record.id);
+      return true;
     }
-  }
-  const declaringRecords = manifestRecords.filter(
-    (record) =>
-      selectedPluginIds.has(record.id) &&
-      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
-  );
+    // Already eligible migration owners do not need persisted-auth presence probes.
+    selectedPluginIds ??= new Set(
+      resolveConfiguredChannelPluginIds({
+        config: context.config,
+        activationSourceConfig: context.activationSourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+        manifestRecords,
+      }),
+    );
+    return selectedPluginIds.has(record.id);
+  });
   if (declaringRecords.length === 0) {
     return EMPTY_LEGACY_SESSION_SURFACES;
   }

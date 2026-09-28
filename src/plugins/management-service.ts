@@ -8,14 +8,13 @@ import type {
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
+import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
   computeDeclaredSurfaceHash,
-  formatPluginCapabilityConsentRequired,
-  resolveAcceptedSurfaceCurrent,
   resolvePluginInstallRecordIntegrity,
   resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
@@ -24,6 +23,7 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { resolvePluginCredentialDescriptors } from "./credential-descriptors.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
   emptyInstalledPluginComponents,
@@ -33,8 +33,17 @@ import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
+import {
+  projectPluginOverviewCapabilities,
+  readInstalledPluginOverview,
+} from "./installed-plugin-overview.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
+  type ManagedPluginIconSource,
+  resolveInstalledPluginClawHubIconSource,
+  resolvePluginIconSource,
+  resolvePluginIconSources,
+  resolvePluginActivityIconSource,
   type ManagedPluginCatalogEntry,
   type ManagedPluginCatalog,
   getManagedPluginCache,
@@ -61,7 +70,6 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
 import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
-import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { createPluginCache, getProcessPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import {
@@ -71,10 +79,7 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
-import {
-  buildPluginDependencyStatus,
-  projectPluginDependencyHealth,
-} from "./status-dependencies-core.js";
+import { projectPluginInstallHealth } from "./status-snapshot.js";
 
 function resolveManagedPluginState(params: {
   enabled: boolean;
@@ -101,50 +106,28 @@ function pluginVersionKey(name: string, version: string): string {
 function resolveManagedPluginDiagnostics(
   snapshot: PluginMetadataSnapshot,
   config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
 ): PluginDiagnostic[] {
-  const dependencies = getManagedPluginCache().dependencyStatus;
   const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
-  const { diagnostics } = projectPluginDependencyHealth({
-    plugins: snapshot.index.plugins.map((record) => {
-      const manifest = snapshot.byPluginId.get(record.pluginId);
-      const enabled = isEnabled(record.pluginId);
-      if (manifest && !dependencies.has(manifest) && tracksPluginDependencyStatus(record)) {
-        dependencies.set(
-          manifest,
-          buildPluginDependencyStatus({
-            rootDir: record.rootDir,
-            dependencies: manifest.packageDependencies,
-            optionalDependencies: manifest.packageOptionalDependencies,
-          }),
-        );
-      }
-      return {
-        id: record.pluginId,
-        source: manifest?.source ?? record.source ?? record.manifestPath,
-        enabled,
-        status: enabled ? ("loaded" as const) : ("disabled" as const),
-        dependencyStatus: manifest ? dependencies.get(manifest) : undefined,
-      };
-    }),
-    diagnostics: [...snapshot.diagnostics],
-  });
+  const { diagnostics } = projectPluginInstallHealth(
+    {
+      plugins: snapshot.index.plugins.map((record) => {
+        const manifest = snapshot.byPluginId.get(record.pluginId);
+        const enabled = isEnabled(record.pluginId);
+        return {
+          id: record.pluginId,
+          source: manifest?.source ?? record.source ?? record.manifestPath,
+          enabled,
+          status: enabled ? ("loaded" as const) : ("disabled" as const),
+        };
+      }),
+      diagnostics: [...snapshot.diagnostics],
+    },
+    { metadata: snapshot, config, env },
+  );
   return diagnostics;
 }
 
-export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
-
-function resolvePluginIconSource(params: {
-  metadata: PluginMetadataSnapshot;
-  pluginId: string;
-}): ManagedPluginIconSource | undefined {
-  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
-  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
-  const localIconPath = normalizeOptionalString(manifest?.iconPath);
-  if (localIconPath && manifest) {
-    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
-  }
-  return undefined;
-}
 function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const workspace = resolvePluginControlPlaneWorkspace({ config, env });
   return {
@@ -154,7 +137,7 @@ function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.
   };
 }
 
-function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+export function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const boot = getProcessGatewayPluginMetadataSnapshot();
   const candidate = getProcessPluginCache().desiredMetadata;
   return candidate && candidate.boot === boot
@@ -189,16 +172,24 @@ export function refreshManagedPluginMetadata(params: {
   return snapshot;
 }
 
-/** Resolve the current package-local icon without accepting caller-provided input. */
-export const resolveManagedPluginIconSource = withManagedPluginCache(
+/** Resolve ordered branding sources from package bytes and exact installed provenance. */
+export const resolveManagedPluginIconSources = withManagedPluginCache(
+  async (params: { config: OpenClawConfig; pluginId: string; env?: NodeJS.ProcessEnv }) => {
+    const env = params.env ?? process.env;
+    const metadata = resolveManagedPluginMetadata(params.config, env);
+    return resolvePluginIconSources({ metadata, pluginId: params.pluginId, env });
+  },
+);
+
+export const resolveManagedPluginActivityIconSource = withManagedPluginCache(
   async (params: {
     config: OpenClawConfig;
     pluginId: string;
+    toolName?: string;
     env?: NodeJS.ProcessEnv;
   }): Promise<ManagedPluginIconSource | undefined> => {
-    const env = params.env ?? process.env;
-    const metadata = resolveManagedPluginMetadata(params.config, env);
-    return resolvePluginIconSource({ metadata, pluginId: params.pluginId });
+    const metadata = resolveManagedPluginMetadata(params.config, params.env ?? process.env);
+    return resolvePluginActivityIconSource({ ...params, metadata });
   },
 );
 
@@ -250,21 +241,22 @@ export const listManagedPlugins = withManagedPluginCache(
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
   }): Promise<ManagedPluginCatalog> => {
+    // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
+    // Retain the paired source before hosted catalog I/O can publish another generation.
+    const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
     const env = params.env ?? process.env;
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
-    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config);
     const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
+    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config, env);
     // Prepare the merged entry once; display names never add install identities.
     const officialEntries = prepareCatalogEntries(officialCatalog.entries);
     const bundledOfficialEntries = prepareCatalogEntries(
       listOfficialExternalPluginCatalogEntries(),
     );
-    const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
+    const installedIconsById = new Map<string, boolean>();
     const installedClawHubPackages = new Set<string>();
     const discoveryRegistry = resolveClawHubBaseUrl();
-    const publicDiscoveryRegistry = isDefaultClawHubBaseUrl(discoveryRegistry);
-    const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const categoryTargetsByRegistry = new Map<
       string,
       Map<
@@ -290,22 +282,6 @@ export const listManagedPlugins = withManagedPluginCache(
       const ownership = ownershipResolver.resolvePackage(record.pluginId);
       const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
-      if (
-        enabled &&
-        record.origin !== "bundled" &&
-        !manifest?.trustedOfficialInstall &&
-        ownership.ok &&
-        installRecord
-      ) {
-        const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
-        if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
-          capabilityConsentDiagnostics.push({
-            level: "warn",
-            pluginId: record.pluginId,
-            message: formatPluginCapabilityConsentRequired(record.pluginId),
-          });
-        }
-      }
       const { entry: officialEntry, clawhubPackage } = resolveInstalledHostedOfficialEntry({
         record,
         ...(installOwner ? { installOwner } : {}),
@@ -333,7 +309,7 @@ export const listManagedPlugins = withManagedPluginCache(
             ? { ...localCatalog, ...officialCatalogMetadata }
             : localCatalog;
       const setup = resolvePluginConfigEnablement({
-        config: params.config,
+        config: sourceConfig,
         pluginId: record.pluginId,
         manifest,
       });
@@ -371,15 +347,10 @@ export const listManagedPlugins = withManagedPluginCache(
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }
-      const recordedClawHubPackage =
-        installRecord?.source === "clawhub" &&
-        normalizeOptionalString(installRecord.clawhubUrl) &&
-        resolveClawHubBaseUrl(installRecord.clawhubUrl) === discoveryRegistry
-          ? normalizeOptionalString(installRecord.clawhubPackage)
-          : undefined;
+      const remoteIcon = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
       // Discovery names are registry-scoped; trusted official/npm counterparts belong to the public catalog.
       const discoveryClawHubPackage =
-        (publicDiscoveryRegistry ? clawhubPackage : undefined) ?? recordedClawHubPackage;
+        remoteIcon?.baseUrl === discoveryRegistry ? remoteIcon.packageName : undefined;
       if (discoveryClawHubPackage) {
         plugin.clawhubPackage = discoveryClawHubPackage;
       }
@@ -409,11 +380,18 @@ export const listManagedPlugins = withManagedPluginCache(
       if (!installedIconsById.has(normalizedPluginId)) {
         installedIconsById.set(
           normalizedPluginId,
-          resolvePluginIconSource({ metadata, pluginId: record.pluginId }),
+          Boolean(resolvePluginIconSource({ metadata, pluginId: record.pluginId }) || remoteIcon),
         );
       }
       if (installedIconsById.get(normalizedPluginId)) {
         plugin.hasIcon = true;
+      }
+      const iconOwner = metadata.byPluginId.get(normalizedPluginId);
+      if (iconOwner?.activityIconPath) {
+        plugin.hasActivityIcon = true;
+      }
+      if (iconOwner?.toolActivityIconPaths) {
+        plugin.activityIconTools = Object.keys(iconOwner.toolActivityIconPaths).toSorted();
       }
       if (manifest?.channels.length) {
         plugin.channelIds = [...manifest.channels];
@@ -536,6 +514,7 @@ export const listManagedPlugins = withManagedPluginCache(
         id: pluginId,
         name: resolveOfficialExternalPluginLabel(entry),
         ...(packageName ? { packageName } : {}),
+        ...(clawhub ? { clawhubPackage: clawhub.name } : {}),
         ...(description ? { description } : {}),
         ...(version ? { version } : {}),
         ...(kind ? { kind } : {}),
@@ -550,11 +529,8 @@ export const listManagedPlugins = withManagedPluginCache(
       });
     }
     const diagnostics: unknown[] = getProcessGatewayPluginMetadataSnapshot()
-      ? [...pluginDiagnostics, ...capabilityConsentDiagnostics]
-      : appendPluginControlPlaneWorkspaceDiagnostic(
-          [...pluginDiagnostics, ...capabilityConsentDiagnostics],
-          workspace,
-        );
+      ? pluginDiagnostics
+      : appendPluginControlPlaneWorkspaceDiagnostic(pluginDiagnostics, workspace);
     if (officialCatalog.error) {
       diagnostics.push({
         level: "warn",
@@ -595,6 +571,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
           enabled,
         },
         declared: pendingReview.declared,
+        overview: readInstalledPluginOverview(manifest),
         components: projectInstalledPluginComponents({
           manifest,
           declared: pendingReview.declared,
@@ -666,6 +643,8 @@ export const inspectManagedPlugin = withManagedPluginCache(
         ...summary,
         declared,
         components: projectInstalledPluginComponents({ manifest, declared }),
+        overview: readInstalledPluginOverview(manifest),
+        credentials: manifest ? resolvePluginCredentialDescriptors(manifest) : [],
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };
@@ -712,6 +691,9 @@ export const inspectManagedPlugin = withManagedPluginCache(
       },
       ...summary,
       components: emptyInstalledPluginComponents(),
+      overview: {
+        capabilities: projectPluginOverviewCapabilities(summary.declared, manifest?.uiCapabilities),
+      },
       reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
   },

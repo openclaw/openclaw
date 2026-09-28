@@ -126,7 +126,8 @@ struct GatewayConnectionBrowserSessionTests {
     {
         let url = try #require(URL(string: "wss://gateway.example.test/team/"))
         let original = try gatewayBrowserSessionFixture(token: "first-browser-session")
-        let replacement = try gatewayBrowserSessionFixture(token: "second-browser-session")
+        let replacement = try gatewayBrowserSessionFixture(
+            token: "second-browser-session", expiresAt: original.expiresAt.addingTimeInterval(86400))
         let source = GatewayConnectionEndpointSource(endpoint: .init(
             config: (url, "stale-owner-token", "stale-owner-password"),
             routeAuthority: 1,
@@ -161,6 +162,7 @@ struct GatewayConnectionBrowserSessionTests {
                 })
             #expect(successor != oldLease)
             #expect(successor.route.browserSession == replacement)
+            #expect(successor.route.browserSession?.expiresAt == replacement.expiresAt)
             #expect(recorder.requests.value.map { $0.value(forHTTPHeaderField: "CF-Access-Token") } == [
                 "first-browser-session", "second-browser-session",
             ])
@@ -236,6 +238,29 @@ struct GatewayConnectionBrowserSessionTests {
 @Suite(.serialized)
 struct MacGatewayBrowserSessionStoreTests {
     @Test @MainActor
+    func `cancelled admission leaves an existing sign in current`() async throws {
+        try await self.withIsolatedStore { store in
+            let url = try #require(URL(string: "wss://cancelled-admission-\(UUID().uuidString).example.test/"))
+            let current = try await store.beginBrowserSignIn(url: url)
+            let gate = GatewayConnectionSuspensionGate()
+            let pending = Task {
+                await gate.suspend()
+                return try await store.beginBrowserSignIn(url: url)
+            }
+            await gate.waitUntilStarted()
+            pending.cancel()
+            await gate.open()
+            var admitted: MacGatewayProfileStore.BrowserSignInAttempt?
+            var cancelled = false
+            do { admitted = try await pending.value } catch { cancelled = error is CancellationError }
+            #expect(cancelled)
+            #expect(current.isCurrent)
+            if let admitted { await store.cancelBrowserSignIn(admitted) }
+            await store.cancelBrowserSignIn(current)
+        }
+    }
+
+    @Test @MainActor
     func `failed same-account renewal refreshes the surviving browser credentials`() async throws {
         try await self.withIsolatedStore { store in
             let host = "failed-renewal-\(UUID().uuidString.lowercased()).example.test"
@@ -275,7 +300,7 @@ struct MacGatewayBrowserSessionStoreTests {
                     try await Task.sleep(for: .milliseconds(10))
                 }
                 #expect(refreshes.value == 1)
-                #expect(!oldLease.isCurrent)
+                #expect(oldLease.isCurrent)
                 let surviving = try #require(await store.endpoint(profileID: profile.id).browserSession)
                 #expect(surviving == original)
                 try await browser.lease(for: surviving).prepare(for: surviving.origin, in: WKUserContentController())
@@ -377,6 +402,37 @@ struct MacGatewayBrowserSessionStoreTests {
                 result = .failure(error)
             }
             await connection.shutdown()
+            try await store.remove(profileID: profile.id)
+            try result.get()
+        }
+    }
+
+    @Test @MainActor
+    func `automatic renewal rejects another account before any side effect`() async throws {
+        try await self.withIsolatedStore { store in
+            let host = "renewal-account-\(UUID().uuidString.lowercased()).example.test"
+            let url = try #require(URL(string: "wss://\(host)/"))
+            let accountA = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-a")
+            let accountB = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-b")
+            let initial = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveBrowserSession(name: "Saved", session: accountA, attempt: initial)
+            let result: Result<Void, Error>
+            do {
+                let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                let attempt = try await store.beginBrowserSignIn(url: url)
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await store.saveBrowserSession(
+                        name: "Saved", session: accountB, attempt: attempt, renewingOnly: true)
+                }
+                await store.cancelBrowserSignIn(attempt)
+                #expect(try await store.endpoint(profileID: profile.id).browserSession == accountA)
+                let current = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                #expect(current.connection === binding.connection)
+                #expect(current.chatStoreID == binding.chatStoreID)
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
             try await store.remove(profileID: profile.id)
             try result.get()
         }
@@ -556,6 +612,9 @@ struct MacGatewayBrowserSessionStoreTests {
                 password: nil,
                 attempt: initial)
             let attempt = try await store.beginBrowserSignIn(url: url)
+            let browserAction = GatewayBrowserHandoff(url: session.origin) { attempt.isCurrent }
+            var launches = 0
+            try browserAction.perform { _ in launches += 1 }
             let result: Result<Void, Error>
             do {
                 switch mutation {
@@ -572,6 +631,11 @@ struct MacGatewayBrowserSessionStoreTests {
                         attempt: edit)
                 default: try await store.remove(profileID: profile.id)
                 }
+                #expect(!browserAction.isAvailable)
+                #expect(throws: CancellationError.self) {
+                    try browserAction.perform { _ in launches += 1 }
+                }
+                #expect(launches == 1)
                 await #expect(throws: GatewayBrowserSessionError.superseded) {
                     try await store.saveBrowserSession(name: "Late", session: session, attempt: attempt)
                 }

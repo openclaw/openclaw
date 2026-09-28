@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { reclaimDefinitelyStaleFileLock } from "openclaw/plugin-sdk/file-lock";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 // Doctor enumeration cold-loads this closure; the host engine schema pulls the
@@ -13,12 +13,9 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  importLegacyMemorySidecarIndex,
-  LEGACY_MEMORY_SIDECAR_SUFFIXES,
-  LegacyMemoryDerivedRowsConflictError,
-  type LegacyMemorySidecarSource,
-} from "./doctor-memory-sidecar-import.js";
+import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.js";
+
+const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
 function formatLegacyVectorRows(count: number | undefined): string {
   return count === undefined ? "legacy vector rows" : `${count} vector row(s)`;
@@ -411,10 +408,6 @@ async function migrateLegacyMemorySidecarSource(params: {
   changes: string[];
   warnings: string[];
 }): Promise<{ archiveReady: boolean }> {
-  const { ensureMemoryIndexSchema, loadSqliteVecExtension } =
-    await import("openclaw/plugin-sdk/memory-core-host-engine-schema");
-  const { ensureOpenClawAgentDatabaseSchema, openNodeSqliteDatabase } =
-    await import("openclaw/plugin-sdk/sqlite-runtime");
   // OpenClaw itself can leave a zero-byte placeholder at the legacy sidecar
   // path while the live index is the per-agent SQLite database. An empty file
   // holds no legacy rows, so remove it quietly instead of emitting a permanent
@@ -438,6 +431,12 @@ async function migrateLegacyMemorySidecarSource(params: {
     // Fall through to the regular import path when cleanup fails so the file
     // is still diagnosed instead of silently ignored.
   }
+  const { importLegacyMemorySidecarIndex, LegacyMemoryDerivedRowsConflictError } =
+    await import("./doctor-memory-sidecar-import.js");
+  const { ensureMemoryIndexSchema, loadSqliteVecExtension } =
+    await import("openclaw/plugin-sdk/memory-core-host-engine-schema");
+  const { ensureOpenClawAgentDatabaseSchema, openNodeSqliteDatabase } =
+    await import("openclaw/plugin-sdk/sqlite-runtime");
   await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
   const db = openNodeSqliteDatabase(params.source.agentDatabasePath, { allowExtension: true });
   try {
@@ -595,61 +594,42 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
 const RETIRED_QMD_GLOBAL_LOCK_NAME = "embed.lock.lock";
 const RETIRED_QMD_AGENT_LOCK_NAME = "qmd-write.lock.lock";
 
-async function readDirectoryEntries(directoryPath: string): Promise<Dirent[]> {
-  try {
-    return (await fs.readdir(directoryPath, { withFileTypes: true })).toSorted((left, right) =>
-      left.name.localeCompare(right.name),
-    );
-  } catch {
-    return [];
-  }
-}
-
 async function collectRetiredQmdFileLocks(stateDir: string): Promise<string[]> {
-  const stateEntries = await readDirectoryEntries(stateDir);
-  const lockPaths: string[] = [];
-  if (stateEntries.some((entry) => entry.name === "qmd" && entry.isDirectory())) {
-    const qmdDir = path.join(stateDir, "qmd");
-    const qmdEntries = await readDirectoryEntries(qmdDir);
-    if (qmdEntries.some((entry) => entry.name === RETIRED_QMD_GLOBAL_LOCK_NAME && entry.isFile())) {
-      lockPaths.push(path.join(qmdDir, RETIRED_QMD_GLOBAL_LOCK_NAME));
-    }
-  }
-  if (!stateEntries.some((entry) => entry.name === "agents" && entry.isDirectory())) {
-    return lockPaths;
-  }
-  const agentsDir = path.join(stateDir, "agents");
-  for (const entry of await readDirectoryEntries(agentsDir)) {
-    if (!entry.isDirectory() || entry.name !== normalizeAgentId(entry.name)) {
-      continue;
-    }
-    const agentDir = path.join(agentsDir, entry.name);
-    const agentEntries = await readDirectoryEntries(agentDir);
-    if (
-      agentEntries.some(
-        (agentEntry) => agentEntry.name === RETIRED_QMD_AGENT_LOCK_NAME && agentEntry.isFile(),
-      )
-    ) {
-      lockPaths.push(path.join(agentDir, RETIRED_QMD_AGENT_LOCK_NAME));
-    }
-  }
-  return lockPaths;
+  const { entries } = await walkDirectory(stateDir, {
+    maxDepth: 3,
+    symlinks: "skip",
+    descend: (entry) =>
+      (entry.depth === 1 && (entry.name === "qmd" || entry.name === "agents")) ||
+      (entry.depth === 2 &&
+        path.dirname(entry.relativePath) === "agents" &&
+        entry.name === normalizeAgentId(entry.name)),
+    include: (entry) =>
+      entry.kind === "file" &&
+      (entry.relativePath === path.join("qmd", RETIRED_QMD_GLOBAL_LOCK_NAME) ||
+        (entry.depth === 3 && entry.name === RETIRED_QMD_AGENT_LOCK_NAME)),
+  });
+  return entries
+    .toSorted((left, right) => left.depth - right.depth || left.path.localeCompare(right.path))
+    .map((entry) => entry.path);
 }
 
 async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string[]> {
-  const agentsDir = path.join(stateDir, "agents");
+  const { entries } = await walkDirectory(path.join(stateDir, "agents"), {
+    maxDepth: 2,
+    symlinks: "skip",
+    descend: (entry) => entry.depth === 1 && entry.name === normalizeAgentId(entry.name),
+    include: (entry) => entry.depth === 2 && entry.kind === "directory" && entry.name === "qmd",
+  });
   const homes: string[] = [];
-  for (const entry of await readDirectoryEntries(agentsDir)) {
-    if (!entry.isDirectory() || entry.name !== normalizeAgentId(entry.name)) {
-      continue;
-    }
-    const agentDir = path.join(agentsDir, entry.name);
-    const agentEntries = await readDirectoryEntries(agentDir);
-    if (agentEntries.some((candidate) => candidate.name === "qmd" && candidate.isDirectory())) {
-      homes.push(path.join(agentDir, "qmd"));
+  for (const entry of entries) {
+    // OpenClaw and standalone QMD wrote the same layout without an ownership
+    // marker. Only an empty directory is safe to retire; unreadable homes stay.
+    const children = await fs.readdir(entry.path).catch(() => undefined);
+    if (children?.length === 0) {
+      homes.push(entry.path);
     }
   }
-  return homes;
+  return homes.toSorted((left, right) => left.localeCompare(right));
 }
 
 export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
@@ -663,8 +643,7 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
     }
     return {
       preview: homes.map(
-        (home) =>
-          `- Retired Memory Core QMD workspace: ${home} -> remove derived index, config, cache, and session-export artifacts`,
+        (home) => `- Empty retired Memory Core QMD workspace: ${home} -> remove empty directory`,
       ),
     };
   },
@@ -673,8 +652,9 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
     const warnings: string[] = [];
     for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
       try {
-        await fs.rm(home, { recursive: true, force: true });
-        changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
+        // Do not remove files added after detection by a standalone QMD process.
+        await fs.rmdir(home);
+        changes.push(`Removed empty retired Memory Core QMD workspace: ${home}`);
       } catch (err) {
         warnings.push(
           `Skipped retired Memory Core QMD workspace cleanup. Run openclaw doctor --fix to retry. ${home}: ${String(err)}`,

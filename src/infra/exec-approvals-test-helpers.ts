@@ -4,11 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { CommandResolution, ExecutableResolution } from "./exec-command-resolution.js";
 
 const tempDirs = new Set<string>();
 
-afterEach(() => {
+afterEach(async () => {
+  for (const tempDir of tempDirs) {
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir }),
+    );
+  }
   cleanupTempDirs(tempDirs);
 });
 

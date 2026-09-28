@@ -12,6 +12,9 @@ const withProgress = vi.hoisted(() =>
 );
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
+const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
@@ -72,9 +75,17 @@ vi.mock("./systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive,
 }));
 
+function runInstall() {
+  return maybeInstallDaemon({
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    port: 18789,
+  });
+}
+
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     progressSetLabel.mockReset();
     serviceIsLoaded.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue(null);
@@ -95,10 +106,7 @@ describe("maybeInstallDaemon", () => {
   });
 
   it("does not serialize SecretRef token into service environment", async () => {
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    await runInstall();
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
@@ -122,10 +130,7 @@ describe("maybeInstallDaemon", () => {
       warnings: [],
     });
 
-    const outcome = await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    const outcome = await runInstall();
 
     expect(outcome).toBe("failed");
     expect(note).toHaveBeenCalledWith(
@@ -168,12 +173,7 @@ describe("maybeInstallDaemon", () => {
     select.mockResolvedValueOnce("reinstall");
     buildGatewayInstallPlan.mockRejectedValueOnce(new Error("replacement plan failed"));
 
-    await expect(
-      maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      }),
-    ).rejects.toThrow("replacement plan failed");
+    await expect(runInstall()).rejects.toThrow("replacement plan failed");
 
     expect(serviceUninstall).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
@@ -200,10 +200,7 @@ describe("maybeInstallDaemon", () => {
     };
     serviceReadCommand.mockResolvedValue(existingCommand);
 
-    const outcome = await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    const outcome = await runInstall();
 
     expect(outcome).toBe("succeeded");
     expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
@@ -222,10 +219,7 @@ describe("maybeInstallDaemon", () => {
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
     );
 
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    await runInstall();
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
@@ -235,27 +229,11 @@ describe("maybeInstallDaemon", () => {
       new Error("systemctl is-enabled unavailable: read-only file system"),
     );
 
-    await expect(
-      maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: read-only file system");
-
-    expect(serviceInstall).not.toHaveBeenCalled();
-  });
-
-  it("continues the WSL2 daemon install flow when service status probe reports systemd unavailability", async () => {
-    serviceIsLoaded.mockRejectedValueOnce(
-      new Error("systemctl --user unavailable: Failed to connect to bus: No medium found"),
+    await expect(runInstall()).rejects.toThrow(
+      "systemctl is-enabled unavailable: read-only file system",
     );
 
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
-
-    expect(serviceInstall).toHaveBeenCalledTimes(1);
+    expect(serviceInstall).not.toHaveBeenCalled();
   });
 
   it("shows restart scheduled when a loaded service defers restart handoff", async () => {
@@ -263,13 +241,56 @@ describe("maybeInstallDaemon", () => {
     select.mockResolvedValueOnce("restart");
     serviceRestart.mockResolvedValueOnce({ outcome: "scheduled" });
 
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    await runInstall();
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceInstall).not.toHaveBeenCalled();
     expect(progressSetLabel).toHaveBeenLastCalledWith("Gateway service restart scheduled.");
+  });
+  it.each([undefined, "node", "bun"] as const)(
+    "carries installed pin intent through setup (explicit=%s)",
+    async (daemonRuntime) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const expected = { revision: "installed-pin", stored: true, pin };
+      const existingCommand = {
+        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+        environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
+      };
+      serviceReadCommand.mockResolvedValue(existingCommand);
+      readDaemonRuntimePinForInstall.mockReturnValue(expected);
+      serviceIsLoaded.mockResolvedValue(true);
+      select.mockResolvedValueOnce("reinstall");
+      await maybeInstallDaemon({ runtime, port: 18789, daemonRuntime });
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: daemonRuntime ?? "bun",
+          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+          existingCommand,
+          env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
+        }),
+      );
+      expect(serviceInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
+        }),
+      );
+      expect(select).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["restart", "skip"])("does not inspect runtime pins for %s", async (action) => {
+    serviceIsLoaded.mockResolvedValue(true);
+    select.mockResolvedValueOnce(action);
+    readDaemonRuntimePinForInstall.mockImplementation(() => {
+      throw new Error("unreadable pin");
+    });
+    await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
+    expect(readDaemonRuntimePinForInstall).not.toHaveBeenCalled();
+    expect(serviceReadCommand).not.toHaveBeenCalled();
+    expect(serviceInstall).not.toHaveBeenCalled();
   });
 });

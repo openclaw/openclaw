@@ -8,6 +8,10 @@ const PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA = "openclaw.plugin-sdk-api-release-
 const PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA =
   "openclaw.plugin-sdk-api-release-evidence-set/v1";
 
+const PLUGIN_SDK_API_RELEASE_POOLED_EVIDENCE_SET_SCHEMA =
+  "openclaw.plugin-sdk-api-release-evidence-set/v2";
+const PLUGIN_SDK_API_DIFF_SET_SCHEMA = "openclaw.plugin-sdk-api-diff-set/v1";
+
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -80,13 +84,75 @@ export function createPluginSdkApiReleaseEvidence({
   };
 }
 
+function requireSelectors(selectors) {
+  if (
+    !isReleaseEvidenceObject(selectors) ||
+    Object.keys(selectors).length !== 2 ||
+    !Object.hasOwn(selectors, "beta") ||
+    !Object.hasOwn(selectors, "latest")
+  ) {
+    throw new Error("Plugin SDK API selector evidence must bind beta and latest");
+  }
+}
+
+// The renderer already reuses comparisons by predecessor commit. Preserve that
+// sharing on disk without changing the v1 logical diff or acknowledgement digest.
+export function createPluginSdkApiDiffSet(selectors) {
+  requireSelectors(selectors);
+  /** @type {Record<string, ReturnType<typeof diffPayload> & { digest: string }>} */
+  const diffs = {};
+  /** @type {Record<string, string>} */
+  const references = {};
+  for (const [selector, diff] of Object.entries(selectors)) {
+    const payload = diffPayload(diff);
+    const digest = createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
+    if (diff.digest !== digest) {
+      throw new Error("Plugin SDK API diff digest does not match its payload");
+    }
+    if (Object.hasOwn(diffs, digest) && JSON.stringify(diffs[digest]) !== JSON.stringify(diff)) {
+      throw new Error("Plugin SDK API pooled diffs disagree for the same digest");
+    }
+    diffs[digest] = diff;
+    references[selector] = digest;
+  }
+  return { schema: PLUGIN_SDK_API_DIFF_SET_SCHEMA, selectors: references, diffs };
+}
+
+export function expandPluginSdkApiDiffSet(value) {
+  if (
+    !isReleaseEvidenceObject(value) ||
+    value.schema !== PLUGIN_SDK_API_DIFF_SET_SCHEMA ||
+    Object.keys(value).length !== 3 ||
+    !isReleaseEvidenceObject(value.diffs)
+  ) {
+    throw new Error("Plugin SDK API pooled diff set is invalid");
+  }
+  requireSelectors(value.selectors);
+  const references = Object.values(value.selectors);
+  if (
+    references.some((ref) => typeof ref !== "string" || !DIGEST_PATTERN.test(ref)) ||
+    Object.keys(value.diffs).length !== new Set(references).size ||
+    references.some((ref) => !Object.hasOwn(value.diffs, ref) || value.diffs[ref]?.digest !== ref)
+  ) {
+    throw new Error("Plugin SDK API pooled diff references are invalid");
+  }
+  const selectors = Object.fromEntries(
+    Object.entries(value.selectors).map(([selector, ref]) => [selector, value.diffs[ref]]),
+  );
+  // Hash the complete payload, including the unselected channel; a pool reference
+  // never replaces payload verification or the selected channel's acknowledgement.
+  createPluginSdkApiDiffSet(selectors);
+  return selectors;
+}
+
 export function selectPluginSdkApiReleaseEvidence({ evidence, npmDistTag }) {
-  if (evidence?.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA) {
+  const pooled = evidence?.schema === PLUGIN_SDK_API_RELEASE_POOLED_EVIDENCE_SET_SCHEMA;
+  if (!pooled && evidence?.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA) {
     return evidence;
   }
   const selectors = evidence.selectors;
   if (
-    Object.keys(evidence).length !== 2 ||
+    Object.keys(evidence).length !== (pooled ? 3 : 2) ||
     !isReleaseEvidenceObject(selectors) ||
     Object.keys(selectors).length !== 2 ||
     ["beta", "latest"].some(
@@ -102,13 +168,40 @@ export function selectPluginSdkApiReleaseEvidence({ evidence, npmDistTag }) {
   if (npmDistTag !== "beta" && npmDistTag !== "latest") {
     throw new Error("Plugin SDK API selector evidence requires the beta or latest npm dist-tag");
   }
-  return selectors[npmDistTag];
+  if (!pooled) {
+    return selectors[npmDistTag];
+  }
+  const diffs = expandPluginSdkApiDiffSet({
+    schema: PLUGIN_SDK_API_DIFF_SET_SCHEMA,
+    selectors: Object.fromEntries(
+      Object.entries(selectors).map(([selector, receipt]) => [selector, receipt.diff]),
+    ),
+    diffs: evidence.diffs,
+  });
+  return { ...selectors[npmDistTag], diff: diffs[npmDistTag] };
 }
 
 export function createPluginSdkApiReleaseEvidenceSet(selectors) {
-  const evidence = { schema: PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA, selectors };
-  selectPluginSdkApiReleaseEvidence({ evidence, npmDistTag: "beta" });
-  return evidence;
+  // Check the existing identity contract before compacting either channel.
+  selectPluginSdkApiReleaseEvidence({
+    evidence: { schema: PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA, selectors },
+    npmDistTag: "beta",
+  });
+  const pool = createPluginSdkApiDiffSet(
+    Object.fromEntries(
+      Object.entries(selectors).map(([selector, receipt]) => [selector, receipt.diff]),
+    ),
+  );
+  return {
+    schema: PLUGIN_SDK_API_RELEASE_POOLED_EVIDENCE_SET_SCHEMA,
+    selectors: Object.fromEntries(
+      Object.entries(selectors).map(([selector, receipt]) => [
+        selector,
+        { ...receipt, diff: pool.selectors[selector] },
+      ]),
+    ),
+    diffs: pool.diffs,
+  };
 }
 
 export function validatePluginSdkApiReleaseEvidence({

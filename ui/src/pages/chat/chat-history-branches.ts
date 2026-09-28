@@ -8,6 +8,12 @@ export function retireChatBranchRequests(state: ChatState): void {
   chatHistoryRequests(state).branchVersion += 1;
 }
 
+export function invalidateChatBranches(state: ChatState): void {
+  retireChatBranchRequests(state);
+  // Keep the displayed menu while the next history refresh reconciles saved tips.
+  state.chatBranchesConnectionEpoch = null;
+}
+
 /** Branches for the current pane; equivalence covers alias-canonicalization windows (#124020 class). */
 export function displayedChatSessionBranches(
   state: Pick<ChatState, "chatBranches" | "chatBranchesSessionKey" | "sessionKey">,

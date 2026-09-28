@@ -316,7 +316,7 @@ suite.define(() => {
         );
 
         await gateway.waitForRequest("agent.identity.get");
-        const image = page.locator(".profile-hero__avatar-image");
+        const image = page.locator(".profile-hero__avatar .identity-avatar__image");
         await image.waitFor({ timeout: 10_000 });
         await expect.poll(() => image.getAttribute("src")).toMatch(/^blob:/u);
         await expect
@@ -497,7 +497,7 @@ suite.define(() => {
         await expect(page.locator(".sidebar-identity-card__name")).toHaveText(updatedDisplayName);
         expect(
           await originalSidebarImage?.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+            image.closest(".viewer-avatar")?.classList.contains("is-pending"),
           ),
         ).toBe(true);
         expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
@@ -784,7 +784,12 @@ suite.define(() => {
         await captureAccounts("model-accounts-default-selected.png", selectedAccount);
         await gateway.setMethodResponse("users.unlinkAuthProfile", { links: [] });
         await gateway.setMethodResponse("users.listModelAccounts", inventory(null));
-        await section.getByRole("button", { name: "Use gateway default", exact: true }).click();
+        await section
+          .getByRole("button", {
+            name: `Use gateway default: OpenAI · ${work.label}`,
+            exact: true,
+          })
+          .click();
         await expect(selectedAccount).toHaveCount(0);
         await expect(section.locator(".profile-auth-account-select")).toHaveCount(3);
         await expect(section.locator(".model-accounts-notice")).toContainText(

@@ -1,22 +1,26 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import {
+  isSystemEventStoreCurrent,
+  recordSystemEventStoreReplaced,
+} from "../../../infra/system-event-ownership.js";
+import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
+import { recordSubagentTerminalState } from "../../../sessions/subagent-terminal-state.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
+import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { getDeliveryLastError } from "./subagent-delivery-state.js";
+import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   logAnnounceGiveUp,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -24,9 +28,11 @@ import {
   resolveAnnounceRetryDelayMs,
 } from "./subagent-registry-helpers.js";
 import type {
+  SubagentLifecycleAnnounceCleanupContext,
+  SubagentLifecycleCleanupContext,
   SubagentLifecycleCommonContext,
   SubagentLifecycleCompletionContext,
-  SubagentLifecycleCleanupContext,
+  SubagentLifecycleOptions,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
 import {
@@ -34,16 +40,21 @@ import {
   maskLifecycleIdentifier,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
+const pendingStoreRetirements = new WeakMap<SubagentRunRecord, Promise<void>>();
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
 function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
   // Restart remains one-way; only suspension preserves an admitted cleanup owner.
-  return isGatewayRestartDraining()
-    ? runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup")
-    : runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-cleanup");
+  // The registry owns cleanup after the spawning tool's caller has retired.
+  return withoutGatewayToolCallerIdentity(() =>
+    isGatewayRestartDraining()
+      ? runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup")
+      : runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-cleanup"),
+  );
 }
 
 export function scheduleResumeSubagentRun(
@@ -55,7 +66,7 @@ export function scheduleResumeSubagentRun(
 ): void {
   const params = context.options;
   const timer = setTimeout(() => {
-    context.deleteScheduledResumeTimer(timer);
+    context.scheduledResumeTimers.delete(timer);
     void runWithGatewayIndependentRootWorkAdmission(async () => {
       if (params.runs.get(runId) !== entry) {
         return;
@@ -90,7 +101,7 @@ export function scheduleResumeSubagentRun(
     });
   }, delayMs);
   timer.unref?.();
-  context.addScheduledResumeTimer(timer);
+  context.scheduledResumeTimers.add(timer);
 }
 
 export function runDetachedCleanupAttempt(
@@ -112,7 +123,7 @@ export function runDetachedCleanupAttempt(
     void runWithSubagentCleanupWorkAdmission(async () => {
       try {
         await args.run();
-        context.clearCleanupFailureCount(args.entry);
+        context.cleanupFailureCounts.delete(args.entry);
       } catch (err) {
         defaultRuntime.log(
           `[warn] subagent cleanup finalize failed (${args.runId}): ${String(err)}`,
@@ -156,29 +167,145 @@ export function runDetachedCleanupAttempt(
   });
 }
 
-export function suspendPendingFinalDelivery(
+export async function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
   args: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "expiry" | "permanent_failure";
     error?: string;
+    enqueuedAt?: number;
+    lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
+    storeReplaced?: true;
   },
-): void {
+): Promise<void> {
   const params = context.options;
-  const committed = blockSubagentCompletionDelivery({
+  const generation = args.entry.generation;
+  const committed = await blockSubagentCompletionDelivery({
     subagent: args.entry,
-    taskId: params.resolveSubagentTask(args.entry).task?.taskId ?? "",
     reason: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
     suspendedReason: args.reason,
+    lastDropReason: args.lastDropReason ?? args.entry.delivery?.lastDropReason,
+    enqueuedAt: args.enqueuedAt,
+    storeReplaced: args.storeReplaced,
   });
   if (!committed) {
     throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
   }
+  if (params.runs.get(args.runId) !== args.entry || args.entry.generation !== generation) {
+    return;
+  }
   params.resumedRuns.delete(args.runId);
+  if (args.entry.delivery?.discardReason === "task-missing") {
+    return;
+  }
   logAnnounceGiveUp(args.entry, args.reason);
   // Suspension settles this child for requester drain while cleanup stays incomplete.
   scheduleRequesterSettleWake(context, args.runId, args.entry);
+}
+
+export function isSubagentCompletionDeliveryAllowed(
+  context: SubagentLifecycleAnnounceCleanupContext,
+  entry: SubagentRunRecord,
+  cleanupGeneration: number,
+  committedDelivery: SubagentRunRecord["delivery"],
+): boolean {
+  const { runId, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
+  const allowed =
+    !subagentRuns.isCompletionAuthorityRetired(entry) &&
+    entry.suppressCompletionDelivery !== true &&
+    !isDeliverySuspended(entry) &&
+    (entry.delivery?.status !== "delivered" || entry.delivery === committedDelivery) &&
+    context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration);
+  if (
+    !allowed ||
+    isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
+  ) {
+    return allowed;
+  }
+  if (entry.expectsCompletionMessage === true) {
+    subagentRuns.retireCompletionAuthority(entry);
+  }
+  return false;
+}
+
+export function suspendReplacedStoreNotifications(
+  options: SubagentLifecycleOptions,
+): Promise<void> {
+  // Capture retirement before yielding: restoring the old selector cannot revive these notifications.
+  const pending = new Set<Promise<void>>();
+  const entries = [...options.runs.values()]
+    .filter((entry) => {
+      const work = pendingStoreRetirements.get(entry);
+      if (!work) {
+        return true;
+      }
+      pending.add(work);
+      return false;
+    })
+    .filter((entry) => {
+      const { delivery, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
+      return (
+        delivery &&
+        ["pending", "in_progress"].includes(delivery.status) &&
+        delivery.deliveredAt === undefined &&
+        delivery.announcedAt === undefined &&
+        entry.execution.status === "terminal" &&
+        entry.expectsCompletionMessage === true &&
+        !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
+      );
+    })
+    .map((entry) => ({
+      entry,
+      generation: entry.generation,
+      deliveryGeneration: entry.delivery?.generation,
+    }));
+  if (!entries.length) {
+    return Promise.all(pending).then(() => {});
+  }
+  entries.forEach(({ entry }) => subagentRuns.retireCompletionAuthority(entry));
+  const work = runWithSubagentCleanupWorkAdmission(async () => {
+    for (const { entry, generation, deliveryGeneration } of entries) {
+      if (
+        options.runs.get(entry.runId) !== entry ||
+        entry.generation !== generation ||
+        entry.delivery?.generation !== deliveryGeneration
+      ) {
+        continue;
+      }
+      if (
+        !(await blockSubagentCompletionDelivery({
+          subagent: entry,
+          reason: "store replaced",
+          suspendedReason: "permanent_failure",
+          storeReplaced: true,
+        }))
+      ) {
+        options.warn("subagent notification store retirement has no current native owner", {
+          runId: entry.runId,
+        });
+        continue;
+      }
+      if (
+        options.runs.get(entry.runId) !== entry ||
+        entry.generation !== generation ||
+        entry.delivery?.generation !== deliveryGeneration
+      ) {
+        continue;
+      }
+      options.resumedRuns.delete(entry.runId);
+      recordSystemEventStoreReplaced();
+    }
+  }).finally(() => {
+    for (const { entry } of entries) {
+      pendingStoreRetirements.delete(entry);
+    }
+  });
+  for (const { entry } of entries) {
+    pendingStoreRetirements.set(entry, work);
+  }
+  pending.add(work);
+  return Promise.all(pending).then(() => {});
 }
 
 export function beginSubagentCleanup(
@@ -277,9 +404,9 @@ export async function completeTerminalEffects(
   const isCurrentSessionEffectsOwner = () =>
     isCurrentTerminalCallback() &&
     !context.newerGenerationOwnsSession(entry) &&
-    !shouldSuppressSubagentRecoverySessionEffects(entry);
+    !context.shouldSuppressSessionEffects(entry);
   const refreshSessionEffectsSuppression = () => {
-    if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+    if (!context.shouldSuppressSessionEffects(entry)) {
       return false;
     }
     suppressSessionEffects = true;
@@ -315,24 +442,51 @@ export async function completeTerminalEffects(
     releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
   }
   refreshSessionEffectsSuppression();
-  const isProvisionalKill = entry.killReconciliation !== undefined;
   // Record only the current, non-superseded callback with a committed outcome; the
   // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
   // would permanently mislabel the signal-log terminal kind.
-  const outcomeStatus = entry.execution.outcome?.status;
+  const terminalOutcome = entry.execution.outcome;
+  const outcomeStatus = terminalOutcome?.status;
   if (
     !suppressSessionEffects &&
-    !isProvisionalKill &&
+    entry.killReconciliation === undefined &&
     outcomeStatus &&
     outcomeStatus !== "unknown"
   ) {
-    recordSubagentTerminalState({
+    const signal = {
       childSessionKey: entry.childSessionKey,
       runId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
       outcomeStatus,
+    };
+    const terminalEndedAt = entry.execution.endedAt;
+    const hasCurrentTerminalOutcome = () =>
+      entry.killReconciliation === undefined &&
+      entry.execution.status === "terminal" &&
+      entry.execution.outcome === terminalOutcome &&
+      entry.execution.outcome?.status === outcomeStatus &&
+      entry.execution.endedAt === terminalEndedAt &&
+      entry.runId === signal.runId &&
+      entry.childSessionKey === signal.childSessionKey &&
+      entry.requesterSessionKey === signal.requesterSessionKey;
+    await recordSubagentTerminalState(signal, () => {
+      if (!isCurrentSessionEffectsOwner() || !hasCurrentTerminalOutcome()) {
+        throw new Error("Subagent terminal signal owner changed before commit");
+      }
     });
+    if (!isCurrentTerminalCallback()) {
+      return;
+    }
+    refreshSessionEffectsSuppression();
+    if (context.newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
+      return;
+    }
+    if (!hasCurrentTerminalOutcome()) {
+      return;
+    }
   }
+  const isProvisionalKill = entry.killReconciliation !== undefined;
 
   if (!suppressSessionEffects) {
     try {
@@ -371,7 +525,7 @@ export async function completeTerminalEffects(
     mutated ||
     (completeParams.recoverInterrupted === true &&
       !isProvisionalKill &&
-      !context.hasProgressEnded(entry));
+      !context.progressEndedEntries.has(entry));
   if (shouldPublishTerminalStatus && !suppressedForSteerRestart && !suppressSessionEffects) {
     emitSessionLifecycleEvent({
       sessionKey: entry.childSessionKey,
@@ -380,8 +534,8 @@ export async function completeTerminalEffects(
       label: entry.label,
     });
     // The enclosing steer/session-effects guard admits only the real terminal generation.
-    if (!isProvisionalKill && !context.hasProgressEnded(entry)) {
-      context.markProgressEnded(entry);
+    if (!isProvisionalKill && !context.progressEndedEntries.has(entry)) {
+      context.progressEndedEntries.add(entry);
       await params.emitSubagentProgressEndedForRun(entry);
       refreshSessionEffectsSuppression();
       if (!isCurrentTerminalCallback()) {
@@ -395,10 +549,7 @@ export async function completeTerminalEffects(
     !suppressSessionEffects &&
     params.shouldEmitEndedHookForRun({ entry, reason: completionReason });
   const shouldDeferEndedHook =
-    shouldEmitEndedHook &&
-    completeParams.triggerCleanup &&
-    entry.expectsCompletionMessage === true &&
-    !suppressedForSteerRestart;
+    shouldEmitEndedHook && completeParams.triggerCleanup && entry.expectsCompletionMessage === true;
   if (!shouldDeferEndedHook && shouldEmitEndedHook) {
     await params.emitSubagentEndedHookForRun({
       entry,
@@ -463,7 +614,7 @@ async function completeTerminalCleanup(
     if (
       suppressSessionEffects ||
       !isSessionEffectsOwnerCurrent() ||
-      !shouldSuppressSubagentRecoverySessionEffects(entry)
+      !context.shouldSuppressSessionEffects(entry)
     ) {
       return suppressSessionEffects;
     }
@@ -481,12 +632,7 @@ async function completeTerminalCleanup(
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
     return;
   }
-  if (entry.resumptionNotice) {
-    // The recovered run may finish before its resumption notice is delivered.
-    // Restart recovery retries that debt for a bounded terminal window, then
-    // clears it and re-enters cleanup so completion cannot remain wedged.
-    return;
-  }
+
   refreshSessionEffectsSuppression();
   if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
     return;
@@ -523,17 +669,16 @@ async function completeTerminalCleanup(
         await retireSupersededSession(entry);
         return;
       }
-      if (refreshSessionEffectsSuppression()) {
-        return;
-      }
       // Claim only when this caller is about to dispatch. A concurrent caller
       // may have claimed while the lazy browser module was loading.
-      if (entry.browserCleanupDispatchedAt === undefined) {
+      if (!refreshSessionEffectsSuppression() && entry.browserCleanupDispatchedAt === undefined) {
         entry.browserCleanupDispatchedAt = Date.now();
         dispatchedBrowserCleanup = true;
         try {
           await cleanupBrowserSessions({
             sessionKeys: [entry.childSessionKey],
+            isCurrent: () =>
+              isSessionEffectsOwnerCurrent() && !context.shouldSuppressSessionEffects(entry),
             onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
           });
         } catch (error) {

@@ -17,6 +17,7 @@ import {
   isJobEnabled,
 } from "./jobs-scheduling.js";
 import type {
+  CronJobPolicyContext,
   CronServiceState,
   CronSystemEventEnqueueResult,
   DeferredCronNotifications,
@@ -49,17 +50,16 @@ type QueuedSystemEventHandle = {
 
 /** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
 export function resolveNextRunAtMsOrDisable(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   candidate: unknown;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   const nextRunAtMs = asDateTimestampMs(params.candidate);
   if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
     return nextRunAtMs;
   }
   autoDisableCronJob({
-    state: params.state,
     job: params.job,
     reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
@@ -118,11 +118,11 @@ export function applyTriggerRunResult(
 }
 
 export function resolveCronNextRunWithLowerBound(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(

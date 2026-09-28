@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
+import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -16,6 +17,8 @@ import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 export function createProviderRegistrars(state: PluginRegistryState) {
   const {
     registry,
+    createIdentityRegistration,
+    createRegistration,
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,
@@ -41,13 +44,12 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     if (!record.providerIds.includes(id)) {
       record.providerIds.push(id);
     }
-    registry.providers.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: { ...normalizedProvider, pluginRoot: record.rootDir },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.providers.push(
+      createRegistration(record, {
+        provider: { ...normalizedProvider, pluginRoot: record.rootDir },
+      }),
+    );
+    invalidateProviderRegistryIndex(registry.providers);
     // Reserve catalog ownership without duplicating the discovery-owned model row builders.
     if (normalizedProvider.catalog || normalizedProvider.staticCatalog) {
       registerModelCatalogProvider(record, {
@@ -62,7 +64,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     harness: AgentHarness,
     options?: AgentHarnessRegistrationOptions,
   ) => {
-    const id = normalizeOptionalString((harness as Partial<AgentHarness> | undefined)?.id) ?? "";
+    const id = normalizeOptionalString(harness?.id) ?? "";
     if (!id) {
       reportRegistrationError(record, "agent harness registration missing id");
       return;
@@ -95,21 +97,18 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
     const existing = registry.agentHarnesses.find((entry) => entry.harness.id === id);
     if (existing) {
-      const ownerPluginId = "pluginId" in existing ? existing.pluginId : undefined;
-      const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
+      const ownerDetail = existing.pluginId ? ` (owner: ${existing.pluginId})` : "";
       reportRegistrationError(record, `agent harness already registered: ${id}${ownerDetail}`);
       return;
     }
     const normalizedHarness = { ...harness, id, pluginId: harness.pluginId ?? record.id };
     record.agentHarnessIds.push(id);
-    registry.agentHarnesses.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      harness: normalizedHarness,
-      ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.agentHarnesses.push(
+      createRegistration(record, {
+        harness: normalizedHarness,
+        ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
+      }),
+    );
   };
 
   const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
@@ -126,14 +125,12 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.cliBackends.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      builtWithOpenClawVersion: record.builtWithOpenClawVersion,
-      backend: { ...backend, id },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.cliBackends.push(
+      createRegistration(record, {
+        builtWithOpenClawVersion: record.builtWithOpenClawVersion,
+        backend: { ...backend, id },
+      }),
+    );
     record.cliBackendIds.push(id);
   };
 
@@ -151,13 +148,11 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.textTransforms.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      transforms,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.textTransforms.push(
+      createRegistration(record, {
+        transforms,
+      }),
+    );
   };
 
   const registerEmbeddingProvider = (record: PluginRecord, adapter: EmbeddingProviderAdapter) => {
@@ -187,13 +182,11 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `embedding provider already registered: ${id}${ownerDetail}`);
       return;
     }
-    registry.embeddingProviders.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: adapter,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.embeddingProviders.push(
+      createRegistration(record, {
+        provider: adapter,
+      }),
+    );
     if (!record.embeddingProviderIds.includes(id)) {
       record.embeddingProviderIds.push(id);
     }
@@ -204,14 +197,14 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       kindLabel: string;
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
-      onRegister?: (record: PluginRecord, provider: T) => void;
+      catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
     }) =>
     (record: PluginRecord, provider: T): boolean | void => {
       const id = provider.id.trim();
       const { kindLabel } = params;
       if (!id) {
         reportRegistrationError(record, `${kindLabel} registration missing id`);
-        return params.onRegister ? undefined : false;
+        return params.catalogKinds ? undefined : false;
       }
       const existing = params.registrations.find((entry) => entry.provider.id === id);
       if (existing) {
@@ -219,146 +212,49 @@ export function createProviderRegistrars(state: PluginRegistryState) {
           record,
           `${kindLabel} already registered: ${id} (${existing.pluginId})`,
         );
-        return params.onRegister ? undefined : false;
+        return params.catalogKinds ? undefined : false;
       }
       const ownedIds = params.ownedIds(record);
       if (!ownedIds.includes(id)) {
         ownedIds.push(id);
       }
-      params.registrations.push({
-        pluginId: record.id,
-        pluginName: record.name,
-        provider,
-        source: record.source,
-        rootDir: record.rootDir,
-      });
-      if (params.onRegister) {
-        params.onRegister(record, provider);
+      params.registrations.push(
+        createIdentityRegistration(record, {
+          provider,
+        }),
+      );
+      if (params.catalogKinds) {
+        registerModelCatalogProvider(record, { provider: provider.id, kinds: params.catalogKinds });
         return;
       }
       return true;
     };
 
   const registerWorkerProvider = (record: PluginRecord, provider: WorkerProvider) => {
-    const reject = (message: string) => reportRegistrationError(record, message);
     const validation = validateWorkerProviderContract(
       provider,
       record.contracts?.workerProviders ?? [],
     );
     if (!validation.ok) {
-      reject(validation.message);
+      reportRegistrationError(record, validation.message);
       return;
     }
     const { id } = validation;
     const existing = registry.workerProviders.get(id);
     if (existing) {
-      reject(`worker provider already registered: ${id} (${existing.pluginId})`);
+      reportRegistrationError(
+        record,
+        `worker provider already registered: ${id} (${existing.pluginId})`,
+      );
       return;
     }
-    registry.workerProviders.set(id, {
-      pluginId: record.id,
-      pluginName: record.name,
-      provider,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.workerProviders.set(
+      id,
+      createRegistration(record, {
+        provider,
+      }),
+    );
   };
-
-  const registerSpeechProvider = createProviderLikeRegistrar({
-    kindLabel: "speech provider",
-    registrations: registry.speechProviders,
-    ownedIds: (record) => record.speechProviderIds,
-    onRegister: (record, provider) =>
-      registerModelCatalogProvider(record, {
-        provider: provider.id,
-        kinds: ["voice"],
-      }),
-  });
-
-  const registerRealtimeTranscriptionProvider = createProviderLikeRegistrar({
-    kindLabel: "realtime transcription provider",
-    registrations: registry.realtimeTranscriptionProviders,
-    ownedIds: (record) => record.realtimeTranscriptionProviderIds,
-    onRegister: (record, provider) =>
-      registerModelCatalogProvider(record, {
-        provider: provider.id,
-        kinds: ["voice"],
-      }),
-  });
-
-  const registerRealtimeVoiceProvider = createProviderLikeRegistrar({
-    kindLabel: "realtime voice provider",
-    registrations: registry.realtimeVoiceProviders,
-    ownedIds: (record) => record.realtimeVoiceProviderIds,
-    onRegister: (record, provider) =>
-      registerModelCatalogProvider(record, {
-        provider: provider.id,
-        kinds: ["voice"],
-      }),
-  });
-
-  const registerMediaUnderstandingProvider = createProviderLikeRegistrar({
-    kindLabel: "media provider",
-    registrations: registry.mediaUnderstandingProviders,
-    ownedIds: (record) => record.mediaUnderstandingProviderIds,
-  });
-
-  const registerTranscriptSourceProvider = createProviderLikeRegistrar({
-    kindLabel: "transcripts source provider",
-    registrations: registry.transcriptSourceProviders,
-    ownedIds: (record) => record.transcriptSourceProviderIds,
-  });
-
-  const registerImageGenerationProvider = createProviderLikeRegistrar({
-    kindLabel: "image-generation provider",
-    registrations: registry.imageGenerationProviders,
-    ownedIds: (record) => record.imageGenerationProviderIds,
-    onRegister: (record, provider) =>
-      registerModelCatalogProvider(record, {
-        provider: provider.id,
-        kinds: ["image_generation"],
-      }),
-  });
-
-  const registerVideoGenerationProvider = createProviderLikeRegistrar({
-    kindLabel: "video-generation provider",
-    registrations: registry.videoGenerationProviders,
-    ownedIds: (record) => record.videoGenerationProviderIds,
-    onRegister: (record, provider) =>
-      registerModelCatalogProvider(record, {
-        provider: provider.id,
-        kinds: ["video_generation"],
-      }),
-  });
-
-  const registerMusicGenerationProvider = createProviderLikeRegistrar({
-    kindLabel: "music-generation provider",
-    registrations: registry.musicGenerationProviders,
-    ownedIds: (record) => record.musicGenerationProviderIds,
-    onRegister: (record, provider) =>
-      registerModelCatalogProvider(record, {
-        provider: provider.id,
-        kinds: ["music_generation"],
-      }),
-  });
-
-  const registerWebFetchProvider = createProviderLikeRegistrar({
-    kindLabel: "web fetch provider",
-    registrations: registry.webFetchProviders,
-    ownedIds: (record) => record.webFetchProviderIds,
-  });
-
-  const registerWebSearchProvider = createProviderLikeRegistrar({
-    kindLabel: "web search provider",
-    registrations: registry.webSearchProviders,
-    ownedIds: (record) => record.webSearchProviderIds,
-  });
-
-  const registerMigrationProvider = createProviderLikeRegistrar({
-    kindLabel: "migration provider",
-    registrations: registry.migrationProviders,
-    ownedIds: (record) => record.migrationProviderIds,
-  });
 
   return {
     registerProvider,
@@ -367,16 +263,66 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerTextTransforms,
     registerEmbeddingProvider,
     registerWorkerProvider,
-    registerSpeechProvider,
-    registerRealtimeTranscriptionProvider,
-    registerRealtimeVoiceProvider,
-    registerMediaUnderstandingProvider,
-    registerTranscriptSourceProvider,
-    registerImageGenerationProvider,
-    registerVideoGenerationProvider,
-    registerMusicGenerationProvider,
-    registerWebFetchProvider,
-    registerWebSearchProvider,
-    registerMigrationProvider,
+    registerSpeechProvider: createProviderLikeRegistrar({
+      kindLabel: "speech provider",
+      registrations: registry.speechProviders,
+      ownedIds: (record) => record.speechProviderIds,
+      catalogKinds: ["voice"],
+    }),
+    registerRealtimeTranscriptionProvider: createProviderLikeRegistrar({
+      kindLabel: "realtime transcription provider",
+      registrations: registry.realtimeTranscriptionProviders,
+      ownedIds: (record) => record.realtimeTranscriptionProviderIds,
+      catalogKinds: ["voice"],
+    }),
+    registerRealtimeVoiceProvider: createProviderLikeRegistrar({
+      kindLabel: "realtime voice provider",
+      registrations: registry.realtimeVoiceProviders,
+      ownedIds: (record) => record.realtimeVoiceProviderIds,
+      catalogKinds: ["voice"],
+    }),
+    registerMediaUnderstandingProvider: createProviderLikeRegistrar({
+      kindLabel: "media provider",
+      registrations: registry.mediaUnderstandingProviders,
+      ownedIds: (record) => record.mediaUnderstandingProviderIds,
+    }),
+    registerTranscriptSourceProvider: createProviderLikeRegistrar({
+      kindLabel: "transcripts source provider",
+      registrations: registry.transcriptSourceProviders,
+      ownedIds: (record) => record.transcriptSourceProviderIds,
+    }),
+    registerImageGenerationProvider: createProviderLikeRegistrar({
+      kindLabel: "image-generation provider",
+      registrations: registry.imageGenerationProviders,
+      ownedIds: (record) => record.imageGenerationProviderIds,
+      catalogKinds: ["image_generation"],
+    }),
+    registerVideoGenerationProvider: createProviderLikeRegistrar({
+      kindLabel: "video-generation provider",
+      registrations: registry.videoGenerationProviders,
+      ownedIds: (record) => record.videoGenerationProviderIds,
+      catalogKinds: ["video_generation"],
+    }),
+    registerMusicGenerationProvider: createProviderLikeRegistrar({
+      kindLabel: "music-generation provider",
+      registrations: registry.musicGenerationProviders,
+      ownedIds: (record) => record.musicGenerationProviderIds,
+      catalogKinds: ["music_generation"],
+    }),
+    registerWebFetchProvider: createProviderLikeRegistrar({
+      kindLabel: "web fetch provider",
+      registrations: registry.webFetchProviders,
+      ownedIds: (record) => record.webFetchProviderIds,
+    }),
+    registerWebSearchProvider: createProviderLikeRegistrar({
+      kindLabel: "web search provider",
+      registrations: registry.webSearchProviders,
+      ownedIds: (record) => record.webSearchProviderIds,
+    }),
+    registerMigrationProvider: createProviderLikeRegistrar({
+      kindLabel: "migration provider",
+      registrations: registry.migrationProviders,
+      ownedIds: (record) => record.migrationProviderIds,
+    }),
   };
 }

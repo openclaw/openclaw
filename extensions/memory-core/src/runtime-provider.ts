@@ -7,6 +7,7 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./memory/index.js";
+import { prepareMemoryManagerReload } from "./memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
 
@@ -16,6 +17,7 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
   }
 
   return {
+    prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
       const { manager, debug, error } = await getMemorySearchManager({
         ...params,
@@ -33,6 +35,7 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
         await import("./session-search-visibility.js");
       return await filterMemorySearchHitsBySessionVisibility(params);
     },
+    supportsWorkspaceMemoryReadSources: true,
     classifyWorkspaceMemoryPaths,
     closeAllMemorySearchManagers,
     closeMemorySearchManager,

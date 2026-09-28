@@ -39,10 +39,11 @@ vi.mock("./shared-client.js", () => ({
 let owner: ReturnType<typeof createCodexAppServerModelCatalog>;
 const loadCodexAppServerModelCatalog = (...args: Parameters<typeof owner.load>) =>
   owner.load(...args);
-const read = (overrides = {}) =>
+const nativePluginConfig = { appServer: { homeScope: "user" } };
+const read = (overrides = {}, pluginConfig?: unknown) =>
   owner.read(
     { ...catalogParams, provider: "openai", modelId: "synthetic-opaque", ...overrides },
-    undefined,
+    pluginConfig,
   );
 const listModelsMock = vi.mocked(listAllCodexAppServerModels);
 
@@ -127,9 +128,9 @@ describe("Codex app-server model catalog", () => {
       includeHidden: true,
     });
     expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].startOptions?.homeScope).toBe(
-      "user",
+      "agent",
     );
-    expect(probeCodexNativeAuth).toHaveBeenCalledOnce();
+    expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
 
   it("returns no rows without a live call when discovery is disabled", async () => {
@@ -283,10 +284,10 @@ describe("Codex app-server model catalog", () => {
           },
         ],
       });
-      await owner.load(catalogParams, undefined);
-      expect(read()).toEqual({ accountType: "chatgpt", authMode: mode });
+      await owner.load(catalogParams, nativePluginConfig);
+      expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
       rpc.epoch += 1;
-      expect(read()).toBeUndefined();
+      expect(read({}, nativePluginConfig)).toBeUndefined();
     },
   );
 
@@ -368,19 +369,19 @@ describe("Codex app-server model catalog", () => {
         ],
       });
       rpc.request.mockResolvedValue({ account, requiresOpenaiAuth: true });
-      await owner.load(catalogParams, undefined);
-      expect(read()).toEqual(readiness);
-      expect(read({ agentId: "another" })).toBeUndefined();
-      expect(read({ agentDir: "/tmp/another-agent" })).toBeUndefined();
-      expect(read({ workspaceDir: "/tmp/another-workspace" })).toBeUndefined();
-      expect(read({ config: { ...catalogParams.config } })).toBeUndefined();
-      expect(read({ modelId: "unlisted" })).toBeUndefined();
-      expect(read({ provider: "another" })).toBeUndefined();
+      await owner.load(catalogParams, nativePluginConfig);
+      expect(read({}, nativePluginConfig)).toEqual(readiness);
+      expect(read({ agentId: "another" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ agentDir: "/tmp/another-agent" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ workspaceDir: "/tmp/another-workspace" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ config: { ...catalogParams.config } }, nativePluginConfig)).toBeUndefined();
+      expect(read({ modelId: "unlisted" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ provider: "another" }, nativePluginConfig)).toBeUndefined();
       expect(
         owner.read({ ...catalogParams, provider: "openai", modelId: "synthetic-opaque" }, {}),
       ).toBeUndefined();
       rpc.epoch += 1;
-      expect(read()).toBeUndefined();
+      expect(read({}, nativePluginConfig)).toBeUndefined();
     },
   );
 

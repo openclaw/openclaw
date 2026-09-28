@@ -20,6 +20,35 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Background updates may refresh their own scoped cache; they must not replace
   the foreground selection or publish another context's state into its view.
 
+## Session Roster Refresh
+
+- Session rosters apply nested Gateway row snapshots through the shared reconciler.
+  `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
+  window: lifecycle, participants, placement, patch/send/steer, run-start/settlement/capacity, and title
+  updates can avoid list reads when membership, lineage, and pin/owner/archive
+  facts stay unchanged and recency does not move backwards. Tree events require
+  the Gateway's complete, access-scoped `ancestorSessions` snapshots plus any
+  `ancestorSessionRefs`; references require the held row's admitted content revision. Each row
+  retains its own generation and field receipts. Certified nested rows own their
+  facts; only explicit null clearing receipts may fill omissions from the event
+  envelope. Unknown rows, incomplete ancestor coverage, broad changes, catalog
+  changes, Gateway-owned filters, failed reads,
+  owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
+  refresh. Events never create list membership.
+- Re-adopting cached lineage rows changes presentation without invalidating
+  managed list membership. Fresh descriptor reads and Gateway events retain
+  their authoritative invalidation paths.
+- `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
+  collect events in a four-to-five-second window sampled once when armed so
+  browsers spread their reads and subsequent events cannot postpone them.
+  After each automatic refresh, wait three times its duration
+  (at least five seconds, at most 15 seconds) before the next automatic read.
+  Trailing invalidation stays with that owner, including while a request is pending.
+- Explicit refreshes, filter/agent changes, reconnects, and foreground replacements
+  bypass event backoff and absorb pending invalidation. Recheck visibility and
+  current intent after background admission; hidden pages retain one catch-up
+  refresh until visible.
+
 ## i18n Rules
 
 - Foreign-language files in `ui/src/i18n/locales/*.ts` are stable, source-owned lazy-module adapters; their translations are generated from canonical grouped memory in `ui/src/i18n/.i18n/*.tm.jsonl`.
@@ -47,6 +76,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Stylesheet Policy
 
+- No universal targets or pseudo-elements after a `:has()` compound, no `:has()` with `::placeholder` (measured ~9/~8 ms subtree restyles per insertion with 534 messages), and no descendant after a sibling-relative `:has(+ …)` on repeated items (it restyled every position-rail tick per transcript row); use owner-set classes, named children, or a custom property on the `:has()` subject. Stylelint enforces these. No `:has()` on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, or `body` compounds, including modifiers and nested `&` forms: every insertion below a `:has()` subject schedules a global `:has` restyle of that subtree (stylelint cannot resolve nesting).
 - Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
 - Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
 - Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.
@@ -76,4 +106,5 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Visual Proof
 
+- For substantial UI design changes, follow the [Control UI E2E skill's UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test) to review states in an HTML gallery and collect feedback per example.
 - Visual proofs never include the Discord invitation card: the mock and E2E harness seed its canonical browser dismissal before rendering. Dedicated invitation behavior tests may opt into a fresh visitor with `communityInviteDismissed: false`, but do not capture invitation screenshots or videos.

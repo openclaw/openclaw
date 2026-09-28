@@ -66,6 +66,9 @@ describe("diffs plugin language-pack discovery", () => {
             state: { openBlobStore },
           } as never,
           registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
+            if (typeof tool !== "function" && "contextVersion" in tool) {
+              throw new Error("expected legacy diffs registration");
+            }
             registeredToolFactory = typeof tool === "function" ? tool : () => tool;
           },
         });

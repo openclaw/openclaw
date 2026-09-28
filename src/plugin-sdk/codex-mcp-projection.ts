@@ -52,7 +52,6 @@ export function resolveCodexTtsProvenanceTransfer(
 }
 
 export {
-  buildCodexUserMcpServersThreadConfigPatch,
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
   buildCodexUserMcpServersThreadConfigPatchForRun,
   resolveCodexMcpToolOverridesForAgent,

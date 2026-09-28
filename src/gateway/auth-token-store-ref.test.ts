@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { provisionGatewayTokenStoreRef } from "./auth-token-store-ref.js";
@@ -43,20 +45,37 @@ describe("provisionGatewayTokenStoreRef", () => {
     expect(readStored()).toBe(result.token);
   });
 
-  it("reuses an existing entry so reruns never rotate a paired token", () => {
-    writeSecretStoreEntry({
-      scope: STORE_SCOPE,
-      name: STORE_NAME,
-      value: "already-paired-token",
-      kind: "secret",
-      updatedBy: "test",
-    });
+  it.each(["already-paired-token", REDACTED_SENTINEL])(
+    "reuses valid stored tokens and visibly rejects a redacted stored token: %s",
+    (token) => {
+      writeSecretStoreEntry({
+        scope: STORE_SCOPE,
+        name: STORE_NAME,
+        value: "already-paired-token",
+        kind: "secret",
+        updatedBy: "test",
+      });
 
-    const result = provisionGatewayTokenStoreRef({ config: {} });
+      if (token === REDACTED_SENTINEL) {
+        // Model an older writer's persisted corruption, bypassing the new write guard.
+        openOpenClawStateDatabase({
+          path: resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        })
+          .db.prepare("UPDATE secret_store_entries SET value = ? WHERE name = ?")
+          .run(token, STORE_NAME);
+        expect(() => provisionGatewayTokenStoreRef({ config: {} })).toThrow(
+          expect.objectContaining({
+            code: "SECRET_STORE_VALUE_REDACTED",
+            message: expect.stringContaining(STORE_NAME),
+          }),
+        );
+      } else {
+        expect(provisionGatewayTokenStoreRef({ config: {} }).token).toBe(token);
+      }
 
-    expect(result.token).toBe("already-paired-token");
-    expect(readStored()).toBe("already-paired-token");
-  });
+      expect(readStored()).toBe(token);
+    },
+  );
 
   it("lets an explicit token win so a persisted plaintext token migrates unchanged", () => {
     writeSecretStoreEntry({

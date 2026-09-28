@@ -9,6 +9,7 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
@@ -99,6 +100,12 @@ export type CronRunStatus = "ok" | "error" | "skipped";
 
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+
+/** Transport evidence for a primary webhook, including an unacknowledged request. */
+export type CronWebhookDeliveryOutcome = {
+  status: "delivered" | "not-delivered" | "unknown";
+  error?: string;
+};
 
 /** Delivery target snapshot recorded for audit/debug output. */
 export type CronDeliveryTraceTarget = NonNullable<CronDeliveryTrace["intended"]>;
@@ -288,11 +295,17 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
+} & Partial<
+  Omit<
+    CronAgentTurnPayloadFields,
+    "model" | "fallbacks" | "toolsAllow" | "thinking" | "timeoutSeconds"
+  >
+> & {
     model?: string | null;
     fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
     thinking?: string | null;
+    timeoutSeconds?: number | null;
   };
 
 type CronCommandPayloadFields = {
@@ -312,7 +325,9 @@ type CronCommandPayload = {
 
 type CronCommandPayloadPatch = {
   kind: "command";
-} & Partial<CronCommandPayloadFields>;
+} & Partial<Omit<CronCommandPayloadFields, "timeoutSeconds">> & {
+    timeoutSeconds?: number | null;
+  };
 
 type CronScriptPayloadFields = {
   script: string;
@@ -326,7 +341,9 @@ type CronScriptPayload = {
 
 type CronScriptPayloadPatch = {
   kind: "script";
-} & Partial<CronScriptPayloadFields>;
+} & Partial<Omit<CronScriptPayloadFields, "timeoutSeconds">> & {
+    timeoutSeconds?: number | null;
+  };
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 // scheduleActivatedAtMs fences catch-up to slots belonging to the active schedule;
 // edits must not invent missed work. Without activation, every computed slot is real.
@@ -340,10 +357,18 @@ export type CronJobState = Omit<
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
   pacedNextRunAtMs?: number;
-  /** Exact recurring slot retained across an out-of-band manual force run. */
+  /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
+  /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
+  runningReceiptId?: string;
+  /** Nonce for a committed schedule edit during the pending run. */
+  runningScheduleChangeId?: string;
+  /** Unresolved recovery scope and last notified signature, when an alert was requested. */
+  failureAlertIncident?: { signature?: string; scope: "run" | "trigger" };
+  /** Fences notification settlement when multiple cycles share a timestamp. */
+  lastFailureNotificationId?: string;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** @deprecated Use lastRunStatus. */
@@ -371,6 +396,7 @@ export type CronTriggerFailureCode =
   | "output_limit_exceeded"
   | "snapshot_limit_exceeded"
   | "internal_error"
+  | "plugin_reload_failed"
   | "tool_budget_exceeded";
 
 /** Result union returned by the cron trigger-script evaluator. */
@@ -403,12 +429,28 @@ export type CronJob = CronJobBase<
 };
 
 /** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
-export type CronToolsAllowProvenance = {
-  version: 1;
-  source: "final-executable-surface";
-  /** Store-private creator origin; missing legacy facts normalize to unknown. */
-  callerOrigin?: CronScheduledToolCallerOrigin;
-};
+export type CronToolsAllowProvenance =
+  | {
+      version: 1;
+      source: "final-executable-surface";
+      /** Store-private creator origin; missing legacy facts normalize to unknown. */
+      callerOrigin?: CronScheduledToolCallerOrigin;
+      channelRequester?: CronAuthenticatedChannelRequester;
+    }
+  | ({
+      version: 1;
+      source: "authenticated-requester";
+    } & (
+      | {
+          /** Authenticated creator origin captured independently of the tool surface. */
+          callerOrigin: CronScheduledToolCallerOrigin;
+          channelRequester?: CronAuthenticatedChannelRequester;
+        }
+      | {
+          callerOrigin?: never;
+          channelRequester: CronAuthenticatedChannelRequester;
+        }
+    ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
@@ -433,7 +475,14 @@ export type CronStoreFile = {
 };
 
 type CronJobStateInput = Partial<
-  Omit<CronJobState, "autoDisabled" | "scheduleActivatedAtMs" | "streamSourceIdentity">
+  Omit<
+    CronJobState,
+    | "autoDisabled"
+    | "scheduleActivatedAtMs"
+    | "streamSourceIdentity"
+    | "runningReceiptId"
+    | "runningScheduleChangeId"
+  >
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */

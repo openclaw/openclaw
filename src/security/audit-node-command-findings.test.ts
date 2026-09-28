@@ -104,12 +104,19 @@ describe("security audit node command findings", () => {
     }
   });
 
-  it("does not flag valid dangerous gateway.nodes.commands.deny entries as ineffective", () => {
+  it("does not flag valid gateway.nodes.commands.deny entries as ineffective", () => {
     const findings = collectNodeDenyCommandPatternFindings({
       gateway: {
         nodes: {
           commands: {
-            deny: ["camera.snap", "camera.clip", "screen.record", "sms.send", "system.run"],
+            deny: [
+              "camera.snap",
+              "camera.clip",
+              "screen.record",
+              "desktop.stream",
+              "sms.send",
+              "system.run",
+            ],
           },
         },
       },

@@ -5,6 +5,7 @@ import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -46,7 +47,7 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
     ).desktopClientFactory = () => ({
       async connect(options) {
         element.dataset.viewOnly = String(options.viewOnly);
-        element.dataset.scaleViewport = String(options.scaleViewport ?? true);
+        element.dataset.scaleViewport = String(options.sizingMode !== "actual");
         const remote = document.createElement("div");
         remote.dataset.testRemoteDesktop = "true";
         remote.textContent = "Remote desktop";
@@ -55,6 +56,9 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
         options.target.replaceChildren(remote);
         options.onConnect?.();
         return {
+          setPresented() {
+            return true;
+          },
           disableInput() {
             element.dataset.viewOnly = "true";
           },
@@ -70,8 +74,8 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
           sendBackspace() {
             element.dataset.lastKeyboardText = "Backspace";
           },
-          setScaleViewport(enabled) {
-            element.dataset.scaleViewport = String(enabled);
+          setSizingMode(mode) {
+            element.dataset.scaleViewport = String(mode !== "actual");
           },
         };
       },
@@ -222,6 +226,39 @@ suite.define(() => {
       await page.screenshot({
         path: path.join(artifactDirectory, "session-first-frame-without-global-inventory.png"),
       });
+
+      for (let index = 0; index < 32; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
+      }
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      expect(await rfb.events()).toEqual(["authenticated:1"]);
+
+      const replacement = { ...environment, id: "worker-replacement" };
+      await gateway.setMethodResponse("environments.status", replacement);
+      await gateway.deferNext("sessions.describe");
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "placement" });
+      await gateway.waitForRequest("sessions.describe", { after: 1 });
+      for (let index = 0; index < 32; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
+      }
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(2);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      await gateway.resolveDeferred("sessions.describe", {
+        session: { key: sessionKey, placement: { state: "active", environmentId: replacement.id } },
+      });
+      expect((await gateway.waitForRequest("desktop.observe", { after: 1 })).params).toEqual({
+        source: { kind: "environment", environmentId: replacement.id },
+        control: false,
+      });
+      await expect.poll(async () => (await rfb.events()).includes("authenticated:2")).toBe(true);
+      await gateway.setMethodResponse("environments.status", environment);
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "start" });
+      expect((await gateway.waitForRequest("desktop.observe", { after: 2 })).params).toEqual({
+        source: { kind: "environment", environmentId: environment.id },
+        control: false,
+      });
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
     });
   });
 
@@ -230,8 +267,24 @@ suite.define(() => {
     async (initialState) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
         const sessionKey = "agent:main:cloud-desktop";
+        // This test exercises an explicit manual open, not automatic discovery.
+        await page.addInitScript(
+          ({ key, sessionKey: scopedSessionKey }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sessionKey: scopedSessionKey,
+                sidebarSessionLayouts: {
+                  [scopedSessionKey]: { columns: [], resourceAutoOpenDismissed: true },
+                },
+              }),
+            );
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), sessionKey },
+        );
         const session = {
           key: sessionKey,
+          sessionId: "cloud-desktop-session",
           kind: "direct",
           label: "Cloud desktop session",
           updatedAt: 1,
@@ -725,7 +778,7 @@ suite.define(() => {
     });
   });
 
-  it("auto-connects view-only and provides four working touch actions", async () => {
+  it("keeps all six touch controls reachable at 320px, phone, and desktop widths", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await openDesktopDocument(
         page,
@@ -752,11 +805,77 @@ suite.define(() => {
       const viewRequest = await gateway.waitForRequest("desktop.observe");
       expect(viewRequest.params).toEqual({ source: { kind: "host" }, control: false });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("true");
-      const touchActions = panel.locator(".desktop-touch-action");
-      await expect.poll(() => touchActions.count()).toBe(4);
+      const touchActions = panel.locator(".desktop-touch-action, .desktop-sizing");
+      await expect.poll(() => touchActions.count()).toBe(6);
+      await expect
+        .poll(() =>
+          panel.getByRole("button", { name: "Audio unavailable", exact: true }).isDisabled(),
+        )
+        .toBe(true);
+      await panel
+        .getByRole("button", { name: "Open desktop in Picture-in-Picture", exact: true })
+        .waitFor();
       await panel.getByRole("button", { name: "Back", exact: true }).waitFor();
 
-      await panel.getByRole("button", { name: "Take control", exact: true }).click();
+      for (const width of [320, 390, 1280]) {
+        await page.setViewportSize({ width, height: 844 });
+        await page.screenshot({
+          path: path.join(artifactDirectory, "connected-toolbar-" + width + "x844.png"),
+          fullPage: false,
+        });
+        const actions = await touchActions.evaluateAll((elements) =>
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            const root = element.getRootNode() as ShadowRoot;
+            const icon = element.querySelector("svg")?.getBoundingClientRect();
+            const reachable = [
+              [rect.left + 2, rect.top + rect.height / 2],
+              [rect.right - 2, rect.top + rect.height / 2],
+              [rect.left + rect.width / 2, rect.top + 2],
+              [rect.left + rect.width / 2, rect.bottom - 2],
+              [rect.left + rect.width / 2, rect.top + rect.height / 2],
+            ].every(([x, y]) => element.contains(root.elementFromPoint(x!, y!)));
+            return {
+              label: element.getAttribute("aria-label"),
+              width: rect.width,
+              height: rect.height,
+              left: rect.left,
+              right: rect.right,
+              reachable,
+              iconContained:
+                !icon ||
+                (icon.left >= rect.left &&
+                  icon.right <= rect.right &&
+                  icon.top >= rect.top &&
+                  icon.bottom <= rect.bottom),
+            };
+          }),
+        );
+        for (const action of actions) {
+          expect(action.width, action.label ?? "touch control").toBeGreaterThanOrEqual(44);
+          expect(action.height).toBeGreaterThanOrEqual(44);
+          expect(action.left).toBeGreaterThanOrEqual(12);
+          expect(action.right).toBeLessThanOrEqual(width - 12);
+          expect(action.reachable, action.label ?? "touch control").toBe(true);
+          expect(action.iconContained, action.label ?? "touch control").toBe(true);
+        }
+      }
+      await page.setViewportSize({ width: 320, height: 844 });
+      await panel.getByRole("combobox", { name: "Desktop size", exact: true }).focus();
+      await page.keyboard.press("Tab");
+      expect(
+        await panel.evaluate((element) =>
+          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+        ),
+      ).toBe("Back");
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Shift+Tab");
+      expect(
+        await panel.evaluate((element) =>
+          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+        ),
+      ).toBe("Take control");
+      await page.keyboard.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
       expect((await gateway.getRequests("desktop.observe"))[1]?.params).toEqual({
         source: { kind: "host" },
@@ -764,7 +883,9 @@ suite.define(() => {
       });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("false");
 
-      await panel.getByRole("button", { name: "Use actual size", exact: true }).click();
+      await panel
+        .getByRole("combobox", { name: "Desktop size", exact: true })
+        .selectOption("actual");
       await expect.poll(() => panel.getAttribute("data-scale-viewport")).toBe("false");
 
       await panel.getByRole("button", { name: "Keyboard", exact: true }).click();
@@ -785,7 +906,7 @@ suite.define(() => {
       await expect.poll(() => panel.getAttribute("data-last-keyboard-text")).toBe("m");
 
       await page.screenshot({
-        path: path.join(artifactDirectory, "connected-toolbar-390x844.png"),
+        path: path.join(artifactDirectory, "controlled-toolbar-320x844.png"),
         fullPage: false,
       });
     });

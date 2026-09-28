@@ -1,9 +1,11 @@
 // Formats config validation issues for CLI and diagnostics.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import type { ConfigValidationIssue } from "./types.js";
 
 type ConfigIssueLineInput = {
   path?: string | null;
+  pathSegments?: readonly (string | number)[];
   message: string;
   line?: number;
   sourceFile?: string;
@@ -93,7 +95,10 @@ export function formatConfigIssueLine(
 ): string {
   const prefix = marker ? `${marker} ` : "";
   const locationPrefix = resolveIssueLocationPrefix(issue, opts);
-  const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, opts));
+  const issuePath = issue.pathSegments?.length
+    ? formatConcreteConfigPath(issue.pathSegments)
+    : issue.path;
+  const path = sanitizeTerminalText(resolveIssuePathForLine(issuePath, opts));
   const message = sanitizeTerminalText(issue.message);
   return `${prefix}${locationPrefix}${path}: ${message}`;
 }

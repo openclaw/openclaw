@@ -1,33 +1,231 @@
-/**
- * Image generation background task facade.
- *
- * Binds shared detached media-task lifecycle behavior to image_generate labels and completion messages.
- */
+/** Owns image, music, and video preflight, task admission, and detached completion. */
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import {
   IMAGE_GENERATION_TASK_KIND,
   MUSIC_GENERATION_TASK_KIND,
   VIDEO_GENERATION_TASK_KIND,
 } from "../media-generation-task-status.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { ToolInputError, readToolStringParam } from "./common.js";
 import {
   buildMediaGenerationStartedToolResult,
+  captureMediaGenerationAdmission,
   createMediaGenerationTaskLifecycle,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
-  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
   type MediaGenerationExecutionResult,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
+import type { MediaGenerateActionResult } from "./media-generate-tool-actions-shared.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
+import {
+  hasGenerationToolAvailability,
+  resolveCapabilityModelConfigForTool,
+  resolveMediaToolSandboxConfig,
+  type MediaToolSandbox,
+} from "./media-tool-shared.js";
+import {
+  applyAgentDefaultModelConfig,
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
+
+export type MediaGenerateToolOptions = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  authProfileStore?: AuthProfileStore;
+  agentSessionKey?: string;
+  requesterAgentId?: string;
+  requesterOrigin?: DeliveryContext;
+  workspaceDir?: string;
+  cwd?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  sandbox?: MediaToolSandbox;
+  fsPolicy?: ToolFsPolicy;
+  scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
+  onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
+};
+
+const GENERATION_LABELS = {
+  imageGenerationProviders: "image",
+  musicGenerationProviders: "music",
+  videoGenerationProviders: "video",
+} as const;
+
+export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATION_LABELS>(
+  providerKey: K,
+  options?: MediaGenerateToolOptions,
+) {
+  const cfg = options?.config ?? getRuntimeConfig();
+  const knownProviders:
+    | { [P in keyof typeof GENERATION_LABELS]?: readonly CapabilityProviderFor<P>[] }
+    | undefined = options?.preparedModelRuntime?.mediaCapabilityProviders;
+  const known = knownProviders?.[providerKey];
+  const preparedProviders = known ? [...known] : undefined;
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
+      providerKey,
+      providers: preparedProviders,
+    })
+  ) {
+    return null;
+  }
+  return {
+    cfg,
+    preparedProviders,
+    sandboxConfig: resolveMediaToolSandboxConfig(
+      options?.sandbox,
+      options?.fsPolicy?.workspaceOnly,
+    ),
+  };
+}
 
 /** Transferred resources belong to queued work through actual generation and persistence. */
 export type MediaGenerationTaskResources = {
   run: <T>(run: () => T | Promise<T>) => Promise<T>;
   release: () => Promise<void>;
 };
+
+/** Preflight retains resources until a duplicate result releases them or task admission takes over. */
+export async function prepareMediaGenerationTask<
+  T extends MediaGenerationExecutionResult,
+  Resources extends (MediaGenerationTaskResources & { assertOpen: () => void }) | undefined,
+>(params: {
+  generationLabel: "image" | "video" | "music";
+  cfg: OpenClawConfig;
+  args: Record<string, unknown>;
+  model?: string;
+  options?: MediaGenerateToolOptions;
+  acquire: (cfg: OpenClawConfig) => Promise<Resources>;
+  resolveProviders: (
+    resources: Resources,
+  ) => Parameters<typeof resolveCapabilityModelConfigForTool>[0]["providers"];
+  findDuplicate: (
+    sessionKey: string | undefined,
+    request: { prompt: string; agentId?: string },
+  ) => Promise<MediaGenerateActionResult | undefined>;
+  signal?: AbortSignal;
+  prepare: (context: {
+    resources: Resources;
+    modelConfig: ToolModelConfig;
+    effectiveCfg: OpenClawConfig;
+    prompt: string;
+    explicitModelConfig: boolean;
+  }) => Promise<
+    | { kind: "result"; result: MediaGenerateActionResult }
+    | {
+        kind: "task";
+        params: Omit<
+          Parameters<typeof runMediaGenerationTask<T>>[0],
+          "resources" | "generationLabel"
+        >;
+      }
+  >;
+}) {
+  const { cfg, generationLabel, model, options, signal } = params;
+  const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+  const explicitModelConfig = hasToolModelConfig(
+    coerceToolModelConfig(cfg.agents?.defaults?.mediaModels?.[generationLabel]),
+  );
+  const configuredModel =
+    model || explicitModelConfig
+      ? resolveCapabilityModelConfigForTool({
+          cfg,
+          modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
+          modelOverride: model,
+          providers: [],
+        })
+      : null;
+  const readRequest = async () => {
+    const prompt = readToolStringParam(params.args, "prompt", { required: true });
+    return {
+      prompt,
+      duplicate: await params.findDuplicate(options?.agentSessionKey, {
+        prompt,
+        agentId: options?.requesterAgentId,
+      }),
+    };
+  };
+  const configuredRequest = configuredModel ? await readRequest() : undefined;
+  if (configuredRequest?.duplicate) {
+    return configuredRequest.duplicate;
+  }
+  signal?.throwIfAborted();
+  const resources = await params.acquire(
+    configuredModel
+      ? (applyAgentDefaultModelConfig(cfg, generationLabel, configuredModel) ?? cfg)
+      : cfg,
+  );
+  const prepare = async () => {
+    const modelConfig =
+      configuredModel ??
+      resolveCapabilityModelConfigForTool({
+        cfg,
+        workspaceDir: options?.workspaceDir,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
+        modelOverride: model,
+        providers: params.resolveProviders(resources),
+      });
+    if (!modelConfig) {
+      throw new ToolInputError(`No ${generationLabel}-generation model configured.`);
+    }
+    const effectiveCfg = applyAgentDefaultModelConfig(cfg, generationLabel, modelConfig) ?? cfg;
+    const { prompt, duplicate } = configuredRequest ?? (await readRequest());
+    if (duplicate) {
+      return { kind: "result" as const, result: duplicate };
+    }
+    signal?.throwIfAborted();
+    resources?.assertOpen();
+    return params.prepare({ resources, modelConfig, effectiveCfg, prompt, explicitModelConfig });
+  };
+  let prepared: Awaited<ReturnType<typeof prepare>>;
+  try {
+    resources?.assertOpen();
+    prepared = resources ? await resources.run(prepare) : await prepare();
+    if (prepared.kind === "task") {
+      // Cancellation fences admission; accepted work retains resources independently.
+      signal?.throwIfAborted();
+      resources?.assertOpen();
+    }
+  } catch (error) {
+    const title = `${params.generationLabel.charAt(0).toUpperCase()}${params.generationLabel.slice(1)}`;
+    return rethrowAfterMediaCleanup(
+      error,
+      () => resources?.release(),
+      `${title} preflight and cleanup failed`,
+    );
+  }
+  if (prepared.kind === "result") {
+    await resources?.release();
+    return prepared.result;
+  }
+  return runMediaGenerationTask({
+    ...prepared.params,
+    generationLabel: params.generationLabel,
+    resources,
+    assertAdmissionCurrent: () => {
+      assertSourceCurrent();
+      resources?.assertOpen();
+    },
+  });
+}
 
 /** Owns task admission and the shared foreground or detached generation lifecycle. */
 export async function runMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
@@ -39,18 +237,19 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   prompt: string;
   requestKey: string;
   providerId?: string;
-  config?: OpenClawConfig;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
   onFailure: (message: string, meta?: Record<string, unknown>) => void;
   detailExtras?: Record<string, unknown>;
   messages?: Array<string | undefined>;
   resources?: MediaGenerationTaskResources;
+  assertAdmissionCurrent?: () => void;
   run: (
     handle: MediaGenerationTaskHandle | null,
   ) => Promise<T & { contentText: string; details: Record<string, unknown> }>;
 }) {
   const resources = params.resources;
+  const assertAdmissionCurrent = captureMediaGenerationAdmission(params.assertAdmissionCurrent);
   let resourcesTransferred = false;
   const run = resources
     ? async (handle: MediaGenerationTaskHandle | null) => {
@@ -59,22 +258,11 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
         try {
           executed = await resources.run(() => params.run(handle));
         } catch (error) {
-          let cleanupFailure: { error: unknown } | undefined;
-          try {
-            await resources.release();
-          } catch (cleanupError) {
-            cleanupFailure = { error: cleanupError };
-          }
-          if (cleanupFailure) {
-            throw new AggregateError(
-              [error, cleanupFailure.error],
-              "Media generation and cleanup failed",
-              {
-                cause: error,
-              },
-            );
-          }
-          throw error;
+          return rethrowAfterMediaCleanup(
+            error,
+            () => resources.release(),
+            "Media generation and cleanup failed",
+          );
         }
         await resources.release();
         return executed;
@@ -85,15 +273,22 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
     const toolName = `${generationLabel}_generate`;
     const progressSummary = `Generating ${generationLabel}`;
     const title = `${generationLabel.charAt(0).toUpperCase()}${generationLabel.slice(1)}`;
-    const handle = lifecycle.createTaskRun({
+    const handle = await lifecycle.createTaskRun({
       sessionKey: params.sessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
       prompt: params.prompt,
       providerId: params.providerId,
+      assertCurrent: assertAdmissionCurrent,
     });
+    try {
+      assertAdmissionCurrent();
+    } catch (error) {
+      lifecycle.failTaskRun({ handle, error });
+      throw error;
+    }
 
-    if (handle && shouldDetachMediaGenerationTask(params.sessionKey, params.requesterAgentId)) {
+    if (handle?.detach) {
       recordRecentMediaGenerationTaskStartForSession({
         sessionKey: params.sessionKey,
         agentId: params.requesterAgentId,
@@ -111,7 +306,6 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
         handle,
         scheduleBackgroundWork: params.scheduleBackgroundWork,
         progressSummary,
-        config: params.config,
         toolName: `${title} generation`,
         onWakeFailure: params.onFailure,
         run: () => run(handle),
@@ -153,80 +347,43 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   } catch (error) {
     // Admission or scheduling can fail before the callback owns the resource claim.
     if (resources && !resourcesTransferred) {
-      let cleanupFailure: { error: unknown } | undefined;
-      try {
-        await resources.release();
-      } catch (cleanupError) {
-        cleanupFailure = { error: cleanupError };
-      }
-      if (cleanupFailure) {
-        throw new AggregateError(
-          [error, cleanupFailure.error],
-          "Media admission and cleanup failed",
-          {
-            cause: error,
-          },
-        );
-      }
+      return rethrowAfterMediaCleanup(
+        error,
+        () => resources.release(),
+        "Media admission and cleanup failed",
+      );
     }
     throw error;
   }
 }
 
-/** Detached image generation task handle. */
-export type ImageGenerationTaskHandle = MediaGenerationTaskHandle;
+function createGenerationTaskLifecycle(
+  kind: "image" | "music" | "video",
+  taskKind: Parameters<typeof createMediaGenerationTaskLifecycle>[0]["taskKind"],
+) {
+  const title = `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+  return createMediaGenerationTaskLifecycle({
+    toolName: `${kind}_generate`,
+    taskKind,
+    label: `${title} generation`,
+    queuedProgressSummary: `Queued ${kind} generation`,
+    generatedLabel: kind === "music" ? "track" : kind,
+    failureProgressSummary: `${title} generation failed`,
+    eventSource: `${kind}_generation`,
+    announceType: `${kind} generation task`,
+    completionLabel: kind,
+  });
+}
 
-/** Shared lifecycle instance configured for image generation. */
-export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
-  toolName: "image_generate",
-  taskKind: IMAGE_GENERATION_TASK_KIND,
-  label: "Image generation",
-  queuedProgressSummary: "Queued image generation",
-  generatedLabel: "image",
-  failureProgressSummary: "Image generation failed",
-  eventSource: "image_generation",
-  announceType: "image generation task",
-  completionLabel: "image",
-});
-
-/**
- * Music generation background task facade.
- *
- * Binds shared detached media-task lifecycle behavior to music_generate labels and completion messages.
- */
-
-export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
-
-/** Shared lifecycle configured with music-specific status text and event metadata. */
-export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
-  toolName: "music_generate",
-  taskKind: MUSIC_GENERATION_TASK_KIND,
-  label: "Music generation",
-  queuedProgressSummary: "Queued music generation",
-  generatedLabel: "track",
-  failureProgressSummary: "Music generation failed",
-  eventSource: "music_generation",
-  announceType: "music generation task",
-  completionLabel: "music",
-});
-
-/**
- * Video-generation background task lifecycle adapters.
- *
- * Specializes the shared media background runner with video status text and completion metadata.
- */
-
-export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
-
-/** Shared lifecycle configured with video-specific status text and event metadata. */
-export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
-  toolName: "video_generate",
-  taskKind: VIDEO_GENERATION_TASK_KIND,
-  label: "Video generation",
-  queuedProgressSummary: "Queued video generation",
-  generatedLabel: "video",
-  failureProgressSummary: "Video generation failed",
-  eventSource: "video_generation",
-  announceType: "video generation task",
-  completionLabel: "video",
-});
+export const imageGenerationTaskLifecycle = createGenerationTaskLifecycle(
+  "image",
+  IMAGE_GENERATION_TASK_KIND,
+);
+export const musicGenerationTaskLifecycle = createGenerationTaskLifecycle(
+  "music",
+  MUSIC_GENERATION_TASK_KIND,
+);
+export const videoGenerationTaskLifecycle = createGenerationTaskLifecycle(
+  "video",
+  VIDEO_GENERATION_TASK_KIND,
+);

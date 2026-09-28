@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry, resolveChannelAccountKey } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
   resolveChannelGroups,
@@ -72,15 +72,13 @@ export function resolveChannelGroupsConfigPath(params: {
     return rootPath;
   }
   const accountId = normalizeAccountId(params.accountId);
-  const account = resolveAccountEntry(accounts, accountId);
+  const accountKey = resolveChannelAccountKey(accounts, accountId, params.channel);
+  const account = accountKey ? accounts[accountKey] : undefined;
   // Account merging preserves map references. Use the owner's selected map so
   // empty-map inheritance and shallow replacement both retain their exact scope.
   if (!account || (params.groups !== undefined && params.groups !== account.groups)) {
     return rootPath;
   }
-  const accountKey = Object.hasOwn(accounts, accountId)
-    ? accountId
-    : Object.keys(accounts).find((key) => accounts[key] === account);
   return accountKey
     ? `channels.${params.channel}.accounts[${JSON.stringify(accountKey)}].groups`
     : rootPath;
@@ -103,9 +101,10 @@ function resolveChannelGroupPolicyMode(
   if (!channelConfig) {
     return undefined;
   }
-  const accountPolicy = resolveAccountEntry(
+  const accountPolicy = resolveChannelAccountEntry(
     channelConfig.accounts,
     normalizedAccountId,
+    channel,
   )?.groupPolicy;
   return accountPolicy ?? channelConfig.groupPolicy;
 }

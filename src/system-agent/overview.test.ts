@@ -1,5 +1,6 @@
 // OpenClaw overview tests cover summary output for rescue diagnostics.
 import { describe, expect, it } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {
   formatSystemAgentOverview,
@@ -8,6 +9,24 @@ import {
   loadSystemAgentOverview,
   type SystemAgentOverview,
 } from "./overview.js";
+
+function createConfigSnapshot(runtimeConfig: OpenClawConfig): ConfigFileSnapshot {
+  return {
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: runtimeConfig,
+    sourceConfig: runtimeConfig,
+    resolved: runtimeConfig,
+    valid: true,
+    runtimeConfig,
+    config: runtimeConfig,
+    hash: "test-hash",
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
+}
 
 function createOverview(defaultModel?: string): SystemAgentOverview {
   return {
@@ -52,21 +71,7 @@ describe("loadSystemAgentOverview", () => {
       },
       gateway: { port: 19001 },
     };
-    const snapshot: ConfigFileSnapshot = {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: runtimeConfig,
-      sourceConfig: runtimeConfig,
-      resolved: runtimeConfig,
-      valid: true,
-      runtimeConfig,
-      config: runtimeConfig,
-      hash: "test-hash",
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    };
+    const snapshot = createConfigSnapshot(runtimeConfig);
     const overview = await loadSystemAgentOverview({
       env: { OPENCLAW_TEST_FAST: "1" },
       deps: {
@@ -111,6 +116,71 @@ describe("loadSystemAgentOverview", () => {
     expect(startup).not.toContain("API keys:");
   });
 
+  it.each([false, true])(
+    "reports primary readiness for a sole configured utility model with separation %s",
+    async (separated) => {
+      const runtimeConfig: OpenClawConfig = {
+        ...(separated ? { meta: { migrations: { utilityModelSeparation: true as const } } } : {}),
+        agents: {
+          defaults: {
+            utilityModel: "helper@local:utility",
+            models: { "local-utility/small": { alias: "helper" } },
+          },
+          entries: {
+            main: { default: true },
+            ops: { utilityModel: "helper@local:ops" },
+          },
+        },
+        models: {
+          providers: {
+            "local-utility": {
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: [
+                makeProviderModelFixture({
+                  id: "small",
+                  provider: "local-utility",
+                  api: "openai-completions",
+                  baseUrl: "http://127.0.0.1:9/v1",
+                }),
+              ],
+            },
+          },
+        },
+      };
+      const original = structuredClone(runtimeConfig);
+      const overview = await loadSystemAgentOverview({
+        env: { OPENCLAW_TEST_FAST: "1" },
+        deps: {
+          readConfigFileSnapshot: async () => createConfigSnapshot(runtimeConfig),
+          buildGatewayConnectionDetails: () => ({
+            url: "ws://127.0.0.1:18789",
+            urlSource: "local loopback",
+          }),
+          probeLocalCommand: async (command) => ({ command, found: false }),
+          probeGatewayUrl: async (url) => ({ reachable: true, url }),
+        },
+      });
+
+      expect(overview.defaultModel).toBe(separated ? undefined : "local-utility/small");
+      expect(overview.setupModel).toBe(separated ? "helper@local:utility" : undefined);
+      expect(overview.utilityModel).toBe("helper@local:utility");
+      expect(overview.agents.map(({ id, model }) => ({ id, model }))).toEqual([
+        { id: "main", model: separated ? undefined : "local-utility/small" },
+        { id: "ops", model: separated ? undefined : "local-utility/small" },
+      ]);
+      const welcome = formatSystemAgentOnboardingWelcome(overview);
+      if (separated) {
+        expect(welcome).toContain("Choose a primary model");
+        expect(welcome).not.toContain("Say `talk to agent`");
+      } else {
+        expect(welcome).toContain("Verified model: local-utility/small");
+        expect(welcome).toContain("Say `talk to agent`");
+        expect(formatSystemAgentOverview(overview)).toContain('run "talk to agent"');
+      }
+      expect(runtimeConfig).toEqual(original);
+    },
+  );
+
   it("fails closed in startup copy when inference is unavailable", () => {
     const overview = createOverview();
 
@@ -123,6 +193,21 @@ describe("loadSystemAgentOverview", () => {
     expect(startup.match(/`[^`]+`/g)).toEqual(["`openclaw onboard`"]);
     expect(startup).not.toContain("local Claude Code/Codex/Gemini login");
     expect(startup).not.toContain("typed commands as last resort");
+  });
+
+  it("describes utility setup without claiming ordinary agent readiness", () => {
+    const overview = {
+      ...createOverview(),
+      setupModel: "fixture/small",
+      utilityModel: "fixture/small",
+    };
+    expect(formatSystemAgentStartupMessage(overview)).toContain("Setup model: fixture/small");
+    expect(formatSystemAgentStartupMessage(overview)).not.toContain("Inference is unavailable");
+    const welcome = formatSystemAgentOnboardingWelcome(overview);
+    expect(welcome).toContain("Verified setup model: fixture/small");
+    expect(welcome).toContain("Choose a primary model");
+    expect(welcome).not.toContain("Say `talk to agent`");
+    expect(formatSystemAgentOverview(overview)).toContain("Default model: not configured");
   });
 
   it("describes post-inference onboarding as the start of remaining setup", () => {

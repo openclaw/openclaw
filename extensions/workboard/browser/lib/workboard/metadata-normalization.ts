@@ -85,6 +85,7 @@ const workboardEventSchema = z
     runId: optionalStringSchema,
   })
   .transform(omitUndefinedFields);
+const workboardEventsSchema = tolerantArray(workboardEventSchema);
 
 const attemptSchema = z
   .object({
@@ -292,7 +293,7 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
 }
 
 export function normalizeEvents(value: unknown): WorkboardEvent[] {
-  const result = tolerantArray(workboardEventSchema).safeParse(value);
+  const result = workboardEventsSchema.safeParse(value);
   return result.success ? (result.data ?? []) : [];
 }
 

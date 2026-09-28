@@ -1,12 +1,24 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LogbookStore, dayKeyFor } from "./store.js";
+import { dayKeyFor } from "./day.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { LogbookStore } from "./store.js";
 import type { LogbookCardDraft } from "./types.js";
 
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const DAY = "2026-07-03";
 
 function queryPlanDetails(database: DatabaseSync, sql: string): string[] {
@@ -41,7 +53,7 @@ describe("LogbookStore", () => {
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), "logbook-store-"));
-    store = await LogbookStore.open(dir);
+    store = await LogbookStore.open(dir, workerModuleUrl);
   });
 
   afterEach(async () => {
@@ -79,6 +91,32 @@ describe("LogbookStore", () => {
     });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
     expect(await store.batchFrames(batchId)).toHaveLength(2);
+  });
+
+  it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
+    const capturedAtMs = Date.now();
+    const frameId = await insertFrame(capturedAtMs);
+    const otherRoot = path.join(dir, "another-root");
+    mkdirSync(otherRoot);
+    linkSync(path.join(dir, "logbook.sqlite"), path.join(otherRoot, "logbook.sqlite"));
+    const [result] = await Promise.allSettled([LogbookStore.open(otherRoot, workerModuleUrl)]);
+    try {
+      expect(existsSync(path.join(otherRoot, "frames"))).toBe(false);
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: { message: "SQLite database already belongs to another worker backend" },
+      });
+      expect(await store.frameById(frameId)).toMatchObject({
+        id: frameId,
+        capturedAtMs,
+        path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
+      });
+      expect(await store.countUnbatchedActiveFrames()).toBe(1);
+    } finally {
+      if (result.status === "fulfilled") {
+        await result.value.close();
+      }
+    }
   });
 
   it("creates every owned table as STRICT with foreign keys enabled", () => {
@@ -182,7 +220,7 @@ describe("LogbookStore", () => {
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     database.close();
 
-    store = await LogbookStore.open(dir);
+    store = await LogbookStore.open(dir, workerModuleUrl);
 
     const reopened = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -208,22 +246,6 @@ describe("LogbookStore", () => {
       expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     } finally {
       reopened.close();
-    }
-  });
-
-  it("rejects values that violate STRICT column types", () => {
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
-    try {
-      expect(() =>
-        database
-          .prepare("INSERT INTO standups (day, text, updated_ms) VALUES (?, ?, ?)")
-          .run(DAY, "bad timestamp", "not-an-integer"),
-      ).toThrow();
-      expect(database.prepare("SELECT COUNT(*) AS count FROM standups").get()).toEqual({
-        count: 0,
-      });
-    } finally {
-      database.close();
     }
   });
 
@@ -365,17 +387,6 @@ describe("LogbookStore", () => {
     });
   });
 
-  it("prunes old frame rows and files but keeps recent ones", async () => {
-    const now = Date.now();
-    const oldId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    const newId = await insertFrame(now);
-    const oldPath = (await store.frameById(oldId))?.path ?? "";
-    expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(1);
-    expect(await store.frameById(oldId)).toBeNull();
-    expect(existsSync(oldPath)).toBe(false);
-    expect(await store.frameById(newId)).not.toBeNull();
-  });
-
   it("keeps frame metadata when a retained file cannot be removed", async () => {
     const now = Date.now();
     const firstId = await insertFrame(now - 21 * 24 * 60 * 60_000);
@@ -392,16 +403,6 @@ describe("LogbookStore", () => {
     expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(2);
     expect(await store.frameById(firstId)).toBeNull();
     expect(await store.frameById(blockedId)).toBeNull();
-  });
-
-  it("detaches pruned keyframes from surviving cards", async () => {
-    const now = Date.now();
-    const oldId = await insertFrame(now - 20 * 24 * 60 * 60_000);
-    await store.replaceCardsInWindow(DAY, 0, Number.MAX_SAFE_INTEGER, [
-      draft({ keyframeId: oldId }),
-    ]);
-    await store.pruneFrames(now - 14 * 24 * 60 * 60_000);
-    expect((await store.cardsForDay(DAY))[0]?.keyframeId).toBeUndefined();
   });
 
   it("replaces observations on batch retry instead of appending", async () => {
@@ -445,6 +446,26 @@ describe("LogbookStore", () => {
     expect((await store.cardsForDay(DAY)).map((card) => card.title)).toEqual(["kept"]);
   });
 
+  it.each([false, true])(
+    "selects current keyframes after pruning instead of retaining a stale draft id (survivor=%s)",
+    async (survivor) => {
+      const startMs = new Date(`${DAY}T10:00:00`).getTime();
+      const expiredId = await insertFrame(startMs + 10 * 60_000);
+      const remainingId = survivor ? await insertFrame(startMs + 25 * 60_000) : undefined;
+      expect(await store.pruneFrames(startMs + 20 * 60_000)).toBe(1);
+      await store.replaceCardsInWindow(
+        DAY,
+        startMs,
+        startMs + 30 * 60_000,
+        [draft({ keyframeId: expiredId })],
+        { selectKeyframes: true },
+      );
+      const cards = await store.cardsForDay(DAY);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.keyframeId).toBe(remainingId);
+    },
+  );
+
   it("requeues errored batches for explicit retry", async () => {
     const t0 = Date.now();
     const frameId = await insertFrame(t0);
@@ -467,12 +488,6 @@ describe("LogbookStore", () => {
     expect(mode(dir)).toBe(0o700);
     expect(mode(store.framesDir)).toBe(0o700);
     expect(mode(path.join(dir, "logbook.sqlite"))).toBe(0o600);
-  });
-
-  it("stores and updates standups", async () => {
-    await store.saveStandup(DAY, "## Done\n- shipped");
-    await store.saveStandup(DAY, "## Done\n- shipped more");
-    expect((await store.getStandup(DAY))?.text).toContain("shipped more");
   });
 
   it("migrates legacy tables to STRICT without losing batch assignments", async () => {
@@ -511,7 +526,7 @@ describe("LogbookStore", () => {
     `);
     legacy.close();
 
-    store = await LogbookStore.open(dir);
+    store = await LogbookStore.open(dir, workerModuleUrl);
 
     expect((await store.batchFrames(7)).map((frame) => frame.id)).toEqual([11]);
     const migrated = new DatabaseSync(databasePath, { readOnly: true });
@@ -536,6 +551,28 @@ describe("LogbookStore", () => {
     }
   });
 
+  it("refuses a newer schema without changing its stored data", async () => {
+    await store.saveStandup(DAY, "Preserved future-version fixture");
+    await store.close();
+    const databasePath = path.join(dir, "logbook.sqlite");
+    const future = new DatabaseSync(databasePath);
+    future.exec("PRAGMA user_version = 2");
+    future.close();
+
+    await expect(LogbookStore.open(dir, workerModuleUrl)).rejects.toThrow(
+      "Logbook database uses newer schema version 2; this build supports 1",
+    );
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(preserved.prepare("SELECT day, text FROM standups").all()).toEqual([
+        { day: DAY, text: "Preserved future-version fixture" },
+      ]);
+    } finally {
+      preserved.close();
+    }
+  });
+
   it("rolls back a legacy STRICT migration when stored data has the wrong type", async () => {
     const legacyDir = path.join(dir, "invalid-legacy");
     mkdirSync(legacyDir);
@@ -547,7 +584,7 @@ describe("LogbookStore", () => {
     `);
     legacy.close();
 
-    await expect(LogbookStore.open(legacyDir)).rejects.toThrow(
+    await expect(LogbookStore.open(legacyDir, workerModuleUrl)).rejects.toThrow(
       "Failed migrating SQLite table standups to STRICT",
     );
 

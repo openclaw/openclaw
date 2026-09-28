@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
@@ -93,14 +92,18 @@ function unexpectedGeminiEmbeddingDimensions(expected: number, actual: number): 
   return new Error(`gemini embeddings failed: expected ${expected} dimensions, received ${actual}`);
 }
 
+/** Direct and downloaded vectors share one invariant before normalization. */
+export function isValidGeminiEmbeddingValues(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  );
+}
+
 function readGeminiEmbeddingValues(value: unknown): number[] {
-  if (!Array.isArray(value)) {
+  if (!isValidGeminiEmbeddingValues(value)) {
     throw malformedGeminiEmbeddingResponse();
-  }
-  for (const entry of value) {
-    if (typeof entry !== "number" || !Number.isFinite(entry)) {
-      throw malformedGeminiEmbeddingResponse();
-    }
   }
   return value;
 }

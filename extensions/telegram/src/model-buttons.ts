@@ -5,7 +5,7 @@
  * - mdl_prov              - show providers list
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
- * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_sel/{model}       - read legacy providerless model selections
  * - mdl1~m:{sha256}       - select an opaque provider/model ref
  * - mdl1~p:{sha256}:{pg}  - show models for an opaque provider ref
  * - mdl_back              - back to providers list
@@ -54,7 +54,6 @@ const CALLBACK_PREFIX = {
   back: "mdl_back",
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
-  selectCompact: "mdl_sel/",
   opaqueModel: "mdl1~m:",
   opaqueProvider: "mdl1~p:",
 } as const;
@@ -65,10 +64,6 @@ function hashOpaqueCallback(domain: "model" | "provider", ...values: string[]): 
     .digest("base64url");
 }
 
-/**
- * Parse a model callback_data string into a structured object.
- * Returns null if the data doesn't match a known pattern.
- */
 export function parseModelCallbackData(data: string): ParsedModelCallback | null {
   const trimmed = data.trim();
   const opaqueModelMatch = trimmed.match(/^mdl1~m:([A-Za-z0-9_-]{43})$/);
@@ -96,7 +91,7 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (compact fallback)
+  // mdl_sel/{model} (legacy providerless input)
   const compactModel = trimmed.match(/^mdl_sel\/(.+)$/)?.[1];
   if (compactModel) {
     return { type: "select", model: compactModel };
@@ -114,14 +109,6 @@ export function buildModelSelectionCallbackData(params: {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (LEGACY_PROVIDER_PATTERN.test(params.provider) && fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
-  }
-  const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  if (
-    LEGACY_PROVIDER_PATTERN.test(params.provider) &&
-    fitsTelegramCallbackData(`${CALLBACK_PREFIX.list}${params.provider}_1`) &&
-    fitsTelegramCallbackData(compactCallbackData)
-  ) {
-    return compactCallbackData;
   }
   return `${CALLBACK_PREFIX.opaqueModel}${hashOpaqueCallback("model", params.provider, params.model)}`;
 }
@@ -196,9 +183,6 @@ function isCurrentModelSelection(params: {
     : currentModel === params.model;
 }
 
-/**
- * Build provider selection keyboard with 2 providers per row.
- */
 export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   const rows: ButtonRow[] = [];
   for (const [index, provider] of providers.entries()) {
@@ -210,9 +194,6 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   return rows;
 }
 
-/**
- * Build model list keyboard with pagination and back button.
- */
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
@@ -223,7 +204,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   const rows: ButtonRow[] = [];
 
-  // Calculate page slice
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
@@ -244,7 +224,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     ]);
   }
 
-  // Pagination row
   if (totalPages > 1) {
     const paginationRow: ButtonRow = [];
 
@@ -270,22 +249,15 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     rows.push(paginationRow);
   }
 
-  // Back button
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.back }]);
 
   return rows;
 }
 
-/**
- * Build "Browse providers" button for /model summary.
- */
 export function buildBrowseProvidersButton(): ButtonRow[] {
   return [[{ text: "Browse providers", callback_data: CALLBACK_PREFIX.providers }]];
 }
 
-/**
- * Truncate a model label for display, preserving its end if too long.
- */
 function truncateModelLabel(modelLabel: string, maxLen: number): string {
   if (modelLabel.length <= maxLen) {
     return modelLabel;
@@ -293,16 +265,10 @@ function truncateModelLabel(modelLabel: string, maxLen: number): string {
   return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
 }
 
-/**
- * Get page size for model list pagination.
- */
 export function getModelsPageSize(): number {
   return MODELS_PAGE_SIZE;
 }
 
-/**
- * Calculate total pages for a model list.
- */
 export function calculateTotalPages(totalModels: number, pageSize?: number): number {
   const size = pageSize ?? MODELS_PAGE_SIZE;
   return size > 0 ? Math.ceil(totalModels / size) : 1;

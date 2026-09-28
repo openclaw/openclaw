@@ -164,13 +164,12 @@ describe("LINE carousel fallback delivery", () => {
   });
 
   it("keeps the auto-reply fallback and ordinary text in the same reply", async () => {
-    const { deps, replyMessageLine } = createDeps({ buildTemplateMessageFromPayload });
+    const { replyMessageLine } = createDeps({ buildTemplateMessageFromPayload });
 
     await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: { text: "After", channelData: { line: lineData } },
       lineData,
-      deps,
     });
 
     expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(

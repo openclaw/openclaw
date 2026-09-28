@@ -9,8 +9,10 @@ import type {
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
@@ -21,16 +23,28 @@ type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOption
 
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 
-type EmbeddedGatewayRuntime = typeof import("./embedded-gateway-stub.runtime.js");
+const getRuntime = createLazyPromise(() => import("./embedded-gateway-stub.runtime.js"));
+let sessionProjection: Promise<SessionRowProjection> | undefined;
 
-let runtimeMod: EmbeddedGatewayRuntime | undefined;
+export function bindEmbeddedSessionRowProjection(projection: Promise<SessionRowProjection>) {
+  sessionProjection = projection;
+  return () => {
+    if (sessionProjection === projection) {
+      sessionProjection = undefined;
+    }
+  };
+}
 
-async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
-  if (!runtimeMod) {
-    // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
-    runtimeMod = await import("./embedded-gateway-stub.runtime.js");
+async function borrowSessionRowProjection() {
+  const publication = sessionProjection;
+  if (!publication) {
+    throw new Error("Embedded session projection is unavailable");
   }
-  return runtimeMod;
+  const projection = await publication;
+  if (sessionProjection !== publication) {
+    throw new Error("Embedded session projection is unavailable");
+  }
+  return projection;
 }
 
 function readOffsetParam(params: Record<string, unknown>): number | undefined {
@@ -43,39 +57,35 @@ function readOffsetParam(params: Record<string, unknown>): number | undefined {
 
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const opts = params as SessionsListParams;
-  const { storePath, store, targetsBySessionKey } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
-    agentId: opts.agentId,
-    projection: "list",
-  });
-  return rt.listSessionsFromStoreAsync({
-    cfg,
-    storePath,
-    store,
-    targetsBySessionKey,
-    opts,
+  return rt.listProjectedSessions({
+    projection: await borrowSessionRowProjection(),
+    opts: params as SessionsListParams,
   });
 }
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const resolved = await rt.resolveSessionKeyFromResolveParams({
-    cfg,
-    client: null,
-    p: params as SessionsResolveParams,
-  });
-  if (!resolved.ok) {
-    throw new Error(resolved.error.message);
-  }
-  if ("missing" in resolved) {
-    return { ok: false };
-  }
-  if ("ambiguous" in resolved) {
-    return { ok: false, candidates: resolved.candidates };
-  }
-  return { ok: true, key: resolved.key, agentId: resolved.agentId };
+  const publication = sessionProjection;
+  return await rt.withPreparedSessionResolve(
+    {
+      projection: await borrowSessionRowProjection(),
+      isCurrent: () => sessionProjection === publication,
+      client: null,
+      p: params as SessionsResolveParams,
+    },
+    (resolved) => {
+      if (!resolved.ok) {
+        throw new Error(resolved.error.message);
+      }
+      if ("missing" in resolved) {
+        return { ok: false };
+      }
+      if ("ambiguous" in resolved) {
+        return { ok: false, candidates: resolved.candidates };
+      }
+      return { ok: true, key: resolved.key, agentId: resolved.agentId };
+    },
+  );
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -127,7 +137,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     requestedAgentId ??
     agentIds.values().next().value ??
     rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
-  const result = rt.searchSessionTranscripts({
+  const result = await rt.searchSessionTranscripts({
     agentId,
     storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,
@@ -136,6 +146,9 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   });
   return {
     results: result.hits,
+    ...(result.archivedTranscriptsExcluded
+      ? { archivedTranscriptsExcluded: result.archivedTranscriptsExcluded }
+      : {}),
     ...(result.indexing ? { indexing: true } : {}),
     ...(result.truncated ? { truncated: true } : {}),
   };
@@ -149,6 +162,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
+  windowReset?: boolean;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -205,10 +219,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const historyEntry =
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
-  const hardMax = 1000;
-  const defaultLimit = 200;
-  const requested = typeof limit === "number" ? limit : defaultLimit;
-  const max = Math.min(hardMax, requested);
+  const max = Math.min(1000, limit ?? 200);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
@@ -240,7 +251,8 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
         messageCost: (message) => jsonUtf8Bytes(message) + 1,
       }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
     : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const pagination = params.offset === undefined ? undefined : page.pagination;
+  const responseOffset = page.responseOffset ?? (params.offset === undefined ? undefined : offset);
+  const pagination = responseOffset === undefined ? undefined : page.pagination;
   const nextOffset =
     pagination !== undefined
       ? rt.resolveChatHistoryNextOffset({
@@ -248,10 +260,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
-          replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
-            projected: page.messages,
-            bounded: capped,
-          }),
+          projected: page.messages,
         })
       : 0;
   const hasMore =
@@ -263,8 +272,13 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionKey,
     sessionId,
     messages: capped,
-    ...(params.offset !== undefined
-      ? { offset, hasMore, totalMessages: pagination?.totalMessages ?? page.messages.length }
+    ...(page.windowReset ? { windowReset: true } : {}),
+    ...(responseOffset !== undefined
+      ? {
+          offset: responseOffset,
+          hasMore,
+          totalMessages: pagination?.totalMessages ?? page.messages.length,
+        }
       : {}),
     ...(hasMore ? { nextOffset } : {}),
     thinkingLevel: entry?.thinkingLevel,

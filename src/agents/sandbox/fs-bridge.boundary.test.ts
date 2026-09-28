@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-// Sandbox filesystem bridge boundary tests cover host-side validation before
-// any Docker filesystem command can run.
+// Sandbox filesystem bridge boundary tests cover host validation before content
+// reads or mutations; container metadata resolves mount-aware aliases first.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createHostEscapeFixture,
   createSandbox,
+  expectOnlyCanonicalPathCommands,
   createSandboxFsBridge,
   expectMkdirpAllowsExistingDirectory,
   findCallByDockerArg,
@@ -64,10 +65,10 @@ describe("sandbox fs bridge boundary validation", () => {
   });
 
   it.each(["file", "directory"] as const)(
-    "rejects pre-existing host %s symlink escapes before docker exec",
+    "rejects pre-existing host %s symlink escapes before content access",
     async (kind) => {
-      // Host-visible symlink escapes are rejected locally so Docker never follows
-      // them inside a privileged bridge command.
+      // Host-visible escapes must fail before content access. Read metadata may
+      // resolve container aliases; mkdir keeps its original host-first check.
       await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
         const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
         if (process.platform === "win32") {
@@ -90,14 +91,18 @@ describe("sandbox fs bridge boundary validation", () => {
             ? bridge.mkdirp({ filePath: "link.txt" })
             : bridge.readFile({ filePath: "link.txt" }),
         ).rejects.toThrow(/Symlink escapes/);
-        expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+        if (kind === "directory") {
+          expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+        } else {
+          expectOnlyCanonicalPathCommands();
+        }
       });
     },
   );
 
-  it("rejects pre-existing host hardlink escapes before docker exec", async () => {
+  it("rejects pre-existing host hardlink escapes before content access", async () => {
     // Hardlinks can expose outside files without a symlink marker, so the bridge
-    // checks link metadata before reads enter the container.
+    // checks link metadata before any file contents are read.
     if (process.platform === "win32") {
       return;
     }
@@ -121,14 +126,14 @@ describe("sandbox fs bridge boundary validation", () => {
       });
 
       await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 
-  it("rejects missing files before any docker read command runs", async () => {
+  it("rejects missing files without a container content-read command", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/ENOENT|no such file/i);
-    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    expectOnlyCanonicalPathCommands();
   });
 
   it.runIf(process.platform !== "win32")(
@@ -161,7 +166,7 @@ describe("sandbox fs bridge boundary validation", () => {
         } finally {
           openSync.mockRestore();
         }
-        expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+        expectOnlyCanonicalPathCommands();
       });
     },
   );

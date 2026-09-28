@@ -4,6 +4,10 @@ import { render } from "lit";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
 import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
+import {
+  createSessionWorkspaceProps,
+  type SessionWorkspaceHost,
+} from "./chat-session-workspace.ts";
 
 function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): SessionWorkspaceProps {
   return {
@@ -14,6 +18,7 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     error: null,
     activeId: null,
     filter: "all",
+    browserPath: "",
     browserSearch: "",
     dock: "right",
     narrowLayout: false,
@@ -35,45 +40,151 @@ afterEach(() => {
 });
 
 describe("session workspace path actions", () => {
-  it("renders file-shaped placeholders while the initial workspace list loads", async () => {
-    const workspace = createWorkspace({ loading: true });
+  it.each([
+    { path: "reports", search: "", loading: false, parent: "" },
+    { path: "reports/monthly", search: "", loading: false, parent: "reports" },
+    { path: "", search: "", loading: false, parent: null },
+    { path: "reports", search: "notes", loading: false, parent: null },
+    { path: "reports", search: "", loading: true, parent: null },
+  ])("keeps only settled non-root folder recovery available: %j", (scenario) => {
+    const onBrowsePath = vi.fn();
+    const workspace = createWorkspace({
+      browserPath: scenario.path,
+      browserSearch: scenario.search,
+      loading: scenario.loading,
+      list: { sessionKey: "agent:main:workspace", root: "/workspace", files: [] },
+      onBrowsePath,
+    });
     const mount = document.body.appendChild(document.createElement("div"));
-
     render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
-
-    const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).toBeInstanceOf(HTMLElement);
-    await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
-    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
-    expect(mount.textContent).not.toContain("Loading session workspace");
+    const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
+    if (scenario.parent === null) {
+      expect(parent).toBeNull();
+      expect(mount.textContent).not.toContain("This folder is unavailable.");
+    } else {
+      expect(parent).not.toBeNull();
+      expect(mount.textContent).toContain("This folder is unavailable.");
+      parent!.click();
+      expect(onBrowsePath).toHaveBeenCalledExactlyOnceWith(scenario.parent);
+    }
   });
 
-  it.each(
-    [
-      {
-        surface: "session Files",
-        selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
-        path: "src/edited.ts",
-        origin: "session" as const,
+  it("keeps path-only session rows selected after their read and refresh", async () => {
+    const file = { kind: "modified", path: "README.md", name: "README.md", missing: false };
+    const result = { sessionKey: "agent:main:current", root: "/workspace", files: [file] };
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      agentsList: [],
+      sessionKey: result.sessionKey,
+      sidebarContent: null,
+      sessions: {
+        listFiles: vi.fn().mockResolvedValue(result),
+        getFile: vi.fn().mockResolvedValue({ ...result, file: { ...file, content: "# Readme" } }),
       },
-      {
-        surface: "project browser",
-        selector: ".chat-workspace-rail__list--browser",
-        path: "src/browser.ts",
-        origin: "workspace" as const,
-      },
-    ].flatMap((surface) =>
-      [false, true].map((failed) => ({
-        surface: surface.surface,
-        selector: surface.selector,
-        path: surface.path,
-        origin: surface.origin,
-        failed,
-        feedback: failed ? "Copy failed" : "Copied!",
-      })),
-    ),
-  )("shows $feedback when copying a $surface path", async (testCase) => {
+    } as unknown as SessionWorkspaceHost;
+    createSessionWorkspaceProps(state, { expanded: true });
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    const container = document.createElement("div");
+    const renderRows = () =>
+      render(
+        renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+        container,
+      );
+    renderRows();
+    container.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")!.click();
+    await vi.waitFor(() =>
+      expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
+    );
+    renderRows();
+    expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
+      "README.md",
+    );
+    createSessionWorkspaceProps(state).onRefresh();
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
+    renderRows();
+    expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
+      "README.md",
+    );
+  });
+
+  it.each(["/synthetic/very-long-workspace-prefix", "C:\\synthetic\\very-long-workspace-prefix"])(
+    "keeps session file labels readable and distinct under %s",
+    async (root) => {
+      const separator = root.includes("\\") ? "\\" : "/";
+      const path = (...parts: string[]) => [root, ...parts].join(separator);
+      const paths = [path("inventory.csv"), path("ui", "index.ts"), path("api", "index.ts")];
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const onOpenFile = vi.fn();
+      const workspace = createWorkspace({
+        list: {
+          sessionKey: "agent:main:workspace",
+          root,
+          files: paths.map((filePath, index) => ({
+            kind: index === 2 ? "read" : "modified",
+            path: filePath,
+            name: index === 0 ? "inventory.csv" : "index.ts",
+            missing: false,
+          })),
+        },
+        activeId: `file:${paths[1]}`,
+        onOpenFile,
+      });
+      const mount = document.body.appendChild(document.createElement("div"));
+      const renderRows = () => render(renderSessionWorkspaceRail(workspace), mount);
+      const labels = () =>
+        [...mount.querySelectorAll(".chat-workspace-rail__file-name")].map(
+          (row) => row.textContent,
+        );
+      renderRows();
+      expect(labels()).toEqual([
+        "inventory.csv",
+        `ui${separator}index.ts`,
+        `api${separator}index.ts`,
+      ]);
+      const rows = [...mount.querySelectorAll(".chat-workspace-rail__file")];
+      for (const [index, row] of rows.entries()) {
+        const open = row.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")!;
+        expect(open.getAttribute("aria-label")).toBe(paths[index]);
+        expect(row.querySelector("openclaw-tooltip")?.content).toBe(paths[index]);
+        open.click();
+        expect(onOpenFile).toHaveBeenLastCalledWith(paths[index], "session");
+        row.querySelector<HTMLButtonElement>('button[aria-label="Copy path"]')!.click();
+        await vi.waitFor(() => expect(writeText).toHaveBeenLastCalledWith(paths[index]));
+      }
+      const selectedRow = rows[1];
+      assert(selectedRow, "Expected the selected ui/index.ts row");
+      expect(selectedRow.classList.contains("chat-workspace-rail__file--active")).toBe(true);
+      workspace.filter = "changed";
+      renderRows();
+      expect(labels()).toEqual(["inventory.csv", `ui${separator}index.ts`]);
+      workspace.browserSearch = `ui${separator}index`;
+      renderRows();
+      expect(labels()).toEqual([`ui${separator}index.ts`]);
+    },
+  );
+
+  it.each([
+    {
+      surface: "session Files",
+      selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
+      path: "src/edited.ts",
+      origin: "session" as const,
+      failed: true,
+      feedback: "Copy failed",
+    },
+    {
+      surface: "project browser",
+      selector: ".chat-workspace-rail__list--browser",
+      path: "src/browser.ts",
+      origin: "workspace" as const,
+      failed: false,
+      feedback: "Copied!",
+    },
+  ])("shows $feedback when copying a $surface path", async (testCase) => {
     const writeText = testCase.failed
       ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
       : vi.fn().mockResolvedValue(undefined);
@@ -156,7 +267,7 @@ describe("session workspace path actions", () => {
     expect(mount.querySelector("summary")?.textContent).toContain("Artifacts");
     expect(mount.querySelector("details")?.open).toBe(true);
     expect(mount.textContent).toContain("Portrait");
-    expect(mount.textContent).not.toContain("src/edited.ts");
+    expect(mount.querySelector('button[aria-label="src/edited.ts"]')).toBeNull();
     expect(mount.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("IMAGE");
 
     workspace.browserSearch = "";
@@ -167,8 +278,68 @@ describe("session workspace path actions", () => {
 
     expect(mount.querySelectorAll("details")).toHaveLength(1);
     expect(mount.querySelector("details")?.open).toBe(true);
-    expect(mount.textContent).toContain("src/edited.ts");
+    expect(mount.querySelector('button[aria-label="src/edited.ts"]')).not.toBeNull();
   });
+
+  it.each(["inventory  report", "  INVENTORY  REPORT  ", "\tinventory  report\t"])(
+    "matches every Files group consistently for %j without collapsing internal spaces",
+    (query) => {
+      const workspace = createWorkspace({
+        browserSearch: query,
+        list: {
+          sessionKey: "agent:main:workspace",
+          files: [
+            {
+              kind: "modified",
+              name: "inventory  report.csv",
+              path: "inventory  report.csv",
+              missing: false,
+            },
+            {
+              kind: "read",
+              name: "inventory  report.md",
+              path: "inventory  report.md",
+              missing: false,
+            },
+            {
+              kind: "modified",
+              name: "inventory report.csv",
+              path: "inventory report.csv",
+              missing: false,
+            },
+          ],
+          artifacts: [
+            { id: "report", title: "Inventory  report", type: "file", download: { mode: "bytes" } },
+            { id: "other", title: "Inventory report", type: "file", download: { mode: "bytes" } },
+          ],
+          browser: {
+            path: "",
+            search: "inventory  report",
+            entries: [
+              { kind: "file", name: "inventory  report.csv", path: "inventory  report.csv" },
+            ],
+          },
+        },
+      });
+      const mount = document.body.appendChild(document.createElement("div"));
+      render(renderSessionWorkspaceRail(workspace), mount);
+      expect(
+        Array.from(
+          mount.querySelectorAll(".chat-workspace-rail__file-name"),
+          (row) => row.textContent,
+        ),
+      ).toEqual([
+        "inventory  report.csv",
+        "inventory  report.md",
+        "Inventory  report",
+        "inventory  report.csv",
+      ]);
+      expect(mount.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe(query);
+
+      render(renderSessionWorkspaceRail({ ...workspace, browserSearch: "   " }), mount);
+      expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(6);
+    },
+  );
 
   it("omits filter chips when only project files are available", () => {
     const workspace = createWorkspace({

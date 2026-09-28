@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -140,11 +141,7 @@ describe("ambient provider credentials are not queued behind a declared profile"
             refresh: "refresh-token",
             expires: Date.now() + 600_000,
           },
-          "openai:platform": {
-            type: "api_key",
-            provider: "openai",
-            key: "declared-platform-key",
-          },
+          "openai:platform": createApiKeyCredential("openai", "declared-platform-key"),
         },
         order: { openai: ["openai:chatgpt", "openai:platform"] },
       } as unknown as AuthProfileStore,

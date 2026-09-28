@@ -1,5 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
-// Runs synchronous extra security audit checks.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -24,25 +22,13 @@ import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
-  resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
+import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
-
-/**
- * Synchronous security audit collector functions.
- *
- * These functions analyze config-based security properties without I/O.
- */
-
-type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
 
 type HooksHardeningAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
@@ -225,45 +211,13 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
   const platformNodes = [
     { platform: "ios", deviceFamily: "iPhone" },
     { platform: "android", deviceFamily: "Android" },
-    {
-      platform: "macos",
-      deviceFamily: "Mac",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-        "screen.snapshot",
-      ],
-    },
-    {
-      platform: "linux",
-      deviceFamily: "Linux",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-      ],
-    },
-    {
-      platform: "windows",
-      deviceFamily: "Windows",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-        "screen.snapshot",
-      ],
-    },
+    { platform: "macos", deviceFamily: "Mac" },
+    { platform: "linux", deviceFamily: "Linux" },
+    { platform: "windows", deviceFamily: "Windows" },
     { platform: "unknown" },
   ];
   for (const node of platformNodes) {
-    const allow = resolveNodeCommandAllowlist(baseCfg, node);
+    const allow = resolveNodePairingCommandAllowlist(baseCfg, node);
     for (const cmd of allow) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
@@ -271,7 +225,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
-  for (const cmd of resolveNodeCommandAllowlist(baseCfg, { caps: ["talk"] })) {
+  for (const cmd of resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] })) {
     const normalized = normalizeNodeCommand(cmd);
     if (normalized) {
       out.add(normalized);
@@ -304,37 +258,6 @@ function looksLikeNodeCommandPattern(value: string): boolean {
   return /\s/.test(value) || value.includes("group:");
 }
 
-function editDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  if (!a) {
-    return b.length;
-  }
-  if (!b) {
-    return a.length;
-  }
-
-  const dp: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
-
-  for (let i = 1; i <= a.length; i++) {
-    let prev = expectDefined(dp[0], "dp entry at 0");
-    dp[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const temp = dp[j];
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[j] = Math.min(
-        expectDefined(dp[j], "dp entry at j") + 1,
-        expectDefined(dp[j - 1], "dp entry at j 1") + 1,
-        prev + cost,
-      );
-      prev = expectDefined(temp, "audit extra.sync temp");
-    }
-  }
-
-  return expectDefined(dp[b.length], "dp entry at b.length");
-}
-
 function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
   const needle = unknown.trim();
   if (!needle) {
@@ -352,7 +275,7 @@ function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[]
 
   // Fuzzy: Levenshtein over a small-ish known set.
   const ranked = Array.from(known)
-    .map((cmd) => ({ cmd, d: editDistance(needle, cmd) }))
+    .map((cmd) => ({ cmd, d: levenshteinDistance(needle, cmd) }))
     .toSorted((a, b) => a.d - b.d || a.cmd.localeCompare(b.cmd));
 
   const best = ranked[0]?.d ?? Infinity;
@@ -1228,13 +1151,12 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     findings.push({
       checkId: "security.exposure.open_groups_with_control_plane_tools",
       severity: "critical",
-      title: "Open group/DM policy with gateway/cron control-plane tools exposed",
+      title: "Open group/DM policy with control-plane tools exposed",
       detail:
         `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         `Control-plane tool exposure contexts:\n${controlPlaneContexts.map((line) => `- ${line}`).join("\n")}\n` +
-        "Prompt injection in open conversations can trigger persistent gateway config changes or scheduled automation.",
-      remediation:
-        'For open groups or DMs, deny control-plane tools (`gateway`, `cron`) and prefer tools.profile="messaging". Tighten dmPolicy/groupPolicy to pairing or allowlist when possible.',
+        "Prompt injection in open conversations can trigger OpenClaw updates, plugin changes, or scheduled automation.",
+      remediation: `For open groups or DMs, deny control-plane tools (${GATEWAY_CONTROL_PLANE_TOOLS.map((tool) => `\`${tool}\``).join(", ")}) and prefer tools.profile="messaging". Tighten dmPolicy/groupPolicy to pairing or allowlist when possible.`,
     });
   }
 

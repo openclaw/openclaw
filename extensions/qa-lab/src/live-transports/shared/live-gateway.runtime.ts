@@ -9,6 +9,7 @@ import {
   type QaGatewayChildCommand,
 } from "../../gateway-child.js";
 import type { QaProviderMode } from "../../model-selection.js";
+import type { QaMockOpenAiServerOptions } from "../../providers/mock-openai/server-options.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import type { RuntimeId } from "../../runtime-parity.js";
@@ -70,6 +71,11 @@ type QaLiveGatewayParams = {
   controlUiEnabled?: boolean;
   mockAuthAgentIds?: readonly string[];
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
+  mockProviderOptions?: Pick<
+    QaMockOpenAiServerOptions,
+    "repeatedRequestResponsePauseMs" | "repeatedRequestStalledResponsePauseMs"
+  >;
 };
 
 type QaLiveGateway = {
@@ -125,30 +131,19 @@ export function createQaLiveLaneGateway() {
         throw new Error("qa live gateway lifecycle already started or closed");
       }
       startup = (async () => {
+        const { mockProviderOptions, mutateConfig, ...gatewayParams } = params;
         mock = await startQaProviderServer(params.providerMode, {
           modelRefs: [params.primaryModel, params.alternateModel],
+          ...mockProviderOptions,
         });
         if (closed) {
           throw new Error("qa live gateway lifecycle is closed");
         }
         const gateway = await gatewayOwner.start({
-          repoRoot: params.repoRoot,
-          command: params.command,
+          ...gatewayParams,
           providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-          transport: params.transport,
-          transportBaseUrl: params.transportBaseUrl,
-          controlUiAllowedOrigins: params.controlUiAllowedOrigins,
-          providerMode: params.providerMode,
-          primaryModel: params.primaryModel,
-          alternateModel: params.alternateModel,
-          fastMode: params.fastMode,
-          forcedRuntime: params.forcedRuntime,
-          thinkingDefault: params.thinkingDefault,
-          claudeCliAuthMode: params.claudeCliAuthMode,
-          controlUiEnabled: params.controlUiEnabled,
-          mockAuthAgentIds: params.mockAuthAgentIds,
           mutateConfig: (cfg) =>
-            prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
+            prepareLiveTransportGatewayConfig(mutateConfig ? mutateConfig(cfg) : cfg),
         });
 
         return { gateway, mock, stop: stopReady };

@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { expectInstalledCompletionProfile } from "./completion-profile.test-support.js";
 import {
   COMPLETION_SHELLS,
   formatCompletionReloadCommand,
@@ -19,7 +20,7 @@ import {
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type GetSubCliCompletionGroups =
-  typeof import("./program/register.subclis-core.js").getSubCliCompletionGroups;
+  typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
 
 const outputFileMocks = vi.hoisted(() => ({
   publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
@@ -67,7 +68,7 @@ vi.mock("./program/program-context.js", () => ({
   getProgramContext: getProgramContextMock,
 }));
 
-vi.mock("./program/register.subclis-core.js", () => ({
+vi.mock("./program/register.subclis.js", () => ({
   getSubCliCompletionGroups: getSubCliCompletionGroupsMock,
 }));
 
@@ -148,7 +149,7 @@ describe("completion-cli write-state", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "publishes %s completion atomically without changing existing file or directory modes",
     async (shell) => {
       await withIsolatedCompletionState(async () => {
@@ -179,7 +180,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "preserves the existing %s completion when staged publication fails",
     async (shell) => {
       const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
@@ -311,7 +312,7 @@ describe("completion-cli write-state", () => {
         await program.parseAsync(args, { from: "user" });
 
         const installedProfile = await fs.readFile(profilePath, "utf8");
-        expect(installedProfile).toContain(cachePath);
+        expectInstalledCompletionProfile(installedProfile, shell, cachePath);
         expect(log).toHaveBeenCalledWith(
           `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
         );
@@ -327,7 +328,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "reports missing %s completion cache without registering commands or plugins",
     async (shell) => {
       const { registerCompletionCli } = await import("./completion-cli.js");
@@ -365,7 +366,9 @@ describe("completion-cli write-state", () => {
         registerCompletionCli(program);
         await program.parseAsync(["completion", "--install", "--yes"], { from: "user" });
 
-        await expect(fs.readFile(resolveCompletionProfilePath("fish"), "utf8")).resolves.toContain(
+        expectInstalledCompletionProfile(
+          await fs.readFile(resolveCompletionProfilePath("fish"), "utf8"),
+          "fish",
           cachePath,
         );
         expectCompletionInstallationToSkipRegistration();

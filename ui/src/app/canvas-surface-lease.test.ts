@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createCanvasSurfaceLease } from "./canvas-surface-lease.runtime.ts";
 
 type ScheduledTimer = {
@@ -68,14 +69,6 @@ async function flushPromises() {
   for (let index = 0; index < 10; index += 1) {
     await Promise.resolve();
   }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
 }
 
 function createLeaseHarness(request: (method: string, params: unknown) => Promise<unknown>) {

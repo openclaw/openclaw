@@ -23,10 +23,10 @@ export const prepareSimpleCompletionModelForAgent = async (
     if ("error" in acquired) {
       return acquired;
     }
-    const claim = { release: async () => acquired.release() };
+    const claim = { release: async () => await acquired[Symbol.asyncDispose]() };
     try {
       host.assertOpen();
-      const { release: _release, ...prepared } = acquired;
+      const { [Symbol.asyncDispose]: _dispose, ...prepared } = acquired;
       const model = bindModelCompletionOwner(prepared.model, {
         run: (run) => host.track(run),
         assertCurrent: () => host.assertOpen(),

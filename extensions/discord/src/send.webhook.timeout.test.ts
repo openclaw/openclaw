@@ -104,10 +104,7 @@ describe("sendWebhookMessageDiscord timeout", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => {
-        return new Response(JSON.stringify({ id: "message-1", channel_id: "channel-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ id: "message-1", channel_id: "channel-1" });
       }),
     );
 

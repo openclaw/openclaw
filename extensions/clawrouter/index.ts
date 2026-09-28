@@ -254,6 +254,7 @@ export default defineSingleProviderPluginEntry({
           token: ctx.token,
           baseUrl: configuredBaseUrl(ctx.config),
           timeoutMs: ctx.timeoutMs,
+          signal: ctx.signal,
         }),
     };
   },

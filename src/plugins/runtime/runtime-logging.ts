@@ -4,19 +4,20 @@ import { getChildLogger, isFileLogLevelEnabled } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
 import type { PluginRuntime } from "./types.js";
 
-function writeRuntimeLog(
-  log: (...args: unknown[]) => void,
+type RuntimeLogMethod = "debug" | "info" | "warn" | "error";
+
+export function writeRuntimeLog(
+  logger: Pick<ReturnType<typeof getChildLogger>, RuntimeLogMethod>,
+  level: RuntimeLogMethod,
   message: string,
   meta?: Record<string, unknown>,
 ): void {
   if (meta && Object.keys(meta).length > 0) {
-    log(meta, message);
+    logger[level](meta, message);
     return;
   }
-  log(message);
+  logger[level](message);
 }
-
-type RuntimeLogMethod = "debug" | "info" | "warn" | "error";
 
 /** Creates the plugin runtime logging facade. */
 export function createRuntimeLogging(): PluginRuntime["logging"] {
@@ -36,7 +37,7 @@ export function createRuntimeLogging(): PluginRuntime["logging"] {
             return;
           }
           const logger = getChildLogger(bindings, childOpts);
-          writeRuntimeLog(logger[level].bind(logger), message, meta);
+          writeRuntimeLog(logger, level, message, meta);
         };
       return {
         debug: emit("debug"),

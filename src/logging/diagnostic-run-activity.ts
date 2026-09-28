@@ -1,4 +1,3 @@
-// Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
@@ -11,6 +10,10 @@ import type {
 } from "../infra/diagnostic-model-request-provenance.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../infra/diagnostic-model-request.js";
 import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
+import {
+  resolveToolExecutionLivenessDiagnosticMetadata,
+  type DiagnosticToolExecutionLiveness,
+} from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   applyArgumentChurnObservation,
   clearArgumentChurnActivity,
@@ -37,6 +40,7 @@ import {
 } from "./diagnostic-run-activity-recovery.js";
 import {
   buildDiagnosticSessionActivitySnapshot,
+  resolveToolExecutionRecoveryDeadlineAtMs,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
 import {
@@ -106,7 +110,10 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
   return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
 }
 
-function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
+function recordToolStarted(
+  event: DiagnosticToolStartedActivityEvent,
+  liveness?: DiagnosticToolExecutionLiveness,
+): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity || shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
@@ -121,7 +128,10 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     toolCallId: event.toolCallId,
     startedAt: now,
     lastProgressAt: now,
-    deadlineAtMs: event.deadlineAtMs,
+    // Start delivery is asynchronous; retain the owner's live reference across preparation.
+    get deadlineAtMs() {
+      return resolveToolExecutionRecoveryDeadlineAtMs(liveness?.deadlineAtMs) ?? event.deadlineAtMs;
+    },
   });
   touchSessionActivity(activity, `tool:${event.toolName}:started`, now);
 }
@@ -608,7 +618,7 @@ export function startDiagnosticRunActivityTracking(): void {
       }
       switch (event.type) {
         case "tool.execution.started":
-          return recordToolStarted(event);
+          return recordToolStarted(event, resolveToolExecutionLivenessDiagnosticMetadata(metadata));
         case "tool.execution.completed":
         case "tool.execution.error":
         case "tool.execution.blocked":

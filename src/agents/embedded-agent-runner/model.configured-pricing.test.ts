@@ -84,9 +84,9 @@ describe("captured configured pricing policies", () => {
           getStaticCatalogModel: () => discoveredModel,
           runtimeHooks: createRuntimeHooks(),
         });
-        expect(result.id).toBe("middle");
+        expect(result?.id).toBe("middle");
         expect(fallback?.id).toBe("middle");
-        expect(result.cost).toEqual({ ...flatCatalogCost, input: 7 });
+        expect(result?.cost).toEqual({ ...flatCatalogCost, input: 7 });
         expect(fallback?.cost).toEqual({ ...flatCatalogCost, input: 7 });
       });
     },

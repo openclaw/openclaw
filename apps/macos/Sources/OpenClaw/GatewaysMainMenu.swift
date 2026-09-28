@@ -73,8 +73,14 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "GatewaysMainMenu")
-    private lazy var store = GatewayMenuStatusStore(disconnectProfile: { [weak self] profileID in
-        await self?.disconnectIdleProfile(profileID)
+    var localHealth: DashboardGatewayHealth {
+        self.store.facts[.local]?.health ?? .unknown
+    }
+
+    private lazy var store = GatewayMenuStatusStore(disconnectLocal: { [weak self] in
+        await self?.disconnectIdleGateway(.local)
+    }, disconnectProfile: { [weak self] profileID in
+        await self?.disconnectIdleGateway(.profile(profileID))
     })
     private var windowOpens: [UUID: (target: DashboardGatewayTarget, task: Task<Void, Never>)] = [:]
     private let ownedMenu = NSMenu(title: String(localized: "Gateways"))
@@ -143,7 +149,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     private func observeGatewayChanges() {
         withObservationTracking {
             _ = DashboardManager.shared.gatewayEntries
-            _ = DashboardManager.shared.frontmostDashboardTarget
+            _ = AppNavigationActions.selectedGatewayTarget
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -276,19 +282,27 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         } else {
             nil
         }
-        let labels = gateway.isPrimary ? self.primaryLabels : profile.map(GatewayMenuEndpointLabels.profile)
+        let labels: GatewayMenuEndpointLabels? = switch gateway.target {
+        case .primary: self.primaryLabels
+        case .local: GatewayMenuEndpointLabels(endpointLabel: "localhost:\(GatewayEnvironment.gatewayPort())")
+        case .profile: profile.map(GatewayMenuEndpointLabels.profile)
+        }
         let model = GatewayMenuCardModel(
             name: gateway.name,
             isPrimary: gateway.isPrimary,
-            isFrontmost: dashboard.frontmostDashboardTarget == gateway.target,
+            isFrontmost: AppNavigationActions.selectedGatewayTarget == gateway.target,
             shortcutNumber: gateway.shortcutNumber,
-            health: facts?.health ?? gateway.health,
+            // Probes still supply latency/version and health for unopened targets;
+            // a live dashboard owns connection health when its authority differs.
+            health: dashboard.dashboardHealth(for: gateway.target) ?? facts?.health ?? gateway.health,
             version: facts?.version,
             buildId: facts?.buildId,
             endpointLabel: labels?.endpointLabel,
             transportLabel: labels?.transportLabel,
             latencyMs: facts?.latencyMs,
-            windowCount: dashboard.openWindowCount(for: gateway.target),
+            windowCount: AppStateStore.shared.nativeExperienceEnabled
+                ? WebChatManager.shared.openWindowCount(for: gateway.target)
+                : dashboard.openWindowCount(for: gateway.target),
             browserSessionExpiresAt: profile?.browserSessionExpiresAt,
             lastSeen: facts?.lastSeen,
             isProbing: self.store.isProbing(gateway.target))
@@ -309,12 +323,12 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
 
     @objc private func openGateway(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: DashboardManager.shared.openOrFocusDashboard(for: target))
+        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target))
     }
 
     @objc private func newGatewayWindow(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: DashboardManager.shared.openNewDashboardWindow(for: target))
+        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target, newWindow: true))
     }
 
     private func trackWindowOpen(target: DashboardGatewayTarget, task: Task<Void, Never>) {
@@ -326,8 +340,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         }
     }
 
-    private func disconnectIdleProfile(_ profileID: String) async {
-        let target = DashboardGatewayTarget.profile(profileID)
+    private func disconnectIdleGateway(_ target: DashboardGatewayTarget) async {
         // AppKit closes tracking before dispatching an item action. A selected
         // dashboard owns its connection while its async window setup finishes.
         while let opening = self.windowOpens.first(where: { $0.value.target == target }) {
@@ -336,17 +349,18 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             self.windowOpens[opening.key] = nil
         }
         guard !Task.isCancelled, Self.activeConsumerCount(for: target) == 0 else { return }
-        await MacGatewayConnectionFleet.shared.disconnect(profileID: profileID, ifCurrent: { !Task.isCancelled })
+        switch target {
+        case .primary: break
+        case .local: await MacGatewayConnectionFleet.shared.disconnectLocal(ifCurrent: { !Task.isCancelled })
+        case let .profile(profileID):
+            await MacGatewayConnectionFleet.shared.disconnect(profileID: profileID, ifCurrent: { !Task.isCancelled })
+        }
     }
 
     /// Dashboard windows and native chat windows share a saved profile's fleet
     /// connection; probe cleanup may only disconnect when neither is open.
     private static func activeConsumerCount(for target: DashboardGatewayTarget) -> Int {
-        var count = DashboardManager.shared.openWindowCount(for: target)
-        if case let .profile(profileID) = target {
-            count += WebChatManager.shared.openWindowCount(profileID: profileID)
-        }
-        return count
+        DashboardManager.shared.openWindowCount(for: target) + WebChatManager.shared.openWindowCount(for: target)
     }
 
     @objc private func manageGateways(_: NSMenuItem) {

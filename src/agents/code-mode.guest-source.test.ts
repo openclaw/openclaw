@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { prepareSource } from "./code-mode-source.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -13,8 +12,6 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
-
-const sourceValidationConfig = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
 function createSourceValidationTools() {
   const { config, catalogRef, tools } = createCodeModeHarness();
@@ -34,9 +31,9 @@ describe("Code Mode guest source validation", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("accepts command as an exec-compatible code alias", async () => {
@@ -155,7 +152,7 @@ describe("Code Mode guest source validation", () => {
 
     expect(details.status).toBe("failed");
     expect(details.code).toBe("invalid_input");
-    expect(details.error).toMatch(/JavaScript or TypeScript, not shell commands/);
+    expect(details.error).toMatch(/JavaScript, not shell commands/);
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -194,7 +191,7 @@ describe("Code Mode guest source validation", () => {
     "preserves valid shell-like JavaScript without false rejection: %j",
     async ({ code, value, realGuest }) => {
       if (!realGuest) {
-        await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+        expect(prepareSource(code)).toBe(code);
         return;
       }
       const tools = createSourceValidationTools();
@@ -282,7 +279,7 @@ describe("Code Mode guest source validation", () => {
     },
   ])("preserves harmless $name in source validation", async ({ code, value, realGuest }) => {
     if (!realGuest) {
-      await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+      expect(prepareSource(code)).toBe(code);
       return;
     }
     const tools = createSourceValidationTools();
@@ -297,34 +294,46 @@ describe("Code Mode guest source validation", () => {
   });
 
   it.each([
-    "const fs = require('node:fs'); return fs;",
-    String.raw`return r\u0065quire('node:fs');`,
-    "return require?.('node:fs');",
-    "return (require)('node:fs');",
-    "return (0, require)('node:fs');",
-    "const load = require; return load('node:fs');",
-    "return module.require('node:fs');",
-    "return process.getBuiltinModule('node:fs');",
-    "return import('node:fs');",
-    "return import.meta.url;",
-    "return `${import('node:fs')}`;",
-    "return `${require('node:fs')}`;",
-    "return `${`nested ${import('node:fs')}`}`;",
-    "return `${`nested ${require('node:fs')}`}`;",
-    "return `${({ value: import('node:fs') }).value}`;",
-    "const message = `import('node:fs')`; return require('node:fs');",
-    "const pattern = /import.meta/; return import('node:fs');",
-    "let value = 1; return value++ / import('node:fs');",
-    "let value = 1; return value-- / import('node:fs');",
-    "const value = { of: 1 }; return value.of / import('node:fs');",
-    "const value = { return: 1 }; return value.return / import('node:fs');",
-    "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
-    "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
-    "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
-    "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
-    "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
-    "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
-  ])("rejects module access: %s", async (code) => {
+    ...[
+      "const fs = require('node:fs'); return fs;",
+      String.raw`return r\u0065quire('node:fs');`,
+      "return require?.('node:fs');",
+      "return (require)('node:fs');",
+      "return (0, require)('node:fs');",
+      "const load = require; return load('node:fs');",
+      "return module.require('node:fs');",
+      "return process.getBuiltinModule('node:fs');",
+      "return import('node:fs');",
+      "return `${import('node:fs')}`;",
+      "return `${require('node:fs')}`;",
+      "return `${`nested ${import('node:fs')}`}`;",
+      "return `${`nested ${require('node:fs')}`}`;",
+      "return `${({ value: import('node:fs') }).value}`;",
+      "const message = `import('node:fs')`; return require('node:fs');",
+      "const pattern = /import.meta/; return import('node:fs');",
+      "let value = 1; return value++ / import('node:fs');",
+      "let value = 1; return value-- / import('node:fs');",
+      "const value = { of: 1 }; return value.of / import('node:fs');",
+      "const value = { return: 1 }; return value.return / import('node:fs');",
+      "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
+      "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
+      "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
+      "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
+    ].map((code) => ({
+      code,
+      reason: "module access",
+      expectedError: "module access is disabled",
+    })),
+    ...[
+      "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+      "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+    ].map((code) => ({
+      code,
+      reason: "existing parser limitation: optional keyword property before division",
+      expectedError:
+        "SyntaxError at openclaw-code-mode:user.js:1:51: Unexpected token. No tools were dispatched; correct the JavaScript source and submit it again.",
+    })),
+  ])("rejects $reason: $code", async ({ code, expectedError }) => {
     const tools = createSourceValidationTools();
     const details = resultDetails(
       await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-import", {
@@ -332,7 +341,14 @@ describe("Code Mode guest source validation", () => {
       }),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("module access is disabled");
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      failurePhase: "input",
+      bridgeDispatchStarted: false,
+      telemetry: { callCount: 0 },
+    });
+    expect(String(details.error)).toContain(expectedError);
+    expect(testing.activeRuns.size).toBe(0);
   });
 });

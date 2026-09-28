@@ -8,6 +8,21 @@ title: "Node session catalogs"
 sidebarTitle: "Session catalogs"
 ---
 
+Catalog listing waits up to one second per provider, concurrently. Providers that
+finish within that budget return normally. A slow provider returns
+`catalog.error.code: "catalog_pending"`; when available, its last successful page
+for the same caller and query is included with hosts marked `pending: true` and
+a stale-results message. A failed refresh can likewise return the last page with
+`catalog.error.code: "catalog_stale"` and the underlying error in its message.
+Other providers remain usable. Late results refresh the page for the next list;
+existing host progress updates remain supported.
+
+These fallback pages are bounded in memory and invalidated by configuration or
+provider registration changes and catalog archive operations. Every delivery
+rechecks current visibility and local session identity. The one-second budget
+covers provider discovery and queueing, not session-projection preparation or
+time spent waiting for the Gateway event loop.
+
 ## Codex sessions and transcripts
 
 The official `codex` plugin can expose non-archived Codex sessions on a
@@ -151,3 +166,17 @@ turn them off in the Web UI under **Config > Plugins**.
 Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
+
+## OpenClaw sessions and transcripts
+
+The bundled [Session Share plugin](/plugins/session-share) publishes selected
+native OpenClaw sessions from a source Gateway to a paired receiver Gateway.
+The source node host runs as the same user with the source Gateway's state
+directory. Enable the plugin on both sides, choose source session groups, and
+connect with only `openclaw.sessions.list.v1` and
+`openclaw.sessions.read.v1` in `--commands`.
+
+The receiver shows read-only rows under the source node in **OpenClaw sessions**.
+Viewers need permission to view others' sessions on role-restricted Gateways.
+This does not permit continuation, terminal access, or worker execution on the
+source. It is separate from hosting new sessions on a node, described in [Session hosting](/nodes/session-hosting).

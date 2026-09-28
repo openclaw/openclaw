@@ -1,11 +1,44 @@
 ---
 name: control-ui-e2e
-description: Use when testing, fixing, or extending the OpenClaw Control UI GUI with Vitest + Playwright end-to-end checks, mocked Gateway WebSocket flows, mocked dashboard runs, screenshots/videos, or agent-verifiable browser proof.
+description: Use when designing, testing, fixing, or extending the OpenClaw Control UI GUI, including UI stress-test galleries with feedback inputs, Vitest + Playwright end-to-end checks, mocked Gateway flows, screenshots/videos, or agent-verifiable browser proof.
 ---
 
 # Control UI E2E
 
-Use this for Control UI changes that need a real browser flow with deterministic Gateway data.
+Use this for Control UI design feedback and real browser flows with deterministic Gateway data.
+
+## UI Stress Test
+
+For substantial UI changes, build a local HTML stress-test gallery early so the
+user can compare meaningful states and give feedback against concrete examples.
+Use it when changing layouts, interactions, or components with multiple states;
+small copy or icon edits can skip it when a gallery adds no useful comparison.
+
+1. Derive examples from the affected components and their data contracts. Cover
+   the relevant normal, loading, empty, error, unavailable, permission, selected,
+   and expanded states, plus long text or dense content where they stress the
+   layout. Show mutually exclusive states separately; label proposed states that
+   the current implementation does not support.
+2. Build one browser-openable HTML overview with stable example IDs, short state
+   labels, and enough context to understand each example. Prefer real components
+   and deterministic mock fixtures. Label static or approximate renderings and
+   link to the running UI for interactions they cannot reproduce. Keep generated
+   galleries in task-owned artifact storage rather than committing them by default.
+3. Give every example a labeled feedback input. Persist feedback locally across
+   refreshes using a gallery-specific storage key and stable example IDs. Include
+   a **Copy feedback** action that exports the example IDs, state labels, and
+   comments as Markdown or plain text for the user to return to the conversation.
+4. Open the gallery in the available preview browser and share its URL or file
+   path. Keep the same gallery and example IDs during iteration, preserving
+   existing comments as examples change. Apply the user's feedback to both the
+   gallery and the implementation so they remain comparable.
+5. Before requesting feedback, inspect the rendered examples at relevant viewport
+   sizes and verify that feedback survives a refresh and exports with the correct
+   example labels. Report any unsupported states or preview limitations.
+
+The gallery supports design review; it does not replace focused behavior tests
+or inspected before/after proof from the running UI. Preserve final proof using
+the fresh capture directories described below, separately from the evolving gallery.
 
 ## Test Shape
 

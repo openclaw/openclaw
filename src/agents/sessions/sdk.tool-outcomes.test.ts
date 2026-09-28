@@ -3,9 +3,15 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  disposeOpenClawAgentDatabaseByPath,
+} from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import type { AgentTool } from "../runtime/index.js";
+import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
 import {
   createAssistant,
@@ -14,18 +20,35 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
-import type { ToolResultEvent } from "./extensions/types.js";
+import type { MessageEndEvent, ToolResultEvent } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
+afterEach(resetSecretRedactionRegistryForTest);
 
 describe("session tool outcomes", () => {
   it.each([false, true])(
     "preserves tool outcomes through events, replay, and storage (recovery=%s)",
     async (withRecovery) => {
+      const secret = "fixture-final-tool-outcome-credential";
+      const image = {
+        type: "image" as const,
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV1sAAAAASUVORK5CYII=",
+      };
+      registerSecretValueForRedaction(secret);
+      // Binary blocks must remain byte-exact even when their bytes match registered text.
+      registerSecretValueForRedaction(image.data);
       const outcomes = [
         {
           name: "returned_error",
@@ -67,23 +90,26 @@ describe("session tool outcomes", () => {
               parameters: Type.Object({}),
               execute: async () => {
                 if (outcome.throws) {
-                  throw new Error("capture failed");
+                  throw new Error(`capture failed: ${secret}`);
                 }
                 return {
-                  content: [{ type: "text", text: "synthetic result" }],
+                  content: [
+                    { type: "text", text: `synthetic result ${secret}` },
+                    ...(outcome.name === "successful_tool" ? [image] : []),
+                  ],
                   details: outcome.details,
                 };
               },
             };
             return outcome.preflight
               ? attachInternalToolExecutionPreparer(tool, async () => {
-                  throw new Error("preflight failed");
+                  throw new Error(`preflight failed: ${secret}`);
                 })
               : tool;
           }),
         ),
         resourceLoader: createResourceLoader(
-          new Map(
+          new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>(
             withRecovery
               ? [
                   [
@@ -95,7 +121,33 @@ describe("session tool outcomes", () => {
                           return { isError: false };
                         }
                         return toolName === "middleware_error"
-                          ? { details: { status: "error", error: "middleware failed" } }
+                          ? {
+                              content: [{ type: "text", text: `middleware failed ${secret}` }],
+                              details: { status: "error", error: "middleware failed" },
+                            }
+                          : undefined;
+                      },
+                    ],
+                  ],
+                  [
+                    "message_end",
+                    [
+                      async (event: unknown) => {
+                        const { message } = event as MessageEndEvent;
+                        return message.role === "toolResult" &&
+                          message.toolName === "successful_tool"
+                          ? {
+                              message: {
+                                ...message,
+                                content: message.content.map((block) =>
+                                  block.type === "text"
+                                    ? Object.assign({}, block, {
+                                        text: `message-end rewrite ${secret}`,
+                                      })
+                                    : block,
+                                ),
+                              },
+                            }
                           : undefined;
                       },
                     ],
@@ -113,7 +165,7 @@ describe("session tool outcomes", () => {
           completed.push({ toolName: event.toolName, isError: event.isError });
         }
       });
-      let replay: unknown;
+      let replay: AgentMessage[] = [];
       let firstTurn = true;
       session.agent.streamFn = (_model, context) => {
         if (!firstTurn) {
@@ -130,6 +182,23 @@ describe("session tool outcomes", () => {
         expect(completed).toHaveLength(expected.length);
         expect(completed).toEqual(expect.arrayContaining(expected));
         expect(replay).toMatchObject(expected);
+        const text = replay
+          .flatMap((message) =>
+            message.role === "toolResult"
+              ? message.content.flatMap((block) => (block.type === "text" ? [block.text] : []))
+              : [],
+          )
+          .join("\n");
+        expect(text.includes("synthetic result")).toBe(true);
+        expect(text.includes("message-end rewrite")).toBe(withRecovery);
+        expect(text.includes(secret)).toBe(false);
+        expect(
+          replay.some(
+            (message) =>
+              message.role === "toolResult" &&
+              message.content.some((block) => block.type === "image" && block.data === image.data),
+          ),
+        ).toBe(true);
         const target = session.sessionManager.getSessionTarget();
         if (!target) {
           throw new Error("Expected a saved transcript target");
@@ -142,6 +211,7 @@ describe("session tool outcomes", () => {
         ).toMatchObject(expected);
       } finally {
         session.dispose();
+        await closeOpenClawAgentDatabaseByPathAsync(path.join(agentDir, "openclaw-agent.sqlite"));
         disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
       }
     },

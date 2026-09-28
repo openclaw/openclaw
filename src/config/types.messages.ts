@@ -10,6 +10,7 @@ import type {
   ProviderCommandsSchema,
   QueueSchema,
 } from "./zod-schema.messages.js";
+import type { CommandsSchema } from "./zod-schema.session.js";
 
 type DefinedSchemaInput<T extends z.ZodType> = NonNullable<z.input<T>>;
 
@@ -27,10 +28,23 @@ export type QueueConfig = DefinedSchemaInput<typeof QueueSchema>;
 export type InboundDebounceConfig = DefinedSchemaInput<typeof InboundDebounceSchema>;
 export type InboundDebounceByProvider = NonNullable<InboundDebounceConfig["byChannel"]>;
 
+export type BroadcastGroupConfig = Exclude<
+  DefinedSchemaInput<typeof BroadcastSchema>[string],
+  string[]
+>;
+
+export type BroadcastEntry = string[] | BroadcastGroupConfig;
+
 export type BroadcastStrategy = NonNullable<DefinedSchemaInput<typeof BroadcastSchema>["strategy"]>;
 export type BroadcastConfig = {
   strategy?: BroadcastStrategy;
-  [peerId: string]: string[] | BroadcastStrategy | undefined;
+  /**
+   * Map channel-qualified peer IDs to participant arrays or bounded group options.
+   * Unqualified WhatsApp peer arrays retain single-pass behavior.
+   *
+   * Note: the index signature includes `undefined` so `strategy?: ...` remains type-safe.
+   */
+  [peerId: string]: BroadcastEntry | BroadcastStrategy | undefined;
 };
 
 type MessagesSchemaInput = DefinedSchemaInput<typeof MessagesSchema>;
@@ -48,23 +62,11 @@ export type NativeCommandsSetting = boolean | "auto";
 
 export type CommandAllowFrom = Record<string, Array<string | number>>;
 
-export type CommandsConfig = {
+export type CommandsConfig = DefinedSchemaInput<typeof CommandsSchema> & {
   /** @deprecated Doctor-only legacy input. */
   ownerDisplay?: "raw" | "hash";
   /** @deprecated Doctor-only legacy input. */
   ownerDisplaySecret?: string;
-  native?: NativeCommandsSetting;
-  nativeSkills?: NativeCommandsSetting;
-  text?: boolean;
-  bash?: boolean;
-  bashForegroundMs?: number;
-  config?: boolean;
-  mcp?: boolean;
-  plugins?: boolean;
-  debug?: boolean;
-  restart?: boolean;
-  ownerAllowFrom?: Array<string | number>;
-  allowFrom?: CommandAllowFrom;
 };
 
 export type ProviderCommandsConfig = DefinedSchemaInput<typeof ProviderCommandsSchema>;

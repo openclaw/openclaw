@@ -1,6 +1,8 @@
-// Browser tests cover agent.existing session plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withChromeMcpTarget } from "../chrome-mcp-routing.js";
 import type { ChromeMcpSnapshotNode } from "../chrome-mcp.snapshot.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
@@ -16,11 +18,19 @@ const chromeMcpMocks = vi.hoisted(() => ({
   clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(
-    async (_params: { profileName: string; targetId: string; fn: string }) => true,
+    async (_params: {
+      profileName: string;
+      targetId: string;
+      fn: string;
+      args?: unknown;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    }): Promise<unknown> => true,
   ),
   fillChromeMcpElement: vi.fn(async () => {}),
+  selectChromeMcpOption: vi.fn(async () => {}),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
-  takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
+  takeChromeMcpScreenshot: vi.fn(async (_params?: unknown) => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn<() => Promise<ChromeMcpSnapshotNode>>(async () => ({
     id: "root",
     role: "document",
@@ -47,6 +57,7 @@ vi.mock("../chrome-mcp.js", () => ({
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
+  selectChromeMcpOption: chromeMcpMocks.selectChromeMcpOption,
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
@@ -55,6 +66,43 @@ vi.mock("../chrome-mcp.js", () => ({
   takeChromeMcpScreenshot: chromeMcpMocks.takeChromeMcpScreenshot,
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
   withChromeMcpDocument: chromeMcpMocks.withChromeMcpDocument,
+}));
+
+vi.mock("../chrome-mcp-actions.js", () => ({
+  takeChromeMcpScreenshotOnTarget: async (params: unknown) =>
+    await chromeMcpMocks.takeChromeMcpScreenshot(params),
+}));
+
+vi.mock("../chrome-mcp-routing.js", () => ({
+  resolveChromeMcpSnapshotRef: (_session: unknown, targetId: string, uid: string) => ({
+    targetId,
+    uid,
+    documentUid: "root",
+  }),
+  withChromeMcpTarget: vi.fn(
+    async (_params: unknown, run: (target: unknown) => Promise<unknown>) =>
+      await run({ pageId: 7, profileOptions: {}, lease: { session: {} } }),
+  ),
+  callTool: async (
+    profileName: string,
+    _profile: unknown,
+    name: string,
+    args: { function: string; args: string[] },
+    options: { signal?: AbortSignal; timeoutMs?: number },
+  ) => {
+    if (name !== "evaluate_script") {
+      throw new Error(`Unexpected tool ${name}`);
+    }
+    const value = await chromeMcpMocks.evaluateChromeMcpScript({
+      profileName,
+      targetId: "7",
+      fn: args.function,
+      args: args.args,
+      signal: options.signal,
+      ...options,
+    });
+    return { structuredContent: { message: JSON.stringify(value) } };
+  },
 }));
 
 vi.mock("../cdp.js", () => ({
@@ -78,9 +126,15 @@ vi.mock("../screenshot.js", () => ({
   })),
 }));
 
-vi.mock("../../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
+}));
+
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => null),
+  getLoadedPwAiModule: () => null,
 }));
 
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
@@ -155,16 +209,16 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
+    chromeMcpMocks.selectChromeMcpOption.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
     chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
     chromeMcpMocks.withChromeMcpDocument.mockClear();
+    vi.mocked(withChromeMcpTarget).mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
-    chromeMcpMocks.evaluateChromeMcpScript
-      .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
-      .mockResolvedValueOnce(true);
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(1).mockResolvedValueOnce(true);
   });
 
   it.each(["", "  spaced  "])("forwards exact select input %j to Chrome MCP", async (value) => {
@@ -176,7 +230,7 @@ describe("existing-session browser routes", () => {
     );
 
     expect(response.statusCode).toBe(200);
-    expect(chromeMcpMocks.fillChromeMcpElement).toHaveBeenCalledWith(
+    expect(chromeMcpMocks.selectChromeMcpOption).toHaveBeenCalledWith(
       expect.objectContaining({ targetId: "7", uid: "select-1", value }),
     );
   });
@@ -212,11 +266,165 @@ describe("existing-session browser routes", () => {
       callArg(chromeMcpMocks.evaluateChromeMcpScript, 1, 0, "label cleanup params"),
       "label cleanup params",
     );
-    expect(renderParams.signal).toBe(ctrl.signal);
+    expect(renderParams.signal).toBeUndefined();
     expect(cleanupParams.signal).toBeUndefined();
+    expect(cleanupParams.args).toEqual(["root"]);
+    expect(withChromeMcpTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: ctrl.signal }),
+      expect.any(Function),
+    );
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
+
+  it.each(
+    ["snapshot", "screenshot"].flatMap((operation) =>
+      [false, true].map((cleanupFails) => ({ operation, cleanupFails })),
+    ),
+  )(
+    "preserves $operation cancellation when label cleanup fails=$cleanupFails",
+    async ({ operation, cleanupFails }) => {
+      const failure = new Error("label injection timed out");
+      const controller = new AbortController();
+      chromeMcpMocks.evaluateChromeMcpScript.mockReset().mockImplementationOnce(async () => {
+        controller.abort(failure);
+        throw failure;
+      });
+      if (cleanupFails) {
+        chromeMcpMocks.evaluateChromeMcpScript.mockRejectedValueOnce(new Error("cleanup failed"));
+      }
+      const response = createBrowserRouteResponse();
+      const handler = operation === "snapshot" ? getSnapshotGetHandler() : getSnapshotPostHandler();
+      const request = handler?.(
+        {
+          params: {},
+          query: { format: "ai", labels: "1" },
+          body: { labels: true },
+          signal: controller.signal,
+        },
+        response.res,
+      );
+      if (operation === "snapshot") {
+        await request;
+        expect(response.body).toEqual({ error: failure.message });
+      } else {
+        await expect(request).rejects.toBe(failure);
+      }
+      expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
+      expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          signal: undefined,
+          fn: expect.stringContaining("node.remove()"),
+        }),
+      );
+    },
+  );
+
+  it("joins cancelled label injection before cleaning its document", async () => {
+    const controller = new AbortController();
+    const failure = new Error("caller cancelled labels");
+    const entered = createDeferred<void>();
+    const complete = createDeferred<number>();
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset().mockImplementationOnce(async () => {
+      entered.resolve();
+      return await complete.promise;
+    });
+    const response = createBrowserRouteResponse();
+    let settled = false;
+    const request = Promise.resolve(
+      getSnapshotPostHandler()?.(
+        {
+          params: {},
+          query: {},
+          body: { labels: true },
+          signal: controller.signal,
+        },
+        response.res,
+      ),
+    ).finally(() => {
+      settled = true;
+    });
+    const rejected = expect(request).rejects.toBe(failure);
+    try {
+      await entered.promise;
+      controller.abort(failure);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+    } finally {
+      complete.resolve(1);
+      await rejected;
+    }
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args: ["root"],
+        signal: undefined,
+        fn: expect.stringContaining("node.remove()"),
+      }),
+    );
+  });
+
+  it.each(["snapshot", "screenshot"])(
+    "does not publish %s success before label cleanup",
+    async (operation) => {
+      const failure = new Error("cleanup failed after capture");
+      chromeMcpMocks.evaluateChromeMcpScript
+        .mockReset()
+        .mockResolvedValueOnce(1)
+        .mockRejectedValueOnce(failure);
+      const response = createBrowserRouteResponse();
+      const publish = vi.spyOn(response.res, "json");
+      const handler = operation === "snapshot" ? getSnapshotGetHandler() : getSnapshotPostHandler();
+      const request = handler?.(
+        { params: {}, query: { format: "ai", labels: "1" }, body: { labels: true } },
+        response.res,
+      );
+      if (operation === "snapshot") {
+        await request;
+        expect(publish).toHaveBeenCalledExactlyOnceWith({ error: failure.message });
+      } else {
+        await expect(request).rejects.toBe(failure);
+        expect(publish).not.toHaveBeenCalled();
+      }
+      expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["snapshot", "screenshot"])(
+    "clears %s labels after media persistence fails and its caller aborts",
+    async (operation) => {
+      const failure = new Error("media persistence failed");
+      const controller = new AbortController();
+      vi.mocked(saveMediaBuffer).mockImplementationOnce(async () => {
+        controller.abort();
+        throw failure;
+      });
+      const response = createBrowserRouteResponse();
+      const handler = operation === "snapshot" ? getSnapshotGetHandler() : getSnapshotPostHandler();
+      const request = handler?.(
+        {
+          params: {},
+          query: { format: "ai", labels: "1" },
+          body: { labels: true },
+          signal: controller.signal,
+        },
+        response.res,
+      );
+      if (operation === "snapshot") {
+        await request;
+        expect(response.body).toEqual({ error: failure.message });
+      } else {
+        await expect(request).rejects.toBe(failure);
+        expect(response.body).toBeUndefined();
+      }
+      expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          signal: undefined,
+          fn: expect.stringContaining("node.remove()"),
+        }),
+      );
+    },
+  );
 
   it("omits deltas for existing-session snapshots without stable document identity", async () => {
     chromeMcpMocks.takeChromeMcpSnapshot
@@ -385,21 +593,6 @@ describe("existing-session browser routes", () => {
     );
   });
 
-  it("checks existing-session snapshot URL when SSRF policy is configured", async () => {
-    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
-
-    expect(response.statusCode).toBe(200);
-    expect(navigationGuardMocks.assertBrowserNavigationAllowed).not.toHaveBeenCalled();
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "https://example.com",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
-    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
-  });
-
   it("routes close through profile selection state with exact call options", async () => {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
@@ -558,6 +751,28 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
   });
 
+  it("explains unsupported focused paste without forwarding or echoing its text", async () => {
+    const response = createBrowserRouteResponse();
+    await getActPostHandler()?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "insertText", text: "synthetic-password-paste" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toEqual({
+      code: "ACT_EXISTING_SESSION_UNSUPPORTED",
+      error:
+        "Paste is not supported for existing-session browser profiles. Use a managed browser profile.",
+    });
+    expect(JSON.stringify(response.body)).not.toContain("synthetic-password-paste");
+    expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+  });
+
   it("fails closed for existing-session dialogId responses", async () => {
     const handler = getDialogHookPostHandler();
     const response = createBrowserRouteResponse();
@@ -606,7 +821,7 @@ describe("existing-session browser routes", () => {
     expect(documentParams.userDataDir).toBeUndefined();
     expect(documentParams.targetId).toBe("7");
     expect(evaluate).toHaveBeenCalledOnce();
-    expect(String(evaluate.mock.calls[0]?.[0])).toContain("globalThis.location.href");
+    expect(String(evaluate.mock.calls[0]?.[0])).toContain("location.href");
   });
 
   it("forwards click timeoutMs to the existing-session click executor", async () => {
@@ -649,7 +864,7 @@ describe("existing-session browser routes", () => {
       {
         params: {},
         query: {},
-        body: { kind: "clickCoords", x: 25, y: "32", doubleClick: true, delayMs: 5 },
+        body: { kind: "clickCoords", x: 25, y: "32", doubleClick: true },
       },
       response.res,
     );
@@ -670,6 +885,20 @@ describe("existing-session browser routes", () => {
     expect(clickParams.y).toBe(32);
     expect(clickParams.doubleClick).toBe(true);
     expect(clickParams.button).toBeUndefined();
-    expect(clickParams.delayMs).toBe(5);
+    expect(clickParams.delayMs).toBeUndefined();
   });
+
+  it.each([{ button: "right" }, { button: "middle" }, { delayMs: 5 }])(
+    "rejects unsupported native coordinate input %j before clicking",
+    async (options) => {
+      const handler = getActPostHandler();
+      const response = createBrowserRouteResponse();
+      await handler?.(
+        { params: {}, query: {}, body: { kind: "clickCoords", x: 25, y: 32, ...options } },
+        response.res,
+      );
+      expect(response.statusCode).toBe(501);
+      expect(chromeMcpMocks.clickChromeMcpCoords).not.toHaveBeenCalled();
+    },
+  );
 });

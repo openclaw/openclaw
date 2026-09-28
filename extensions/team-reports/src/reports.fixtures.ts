@@ -23,7 +23,7 @@ export function completion(text: string): Awaited<ReturnType<Complete>> {
   return {
     text,
     provider: "openai",
-    model: "gpt-5.6-sol",
+    model: "gpt-5.6-luna",
     agentId: "main",
     usage: {},
     execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },

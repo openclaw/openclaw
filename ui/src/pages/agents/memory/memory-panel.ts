@@ -7,12 +7,14 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
+import { shellLayoutTraits } from "../../../app/shell-layout-traits.ts";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
 } from "../../../components/confirm-dialog.ts";
 import { renderSettingsDefaultDescription } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
@@ -43,6 +45,8 @@ import {
   resetWikiPreview,
   type DreamingViewState,
 } from "./view.ts";
+
+registerDreamingEnglish();
 
 type WikiPagePreview = {
   title: string;
@@ -412,7 +416,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return html`
-      <section class="content-header content-header--page agent-memory-panel__header">
+      <section
+        class="content-header content-header--page agent-memory-panel__header"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div class="page-meta">
           <div class="dreaming-header-controls">
             <button

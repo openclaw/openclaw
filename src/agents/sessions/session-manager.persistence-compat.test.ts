@@ -4,7 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   formatSqliteSessionFileMarker,
@@ -23,11 +23,18 @@ import {
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
+  tempDirs.cleanup();
+});
 
 function buildAssistantMessage(text: string) {
   return {
@@ -91,12 +98,16 @@ describe("SessionManager persistence compatibility", () => {
     const malformed = buildAssistantMessage("[[reply_to_current]\nVisible reply");
     const laterLiteral = buildAssistantMessage("Visible reply\n[[reply_to_current] literally");
     const ordinaryRelativeMedia = buildAssistantMessage("Generated image\nMEDIA:./render.png");
+    const ordinaryMarkdownText =
+      "  Leading  spaces\r\n\r\n\r\n    indented code\r\n```ts\r\nconst value = 1;\r\n```\r\n";
+    const ordinaryMarkdown = buildAssistantMessage(ordinaryMarkdownText);
     manager.appendMessage(tagged);
     manager.appendMessage(codeExample);
     manager.appendMessage(indentedCode);
     manager.appendMessage(malformed);
     manager.appendMessage(laterLiteral);
     manager.appendMessage(ordinaryRelativeMedia);
+    manager.appendMessage(ordinaryMarkdown);
 
     expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
     expect(tagged).toMatchObject({
@@ -125,6 +136,8 @@ describe("SessionManager persistence compatibility", () => {
     ]);
     expect(laterLiteral).not.toHaveProperty("openclawDelivery");
     expect(ordinaryRelativeMedia).not.toHaveProperty("openclawDelivery");
+    expect(ordinaryMarkdown.content).toEqual([{ type: "text", text: ordinaryMarkdownText }]);
+    expect(ordinaryMarkdown).not.toHaveProperty("openclawDelivery");
 
     const persistedMessages = (await loadTranscriptEvents(scope))
       .filter((event) => (event as { type?: unknown }).type === "message")
@@ -136,6 +149,7 @@ describe("SessionManager persistence compatibility", () => {
       malformed,
       laterLiteral,
       ordinaryRelativeMedia,
+      ordinaryMarkdown,
     ]);
     expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([
       tagged,
@@ -144,6 +158,7 @@ describe("SessionManager persistence compatibility", () => {
       malformed,
       laterLiteral,
       ordinaryRelativeMedia,
+      ordinaryMarkdown,
     ]);
   });
 
@@ -223,7 +238,7 @@ describe("SessionManager persistence compatibility", () => {
       message: { role: "user", content: "question" },
     });
     const manager = SessionManager.open(scope, dir);
-    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+    const modelChangeId = await manager.appendModelChange("openai", "gpt-5.6");
 
     expect(manager.removeTrailingEntries((entry) => entry.id === modelChangeId)).toBe(1);
     expect(manager.getLeafId()).toBe(user.messageId);

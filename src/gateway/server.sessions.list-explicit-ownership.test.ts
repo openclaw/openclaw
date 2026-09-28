@@ -1,20 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import * as projectionRecords from "./session-row-projection-record.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
-import * as sessionUtils from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   seedSessionTranscript,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -215,6 +226,7 @@ test.for(
       const entry = {
         sessionId: "ops-physical-session",
         updatedAt: 10,
+        displayName: "Physical database title",
         visibility:
           change === "join" || change === "leave" ? ("read-only" as const) : ("shared" as const),
         createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
@@ -223,7 +235,7 @@ test.for(
       await seedSessionTranscript({
         ...scope,
         sessionId: entry.sessionId,
-        messages: [{ role: "user", content: "Physical database title" }],
+        messages: [{ role: "user", content: "Physical database preview" }],
       });
       if (change === "leave") {
         addSessionMember(scope, {
@@ -232,40 +244,78 @@ test.for(
           expectedSessionId: entry.sessionId,
         });
       }
-      const project = sessionUtils.listSessionsFromStoreAsync;
-      const spy = vi
-        .spyOn(sessionUtils, "listSessionsFromStoreAsync")
-        .mockImplementationOnce(async (params) => {
-          const result = await project(params);
-          expect(result.sessions).toMatchObject([
-            { key, agentId: "ops", derivedTitle: "Physical database title" },
-          ]);
-          if (change === "delete") {
-            await deleteSessionEntryLifecycle({
-              agentId: scope.agentId,
-              storePath,
-              target: { canonicalKey: key, storeKeys: [key] },
-              archiveTranscript: false,
-              deleteTranscriptWithoutArchive: true,
-            });
-          } else if (change === "draft") {
-            replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
-          } else if (change === "join") {
-            addSessionMember(scope, {
-              identityId: "viewer",
-              addedBy: "owner",
-              expectedSessionId: entry.sessionId,
-            });
-          } else {
-            removeSessionMember(scope, "viewer", undefined, entry.sessionId);
+      const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
+      const previewPublished = createDeferred();
+      const publishTranscriptFields = projectionRecords.publishTranscriptFields;
+      using publication = vi
+        .spyOn(projectionRecords, "publishTranscriptFields")
+        .mockImplementation((...args) => {
+          const published = publishTranscriptFields(...args);
+          const [row] = args;
+          if (
+            row.key === key &&
+            row.entry.sessionId === entry.sessionId &&
+            row.lastMessagePreview === "Physical database preview"
+          ) {
+            previewPublished.resolve();
           }
-          return result;
+          return published;
         });
+      const projection = await createSessionRowProjection({ cfg });
+      const ensure = projection.ensureMaterialized;
+      const spy = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+        await ensure();
+        expect(
+          projection.snapshot(
+            { key, agentId: "ops" },
+            { includeDerivedTitles: true, includeLastMessage: true },
+          ).row,
+        ).toMatchObject({
+          key,
+          agentId: "ops",
+          derivedTitle: "Physical database title",
+          lastMessagePreview: "Physical database preview",
+        });
+        if (change === "delete") {
+          await deleteSessionEntryLifecycle({
+            agentId: scope.agentId,
+            storePath,
+            target: { canonicalKey: key, storeKeys: [key] },
+            archiveTranscript: false,
+            deleteTranscriptWithoutArchive: true,
+          });
+        } else if (change === "draft") {
+          replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
+        } else if (change === "join") {
+          addSessionMember(scope, {
+            identityId: "viewer",
+            addedBy: "owner",
+            expectedSessionId: entry.sessionId,
+          });
+        } else {
+          removeSessionMember(scope, "viewer", undefined, entry.sessionId);
+        }
+        await ensure();
+      });
       try {
+        await previewPublished.promise;
+        publication.mockRestore();
+        expect(
+          projection.snapshot(
+            { key, agentId: "ops" },
+            { includeDerivedTitles: true, includeLastMessage: true },
+          ).row,
+        ).toMatchObject({
+          derivedTitle: "Physical database title",
+          lastMessagePreview: "Physical database preview",
+        });
         const result = await directSessionReq<SessionsListResult>(
           "sessions.list",
-          { configuredAgentsOnly: true, includeDerivedTitles: true },
-          { client: sharingPolicyClient({ user: "viewer" }) },
+          { configuredAgentsOnly: true, includeDerivedTitles: true, includeLastMessage: true },
+          {
+            client: sharingPolicyClient({ user: "viewer" }),
+            context: bindSessionRowProjection({}, () => projection),
+          },
         );
         expect(result.ok).toBe(true);
         expect(spy).toHaveBeenCalled();
@@ -277,6 +327,7 @@ test.for(
               key,
               agentId: "ops",
               sessionId: entry.sessionId,
+              derivedTitle: "Physical database title",
               visibility: "read-only",
               sharingRole: change === "join" ? "member" : "viewer",
             },
@@ -284,12 +335,14 @@ test.for(
         }
       } finally {
         spy.mockRestore();
+        projection.dispose();
+        await projection.ensureMaterialized();
       }
     });
   },
 );
 
-test("sessions.list never substitutes a later same-owner sentinel after the selected row disappears", async () => {
+test("captured sentinel rows never substitute a later same-owner session after deletion", async () => {
   const rootStateDir = process.env.OPENCLAW_STATE_DIR;
   if (!rootStateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
@@ -305,37 +358,74 @@ test("sessions.list never substitutes a later same-owner sentinel after the sele
     replaceSessionEntrySync(first, { sessionId: "first-sentinel", updatedAt: 1 });
     replaceSessionEntrySync(second, { sessionId: "later-sentinel", updatedAt: 2 });
     testState.agentsConfig = { list: [{ id: "main", default: true }] };
-    const project = sessionUtils.listSessionsFromStoreAsync;
-    const spy = vi
-      .spyOn(sessionUtils, "listSessionsFromStoreAsync")
-      .mockImplementationOnce(async (params) => {
-        const result = await project(params);
-        expect(params.targetsBySessionKey.get("unknown")).toMatchObject({
-          agentId: "main",
-          storeTarget: { agentId: "main", storePath: first.storePath },
-        });
-        expect(result.sessions).toMatchObject([
-          { key: "unknown", agentId: "main", sessionId: "first-sentinel" },
-        ]);
-        await deleteSessionEntryLifecycle({
-          ...first,
-          target: { canonicalKey: "unknown", storeKeys: ["unknown"] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
-        return result;
-      });
+    const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
+    const projection = await createSessionRowProjection({ cfg });
+    const client = sharingPolicyClient({ user: "viewer" });
+    const options = { client, context: bindSessionRowProjection({}, () => projection) };
     try {
-      const result = await directSessionReq<SessionsListResult>(
+      const selected = await directSessionReq<SessionsListResult>(
         "sessions.list",
         { configuredAgentsOnly: true, includeUnknown: true },
-        { client: sharingPolicyClient({ user: "viewer" }) },
+        options,
       );
-      expect(result.ok).toBe(true);
-      expect(spy).toHaveBeenCalled();
-      expect(result.payload?.sessions).toEqual([]);
+      expect(selected.ok).toBe(true);
+      expect(selected.payload?.sessions).toMatchObject([
+        { key: "unknown", agentId: "main", sessionId: "first-sentinel" },
+      ]);
+      const captured = projection.describe({
+        key: "unknown",
+        agentId: "main",
+        storePath: first.storePath,
+      })!;
+      await deleteSessionEntryLifecycle({
+        ...first,
+        target: { canonicalKey: "unknown", storeKeys: ["unknown"] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      await projection.ensureMaterialized();
+      expect(prepareProjectedSessionPresentation(projection, client).present(captured)).toBeNull();
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "retired-sentinel",
+        cfg,
+      });
+      const send = vi.fn();
+      const recipient = {
+        ...client,
+        connId: "sentinel-reader",
+        connect: { ...client.connect, scopes: ["operator.admin"] },
+        socket: {
+          readyState: 1,
+          bufferedAmount: 0,
+          send,
+          close: vi.fn(),
+        } as unknown as GatewayWsClient["socket"],
+      } as GatewayWsClient;
+      connection.clients.add(recipient);
+      const detach = connection.attachSessionRowProjection(projection);
+      try {
+        connection.broadcast("sessions.changed", {
+          sessionKey: "unknown",
+          agentId: "main",
+          session: selected.payload!.sessions[0],
+        });
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        detach();
+        connection.mentionInbox.dispose();
+      }
+      // A new selection may use the remaining physical row; the captured identity may not.
+      const current = await directSessionReq<SessionsListResult>(
+        "sessions.list",
+        { configuredAgentsOnly: true, includeUnknown: true },
+        options,
+      );
+      expect(current.payload?.sessions).toMatchObject([
+        { key: "unknown", agentId: "main", sessionId: "later-sentinel" },
+      ]);
     } finally {
-      spy.mockRestore();
+      projection.dispose();
     }
   });
 });

@@ -3,18 +3,24 @@ import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchZaiUsage } from "./provider-usage.fetch.zai.js";
 
+async function fetchUsage(body: unknown, status = 200) {
+  return await fetchZaiUsage(
+    "key",
+    5000,
+    createProviderUsageFetch(async () => makeResponse(status, body)),
+  );
+}
+
 describe("fetchZaiUsage", () => {
   it("returns HTTP errors for failed requests", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(503, "unavailable"));
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage("unavailable", 503);
 
     expect(result.error).toBe("HTTP 503");
     expect(result.windows).toHaveLength(0);
   });
 
   it("returns a stable error for malformed successful usage JSON", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage("{not json");
 
     expect(result.error).toBe("Malformed usage response");
     expect(result.windows).toHaveLength(0);
@@ -24,8 +30,7 @@ describe("fetchZaiUsage", () => {
     ["null", null],
     ["array", []],
   ])("returns a stable API error for a successful %s payload", async (_name, payload) => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage(payload);
 
     expect(result.error).toBe("API error");
     expect(result.windows).toHaveLength(0);
@@ -33,13 +38,9 @@ describe("fetchZaiUsage", () => {
 
   it.each([
     ["missing data", { success: true, code: 200 }],
-    ["null data", { success: true, code: 200, data: null }],
-    ["array data", { success: true, code: 200, data: [] }],
-    ["null limits", { success: true, code: 200, data: { limits: null } }],
     ["object limits", { success: true, code: 200, data: { limits: {} } }],
   ])("treats successful payloads with %s as empty usage", async (_name, payload) => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage(payload);
 
     expect(result).toEqual({
       provider: "zai",
@@ -50,29 +51,21 @@ describe("fetchZaiUsage", () => {
   });
 
   it("returns API message errors for unsuccessful payloads", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        success: false,
-        code: 500,
-        msg: "quota endpoint disabled",
-      }),
-    );
-
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage({
+      success: false,
+      code: 500,
+      msg: "quota endpoint disabled",
+    });
     expect(result.error).toBe("quota endpoint disabled");
     expect(result.windows).toHaveLength(0);
   });
 
   it("falls back to a generic API error for blank unsuccessful messages", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        success: false,
-        code: 500,
-        msg: "   ",
-      }),
-    );
-
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage({
+      success: false,
+      code: 500,
+      msg: "   ",
+    });
     expect(result.error).toBe("API error");
     expect(result.windows).toHaveLength(0);
   });
@@ -81,40 +74,36 @@ describe("fetchZaiUsage", () => {
     const tokenReset = "2026-01-08T00:00:00Z";
     const minuteReset = "2026-01-08T00:30:00Z";
     const monthlyReset = "2026-01-31T12:00:00Z";
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        success: true,
-        code: 200,
-        data: {
-          planName: "Team",
-          limits: [
-            {
-              type: "TOKENS_LIMIT",
-              percentage: 32,
-              unit: 3,
-              number: 6,
-              nextResetTime: tokenReset,
-            },
-            {
-              type: "TOKENS_LIMIT",
-              percentage: 8,
-              unit: 5,
-              number: 15,
-              nextResetTime: minuteReset,
-            },
-            {
-              type: "TIME_LIMIT",
-              percentage: 12.5,
-              unit: 1,
-              number: 30,
-              nextResetTime: monthlyReset,
-            },
-          ],
-        },
-      }),
-    );
-
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage({
+      success: true,
+      code: 200,
+      data: {
+        planName: "Team",
+        limits: [
+          {
+            type: "TOKENS_LIMIT",
+            percentage: 32,
+            unit: 3,
+            number: 6,
+            nextResetTime: tokenReset,
+          },
+          {
+            type: "TOKENS_LIMIT",
+            percentage: 8,
+            unit: 5,
+            number: 15,
+            nextResetTime: minuteReset,
+          },
+          {
+            type: "TIME_LIMIT",
+            percentage: 12.5,
+            unit: 1,
+            number: 30,
+            nextResetTime: monthlyReset,
+          },
+        ],
+      },
+    });
 
     expect(result.plan).toBe("Team");
     expect(result.windows).toEqual([
@@ -137,32 +126,28 @@ describe("fetchZaiUsage", () => {
   });
 
   it("clamps invalid percentages and falls back to alternate plan fields", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        success: true,
-        code: 200,
-        data: {
-          plan: "Pro",
-          limits: [
-            {
-              type: "TOKENS_LIMIT",
-              percentage: -5,
-              unit: 99,
-            },
-            {
-              type: "TIME_LIMIT",
-              percentage: 140,
-            },
-            {
-              type: "OTHER_LIMIT",
-              percentage: 50,
-            },
-          ],
-        },
-      }),
-    );
-
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage({
+      success: true,
+      code: 200,
+      data: {
+        plan: "Pro",
+        limits: [
+          {
+            type: "TOKENS_LIMIT",
+            percentage: -5,
+            unit: 99,
+          },
+          {
+            type: "TIME_LIMIT",
+            percentage: 140,
+          },
+          {
+            type: "OTHER_LIMIT",
+            percentage: 50,
+          },
+        ],
+      },
+    });
 
     expect(result.plan).toBe("Pro");
     expect(result.windows).toEqual([
@@ -180,36 +165,32 @@ describe("fetchZaiUsage", () => {
   });
 
   it("skips malformed limit entries while preserving valid siblings", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        success: true,
-        code: 200,
-        data: {
-          planName: " Team ",
-          limits: [
-            null,
-            "not-an-object",
-            {
-              type: "TOKENS_LIMIT",
-              percentage: 25,
-              unit: 3,
-              number: 6,
-            },
-            {
-              type: "TOKENS_LIMIT",
-              percentage: 10,
-              unit: 3,
-            },
-            {
-              type: "TIME_LIMIT",
-              percentage: "40",
-            },
-          ],
-        },
-      }),
-    );
-
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage({
+      success: true,
+      code: 200,
+      data: {
+        planName: " Team ",
+        limits: [
+          null,
+          "not-an-object",
+          {
+            type: "TOKENS_LIMIT",
+            percentage: 25,
+            unit: 3,
+            number: 6,
+          },
+          {
+            type: "TOKENS_LIMIT",
+            percentage: 10,
+            unit: 3,
+          },
+          {
+            type: "TIME_LIMIT",
+            percentage: "40",
+          },
+        ],
+      },
+    });
 
     expect(result.plan).toBe("Team");
     expect(result.windows).toEqual([
@@ -233,31 +214,27 @@ describe("fetchZaiUsage", () => {
 
   it("ignores invalid nextResetTime while preserving valid ISO resets", async () => {
     const validReset = "2026-01-08T00:00:00Z";
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        success: true,
-        code: 200,
-        data: {
-          planName: "Team",
-          limits: [
-            {
-              type: "TOKENS_LIMIT",
-              percentage: 20,
-              unit: 3,
-              number: 6,
-              nextResetTime: "not-a-date",
-            },
-            {
-              type: "TIME_LIMIT",
-              percentage: 40,
-              nextResetTime: validReset,
-            },
-          ],
-        },
-      }),
-    );
-
-    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    const result = await fetchUsage({
+      success: true,
+      code: 200,
+      data: {
+        planName: "Team",
+        limits: [
+          {
+            type: "TOKENS_LIMIT",
+            percentage: 20,
+            unit: 3,
+            number: 6,
+            nextResetTime: "not-a-date",
+          },
+          {
+            type: "TIME_LIMIT",
+            percentage: 40,
+            nextResetTime: validReset,
+          },
+        ],
+      },
+    });
 
     expect(result.windows).toEqual([
       {

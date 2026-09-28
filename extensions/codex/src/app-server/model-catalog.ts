@@ -10,7 +10,7 @@ import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
-import { isJsonObject, type CodexGetAccountResponse } from "./protocol.js";
+import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
 
@@ -108,7 +108,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const ownsLocalProcess =
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
       const authProfileStore =
-        ownsLocalProcess && configured.appServer?.homeScope === undefined
+        ownsLocalProcess && options.start.homeScope === "agent"
           ? resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               config: params.config,
@@ -117,20 +117,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const authProfileId = authProfileStore
         ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
         : undefined;
-      const usesNativeHome =
-        ownsLocalProcess && configured.appServer?.homeScope !== "agent" && !authProfileId;
+      const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return [];
       }
-      const { start } = usesNativeHome
-        ? resolveCodexAppServerRuntimeOptions({
-            pluginConfig: {
-              ...configured,
-              appServer: { ...configured.appServer, homeScope: "user" },
-            },
-          })
-        : options;
+      const { start } = options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         {
@@ -158,13 +150,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             method: "account/read",
             requestParams: { refreshToken: false },
           });
-          const observedType = isJsonObject(account.account) ? account.account.type : undefined;
-          const accountType =
-            account.requiresOpenaiAuth === true
-              ? observedType === "apiKey" || observedType === "chatgpt"
-                ? observedType
-                : undefined
-              : undefined;
+          const observedType = account.account?.type;
+          const accountType = account.requiresOpenaiAuth
+            ? observedType === "apiKey" || observedType === "chatgpt"
+              ? observedType
+              : undefined
+            : undefined;
           return { models, isCurrent, accountType } as const;
         },
       );

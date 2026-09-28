@@ -1,8 +1,3 @@
-/**
- * Channel config schema helpers.
- *
- * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
- */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
 import {
@@ -20,10 +15,6 @@ import type {
   ChannelConfigSchema,
   ChannelConfigUiHint,
 } from "./types.config.js";
-
-type ZodSchemaWithToJsonSchema = ZodTypeAny & {
-  toJSONSchema?: (params?: Record<string, unknown>) => unknown;
-};
 
 /** Shared allowlist entry shape for channel sender/user ids. */
 const AllowFromEntrySchema = z.union([z.string(), z.number()]);
@@ -278,28 +269,18 @@ export function buildChannelConfigSchema(
   schema: ZodTypeAny,
   options?: BuildChannelConfigSchemaOptions,
 ): ChannelConfigSchema {
-  const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
-  if (typeof schemaWithJson.toJSONSchema === "function") {
-    return {
-      schema: schemaWithJson.toJSONSchema({
-        target: "draft-07",
-        ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
-        unrepresentable: "any",
-      }) as JsonSchemaObject,
-      ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
-      runtime: {
-        safeParse: (value) => safeParseRuntimeSchema(schema, value),
-      },
-    };
-  }
-
-  // Compatibility fallback for plugins built against Zod v3 schemas,
-  // where `.toJSONSchema()` is unavailable.
+  // Plugin roots can contain newer SDK schemas; the host must own their conversion context.
+  // Published Zod v3 plugins retain permissive JSON Schema with their own runtime parser.
+  const jsonSchema: JsonSchemaObject =
+    "_zod" in schema
+      ? (z.toJSONSchema(schema, {
+          target: "draft-07",
+          ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
+          unrepresentable: "any",
+        }) as JsonSchemaObject)
+      : { type: "object", additionalProperties: true };
   return {
-    schema: {
-      type: "object",
-      additionalProperties: true,
-    },
+    schema: jsonSchema,
     ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
     runtime: {
       safeParse: (value) => safeParseRuntimeSchema(schema, value),

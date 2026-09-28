@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements reconnect behavior.
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

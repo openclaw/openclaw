@@ -12,13 +12,12 @@ import type { OpenClawPluginApi } from "./api.js";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDeviceBootstrapToken: vi.fn(async (_params?: { assertCurrent?: () => void }) => ({
     token: "boot-token",
     expiresAtMs: Date.now() + 10 * 60_000,
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
-  resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
   writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
     const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
@@ -28,7 +27,9 @@ const pluginApiMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./api.js", () => ({
+vi.mock("./api.js", async () => ({
+  resolvePairingGatewayUrl: (await import("openclaw/plugin-sdk/device-bootstrap"))
+    .resolvePairingGatewayUrl,
   PAIRING_SETUP_BOOTSTRAP_PROFILE: {
     roles: ["node", "operator"],
     scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
@@ -41,10 +42,6 @@ vi.mock("./api.js", () => ({
   renderQrPngDataUrl: pluginApiMocks.renderQrPngDataUrl,
   revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
   resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
-  resolveAdvertisedLanHost: vi.fn(async () => null),
-  resolveGatewayBindUrl: vi.fn(),
-  resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
-  resolveTailnetHostWithRunner: vi.fn(),
   runPluginCommandWithTimeout: vi.fn(),
   writeQrPngTempFile: pluginApiMocks.writeQrPngTempFile,
 }));
@@ -55,13 +52,7 @@ vi.mock("./notify.js", () => ({
   handleNotifyCommand: vi.fn(async () => ({ text: "notify" })),
 }));
 
-import {
-  approveDevicePairing,
-  listDevicePairing,
-  resolveAdvertisedLanHost,
-  resolveGatewayBindUrl,
-  resolveTailnetHostWithRunner,
-} from "./api.js";
+import { approveDevicePairing, listDevicePairing, runPluginCommandWithTimeout } from "./api.js";
 import registerDevicePair from "./index.js";
 
 type ListedPendingPairingRequest = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
@@ -245,6 +236,21 @@ function createChannelRuntime(
   } as unknown as OpenClawPluginApi["runtime"];
 }
 
+function ipv4Interfaces(address: string): ReturnType<typeof os.networkInterfaces> {
+  return {
+    en0: [
+      {
+        address,
+        family: "IPv4",
+        internal: false,
+        netmask: "255.255.255.0",
+        mac: "00:00:00:00:00:00",
+        cidr: `${address}/24`,
+      },
+    ],
+  };
+}
+
 function makePendingPairingRequest(): ListedPendingPairingRequest {
   return {
     requestId: "req-1",
@@ -288,6 +294,7 @@ function mockPendingPairingList() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18789");
   pluginApiMocks.issueDeviceBootstrapToken.mockResolvedValue({
     token: "boot-token",
     expiresAtMs: Date.now() + 10 * 60_000,
@@ -296,6 +303,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await fs.rm(pluginApiMocks.resolvePreferredOpenClawTmpDir(), { recursive: true, force: true });
 });
 
@@ -512,6 +521,88 @@ describe("device-pair /pair qr", () => {
 });
 
 describe("device-pair /pair default setup code", () => {
+  describe("trusted-proxy setup", () => {
+    const config: OpenClawPluginApi["config"] = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
+      },
+    };
+
+    beforeEach(() => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each([
+      { scopes: ["operator.admin"], expected: FULL_SETUP_REQUEST },
+      { scopes: INTERNAL_SETUP_SCOPES, expected: LIMITED_SETUP_REQUEST },
+    ])("preserves issuer grants for $scopes", async ({ scopes, expected }) => {
+      const text = requireText(await runDefaultSetup({ config }, { gatewayClientScopes: scopes }));
+      expect(text).toContain("Auth: trusted-proxy");
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(expected);
+    });
+
+    it.each([
+      { scopes: ["operator.read"], message: PAIRING_REQUIRED },
+      { scopes: INTERNAL_PAIRING_SCOPES, message: TALK_SECRETS_REQUIRED },
+      { scopes: undefined, message: PAIRING_REQUIRED },
+    ])("rejects unauthorized setup from $scopes", async ({ scopes, message }) => {
+      expect(await runDefaultSetup({ config }, { gatewayClientScopes: scopes })).toEqual({
+        text: message,
+      });
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "preserves external command-owner authority (%s)",
+      async (senderIsOwner) => {
+        const result = await runDefaultSetup(
+          { config },
+          {
+            channel: "discord",
+            gatewayClientScopes: undefined,
+            senderIsOwner,
+          },
+        );
+        if (senderIsOwner) {
+          expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+            FULL_SETUP_REQUEST,
+          );
+          expect(requireText(result)).toContain("Auth: trusted-proxy");
+        } else {
+          expect(result).toEqual({ text: PAIRING_REQUIRED });
+          expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        }
+      },
+    );
+
+    it("keeps plaintext LAN handoff limited and rejects public plaintext", async () => {
+      const text = requireText(
+        await runDefaultSetup(
+          { config, pluginConfig: { publicUrl: "ws://192.168.1.20:18789" } },
+          { gatewayClientScopes: ["operator.admin"] },
+        ),
+      );
+      expect(text).toContain("Access: limited");
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        LIMITED_SETUP_REQUEST,
+      );
+      pluginApiMocks.issueDeviceBootstrapToken.mockClear();
+      await expectSetupRejected(
+        { config, pluginConfig: { publicUrl: "ws://gateway.example.test" } },
+        SECURE_URL_REQUIRED,
+      );
+    });
+
+    it("still rejects unauthenticated gateways", async () => {
+      await expectSetupRejected(
+        { config: { gateway: { auth: { mode: "none" } } } },
+        "Gateway auth is not configured",
+      );
+    });
+  });
+
   it.each`
     toString                                                                                                        | context                                                                                                   | text
     ${exactTestTitle("rejects setup code issuance for internal gateway callers without operator.pairing")}          | ${{ channel: "webchat", gatewayClientScopes: ["operator.write"] }}                                        | ${PAIRING_REQUIRED}
@@ -541,6 +632,53 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Pairing setup code generated.");
   });
 
+  it.each([false, true])(
+    "rechecks channel ownership after Gateway URL discovery (gateway admin: %s)",
+    async (gatewayAdmin) => {
+      let current = true;
+      const ctx = createCommandContext({
+        channel: "discord",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: gatewayAdmin ? ["operator.admin"] : undefined,
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+      });
+      vi.mocked(runPluginCommandWithTimeout).mockImplementationOnce(async () => {
+        current = false;
+        ctx.assertOwnerCurrent = () => {};
+        return { code: 0, stdout: '{"Self":{"DNSName":"gateway.tailnet.ts.net"}}', stderr: "" };
+      });
+      let issued = false;
+      pluginApiMocks.issueDeviceBootstrapToken.mockImplementationOnce(async (params) => {
+        params?.assertCurrent?.();
+        issued = true;
+        return { token: "boot-token", expiresAtMs: Date.now() + 60_000 };
+      });
+      const pending = registerPairCommand({
+        config: {
+          gateway: {
+            tailscale: { mode: "serve" },
+            auth: { mode: "token", token: "gateway-token" },
+          },
+        },
+        pluginConfig: { publicUrl: undefined },
+      }).handler(ctx);
+      if (gatewayAdmin) {
+        await expect(pending).resolves.toMatchObject({
+          text: expect.stringContaining("Pairing setup code generated"),
+        });
+      } else {
+        await expect(pending).rejects.toThrow("original owner revoked");
+      }
+      expect(issued).toBe(gatewayAdmin);
+    },
+  );
+
   it.each`
     toString                                                                                    | options                                                                                                                                                                  | context                                        | expectedText
     ${exactTestTitle("normalizes secure bare publicUrl host ports before issuing setup codes")} | ${{ config: { gateway: { tls: { enabled: true }, auth: { mode: "token", token: "gateway-token" } } }, pluginConfig: { publicUrl: "gateway.example.test:18789/setup" } }} | ${{ gatewayClientScopes: ["operator.admin"] }} | ${"Gateway: wss://gateway.example.test:18789"}
@@ -564,7 +702,11 @@ describe("device-pair /pair default setup code", () => {
   });
 
   it("uses Tailscale Serve MagicDNS as a secure setup url", async () => {
-    vi.mocked(resolveTailnetHostWithRunner).mockResolvedValueOnce("gateway.tailnet.ts.net");
+    vi.mocked(runPluginCommandWithTimeout).mockResolvedValueOnce({
+      code: 0,
+      stdout: '{"Self":{"DNSName":"gateway.tailnet.ts.net"}}',
+      stderr: "",
+    });
     const text = requireText(
       await runDefaultSetup({
         config: {
@@ -579,6 +721,51 @@ describe("device-pair /pair default setup code", () => {
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(text).toContain("Gateway: wss://gateway.tailnet.ts.net");
   });
+
+  it("issues a setup code through publicOrigin for a loopback Gateway", async () => {
+    const text = requireText(
+      await runDefaultSetup({
+        config: {
+          gateway: {
+            bind: "loopback",
+            publicOrigin: "https://gateway.example.test",
+            auth: { mode: "token", token: "gateway-token" },
+          },
+        },
+        pluginConfig: { publicUrl: undefined },
+      }),
+    );
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Gateway: wss://gateway.example.test");
+  });
+
+  it.each(["publicUrl", "remote"] as const)(
+    "keeps /pair setup codes origin-only for a path-qualified %s",
+    async (source) => {
+      const text = requireText(
+        await runDefaultSetup({
+          config: {
+            gateway: {
+              auth: { mode: "token", token: "gateway-token" },
+              ...(source === "remote" ? { remote: { url: "https://pair.example/extra" } } : {}),
+            },
+          },
+          pluginConfig: {
+            publicUrl: source === "publicUrl" ? "https://pair.example/extra" : undefined,
+          },
+        }),
+      );
+      const code = text.match(/Setup code:\n([A-Za-z0-9_-]+)/u)?.[1];
+      if (!code) {
+        throw new Error("Missing setup code in /pair reply");
+      }
+      expect(JSON.parse(Buffer.from(code, "base64url").toString("utf8"))).toMatchObject({
+        url: "wss://pair.example",
+        bootstrapToken: "boot-token",
+      });
+      expect(text.split("\n")).toContain("Gateway: wss://pair.example");
+    },
+  );
 
   it("keeps secure setup limited for non-admin gateway callers", async () => {
     const text = requireText(await runDefaultSetup());
@@ -600,48 +787,26 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Plaintext ws:// was limited for safety");
   });
 
-  it("uses the advertised LAN helper for bind-derived setup urls", async () => {
-    vi.mocked(resolveAdvertisedLanHost).mockResolvedValueOnce("10.211.55.3");
-    vi.mocked(resolveGatewayBindUrl).mockImplementationOnce((params) => ({
-      url: `ws://${params.pickLanHost()}:18789`,
-      source: "gateway.bind=lan",
-    }));
-    const text = requireText(
-      await runDefaultSetup({
-        config: {
-          gateway: { bind: "lan", auth: { mode: "token", token: "gateway-token" } },
-        },
-        pluginConfig: { publicUrl: undefined },
-      }),
-    );
-    expect(resolveAdvertisedLanHost).toHaveBeenCalledTimes(1);
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expect(text).toContain("Gateway: ws://10.211.55.3:18789");
-  });
-
-  it("does not advertise legacy Tailscale Serve fallbacks for LAN setup urls", async () => {
-    vi.mocked(resolveAdvertisedLanHost).mockResolvedValueOnce("192.168.139.3");
-    vi.mocked(resolveGatewayBindUrl).mockImplementationOnce((params) => ({
-      url: `ws://${params.pickLanHost()}:18789`,
-      source: "gateway.bind=lan",
-    }));
-    const text = requireText(
-      await runDefaultSetup({
-        config: {
-          gateway: { bind: "lan", auth: { mode: "token", token: "gateway-token" } },
-        },
-        pluginConfig: { publicUrl: undefined },
-      }),
-    );
-    expect(text).toContain("Gateway: ws://192.168.139.3:18789");
-    expect(text).not.toContain("Fallback:");
-  });
+  it.each(["10.211.55.3", "192.168.139.3"])(
+    "advertises LAN address %s without legacy Serve fallbacks",
+    async (address) => {
+      vi.spyOn(os, "networkInterfaces").mockReturnValueOnce(ipv4Interfaces(address));
+      const text = requireText(
+        await runDefaultSetup({
+          config: {
+            gateway: { bind: "lan", auth: { mode: "token", token: "gateway-token" } },
+          },
+          pluginConfig: { publicUrl: undefined },
+        }),
+      );
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+      expect(text).toContain(`Gateway: ws://${address}:18789`);
+      expect(text).not.toContain("Fallback:");
+      expect(runPluginCommandWithTimeout).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not advertise a loopback Serve route for a custom bind", async () => {
-    vi.mocked(resolveGatewayBindUrl).mockReturnValueOnce({
-      url: "ws://192.168.139.3:18789",
-      source: "gateway.bind=custom",
-    });
     const text = requireText(
       await runDefaultSetup({
         config: {
@@ -673,10 +838,7 @@ describe("device-pair /pair default setup code", () => {
   });
 
   it("rejects tailnet cleartext setup urls before issuing setup codes", async () => {
-    vi.mocked(resolveGatewayBindUrl).mockReturnValueOnce({
-      url: "ws://100.64.0.9:18789",
-      source: "gateway.bind=tailnet",
-    });
+    vi.spyOn(os, "networkInterfaces").mockReturnValueOnce(ipv4Interfaces("100.64.0.9"));
     await expectSetupRejected(
       {
         config: {

@@ -1,26 +1,34 @@
 import path from "node:path";
 import type { HealthCheck, HealthRepairContext } from "openclaw/plugin-sdk/health";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as managedBinary from "./crabbox-managed-binary.js";
-import {
-  openCrabboxWarmImageStore,
-  type WarmProfileRecord,
-} from "./crabbox-worker-warm-image-store.js";
+import { crabboxState } from "./crabbox-state.test-support.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
   registerCrabboxWorkerProviderDoctorChecks,
+  type CrabboxDoctorRegistrationHost,
 } from "./doctor.js";
 
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
+const listPluginStateEntries: CrabboxDoctorRegistrationHost["listPluginStateEntries"] = <T>(
+  options: OpenKeyedStoreOptions,
+) => crabboxState.openKeyedStore<T>(options).entries();
 
 function captureCrabboxDoctorCheck(id = CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID): HealthCheck {
   const checks = new Map<string, HealthCheck>();
   registerCrabboxWorkerProviderDoctorChecks({
     openclawRoot: OPENCLAW_ROOT,
+    listPluginStateEntries,
     getHealthCheck: (key) => checks.get(key),
     registerHealthCheck(value) {
       checks.set(value.id, value);
@@ -58,7 +66,7 @@ describe("Crabbox worker doctor", () => {
   it("accepts a supported configured executable without downloading", async () => {
     const probe = vi
       .spyOn(managedBinary, "probeCrabboxVersion")
-      .mockResolvedValue({ status: "supported", version: "0.55.0" });
+      .mockResolvedValue({ status: "supported", version: "0.56.0" });
     const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
     await expect(captureCrabboxDoctorCheck().detect(context())).resolves.toEqual([]);
     expect(probe).toHaveBeenCalledOnce();
@@ -77,7 +85,7 @@ describe("Crabbox worker doctor", () => {
         expect.objectContaining({
           severity: "warning",
           target: "worker",
-          requirement: "Crabbox 0.55.0 or newer",
+          requirement: "Crabbox 0.56.0 or newer",
           fixHint: expect.stringContaining("openclaw doctor --fix"),
         }),
       ]);
@@ -89,7 +97,7 @@ describe("Crabbox worker doctor", () => {
     vi.spyOn(managedBinary, "resolveManagedCrabboxBinaryPath").mockReturnValue(process.execPath);
     vi.spyOn(managedBinary, "probeCrabboxVersion").mockResolvedValue({
       status: "supported",
-      version: "0.55.0",
+      version: "0.56.0",
     });
     const ctx = context();
     ctx.cfg.cloudWorkers!.profiles!.worker!.settings = { binary: "/nonexistent/crabbox" };
@@ -115,7 +123,7 @@ describe("Crabbox worker doctor", () => {
       .spyOn(managedBinary, "ensureManagedCrabboxBinary")
       .mockImplementation(async ({ binary } = {}) => ({
         binary: binary ?? "crabbox",
-        version: "0.55.0",
+        version: "0.56.0",
       }));
     const check = captureCrabboxDoctorCheck();
     const findings = [{ checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID }] as never;
@@ -140,7 +148,8 @@ describe("Crabbox worker doctor", () => {
 
 describe("Crabbox warm-image doctor", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
@@ -156,7 +165,12 @@ describe("Crabbox warm-image doctor", () => {
     "reports $name without repairing state or probing providers",
     async ({ operation, severity }) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-crabbox-warm-doctor-") };
-      const store = openCrabboxWarmImageStore(env);
+      const store = createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
+        namespace: "warm-images",
+        maxEntries: 128,
+        overflowPolicy: "reject-new",
+        env,
+      });
       const now = Date.now();
       const record: WarmProfileRecord = {
         version: 3,
@@ -253,6 +267,7 @@ describe("Crabbox warm-image doctor", () => {
       const registerHealthCheck = vi.fn((check: HealthCheck) => checks.set(check.id, check));
       const host = {
         openclawRoot: OPENCLAW_ROOT,
+        listPluginStateEntries,
         getHealthCheck: (id: string) => checks.get(id),
         registerHealthCheck,
       };

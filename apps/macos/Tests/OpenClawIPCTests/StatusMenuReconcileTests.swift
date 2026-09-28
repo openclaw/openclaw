@@ -125,6 +125,41 @@ struct StatusMenuReconcileTests {
         #expect(!menu.items.contains { $0.representedObject as? String == "separator.middle" })
     }
 
+    @Test func `debug tunnel action follows the selected SSH transport`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            let menu = NSMenu()
+            let renderer = StatusMenuRenderer(menu: menu, state: state)
+            let descriptor = self.descriptor(actions: [], footer: [.action(.debug)])
+            state.connectionMode = .remote
+            state.remoteTransport = .ssh
+            renderer.render(descriptor)
+            let debug = try #require(menu.items.first { $0.representedObject as? String == "action.debug" })
+            let submenu = try #require(debug.submenu)
+            let tunnel = try #require(submenu.items.first { $0.representedObject as? String == "debug.tunnel" })
+            #expect(tunnel.isEnabled)
+            #expect(tunnel.action != nil)
+
+            state.remoteTransport = .direct
+            renderer.reconcile(descriptor)
+            #expect(debug.submenu === submenu)
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.tunnel" })
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.gateway" })
+
+            state.connectionMode = .local
+            renderer.reconcile(descriptor)
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.tunnel" })
+            #expect(submenu.items.contains { $0.representedObject as? String == "debug.gateway" })
+
+            state.connectionMode = .remote
+            state.remoteTransport = .ssh
+            renderer.reconcile(descriptor)
+            #expect(submenu.items.contains { $0.representedObject as? String == "debug.tunnel" })
+            #expect(!submenu.items.contains { $0.representedObject as? String == "debug.gateway" })
+        }
+    }
+
     private func descriptor(
         actions: [StatusMenuDescriptor.Kind],
         footer: [StatusMenuDescriptor.Kind]) -> StatusMenuDescriptor

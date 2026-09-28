@@ -10,6 +10,7 @@ type UrbitAuthenticateOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  beforeRequest?: () => void;
   timeoutMs?: number;
 };
 
@@ -29,6 +30,7 @@ export async function authenticate(
     ssrfPolicy: options.ssrfPolicy,
     lookupFn: options.lookupFn,
     fetchImpl: options.fetchImpl,
+    beforeRequest: options.beforeRequest,
     timeoutMs: options.timeoutMs ?? 15_000,
     maxRedirects: 3,
     auditContext: "tlon-urbit-login",

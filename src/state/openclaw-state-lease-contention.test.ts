@@ -1,33 +1,30 @@
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { releaseOpenClawStateLeaseBestEffort } from "./openclaw-state-lease-storage.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 describe.each([undefined, "existing"] as const)(
-  "lease coordinator contention (%s schema)",
+  "lease SQLite contention (%s schema)",
   (schemaPolicy) => {
     it.each(["release", "timeout", "abort", "cleanup"] as const)(
-      "preserves the %s contract while an independent writer owns the lifecycle gate",
+      "preserves the %s contract while an independent writer holds a native write transaction",
       async (ending) => {
-        await withOpenClawTestState({ label: "lease-coordinator-contention" }, async (state) => {
+        await withOpenClawTestState({ label: "lease-native-contention" }, async (state) => {
           const database = openOpenClawStateDatabase({ env: state.env });
-          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-            databasePath: database.path,
-            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-            uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-          });
           const takeWriter = () => {
-            const held = tryAcquireExclusiveSqliteCoordinator(coordinatorPath);
-            if (!held) {
-              throw new Error("independent writer did not acquire its coordinator");
-            }
-            return held;
+            const held = new DatabaseSync(database.path);
+            held.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+            return {
+              release() {
+                if (held.isOpen) {
+                  held.exec("ROLLBACK");
+                  held.close();
+                }
+              },
+            };
           };
           let writer = ending === "cleanup" ? undefined : takeWriter();
           const controller = new AbortController();
@@ -47,6 +44,7 @@ describe.each([undefined, "existing"] as const)(
                 entered = true;
                 lease.assertOwned();
                 if (ending === "cleanup") {
+                  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
                   writer = takeWriter();
                   cleanupRelease = yieldImmediate().then(() => writer?.release());
                 }
@@ -56,8 +54,12 @@ describe.each([undefined, "existing"] as const)(
               const rejected = expect(operation).rejects.toMatchObject({
                 code:
                   ending === "timeout"
-                    ? "OPENCLAW_STATE_LEASE_TIMEOUT"
+                    ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
                     : "OPENCLAW_STATE_LEASE_ABORTED",
+                outcome:
+                  ending === "timeout"
+                    ? { kind: "store-unavailable", reason: "sqlite-busy" }
+                    : { kind: "aborted", reason: "caller-signal", elapsedMs: expect.any(Number) },
               });
               if (ending === "abort") {
                 controller.abort(new Error("cancel waiting acquisition"));
@@ -79,6 +81,7 @@ describe.each([undefined, "existing"] as const)(
                 .all("core:test", "contending-writer"),
             ).toEqual([]);
           } finally {
+            vi.useRealTimers();
             writer?.release();
             await cleanupRelease;
           }
@@ -87,3 +90,22 @@ describe.each([undefined, "existing"] as const)(
     );
   },
 );
+
+it("preserves a failed async release for its retained cleanup owner", async () => {
+  const failure = new Error("Synthetic cleanup worker failed before release");
+  await expect(
+    releaseOpenClawStateLeaseBestEffort(
+      {
+        scope: "core:test",
+        key: "retained-release",
+        owner: "synthetic-owner",
+        leaseLabel: "state lease",
+        operationLabel: "test.release",
+        database: { scope: "shared" },
+      },
+      async () => {
+        throw failure;
+      },
+    ),
+  ).rejects.toBe(failure);
+});

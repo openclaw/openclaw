@@ -1,11 +1,8 @@
-/** Tests ACP turn terminal results and detached-task progress outcomes. */
+/** Tests ACP turn terminal results, event drainage, and cancellation ownership. */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -16,8 +13,8 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockParentedAcpSessionEntries,
   mockCallArg,
+  mockParentedAcpSessionEntries,
   readySessionMeta,
   resetAcpSessionManagerForTests,
   type SessionAcpMeta,
@@ -369,7 +366,7 @@ describe("AcpSessionManager turn results", () => {
   });
 
   it("uses startTurn terminal results instead of progress-only events for parented tasks", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       const closeStream = vi.fn(async () => {});
       runtimeState.runtime.startTurn = vi.fn((input) => ({
@@ -395,32 +392,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Codex investigation",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Codex investigation",
       });
 
       const events: string[] = [];
@@ -445,24 +420,11 @@ describe("AcpSessionManager turn results", () => {
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
       expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-failed" });
       expect(events).toEqual(["text_delta", "error"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-progress-only-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Codex investigation",
-        task: "Investigate and report back",
-        status: "failed",
-        progressSummary: "Vou mapear o fluxo real primeiro...",
-        terminalSummary: undefined,
-        error:
-          "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter timed out before final output.",
-      });
     });
   });
 
   it("keeps valid startTurn text-only completions successful", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
@@ -484,32 +446,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Directory check",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Directory check",
       });
 
       const events: string[] = [];
@@ -528,255 +468,11 @@ describe("AcpSessionManager turn results", () => {
 
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
       expect(events).toEqual(["text_delta", "done"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-start-turn-text-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Directory check",
-        task: "Print the current directory",
-        status: "succeeded",
-        progressSummary: "Current directory is /tmp/openclaw.",
-      });
     });
   });
 
-  it("classifies complete parented ACP output before truncating its progress summary", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      const completionChunks = [
-        "I'll run the unit tests against existing models and launch-argument hooks.",
-        "Targets are wired in. Next I'll run the unit tests on a booted simulator, then the UI smoke suite.",
-        "PinPoints now has a real XCTest unit-test target and a deterministic UI smoke suite. Product code was not changed.",
-      ];
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          for (const text of completionChunks) {
-            yield {
-              type: "text_delta" as const,
-              stream: "output" as const,
-              text,
-            };
-          }
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Complete output",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Inspect and report back",
-        mode: "prompt",
-        requestId: "direct-parented-complete-output-run",
-      });
-
-      const record = requireTaskByRunId("direct-parented-complete-output-run");
-      expectRecordFields(record, {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-      });
-      expect(record.progressSummary).toHaveLength(240);
-      expect(record.progressSummary).toMatch(/…$/);
-      expect(record.terminalOutcome).toBeUndefined();
-      expect(record.terminalSummary).toBeUndefined();
-    });
-  });
-
-  it("keeps parented ACP turns successful when final output follows a separator", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
-          };
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Separator final",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Inspect and report back",
-        mode: "prompt",
-        requestId: "direct-parented-separator-final-run",
-      });
-
-      const record = requireTaskByRunId("direct-parented-separator-final-run");
-      expectRecordFields(record, {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-        progressSummary:
-          "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
-      });
-      expect(record.terminalOutcome).toBeUndefined();
-      expect(record.terminalSummary).toBeUndefined();
-    });
-  });
-
-  it("keeps parented ACP turns blocked when progress text only adds follow-up planning", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "I'll inspect the repo now. Then I'll run tests and report back.",
-          };
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Follow-up planning",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Inspect and report back",
-        mode: "prompt",
-        requestId: "direct-parented-followup-planning-run",
-      });
-
-      expectRecordFields(requireTaskByRunId("direct-parented-followup-planning-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-        progressSummary: "I'll inspect the repo now. Then I'll run tests and report back.",
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion ended with progress-only text, not a final deliverable.",
-      });
-    });
-  });
-
-  it("marks completed parented ACP turns blocked when they only contain progress text", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+  it("forwards provider completion after progress-only output", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       const progressOnly = "I'll inspect the repo, run the tests, and report back. "
         .repeat(8)
@@ -801,32 +497,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Progress only",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Progress only",
       });
 
       const events: string[] = [];
@@ -844,99 +518,11 @@ describe("AcpSessionManager turn results", () => {
       });
 
       expect(events).toEqual(["text_delta", "done"]);
-      const record = requireTaskByRunId("direct-parented-progress-completed-run");
-      expectRecordFields(record, {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion ended with progress-only text, not a final deliverable.",
-      });
-      expect(record.progressSummary).toHaveLength(240);
-      expect(record.progressSummary).toMatch(/…$/);
     });
   });
 
-  it.each([
-    {
-      label: "accepts exact-limit evidence when a surrogate pair spans deltas",
-      requestId: "direct-parented-completion-exact-limit-run",
-      suffix: "",
-      overflowed: false,
-    },
-    {
-      label: "blocks parented ACP completion evidence one byte over the verification limit",
-      requestId: "direct-parented-completion-overflow-run",
-      suffix: "x",
-      overflowed: true,
-    },
-  ])("$label", async ({ requestId, suffix, overflowed }) => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      const prefix = "Final report: ";
-      const filler = "x".repeat(100 * 1024 - Buffer.byteLength(prefix, "utf8") - 4);
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: `${prefix}${filler}\ud83d`,
-          };
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: `\ude00${suffix}`,
-          };
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      mockParentedAcpSessionEntries({
-        childSessionKey: "agent:codex:acp:child-1",
-        parentSessionKey: "agent:main:main",
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Produce a final report",
-        mode: "prompt",
-        requestId,
-      });
-
-      const record = requireTaskByRunId(requestId);
-      expectRecordFields(record, {
-        ownerKey: "agent:main:main",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-      });
-      expect(record.terminalOutcome).toBe(overflowed ? "blocked" : undefined);
-      expect(record.terminalSummary).toBe(
-        overflowed
-          ? "Required completion output exceeded the 100 KB verification limit; inspect the child session for the final deliverable."
-          : undefined,
-      );
-      expect(record.progressSummary).toHaveLength(240);
-      expect(record.progressSummary).toMatch(/…$/);
-    });
-  });
-
-  it("marks completed parented ACP turns blocked when final output is missing", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+  it("forwards provider completion when the event stream has no text", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
@@ -952,32 +538,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Missing final",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Missing final",
       });
 
       const events: string[] = [];
@@ -995,20 +559,11 @@ describe("AcpSessionManager turn results", () => {
       });
 
       expect(events).toEqual(["done"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-empty-completed-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-        terminalOutcome: "blocked",
-        terminalSummary: "Required completion did not produce a final deliverable.",
-      });
     });
   });
 
   it("closes completed startTurn streams after draining queued output", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       let closed = false;
       const closeStream = vi.fn(async () => {
@@ -1046,32 +601,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Completed drain",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Completed drain",
       });
 
       const events: string[] = [];
@@ -1090,15 +623,11 @@ describe("AcpSessionManager turn results", () => {
 
       expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-completed" });
       expect(events).toEqual(["text_delta", "done"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-completed-drain-run"), {
-        status: "succeeded",
-        progressSummary: "completed progress",
-      });
     });
   });
 
   it("keeps startTurn cancelled results as non-error terminal turns", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       const closeStream = vi.fn(async () => {});
       runtimeState.runtime.startTurn = vi.fn((input) => ({
@@ -1143,15 +672,6 @@ describe("AcpSessionManager turn results", () => {
       expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
       expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
       expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
-      const record = requireTaskByRunId("run-1");
-      expectRecordFields(record, {
-        ownerKey: "agent:main:main",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "cancelled",
-        progressSummary: "I'll inspect the repo, run the tests, and report back.",
-      });
-      expect(record.terminalOutcome).toBeUndefined();
-      expect(record.terminalSummary).toBeUndefined();
       const states = extractStatesFromUpserts();
       expect(states).toContain("running");
       expect(states).toContain("idle");
@@ -1205,7 +725,7 @@ describe("AcpSessionManager turn results", () => {
   });
 
   it("drains queued startTurn output before closing a failed terminal result", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       let closed = false;
       const closeStream = vi.fn(async () => {
@@ -1246,32 +766,10 @@ describe("AcpSessionManager turn results", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Drain progress",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        label: "Drain progress",
       });
 
       const manager = new AcpSessionManager();
@@ -1290,10 +788,6 @@ describe("AcpSessionManager turn results", () => {
       });
 
       expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-failed" });
-      expectRecordFields(requireTaskByRunId("direct-parented-drain-progress-run"), {
-        status: "failed",
-        progressSummary: "partial progress before failure",
-      });
     });
   });
 

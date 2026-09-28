@@ -1,4 +1,3 @@
-// Feishu plugin module implements client timeout behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { FeishuConfig } from "./types.js";
 
@@ -35,8 +34,7 @@ export function resolveConfiguredHttpTimeoutMs(creds: FeishuClientTimeoutConfig)
     }
   }
 
-  const fromConfig = creds.config?.httpTimeoutMs;
-  const timeout = fromConfig;
+  const timeout = creds.config?.httpTimeoutMs;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     return FEISHU_HTTP_TIMEOUT_MS;
   }

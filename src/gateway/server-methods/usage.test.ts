@@ -52,6 +52,7 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   discoverAllSessions,
   loadCostUsageSummaryFromCache,
@@ -839,14 +840,8 @@ describe("gateway usage helpers", () => {
   it("bounds usage.cost all-agent cache loads", async () => {
     const agentCount = 13;
     const concurrencyLimit = 12;
-    let releaseLoads!: () => void;
-    const loadsReleased = new Promise<void>((resolve) => {
-      releaseLoads = resolve;
-    });
-    let resolveFirstBatchStarted!: () => void;
-    const firstBatchStarted = new Promise<void>((resolve) => {
-      resolveFirstBatchStarted = resolve;
-    });
+    const { promise: loadsReleased, resolve: releaseLoads } = createDeferred();
+    const { promise: firstBatchStarted, resolve: resolveFirstBatchStarted } = createDeferred();
     let started = 0;
     let inFlight = 0;
     let peakInFlight = 0;
@@ -923,14 +918,8 @@ describe("gateway usage helpers", () => {
   it("bounds sessions.usage all-agent session discovery", async () => {
     const agentCount = 13;
     const concurrencyLimit = 12;
-    let releaseLoads!: () => void;
-    const loadsReleased = new Promise<void>((resolve) => {
-      releaseLoads = resolve;
-    });
-    let resolveFirstBatchStarted!: () => void;
-    const firstBatchStarted = new Promise<void>((resolve) => {
-      resolveFirstBatchStarted = resolve;
-    });
+    const { promise: loadsReleased, resolve: releaseLoads } = createDeferred();
+    const { promise: firstBatchStarted, resolve: resolveFirstBatchStarted } = createDeferred();
     let started = 0;
     let inFlight = 0;
     let peakInFlight = 0;

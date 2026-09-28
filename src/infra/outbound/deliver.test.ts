@@ -2,6 +2,7 @@
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -15,8 +16,10 @@ import type {
 } from "../../channels/message/types.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 import { renderMessagePresentationFallbackText } from "../../interactive/payload.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
+import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -33,8 +36,14 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import * as channelResolution from "./channel-resolution.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { matrixOutboundForTest, type MatrixSendFn } from "./deliver.matrix.test-support.js";
+import {
+  registerOutboundImageProjectionTests,
+  registerOutboundPreparationMetadataTests,
+} from "./deliver.projection.test-support.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
@@ -71,12 +80,10 @@ const mocks = vi.hoisted(() => ({
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn<(_hookName?: string) => boolean>(() => false),
-    runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
-      async () => undefined,
-    ),
-    runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
-      async (event) => ({ payload: (event as { payload?: unknown }).payload }),
-    ),
+    runMessageSending: vi.fn<PluginHookHandlerMap["message_sending"]>(async () => undefined),
+    runReplyPayloadSending: vi.fn<PluginHookHandlerMap["reply_payload_sending"]>(async (event) => ({
+      payload: event.payload,
+    })),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
@@ -95,11 +102,11 @@ const queueMocks = vi.hoisted(() => ({
   })),
   loadPendingDelivery: vi.fn(async () => null),
   findDeliveryIntentOwner: vi.fn<
-    () => {
+    () => Promise<{
       namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
       status: "pending" | "failed" | "completed";
-    } | null
-  >(() => null),
+    } | null>
+  >(async () => null),
   ackDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
@@ -262,24 +269,10 @@ const matrixChunkConfig: OpenClawConfig = {
   channels: { matrix: { textChunkLimit: 4000 } } as OpenClawConfig["channels"],
 };
 
-const expectedPreferredTmpRoot = resolvePreferredOpenClawTmpDir();
+const expectedPreferredTmpRoot = await fsPromises.realpath(resolvePreferredOpenClawTmpDir());
 
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
-type MatrixSendFn = (
-  to: string,
-  text: string,
-  options?: Record<string, unknown>,
-) => Promise<{ messageId: string } & Record<string, unknown>>;
-
-function resolveMatrixSender(deps: DeliverOutboundArgs["deps"]): MatrixSendFn {
-  const sender = deps?.matrix;
-  if (typeof sender !== "function") {
-    throw new Error("missing matrix sender");
-  }
-  return sender as MatrixSendFn;
-}
-
 function requireMockCallArg<TArgs extends unknown[]>(
   mockFn: { mock: { calls: TArgs[] } },
   label: string,
@@ -306,13 +299,6 @@ function requireMockCall<T extends unknown[] = unknown[]>(
 
 function requireMatrixSendCall(sendMatrix: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return requireMockCall(sendMatrix as { mock: { calls: unknown[][] } }, "matrix send", index);
-}
-
-function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
-  return {
-    channel: "matrix" as const,
-    ...result,
-  };
 }
 
 function createNetworkError(message: string, code: string, syscall?: string) {
@@ -447,43 +433,6 @@ function installMatrixTextMessageAdapter(params: {
   return messageSendText;
 }
 
-const matrixOutboundForTest: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  chunker: chunkText,
-  chunkerMode: "text",
-  textChunkLimit: 4000,
-  sanitizeText: ({ text }) => (text === "<br>" || text === "<br><br>" ? "" : text),
-  sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) =>
-    withMatrixChannel(
-      await resolveMatrixSender(deps)(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      }),
-    ),
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    mediaReadFile,
-    accountId,
-    deps,
-    gifPlayback,
-  }) =>
-    withMatrixChannel(
-      await resolveMatrixSender(deps)(to, text, {
-        cfg,
-        mediaUrl,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      }),
-    ),
-};
-
 type MatrixDeliveryArgs = Omit<DeliverOutboundArgs, "cfg" | "channel" | "to" | "payloads"> &
   Partial<Pick<DeliverOutboundArgs, "cfg" | "to" | "payloads">>;
 
@@ -561,6 +510,8 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
 }
 
 describe("deliverOutboundPayloads", () => {
+  let expectedQueueStateDir: string;
+
   beforeAll(async () => {
     ({
       deliverOutboundPayloads,
@@ -570,13 +521,14 @@ describe("deliverOutboundPayloads", () => {
   });
 
   beforeEach(() => {
+    expectedQueueStateDir = resolveStateDir();
     resetDiagnosticEventsForTest();
     setActivePluginRegistry(defaultRegistry);
     vi.clearAllMocks();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
-      payload: (event as { payload?: unknown }).payload,
+      payload: event.payload,
     }));
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
@@ -590,7 +542,7 @@ describe("deliverOutboundPayloads", () => {
       created: true,
     }));
     queueMocks.loadPendingDelivery.mockResolvedValue(null);
-    queueMocks.findDeliveryIntentOwner.mockReturnValue(null);
+    queueMocks.findDeliveryIntentOwner.mockResolvedValue(null);
     queueMocks.claimReusableDeliveryPlatformSendAttempt.mockResolvedValue("mock-producer-claim");
     queueMocks.renewDeliveryPlatformSendLease.mockImplementation(async () => Date.now() + 30_000);
     queueMocks.withStableDeliveryPreparation.mockReset();
@@ -598,13 +550,13 @@ describe("deliverOutboundPayloads", () => {
       async (params: {
         id: string;
         run: (owner: {
-          current: () => Record<string, unknown>;
-          beforeFirstModifier: () => void;
-          markPrepared: () => void;
+          current: () => Promise<Record<string, unknown>>;
+          beforeFirstModifier: () => Promise<void>;
+          markPrepared: () => Promise<void>;
           markPublished: () => void;
         }) => Promise<unknown>;
       }) => {
-        if (queueMocks.findDeliveryIntentOwner()) {
+        if (await queueMocks.findDeliveryIntentOwner()) {
           return { status: "existing" };
         }
         const entry = {
@@ -617,11 +569,11 @@ describe("deliverOutboundPayloads", () => {
         return {
           status: "claimed",
           value: await params.run({
-            current: () => entry,
-            beforeFirstModifier: () => {
+            current: async () => entry,
+            beforeFirstModifier: async () => {
               entry.preparationState = "modifiers_started";
             },
-            markPrepared: () => {
+            markPrepared: async () => {
               entry.preparationState = "prepared";
             },
             markPublished: () => {},
@@ -918,7 +870,7 @@ describe("deliverOutboundPayloads", () => {
     expect(beforeParams?.deliveryQueueId).toBe("queue-1");
     expect(queueMocks.markDeliveryPlatformSendDispatched).toHaveBeenCalledWith(
       "queue-1",
-      undefined,
+      expectedQueueStateDir,
       expect.objectContaining({ replyToId: undefined, threadId: undefined }),
     );
     expect(queueMocks.markDeliveryPlatformSendDispatched).toHaveBeenCalledOnce();
@@ -1084,25 +1036,6 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
-  it("fails closed for an unfinished conversation intent without route authority", async () => {
-    const messageSendText = installMatrixTextMessageAdapter({
-      messageId: "should-not-send",
-      durableFinal: { capabilities: { text: true } },
-    });
-
-    await expect(
-      deliverMatrix({
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "legacy-operation",
-        },
-        onDeliveryAttempt: async () => {},
-      }),
-    ).rejects.toMatchObject({ cause: { retryable: false }, queueCustody: "released" });
-    expect(messageSendText).not.toHaveBeenCalled();
-  });
-
   it("does not claim platform custody when message adapter preflight fails", async () => {
     const messageSendText = vi.fn();
     setMatrixMessageAdapter({
@@ -1125,7 +1058,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("does not cross platform I/O when a stable queue intent already exists", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    queueMocks.findDeliveryIntentOwner.mockReturnValue({
+    queueMocks.findDeliveryIntentOwner.mockResolvedValue({
       namespace: "prepared",
       status: "completed",
     });
@@ -1149,7 +1082,7 @@ describe("deliverOutboundPayloads", () => {
   it("never falls back to fresh modifiers after another preparation owner wins", async () => {
     queueMocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
     queueMocks.loadPendingDelivery.mockResolvedValueOnce(null);
-    queueMocks.findDeliveryIntentOwner.mockReturnValueOnce(null);
+    queueMocks.findDeliveryIntentOwner.mockResolvedValueOnce(null);
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
     const sendMatrix = vi.fn();
 
@@ -1205,6 +1138,59 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "waits for the modifier checkpoint before policy (cancel=%s)",
+    async (cancel) => {
+      const checkpoint = createDeferredCore();
+      const entered = createDeferredCore();
+      const controller = new AbortController();
+      hookMocks.runner.hasHooks.mockImplementation(
+        (name?: string) => name === "reply_payload_sending" || name === "message_sending",
+      );
+      const pending = prepareOutboundPayloadBatch(
+        {
+          cfg: {},
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "prepared" }],
+          deps: { matrix: vi.fn() },
+          abortSignal: controller.signal,
+          replyPayloadSendingHook: { kind: "final", context: { channelId: "matrix" } },
+        },
+        {
+          onBeforeFirstModifier: () => {
+            entered.resolve();
+            return checkpoint.promise;
+          },
+        },
+      );
+      const outcome = pending.then(
+        (batch) => ({ batch, error: undefined }),
+        (error: unknown) => ({ batch: undefined, error }),
+      );
+      await entered.promise;
+      await waitForImmediate();
+      const callsBeforeCheckpoint = hookMocks.runner.runReplyPayloadSending.mock.calls.length;
+      if (cancel) {
+        controller.abort();
+      }
+      checkpoint.resolve();
+      const result = await outcome;
+      expect(callsBeforeCheckpoint).toBe(0);
+      if (cancel) {
+        expect(result.error).toBeInstanceOf(Error);
+        expect(hookMocks.runner.runReplyPayloadSending).not.toHaveBeenCalled();
+        expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+      } else {
+        expect(result.batch?.entries).toEqual([
+          expect.objectContaining({ status: "accepted", payload: { text: "prepared" } }),
+        ]);
+        expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledOnce();
+        expect(hookMocks.runner.runMessageSending).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("does not enter the modifier crash boundary when no modifying hook is registered", async () => {
     const onBeforeFirstModifier = vi.fn();
 
@@ -1229,6 +1215,13 @@ describe("deliverOutboundPayloads", () => {
     expect(onBeforeFirstModifier).not.toHaveBeenCalled();
     expect(hookMocks.runner.runReplyPayloadSending).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+  });
+
+  registerOutboundPreparationMetadataTests({
+    matrixChunkConfig,
+    matrixOutboundForTest,
+    setTestOutbound,
+    hookMocks,
   });
 
   it("revalidates conversation authority after queue admission and before the adapter", async () => {
@@ -1325,7 +1318,7 @@ describe("deliverOutboundPayloads", () => {
     expect(completionMocks.completeDurableDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ operationId: "operation-chunked" }),
       expect.objectContaining({ messageId: "chunk-2" }),
-      undefined,
+      expectedQueueStateDir,
     );
   });
 
@@ -2072,7 +2065,11 @@ describe("deliverOutboundPayloads", () => {
     );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expectedQueueStateDir,
+      undefined,
+    );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2215,7 +2212,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.markDeliveryPlatformSendAttemptStarted).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
+      expectedQueueStateDir,
       { replyToId: null },
     );
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
@@ -2251,7 +2248,7 @@ describe("deliverOutboundPayloads", () => {
 
       expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
         "mock-queue-id",
-        undefined,
+        expectedQueueStateDir,
         expect.any(String),
       );
       expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
@@ -2282,7 +2279,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
+      expectedQueueStateDir,
       expect.any(String),
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
@@ -2440,7 +2437,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
+      expectedQueueStateDir,
       expect.any(String),
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
@@ -2504,7 +2501,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
+      expectedQueueStateDir,
       expect.any(String),
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
@@ -2533,7 +2530,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
+      expectedQueueStateDir,
       expect.any(String),
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
@@ -2602,87 +2599,6 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("terminally retires a permanent provider rejection before platform dispatch", async () => {
-    const order: string[] = [];
-    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
-    hookMocks.runner.runMessageSent.mockImplementationOnce(async () => {
-      order.push("message-sent");
-    });
-    const rejection = new PlatformMessageNotDispatchedError("atomic message limit", {
-      cause: new Error("rendered text is too large"),
-      retryable: false,
-    });
-    const sendMatrix = vi.fn().mockRejectedValueOnce(rejection);
-    completionMocks.rejectDurableDelivery.mockImplementationOnce(() => {
-      order.push("reject-owner");
-    });
-    queueMocks.ackDelivery.mockImplementationOnce(async () => {
-      order.push("ack-queue");
-    });
-
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "rendered text" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-rejected",
-          routeFingerprint: "route-rejected",
-        },
-        onDeliveryAttempt: async () => {},
-      }),
-    ).rejects.toThrow("atomic message limit");
-
-    expect(order).toEqual(["reject-owner", "ack-queue", "message-sent"]);
-    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ operationId: "operation-rejected" }),
-      "atomic message limit",
-      undefined,
-    );
-    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "rendered text",
-        error: expect.stringContaining("atomic message limit"),
-        success: false,
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
-  });
-
-  it("normalizes an empty permanent rejection reason before durable retirement", async () => {
-    const sendMatrix = vi.fn().mockRejectedValueOnce(
-      new PlatformMessageNotDispatchedError("   ", {
-        cause: new Error("provider rejected the rendered payload"),
-        retryable: false,
-      }),
-    );
-
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "rendered text" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-empty-rejection",
-          routeFingerprint: "route-empty-rejection",
-        },
-        onDeliveryAttempt: async () => {},
-      }),
-    ).rejects.toThrow("Platform rejected the message before dispatch");
-
-    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ operationId: "operation-empty-rejection" }),
-      "Platform rejected the message before dispatch",
-      undefined,
-    );
-  });
-
   it("preserves queued send evidence when a marked best-effort batch has an ambiguous failure", async () => {
     const ambiguousError = createNetworkError("connect ECONNRESET", "ECONNRESET", "connect");
     const notDispatchedError = new PlatformMessageNotDispatchedError(
@@ -2723,7 +2639,11 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalled();
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expectedQueueStateDir,
+      undefined,
+    );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -3523,7 +3443,7 @@ describe("deliverOutboundPayloads", () => {
     );
     expect(queueMocks.markDeliveryPlatformSendAttemptStarted).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
+      expectedQueueStateDir,
       { replyToId: "hooked-reply" },
     );
   });
@@ -4802,78 +4722,13 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/a.png");
   });
 
-  it("keeps markdown images as text for channels that do not opt in", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-text", roomId: "!room" });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
-    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrixCall[0]).toBe("!room:example");
-    expect(sendMatrixCall[1]).toBe("Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)");
-    expect(sendMatrixOptions?.mediaUrl).toBeUndefined();
-  });
-
-  it("extracts markdown images for channels that opt in", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
-    setTestOutbound({ ...matrixOutboundForTest, extractMarkdownImages: true });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "Chart ![chart](https://example.com/chart.png) now" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
-    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrixCall[0]).toBe("!room:example");
-    expect(sendMatrixCall[1]).toBe("Chart now");
-    expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
-  });
-
-  it.each([
-    {
-      name: "MEDIA directives",
-      text: "Caption\nMEDIA:https://example.com/one.png\nMEDIA:https://example.com/two.png",
-      extractMarkdownImages: false,
-    },
-    {
-      name: "Markdown images",
-      text: "Caption ![one](https://example.com/one.png) ![two](https://example.com/two.png)",
-      extractMarkdownImages: true,
-    },
-  ])("delivers explicit attachments and every extracted $name", async (testCase) => {
-    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(async () => ({
-      channel: "matrix",
-      messageId: "sent",
-    }));
-    setTestOutbound({
-      ...matrixOutboundForTest,
-      sendMedia,
-      extractMarkdownImages: testCase.extractMarkdownImages,
-    });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [
-        {
-          text: testCase.text,
-          mediaUrl: "https://example.com/primary.png",
-          mediaUrls: ["https://example.com/explicit.png", "https://example.com/one.png"],
-        },
-      ],
-    });
-
-    expect(sendMedia.mock.calls.map(([params]) => params.mediaUrl)).toEqual([
-      "https://example.com/explicit.png",
-      "https://example.com/one.png",
-      "https://example.com/primary.png",
-      "https://example.com/two.png",
-    ]);
+  registerOutboundImageProjectionTests({
+    matrixChunkConfig,
+    matrixOutboundForTest,
+    setTestOutbound,
+    hookMocks,
+    deliverMatrix,
+    requireMatrixSendCall,
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
@@ -5099,10 +4954,13 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expectedQueueStateDir,
+      undefined,
+    );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "secret body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -5137,8 +4995,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(1);
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "stopped body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -5158,9 +5015,11 @@ describe("deliverOutboundPayloads", () => {
       deliveryQueueStateDir: "/queue-state",
     });
 
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("recovery-queue-id", "/queue-state", {
-      retainSpoolArtifacts: true,
-    });
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith(
+      "recovery-queue-id",
+      path.resolve("/queue-state"),
+      { retainSpoolArtifacts: true },
+    );
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -5544,35 +5403,56 @@ describe("deliverOutboundPayloads", () => {
     },
   );
 
-  it("emits a terminal failure without queueing when preparation is aborted", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
-    const abortController = new AbortController();
-    abortController.abort();
-    const cfg: OpenClawConfig = {};
+  it.each(["aborted", "metadata rejected"] as const)(
+    "emits one terminal failure without queueing when preparation is %s",
+    async (failure) => {
+      hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+      const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+      const abortController = new AbortController();
+      const errorMessage = failure === "aborted" ? "Operation aborted" : "metadata unavailable";
+      const resolutionSpy =
+        failure === "metadata rejected"
+          ? vi
+              .spyOn(channelResolution, "resolveOutboundChannelMessageAdapter")
+              .mockRejectedValueOnce(new Error(errorMessage))
+          : undefined;
+      if (failure === "aborted") {
+        abortController.abort();
+      }
+      const cfg: OpenClawConfig = {};
+      const events: TrustedMessageAuditEvent[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
 
-    await expect(
-      deliverMatrix({
-        cfg,
-        payloads: [{ text: "a" }],
-        deps: { matrix: sendMatrix },
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toThrow("Operation aborted");
+      try {
+        await expect(
+          deliverMatrix({
+            cfg,
+            payloads: [{ text: "a" }],
+            deps: { matrix: sendMatrix },
+            abortSignal: abortController.signal,
+          }),
+        ).rejects.toThrow(errorMessage);
 
-    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(sendMatrix).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "a",
-        error: expect.stringContaining("Operation aborted"),
-        success: false,
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
-  });
+        expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+        expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+        expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+        expect(sendMatrix).not.toHaveBeenCalled();
+        expect(events.map((event) => event.outcome)).toEqual(["failed"]);
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content: "a",
+            error: expect.stringContaining(errorMessage),
+            success: false,
+          }),
+          expect.objectContaining({ channelId: "matrix" }),
+        );
+      } finally {
+        unsubscribe();
+        resolutionSpy?.mockRestore();
+      }
+    },
+  );
 
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));
@@ -5927,7 +5807,7 @@ describe("deliverOutboundPayloads", () => {
       realRunner.hasHooks((hookName ?? "") as never),
     );
     hookMocks.runner.runMessageSending.mockImplementation((event, ctx) =>
-      realRunner.runMessageSending(event as never, ctx as never),
+      realRunner.runMessageSending(event, ctx),
     );
 
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });

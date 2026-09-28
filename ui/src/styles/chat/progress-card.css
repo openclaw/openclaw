@@ -81,16 +81,11 @@
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  transition: transform 0.16s var(--ease-out);
 }
 
 .session-progress-card__chevron svg {
   width: 14px;
   height: 14px;
-}
-
-.session-progress-card--composer:not([open]) .session-progress-card__chevron {
-  transform: rotate(-90deg);
 }
 
 .session-progress-card__summary:focus-visible {
@@ -122,6 +117,12 @@
   stroke-linejoin: round;
 }
 
+.session-progress-card--composer .session-progress-card__step-marker {
+  height: 1lh;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .session-progress-card__current-marker {
   color: var(--session-progress-neutral);
 }
@@ -142,6 +143,86 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-progress-card__summary-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.session-progress-card__refresh {
+  display: inline-grid;
+  width: var(--chat-stack-trailing-control-size, 24px);
+  height: var(--chat-stack-trailing-control-size, 24px);
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  touch-action: manipulation;
+}
+
+.session-progress-card__refresh:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.session-progress-card__refresh:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.session-progress-card__refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-progress-card__refresh[data-state="pending"] svg {
+  animation: session-progress-refresh-spin 1.2s linear infinite;
+}
+
+.session-progress-card__refresh[data-state="updated"] {
+  color: var(--ok);
+}
+
+.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]) {
+  color: var(--warn);
+}
+
+.session-progress-card__refresh-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
+  color: var(--warn);
+}
+
+/* Keep live announcements accessible; the button carries the visible feedback. */
+.session-progress-card__refresh-status:is([data-state="pending"], [data-state="updated"]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@keyframes session-progress-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-card__refresh[data-state="pending"] svg {
+    animation: none;
+  }
 }
 
 .session-progress-card__dismiss {

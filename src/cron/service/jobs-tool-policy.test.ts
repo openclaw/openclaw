@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { CronStoredJob } from "../types.js";
-import { reconcileToolsAllowAuthority } from "./jobs-tool-policy.js";
+import {
+  cronJobMessageActionAuthorityInputsEqual,
+  reconcileToolsAllowAuthority,
+} from "./jobs-tool-policy.js";
 
 function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
   return {
@@ -102,5 +105,40 @@ describe("reconcileToolsAllowAuthority exec pin", () => {
     });
     expect(job.toolsAllowExecTarget).toBeUndefined();
     expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
+  });
+});
+
+describe("account read authority inputs", () => {
+  it("binds a recorded caller origin to executable inputs but not display metadata", () => {
+    const job = {
+      ...toolJob(["message"]),
+      payload: { kind: "agentTurn" as const, message: "read", toolsAllow: ["message"] },
+      owner: { sessionKey: "agent:main:local", accountId: "work" },
+      scheduledToolPolicy: {
+        version: 1 as const,
+        mode: "account" as const,
+        ownerSessionKey: "agent:main:local",
+        ownerAccountId: "work",
+      },
+      toolsAllowProvenance: {
+        version: 1 as const,
+        source: "authenticated-requester" as const,
+        callerOrigin: { kind: "local" as const },
+      },
+    } satisfies CronStoredJob;
+
+    expect(
+      cronJobMessageActionAuthorityInputsEqual(job, {
+        ...job,
+        description: "display only",
+        displayName: "Readable name",
+      }),
+    ).toBe(true);
+    expect(
+      cronJobMessageActionAuthorityInputsEqual(job, {
+        ...job,
+        payload: { ...job.payload, message: "read something else" },
+      }),
+    ).toBe(false);
   });
 });

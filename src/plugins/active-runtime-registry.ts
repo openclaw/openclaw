@@ -33,7 +33,9 @@ export function resolveCompatibleRuntimePluginRegistry(
     return activeRegistry;
   }
   const identity = getPluginRuntimeLoadContextState(activeRegistry)?.loaderCacheIdentity;
-  return identity?.requestKey === activeCacheKey && identity.resolvedKey === requestedKey
+  return identity &&
+    ((identity.requestKey === activeCacheKey && identity.resolvedKey === requestedKey) ||
+      (identity.resolvedKey === activeCacheKey && identity.requestKey === requestedKey))
     ? activeRegistry
     : undefined;
 }
@@ -52,13 +54,6 @@ export function listRuntimePluginIdsFromRegistry(registry: PluginRegistry): stri
 export function listLoadedRuntimePluginIds(): string[] {
   const registry = getActivePluginRegistry();
   return registry ? listRuntimePluginIdsFromRegistry(registry) : [];
-}
-
-function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {
-  if (ids === undefined) {
-    return undefined;
-  }
-  return normalizeSortedUniqueStringEntries(ids);
 }
 
 export function registryContainsRuntimePluginIds(
@@ -138,9 +133,9 @@ export function getLoadedRuntimePluginRegistry(
     requiredPluginIds?: readonly string[];
   } = {},
 ): PluginRegistry | undefined {
-  const requiredPluginIds = normalizeRequiredPluginIds(
-    params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
-  );
+  const requiredIds = params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds;
+  const requiredPluginIds =
+    requiredIds === undefined ? undefined : normalizeSortedUniqueStringEntries(requiredIds);
   if (params.loadOptions && requiredPluginIds === undefined) {
     // Unscoped requests need the full load identity. Bounded manifest scopes
     // can compare their prepared ownership facts below.

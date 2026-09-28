@@ -231,6 +231,37 @@ describe("local package overrides", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reapplies added overrides through a stable package-root symlink",
+    async () => {
+      await withTestDir({ prefix: "openclaw-package-update-local-root-alias-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const aliasRoot = path.join(base, "package-alias");
+        const addedPath = path.join(packageRoot, "dist", "local.js");
+        const content = "export const local = true;\n";
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(addedPath, content);
+        await fs.symlink(packageRoot, aliasRoot, "dir");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot: aliasRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+        await fs.rm(addedPath);
+        await writePackageDistInventory(packageRoot);
+
+        const result = await applyLocalPackageOverrides({
+          packageRoot: aliasRoot,
+          plan,
+          reapply: true,
+        });
+
+        expect(result).toMatchObject({ status: "applied", applied: 1, conflicts: [] });
+        await expect(fs.readFile(addedPath, "utf8")).resolves.toBe(content);
+        expect((await fs.lstat(aliasRoot)).isSymbolicLink()).toBe(true);
+      });
+    },
+  );
+
   it("does not reapply added overrides after the package root changes", async () => {
     await withTestDir({ prefix: "openclaw-package-update-local-root-swap-" }, async (base) => {
       const packageRoot = path.join(base, "package");

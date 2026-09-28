@@ -1,9 +1,9 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -108,20 +108,12 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
         span.endIndex <= request.command.length,
     )
     .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: typeof spans = [];
+  const parts = [];
   let cursor = 0;
   for (const span of spans) {
-    if (span.startIndex >= cursor) {
-      accepted.push(span);
-      cursor = span.endIndex;
+    if (span.startIndex < cursor) {
+      continue;
     }
-  }
-  if (!accepted.length) {
-    return html`<div class="exec-approval-command mono">${request.command}</div>`;
-  }
-  const parts = [];
-  cursor = 0;
-  for (const span of accepted) {
     if (span.startIndex > cursor) {
       parts.push(request.command.slice(cursor, span.startIndex));
     }
@@ -210,17 +202,17 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
       : nothing
   }
   ${
+    active.pluginDetail
+      ? html`<pre class="exec-approval-command mono" dir="ltr">${active.pluginDetail}</pre>`
+      : nothing
+  }
+  ${
     variant === "modal" && active.request.sessionKey
       ? renderDetails(
           html`${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}`,
         )
       : nothing
   }`;
-}
-
-export function compactApprovalCommand(command: string): string {
-  const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
 function approvalDecisionLabel(decision: ExecApprovalDecision, kind: ExecApprovalRequest["kind"]) {

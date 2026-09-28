@@ -167,7 +167,9 @@ describe("Skill Workshop lifecycle hooks", () => {
     ).rejects.toThrow("proposal marked stale");
 
     expect(
-      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
+      (await listSkillProposalEvents({ proposalId: proposal.record.id })).events.map(
+        (event) => event.type,
+      ),
     ).toEqual(["created", "evaluation_completed", "stale"]);
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -207,7 +209,9 @@ describe("Skill Workshop lifecycle hooks", () => {
     ).rejects.toThrow("proposal marked stale");
 
     expect(
-      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
+      (await listSkillProposalEvents({ proposalId: proposal.record.id })).events.map(
+        (event) => event.type,
+      ),
     ).toEqual(["created", "stale"]);
     await expect(
       inspectSkillProposal(proposal.record.id, { config: {}, agentId: "main" }),
@@ -269,7 +273,9 @@ describe("Skill Workshop lifecycle hooks", () => {
     }
     await expect(inspection).resolves.toMatchObject({ record: { status: "stale" } });
     expect(
-      listSkillProposalEvents({ proposalId: first.record.id }).events.map((event) => event.type),
+      (await listSkillProposalEvents({ proposalId: first.record.id })).events.map(
+        (event) => event.type,
+      ),
     ).toEqual(["created", "stale"]);
   });
 
@@ -331,7 +337,9 @@ describe("Skill Workshop lifecycle hooks", () => {
       record: { status: "quarantined" },
     });
     expect(
-      listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
+      (await listSkillProposalEvents({ proposalId: proposal.record.id })).events.map(
+        (event) => event.type,
+      ),
     ).toEqual(["created", "evaluation_completed", "quarantined"]);
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
       expect.objectContaining({

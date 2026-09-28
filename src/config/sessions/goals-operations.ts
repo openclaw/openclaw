@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsGoalMutationResultSchema } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import {
@@ -28,13 +28,7 @@ import {
   buildUpdatedSessionGoalStatus,
 } from "./goals-transitions.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import {
-  collectSessionEntryLookupKeys,
-  readSessionEntryRow,
-  readSessionIdentitySnapshot,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -58,6 +52,7 @@ type OperationErrorCode =
   | "session-rebound"
   | "goal-rebound"
   | "capacity"
+  | "receipt-invalid"
   | "invalid";
 
 export class SessionGoalOperationError extends Error {
@@ -91,19 +86,17 @@ function assertOperationTime(operation: SessionGoalOperation, now: number): void
 }
 
 function operationFingerprint(operation: SessionGoalOperation): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        operation.issuedAtMs,
-        operation.requestFingerprint,
-        operation.action,
-        "goalId" in operation ? operation.goalId : null,
-        "objective" in operation ? operation.objective : null,
-        "tokenBudget" in operation ? operation.tokenBudget : null,
-        "note" in operation ? operation.note : null,
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      operation.issuedAtMs,
+      operation.requestFingerprint,
+      operation.action,
+      "goalId" in operation ? operation.goalId : null,
+      "objective" in operation ? operation.objective : null,
+      "tokenBudget" in operation ? operation.tokenBudget : null,
+      "note" in operation ? operation.note : null,
+    ]),
+  );
 }
 
 /** Read a durable receipt before transient chat dedupe or busy checks, without creating tables. */
@@ -187,7 +180,7 @@ export function readSessionGoalOperationReceipt(
     (result.goal !== undefined && result.goal.id !== result.goalId)
   ) {
     throw new SessionGoalOperationError(
-      "invalid",
+      "receipt-invalid",
       "Stored Goal operation receipt is invalid; inspect the session before retrying.",
     );
   }
@@ -313,52 +306,47 @@ export async function mutateSessionGoal(
     resolved,
     async () => {
       ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
-      const committed = runOpenClawAgentWriteTransaction((database) => {
-        options.assertCurrent?.();
-        const fresh = readSessionEntryRow(database, resolved.sessionKey);
-        const replay = readSessionGoalOperationReceipt(
-          database.db,
-          resolved.sessionKey,
-          options.expectedSessionId,
-          options.operation,
-        );
-        if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
-          return { result: replay, replayed: true };
-        }
-        if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
-          throw new SessionGoalOperationError(
-            "session-rebound",
-            "Session changed; refresh before changing its Goal.",
+      const committed = runOpenClawAgentWriteTransaction(
+        (database) => {
+          options.assertCurrent?.();
+          const fresh = readSessionEntryRow(database, resolved.sessionKey);
+          const replay = readSessionGoalOperationReceipt(
+            database.db,
+            resolved.sessionKey,
+            options.expectedSessionId,
+            options.operation,
           );
-        }
-        const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
-        const next = mergeSessionEntry(fresh.entry, { goal });
-        const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
-        const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-        writeSessionEntry(database, resolved.sessionKey, next);
-        const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-        const result = writeSessionGoalOperationReceipt(
-          database.db,
-          resolved.sessionKey,
-          options.expectedSessionId,
-          options.operation,
-          goal,
-        );
-        return {
-          result,
-          replayed: false,
-          next,
-          publish: prepareSessionIdentityPublication(
-            database,
-            resolved.agentId,
-            previousIdentity,
-            currentIdentity,
-          ),
-        };
-      }, databaseOptions);
-      if (committed.next) {
-        committed.publish();
-      }
+          if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
+            return { result: replay, replayed: true };
+          }
+          if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
+            throw new SessionGoalOperationError(
+              "session-rebound",
+              "Session changed; refresh before changing its Goal.",
+            );
+          }
+          const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
+          const next = mergeSessionEntry(fresh.entry, { goal });
+          // Goal management preserves the session key and generation, so no identity publication is due.
+          writeSessionEntry(database, resolved.sessionKey, next, {
+            canonicalPreviousEntry: fresh.entry,
+          });
+          const result = writeSessionGoalOperationReceipt(
+            database.db,
+            resolved.sessionKey,
+            options.expectedSessionId,
+            options.operation,
+            goal,
+          );
+          return {
+            result,
+            replayed: false,
+            next,
+          };
+        },
+        databaseOptions,
+        { operationLabel: "session.goal.mutate" },
+      );
       return {
         result: committed.result,
         replayed: committed.replayed,

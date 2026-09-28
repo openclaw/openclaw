@@ -455,13 +455,13 @@ final class StatusMenuSummaries: NSObject {
 
     @objc
     private func openAutomations(_: NSMenuItem) {
-        Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.cronJobsPagePath) }
+        AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.cronJobsPagePath)
     }
 
     @objc
     private func openGateway(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        DashboardManager.shared.openOrFocusDashboard(for: target)
+        AppNavigationActions.openGateway(target)
     }
 
     @objc

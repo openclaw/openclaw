@@ -20,6 +20,7 @@ import {
   dispatchRequest,
   withGatewayServer,
 } from "../server-http.test-harness.js";
+import type { GatewayWsBrowserOrigin } from "../server/ws-types.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 
 let clearOrigin: () => void;
@@ -35,10 +36,13 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-function startLogin(params: { signal?: AbortSignal; timeoutMs?: number } = {}) {
+function startLogin(
+  params: { signal?: AbortSignal; timeoutMs?: number; browserOrigin?: GatewayWsBrowserOrigin } = {},
+) {
   const opened = createDeferredCore<string>();
   const session = createProviderBrowserAuthSession({
     signal: params.signal,
+    browserOrigin: params.browserOrigin,
     openUrl: async (url) => opened.resolve(url),
   });
   const result = session.authorize({
@@ -65,10 +69,17 @@ function callback(query: string, method = "GET") {
 }
 
 describe("provider browser sign-in", () => {
-  it("receives one bound callback through the Gateway without admin credentials", async () => {
-    const login = startLogin();
+  it.each([
+    "https://gateway.example",
+    "http://localhost:18789",
+    "http://127.0.0.1:18789",
+    "http://[::1]:18789",
+  ])("receives one bound callback through the Gateway for %s", async (origin) => {
+    const login = startLogin({
+      browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: true },
+    });
     const url = new URL(await login.opened);
-    expect(new URL(url.searchParams.get("callback_url")!).origin).toBe("https://gateway.example");
+    expect(new URL(url.searchParams.get("callback_url")!).origin).toBe(origin);
     const hooks = vi.fn(async () => false);
     await withGatewayServer({
       prefix: "provider-browser-login",
@@ -180,6 +191,27 @@ describe("provider browser sign-in", () => {
       clock.mockRestore();
       login.session.close();
     }
+  });
+
+  it.each([
+    { origin: "http://localhost:3000", requestHost: "localhost:18789", isLocalClient: true },
+    { origin: "http://localhost:18789", requestHost: "localhost:18789", isLocalClient: false },
+    { origin: "https://other.example", requestHost: "other.example", isLocalClient: true },
+    { origin: "http://192.168.1.2:18789", requestHost: "192.168.1.2:18789", isLocalClient: true },
+    { origin: "file://localhost", requestHost: "localhost", isLocalClient: true },
+  ])("rejects an unserved or unattested browser return ($origin)", async (browserOrigin) => {
+    const openUrl = vi.fn();
+    const session = createProviderBrowserAuthSession({ browserOrigin, openUrl });
+    expect(session.available).toBe(false);
+    await expect(
+      session.authorize({
+        state: "unserved",
+        timeoutMs: 60_000,
+        buildAuthorizationUrl: () => "https://provider.example/authorize",
+      }),
+    ).rejects.toThrow("secure Gateway address");
+    expect(openUrl).not.toHaveBeenCalled();
+    session.close();
   });
 
   it("does not advertise loopback or a guessed browser address", async () => {

@@ -1,8 +1,5 @@
 import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
-import {
-  readPackageDistContentInventoryIfPresent,
-  type PackageDistContentInventoryEntry,
-} from "./package-dist-inventory.js";
+import { readPackageDistContentInventoryIfPresent } from "./package-dist-inventory.js";
 import {
   fileModesHaveSameExecutableSemantics,
   inspectLocalOverrideTarget,
@@ -11,20 +8,18 @@ import {
   resolveSafePackagePath,
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
-  type LocalPackageOverrideTargetProbe,
 } from "./package-local-overrides-shared.js";
-
-function buildCurrentInventoryMap(entries: PackageDistContentInventoryEntry[] | null) {
-  return new Map((entries ?? []).map((entry) => [entry.path, entry]));
-}
 
 export async function preflightLocalOverrides(params: {
   packageRoot: string;
   realPackageRoot: string;
   plan: LocalPackageOverridesPlan;
 }): Promise<LocalPackageOverridesResult["conflicts"]> {
-  const nextInventory = buildCurrentInventoryMap(
-    await readPackageDistContentInventoryIfPresent(params.packageRoot),
+  const nextInventory = new Map(
+    ((await readPackageDistContentInventoryIfPresent(params.packageRoot)) ?? []).map((entry) => [
+      entry.path,
+      entry,
+    ]),
   );
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
@@ -32,12 +27,10 @@ export async function preflightLocalOverrides(params: {
     symlinks: "reject",
   });
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];
-  const targetProbes = new Map<string, LocalPackageOverrideTargetProbe>();
   for (const change of params.plan.changes) {
     const targetPath = resolveSafePackagePath(params.packageRoot, change.path);
     const nextEntry = nextInventory.get(change.path);
     const targetProbe = await probeLocalOverrideTarget(targetPath);
-    targetProbes.set(change.path, targetProbe);
     if (targetProbe.status === "error") {
       conflicts.push({ path: change.path, reason: "target-inspection-failed" });
       continue;
@@ -127,12 +120,8 @@ export async function preflightLocalOverrides(params: {
   }
   if (topologyResolutionFailed) {
     for (const change of params.plan.changes) {
-      if (conflictingPaths.has(change.path)) {
-        continue;
-      }
       conflicts.push({ path: change.path, reason: "target-inspection-failed" });
     }
-    return conflicts;
   }
   return conflicts;
 }

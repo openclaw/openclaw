@@ -125,12 +125,6 @@ export function createAgentRunEventHandler(params: {
       }
     }
 
-    const suppressItemChannelProgress =
-      evt.stream === "item" &&
-      evt.data.suppressChannelProgress === true &&
-      Boolean(params.turn.opts?.onToolStart);
-    const hideItemFromChannelProgress =
-      evt.stream === "item" && evt.data.hideFromChannelProgress === true;
     const itemPhase = evt.stream === "item" ? readStringValue(evt.data.phase) : "";
     const itemName = evt.stream === "item" ? readStringValue(evt.data.name) : "";
     const itemStatus = evt.stream === "item" ? readStringValue(evt.data.status) : "";
@@ -151,8 +145,6 @@ export function createAgentRunEventHandler(params: {
 
     if (
       evt.stream === "item" &&
-      !hideItemFromChannelProgress &&
-      !suppressItemChannelProgress &&
       (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
     ) {
       const itemSummary = readStringValue(evt.data.summary);
@@ -168,6 +160,8 @@ export function createAgentRunEventHandler(params: {
         title: readStringValue(evt.data.title),
         phase: itemPhase,
         status: itemStatus,
+        ...(evt.data.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+        ...(evt.data.suppressChannelProgress === true ? { suppressChannelProgress: true } : {}),
         ...(itemToolCallId ? { toolCallId: itemToolCallId } : {}),
         ...(itemName ? { name: itemName } : {}),
         ...(itemSummary !== undefined ? { summary: itemSummary } : {}),
@@ -183,6 +177,7 @@ export function createAgentRunEventHandler(params: {
         phase: readStringValue(evt.data.phase),
         title: readStringValue(evt.data.title),
         explanation: readStringValue(evt.data.explanation),
+        ...(evt.data.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
         steps: normalizeAgentPlanSteps(evt.data.steps),
         source: readStringValue(evt.data.source),
       });

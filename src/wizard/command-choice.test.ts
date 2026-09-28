@@ -24,7 +24,7 @@ describe("login command choices", () => {
     [0, "all"],
     [1, "keep"],
   ] as const)("returns button %s as %s once", (index, value) => {
-    const choice = createLoginChoicePrompt(prompt, new AbortController().signal);
+    const choice = createLoginChoicePrompt(prompt, new AbortController().signal, "sample");
     const answer = command(choice.reply, index);
     expect(choice.reply.text).toContain(answer);
     expect(choice.answer(answer)).toEqual({ value });
@@ -32,15 +32,15 @@ describe("login command choices", () => {
   });
 
   it("rejects an older login's button while the new login remains usable", () => {
-    const old = createLoginChoicePrompt(prompt, new AbortController().signal);
-    const next = createLoginChoicePrompt(prompt, new AbortController().signal);
+    const old = createLoginChoicePrompt(prompt, new AbortController().signal, "sample");
+    const next = createLoginChoicePrompt(prompt, new AbortController().signal, "sample");
     expect(next.answer(command(old.reply, 0))).toBeUndefined();
     expect(next.answer(command(next.reply, 1))).toEqual({ value: "keep" });
   });
 
   it("rejects a delivered button after cancellation", () => {
     const controller = new AbortController();
-    const choice = createLoginChoicePrompt(prompt, controller.signal);
+    const choice = createLoginChoicePrompt(prompt, controller.signal, "sample");
     controller.abort(new Error("Login replaced"));
     expect(choice.answer(command(choice.reply, 0))).toBeUndefined();
   });

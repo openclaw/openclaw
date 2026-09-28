@@ -216,16 +216,12 @@ suite.define(() => {
         await page.getByRole("button", { name: "Queue message" }).click();
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
-      await gateway.setOnline(false);
-      await gateway.closeLatest();
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ timeout: 10_000 });
-
       const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
       await editRow.dblclick();
+      await gateway.setOnline(false);
+      await gateway.closeLatest();
+      await page.locator(".agent-chat__input--offline").waitFor({ timeout: 10_000 });
+
       // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
@@ -233,6 +229,7 @@ suite.define(() => {
       await page.keyboard.insertText("edited before send");
       await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
+      expect(await page.getByRole("alert").count()).toBe(0);
 
       const lastGrip = page
         .locator(".chat-queue__item", { hasText: "send last" })
@@ -417,9 +414,7 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
+        .locator(".agent-chat__input--offline")
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
       await gateway.emitGatewayEvent("sessions.changed", terminalSession);

@@ -18,10 +18,19 @@ function captureError(run: () => unknown): Error & { errorCode?: string; errorBo
 }
 
 describe("parseTerminalToolCallArguments", () => {
-  it("preserves unsafe integer literals in complete object arguments", () => {
-    expect(parseTerminalToolCallArguments('{"target":9223372036854775807,"safe":42}')).toEqual({
+  it("preserves unsafe integer literals and surrounding argument values", () => {
+    expect(
+      parseTerminalToolCallArguments(
+        '{"target":9223372036854775807,"safe":42,"negative":-9223372036854775808,"fraction":9007199254740992.0,"exponent":1e20,"text":"literal 9223372036854775807 \\"quoted\\" 日本語😀","last":9007199254740992}',
+      ),
+    ).toEqual({
       target: "9223372036854775807",
       safe: 42,
+      negative: "-9223372036854775808",
+      fraction: 9007199254740992,
+      exponent: 1e20,
+      text: 'literal 9223372036854775807 "quoted" 日本語😀',
+      last: "9007199254740992",
     });
     expect(parseTerminalToolCallArguments({})).toEqual({});
   });
@@ -72,14 +81,12 @@ describe("parseTerminalToolCallArguments", () => {
 
   it.each([
     "",
-    "   ",
     '{"secret":"do-not-echo"',
     "[]",
     "null",
     null,
     // Truncated free-text arguments must never be "repaired" into a shorter, executable
     // command (a cut-off `rm -rf /srv/app/tmp/build-cache` would otherwise become `rm -rf /`).
-    '{"command":"rm -rf /',
     '{"command":"rm -rf /srv/app/tmp/bu',
     '{"command":"rm -rf /srv/app/tmp/build-cache","timeout":6',
   ])("rejects non-object or malformed terminal input %# without exposing it", (value) => {

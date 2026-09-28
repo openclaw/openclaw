@@ -16,59 +16,75 @@ describe("llama-server discovery projection", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("projects shared model rows and llama.cpp properties", async () => {
-    discoverRowsMock.mockResolvedValue({
-      kind: "success",
-      health: "loading",
-      fetchedAt: 123,
-      rows: [
-        {
-          model: {
-            id: "qwen/model:Q4_K_M",
-            object: "model",
-            status: { value: "sleeping" },
+  it.each([
+    {
+      name: "advertised reasoning effort",
+      caps: { supports_reasoning_effort: true },
+      reasoning: true,
+    },
+    {
+      name: "unsupported reasoning effort",
+      caps: { supports_reasoning_effort: false },
+      reasoning: false,
+    },
+    { name: "absent reasoning effort", caps: {}, reasoning: false },
+  ])(
+    "projects shared model rows and llama.cpp properties with $name",
+    async ({ caps, reasoning }) => {
+      discoverRowsMock.mockResolvedValue({
+        kind: "success",
+        health: "loading",
+        fetchedAt: 123,
+        rows: [
+          {
+            model: {
+              id: "qwen/model:Q4_K_M",
+              object: "model",
+              status: { value: "sleeping" },
+            },
+            props: {
+              default_generation_settings: { n_ctx: 32_768 },
+              chat_template_caps: { ...caps, supports_tools: true, supports_tool_calls: true },
+            },
           },
-          props: {
-            default_generation_settings: { n_ctx: 32_768 },
-            chat_template_caps: { supports_tools: true, supports_tool_calls: true },
-          },
-        },
-      ],
-    });
+        ],
+      });
 
-    await expect(
-      discoverLlamaServer({ baseUrl: "http://localhost:8080/v1", cacheTtlMs: 0 }),
-    ).resolves.toMatchObject({
-      kind: "success",
-      endpoint: {
-        origin: "http://localhost:8080",
-        inferenceBaseUrl: "http://localhost:8080/v1",
-      },
-      models: [
-        {
-          status: "sleeping",
-          config: {
-            id: "qwen/model:Q4_K_M",
-            contextWindow: 32_768,
-            compat: { supportsTools: true },
-          },
+      await expect(
+        discoverLlamaServer({ baseUrl: "http://localhost:8080/v1", cacheTtlMs: 0 }),
+      ).resolves.toMatchObject({
+        kind: "success",
+        endpoint: {
+          origin: "http://localhost:8080",
+          inferenceBaseUrl: "http://localhost:8080/v1",
         },
-      ],
-    });
-    expect(discoverRowsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:8080/v1",
-      serverBaseUrl: "http://localhost:8080",
-      apiKey: undefined,
-      headers: undefined,
-      label: "llama-server",
-      healthPath: "/health",
-      modelsPathOrder: "server-first",
-      routerModelProps: true,
-      timeoutMs: 5_000,
-      signal: undefined,
-      rawResult: true,
-    });
-  });
+        models: [
+          {
+            status: "sleeping",
+            config: {
+              id: "qwen/model:Q4_K_M",
+              reasoning,
+              contextWindow: 32_768,
+              compat: { supportsTools: true, supportsReasoningEffort: reasoning },
+            },
+          },
+        ],
+      });
+      expect(discoverRowsMock).toHaveBeenCalledWith({
+        baseUrl: "http://localhost:8080/v1",
+        serverBaseUrl: "http://localhost:8080",
+        apiKey: undefined,
+        headers: undefined,
+        label: "llama-server",
+        healthPath: "/health",
+        modelsPathOrder: "server-first",
+        routerModelProps: true,
+        timeoutMs: 5_000,
+        signal: undefined,
+        rawResult: true,
+      });
+    },
+  );
 
   it("attaches the normalized endpoint to shared discovery failures", async () => {
     discoverRowsMock.mockResolvedValue({

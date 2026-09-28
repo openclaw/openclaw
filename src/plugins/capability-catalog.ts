@@ -1,8 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 
 export const capabilityCatalogFamilies = [
   "speechProviders",
@@ -12,8 +13,8 @@ export const capabilityCatalogFamilies = [
 
 /** Materialize one registration without copying its descriptor or invoking provider operations. */
 export function resolveCapabilityProviderRegistration<T extends { id: string }>(
-  entry: T | ((context: PluginCapabilityCatalogContext) => T),
-  resolveContext: (() => PluginCapabilityCatalogContext) | undefined,
+  entry: T | ((context: PluginCapabilityCatalogHostContext) => T),
+  resolveContext: (() => PluginCapabilityCatalogHostContext) | undefined,
 ): T {
   if (typeof entry !== "function") {
     return entry;
@@ -23,7 +24,7 @@ export function resolveCapabilityProviderRegistration<T extends { id: string }>(
       "Capability provider factories require host context; supply resolveCapabilityCatalogContext when creating the registry.",
     );
   }
-  const provider = entry(resolveContext());
+  const provider = entry(wrapCurrentPluginInstance(resolveContext()));
   if (isPromiseLike(provider)) {
     void Promise.resolve(provider).catch(() => {});
     throw new Error("capability provider factories must be synchronous");
@@ -34,7 +35,7 @@ export function resolveCapabilityProviderRegistration<T extends { id: string }>(
 /** Validate the declared public surface without copying provider objects or their hidden methods. */
 export function resolvePluginCapabilityCatalog(
   module: unknown,
-  context: PluginCapabilityCatalogContext,
+  context: PluginCapabilityCatalogHostContext,
 ): PluginCapabilityCatalog {
   const entry = unwrapDefaultModuleExport(module);
   const catalog = typeof entry === "function" ? entry(context) : entry;

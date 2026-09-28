@@ -32,6 +32,31 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("creates an empty workspace without carrying a previous checkout source", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "Start a new project",
+        deferInitialTurn: true,
+        worktree: true,
+        worktreeSource: "empty",
+        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+        projectId: "old-clone",
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+        cwd: "/old/checkout",
+        workspace: "/workspace",
+        baseRef: "old-branch",
+        worktreeName: "old-name",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      titleSource: "Start a new project",
+      worktree: true,
+      worktreeSource: "empty",
+    });
+  });
+
   it("retains a cloud repository through the empty create without sending local checkout options", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -165,21 +190,6 @@ describe("buildDraftSessionCreateParams", () => {
         contextWindow: "200k",
         thinkingLevel: "medium",
         fastMode: true,
-        worktree: false,
-        catalogId: "claude",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "start coding",
-      catalogId: "claude",
-    });
-  });
-
-  it("submits the catalog target for server-side resolution", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "start coding",
         worktree: false,
         catalogId: "claude",
       }),

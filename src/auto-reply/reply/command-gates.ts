@@ -82,7 +82,7 @@ export function defineGatewayControlCommand(
       // Adopt before teardown so the successor cannot replay this non-idempotent
       // command. Adoption loss throws and must prevent the effect.
       await params.opts?.turnAdoptionLifecycle?.onAdopted();
-      return run(params);
+      return rejectNonOwnerCommand(params, label) ?? run(params);
     },
   );
 }
@@ -108,6 +108,11 @@ export function rejectNonOwnerCommand(
   commandLabel: string,
 ): CommandHandlerResult | null {
   if (params.command.senderIsOwner) {
+    try {
+      params.command.assertOwnerCurrent?.();
+    } catch {
+      return commandReply("Your owner authority changed; send a new request.");
+    }
     return null;
   }
   logVerbose(

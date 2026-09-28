@@ -110,7 +110,7 @@ function isolateRtlLine(line: string): string {
 }
 
 export function isolateRtlRenderedLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(stripAnsi(line))) {
+  if (!RTL_SCRIPT_RE.test(line) || !RTL_SCRIPT_RE.test(stripAnsi(line))) {
     return line;
   }
   const padding = line.match(/^(\s*)(.*\S)(\s*)$/u);
@@ -231,44 +231,20 @@ function resolvePersistedTuiAttachmentKind(
   return "file";
 }
 
-/** Render assistant attachments without exposing their sources or capability URLs. */
-function extractAssistantAttachmentText(message: unknown): string {
-  const record = asMessageRecord(message);
-  if (!record) {
-    return "";
-  }
-  const contentAttachments = Array.isArray(record.content)
-    ? record.content.flatMap((block) => {
-        const entry = asMessageRecord(block);
-        const kind = entry ? resolveTuiAttachmentBlockKind(entry) : null;
-        return kind ? [`Attached ${kind}`] : [];
-      })
-    : [];
-  if (contentAttachments.length > 0) {
-    return contentAttachments.join("\n");
-  }
-
-  const persistedAttachments = (readPersistedMediaFacts(record) ?? [])
-    .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
-    .map((fact) => `Attached ${resolvePersistedTuiAttachmentKind(fact)}`);
-  if (persistedAttachments.length > 0) {
-    return persistedAttachments.join("\n");
-  }
-
-  const legacyMedia = [
-    ...(typeof record.mediaUrl === "string" && record.mediaUrl.trim() ? [record.mediaUrl] : []),
-    ...(Array.isArray(record.mediaUrls)
-      ? record.mediaUrls.filter((value) => typeof value === "string" && value.trim())
-      : []),
-  ];
-  return legacyMedia.map(() => "Attached media").join("\n");
-}
-
+/** Render attachment summaries and failures without exposing source metadata. */
 function formatTuiAssistantContent(message: unknown, contentText: string): string {
-  const content = asMessageRecord(message)?.content;
+  const record = asMessageRecord(message);
+  const content = record?.content;
   const failures: ReplyMediaFailure[] = [];
+  const contentAttachments: string[] | undefined = contentText ? undefined : [];
   for (const block of Array.isArray(content) ? content : []) {
     const entry = asMessageRecord(block);
+    if (contentAttachments && entry) {
+      const kind = resolveTuiAttachmentBlockKind(entry);
+      if (kind) {
+        contentAttachments.push(`Attached ${kind}`);
+      }
+    }
     const attachment =
       entry?.type === "attachment_error" ? asMessageRecord(entry.attachment) : undefined;
     const code = attachment?.code;
@@ -282,19 +258,23 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
       failures.push({ code, kind, label: `${kind === "document" ? "file" : kind} attachment` });
     }
   }
-  return (
-    appendReplyMediaFailures(contentText || extractAssistantAttachmentText(message), failures) ?? ""
-  );
-}
-
-function resolveMessageRecord(
-  message: unknown,
-): { record: Record<string, unknown>; content: unknown } | undefined {
-  const record = asMessageRecord(message);
-  if (!record) {
-    return undefined;
+  let text = contentText || contentAttachments?.join("\n") || "";
+  if (!text && record) {
+    const persistedAttachments = (readPersistedMediaFacts(record) ?? [])
+      .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
+      .map((fact) => `Attached ${resolvePersistedTuiAttachmentKind(fact)}`);
+    text = persistedAttachments.join("\n");
+    if (!text) {
+      const legacyMedia = [
+        ...(typeof record.mediaUrl === "string" && record.mediaUrl.trim() ? [record.mediaUrl] : []),
+        ...(Array.isArray(record.mediaUrls)
+          ? record.mediaUrls.filter((value) => typeof value === "string" && value.trim())
+          : []),
+      ];
+      text = legacyMedia.map(() => "Attached media").join("\n");
+    }
   }
-  return { record, content: record.content };
+  return appendReplyMediaFailures(text, failures) ?? "";
 }
 
 function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
@@ -306,22 +286,19 @@ function formatAssistantErrorFromRecord(record: Record<string, unknown>): string
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
-function collectBlockStrings(params: {
-  content: unknown;
-  blockType: "text" | "thinking";
-  valueKey: "text" | "thinking";
-}): string[] {
-  if (!Array.isArray(params.content)) {
+function collectBlockStrings(content: unknown, type: "text" | "thinking"): string[] {
+  if (!Array.isArray(content)) {
     return [];
   }
   const parts: string[] = [];
-  for (const block of params.content) {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const rec = block as Record<string, unknown>;
-    if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
-      parts.push(rec[params.valueKey] as string);
+    const value = rec[type];
+    if (rec.type === type && typeof value === "string") {
+      parts.push(value);
     }
   }
   return parts;
@@ -332,20 +309,7 @@ function collectBlockStrings(params: {
  * Model-agnostic: returns empty string if no thinking blocks exist.
  */
 export function extractThinkingFromMessage(message: unknown): string {
-  const resolved = resolveMessageRecord(message);
-  if (!resolved) {
-    return "";
-  }
-  const { content } = resolved;
-  if (typeof content === "string") {
-    return "";
-  }
-  const parts = collectBlockStrings({
-    content,
-    blockType: "thinking",
-    valueKey: "thinking",
-  });
-  return parts.join("\n").trim();
+  return collectBlockStrings(asMessageRecord(message)?.content, "thinking").join("\n").trim();
 }
 
 /**
@@ -353,11 +317,11 @@ export function extractThinkingFromMessage(message: unknown): string {
  * Model-agnostic: works for any model with text content blocks.
  */
 export function extractContentFromMessage(message: unknown): string {
-  const resolved = resolveMessageRecord(message);
-  if (!resolved) {
+  const record = asMessageRecord(message);
+  if (!record) {
     return "";
   }
-  const { record, content } = resolved;
+  const { content } = record;
 
   if (record.role === "assistant") {
     if (typeof content === "string") {
@@ -376,11 +340,7 @@ export function extractContentFromMessage(message: unknown): string {
     return sanitizeRenderableText(content).trim();
   }
 
-  const parts = collectBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
-  }).map(sanitizeRenderableText);
+  const parts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   if (parts.length > 0) {
     return parts.join("\n").trim();
   }
@@ -429,14 +389,10 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     return "";
   }
 
-  const textParts = collectBlockStrings({ content, blockType: "text", valueKey: "text" }).map(
-    sanitizeRenderableText,
-  );
+  const textParts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   const thinkingParts =
     opts?.includeThinking === true
-      ? collectBlockStrings({ content, blockType: "thinking", valueKey: "thinking" }).map(
-          sanitizeRenderableText,
-        )
+      ? collectBlockStrings(content, "thinking").map(sanitizeRenderableText)
       : [];
 
   return composeThinkingAndContent({
@@ -509,11 +465,7 @@ export function extractTextFromMessage(
     return extractUserAttachmentText(record);
   }
 
-  const errorText = formatAssistantErrorFromRecord(record);
-  if (!errorText) {
-    return "";
-  }
-  return errorText;
+  return formatAssistantErrorFromRecord(record);
 }
 
 /** Extract abort-visible text while keeping attachment-only aborts diagnostic-only. */

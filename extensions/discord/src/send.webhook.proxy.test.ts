@@ -227,12 +227,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
           status: 429,
         }),
       )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "msg-retried", channel_id: "thread-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      .mockResolvedValueOnce(Response.json({ id: "msg-retried", channel_id: "thread-1" }));
 
     const sent = sendWebhookMessageDiscord("hello", {
       cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
@@ -263,12 +258,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     const globalFetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "msg-connected", channel_id: "thread-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      .mockResolvedValueOnce(Response.json({ id: "msg-connected", channel_id: "thread-1" }));
 
     const sent = sendWebhookMessageDiscord("hello", {
       cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,

@@ -1,5 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { enableConsoleCapture, routeLogsToStderr } from "../logging/console.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { bindInheritedProcessLineageFds } from "../process/supervisor/inherited-process-lineage.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
@@ -10,14 +13,29 @@ import { runWorkerCommand, type WorkerCommandLifetime } from "./worker-command.r
 
 const WORKER_START_MESSAGE_TYPE = "openclaw-worker-start-v1";
 
-function isWorkerStartMessage(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    hasExactOwnKeys(value, ["type"]) &&
-    (value as { type?: unknown }).type === WORKER_START_MESSAGE_TYPE
-  );
+function parseWorkerStartMessage(value: unknown): { lineageFds?: readonly number[] } | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["type"], ["lineageFds"]) ||
+    value.type !== WORKER_START_MESSAGE_TYPE
+  ) {
+    return undefined;
+  }
+  if (!Object.hasOwn(value, "lineageFds")) {
+    return {};
+  }
+  const fds = value.lineageFds;
+  if (
+    !Array.isArray(fds) ||
+    fds.length === 0 ||
+    !fds.every(
+      (fd: unknown): fd is number => typeof fd === "number" && Number.isSafeInteger(fd) && fd >= 3,
+    ) ||
+    new Set(fds).size !== fds.length
+  ) {
+    return undefined;
+  }
+  return { lineageFds: fds };
 }
 
 function createWorkerIpcLifetime(): WorkerCommandLifetime {
@@ -28,16 +46,12 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   let disposed = false;
   let started = false;
   let settled = false;
-  let resolveStarted!: (started: boolean) => void;
-  let rejectStarted!: (error: Error) => void;
-  const startedPromise = new Promise<boolean>((resolve, reject) => {
-    resolveStarted = resolve;
-    rejectStarted = reject;
-  });
+  let releaseLineage: (() => void) | undefined;
+  const startResult = createDeferredCore<boolean>();
   const rejectOrAbort = (error: Error) => {
     if (!settled) {
       settled = true;
-      rejectStarted(error);
+      startResult.reject(error);
       return;
     }
     abortController.abort(error);
@@ -46,13 +60,17 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     if (disposed) {
       return;
     }
-    if (!isWorkerStartMessage(message) || settled) {
+    const start = parseWorkerStartMessage(message);
+    if (!start || settled) {
       rejectOrAbort(new Error("invalid internal worker IPC start message"));
       return;
     }
+    if (start.lineageFds) {
+      releaseLineage = bindInheritedProcessLineageFds(start.lineageFds);
+    }
     started = true;
     settled = true;
-    resolveStarted(true);
+    startResult.resolve(true);
   };
   const onDisconnect = () => {
     if (disposed) {
@@ -60,7 +78,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     }
     if (!settled) {
       settled = true;
-      resolveStarted(false);
+      startResult.resolve(false);
       return;
     }
     if (started) {
@@ -70,7 +88,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   process.on("message", onMessage);
   process.once("disconnect", onDisconnect);
   return {
-    started: startedPromise,
+    started: startResult.promise,
     signal: abortController.signal,
     reportConnectionFailure: (cause) => {
       if (disposed || !process.connected || typeof process.send !== "function") {
@@ -87,15 +105,15 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
       }
     },
     terminateOwnedTree: () => {
-      signalProcessTree(process.pid, "SIGKILL", {
-        detached: process.platform !== "win32",
-      });
+      // Anchored applications share their owner's group; direct workers may lead their own.
+      signalProcessTree(process.pid, "SIGKILL");
     },
     dispose: () => {
       if (disposed) {
         return;
       }
       disposed = true;
+      releaseLineage?.();
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       if (process.connected) {

@@ -43,7 +43,7 @@ function createMaintenanceFixture(command: string, exitCode: number) {
     GIT_CONFIG_KEY_0: "test.fromCount",
     GIT_CONFIG_VALUE_0: "preserved count value",
     GIT_CONFIG_PARAMETERS:
-      "'maintenance.autoDetach=true' 'gc.autoDetach=true' 'test.fromParameters=value with spaces=kept'",
+      "'maintenance.auto=true' 'gc.auto=1' 'maintenance.autoDetach=true' 'gc.autoDetach=true' 'test.fromParameters=value with spaces=kept'",
   };
   const git = (args: string[], input?: string) =>
     execFileSync("git", args, { cwd: repo, env, input, encoding: "utf8" }).trim();
@@ -54,7 +54,7 @@ function createMaintenanceFixture(command: string, exitCode: number) {
   git(["remote", "add", "origin", repo]);
   git(["fetch", "-q", "origin", "main"]);
 
-  // Force real auto-GC with two tiny packs; old unreachable objects exercise
+  // Two tiny packs make auto-GC eligible; old unreachable objects exercise
   // the documented recentObjectsHook after maintenance's daemonization point.
   for (let index = 0; index < 2; index++) {
     const oid = git(["hash-object", "-w", "--stdin"], `unreachable fixture ${index}\n`);
@@ -109,7 +109,6 @@ function createMaintenanceFixture(command: string, exitCode: number) {
       'test "$(git config --get test.fromCount)" = "preserved count value"',
       'test "$(git config --get test.fromParameters)" = "value with spaces=kept"',
       command,
-      `test -f ${shellQuote(completed)}`,
       `exit ${exitCode}`,
     ].join("\n"),
   );
@@ -118,10 +117,36 @@ function createMaintenanceFixture(command: string, exitCode: number) {
 }
 
 describePosix("scripts/pr Git maintenance ownership", () => {
+  it.each(["git fetch origin main", "git gc --auto"])(
+    "suppresses automatic maintenance during %s",
+    (command) => {
+      const fixture = createMaintenanceFixture(command, 0);
+      const config = readFileSync(join(fixture.repo, ".git/config"), "utf8");
+      writeFileSync(fixture.release, "release\n");
+      const result = spawnSync(process.execPath, [runner, fixture.repo, fixture.script], {
+        cwd: fixture.repo,
+        env: fixture.env,
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(fixture.ready)).toBe(false);
+      expect(existsSync(fixture.completed)).toBe(false);
+      expect(
+        spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
+          cwd: fixture.repo,
+          env: fixture.env,
+        }).status,
+      ).toBe(1);
+      expect(readFileSync(join(fixture.repo, ".git/config"), "utf8")).toBe(config);
+      expect(fixture.git(["config", "--bool", "maintenance.auto"])).toBe("true");
+      expect(fixture.git(["config", "--int", "gc.auto"])).toBe("1");
+    },
+  );
+
   it.each([
-    { command: "git fetch origin main", exitCode: 0 },
-    { command: "git gc --auto", exitCode: 0 },
-    { command: "git fetch origin main", exitCode: 7 },
+    { command: "git gc", exitCode: 0 },
+    { command: "git gc", exitCode: 7 },
   ])(
     "joins $command before operation completion (exit $exitCode)",
     async ({ command, exitCode }) => {

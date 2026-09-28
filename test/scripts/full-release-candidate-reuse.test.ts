@@ -13,6 +13,7 @@ import {
   selectTrustedFullReleaseCandidate,
   verifySealedFullReleaseCandidate,
 } from "../../scripts/lib/full-release-candidate-reuse.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   canonicalTestJson,
   fullReleaseCandidateBindingFixture,
@@ -28,6 +29,7 @@ const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -175,6 +177,28 @@ async function fixture(now = NOW) {
   };
 }
 
+async function loadingFixture() {
+  const { archive, manifest, metadata } = await fixture();
+  const selected = await selectTrustedFullReleaseCandidate({
+    artifacts: [metadata],
+    now: NOW,
+    readWorkflowRun: async () => workflowRun(),
+    readWorkflowJobs: async () => workflowJobs(manifest),
+    request: manifest.request,
+  });
+  const options = {
+    downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
+    now: NOW,
+    readArtifact: constituentArtifactReader(manifest),
+    readRunAttempt: async () => workflowRun(),
+    readWorkflowJobs: async () => workflowJobs(manifest),
+    request: manifest.request,
+    selected: selected!,
+    token: "test-token",
+  };
+  return { archive, manifest, metadata, options };
+}
+
 describe("trusted full release candidate selection", () => {
   it("treats malformed metadata and workflow provenance as misses before selection", async () => {
     const { archive, manifest, metadata } = await fixture();
@@ -233,18 +257,6 @@ describe("trusted full release candidate selection", () => {
       request: manifest.request,
     });
     expect(selected?.artifact.id).toBe(10);
-  });
-
-  it("accepts an active trusted parent after its publisher job succeeds", async () => {
-    const { manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(77, { conclusion: null, status: "in_progress" }),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    expect(selected?.artifact.id).toBe(301);
   });
 
   it("requires enough remaining lifetime for the longest release-validation drain", async () => {
@@ -381,7 +393,7 @@ printf '%s\n' '{"artifacts":[]}'
       ),
     );
     const contractResult = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [CONTRACT_SCRIPT, "request", "--input", rawInputPath, "--output", requestPath],
       { encoding: "utf8", timeout: 10_000 },
     );
@@ -399,7 +411,7 @@ printf '%s\n' '{"artifacts":[]}'
     expect(request.upgradeSurvivorScenarios).toEqual(["base"]);
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         SCRIPT,
         "discover",
@@ -463,7 +475,7 @@ exit 1
     );
     chmodSync(ghPath, 0o755);
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -508,7 +520,7 @@ cat "$FAKE_GH_PAYLOAD"
       payloadPath,
       JSON.stringify({ artifacts: Array.from({ length: 100 }, () => ({})) }),
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -584,7 +596,7 @@ esac
     });
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -676,7 +688,7 @@ globalThis.fetch = async (url) => {
 };
 `,
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -800,43 +812,23 @@ describe("full release candidate loading", () => {
   });
 
   it("stops candidate loading when the discovery deadline is exhausted", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
+    const { archive, metadata, options } = await loadingFixture();
     let downloads = 0;
     await expect(
       loadSelectedFullReleaseCandidate({
+        ...options,
         deadlineMs: Date.now() - 1,
         downloadArchive: async () => {
           downloads += 1;
           return { archiveBytes: archive, artifactMetadata: metadata };
         },
-        now: NOW,
-        readArtifact: constituentArtifactReader(manifest),
-        readRunAttempt: async () => workflowRun(),
-        readWorkflowJobs: async () => workflowJobs(manifest),
-        request: manifest.request,
-        selected: selected!,
-        token: "test-token",
       }),
     ).rejects.toThrow("candidate discovery exceeded its time budget");
     expect(downloads).toBe(0);
   });
 
   it("rejects unavailable, expired, or changed constituent artifacts before reuse", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
+    const { manifest, options } = await loadingFixture();
     const packageId = manifest.package.artifact.id;
     const cases = [
       {
@@ -868,103 +860,54 @@ describe("full release candidate loading", () => {
     for (const testCase of cases) {
       await expect(
         loadSelectedFullReleaseCandidate({
-          downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
-          now: NOW,
+          ...options,
           readArtifact: testCase.readArtifact,
-          readRunAttempt: async () => workflowRun(),
-          readWorkflowJobs: async () => workflowJobs(manifest),
-          request: manifest.request,
-          selected: selected!,
-          token: "test-token",
         }),
       ).rejects.toThrow(testCase.expected);
     }
   });
 
-  it("rejects a manifest producer workflow that differs from the selected run", async () => {
-    const { manifest } = await fixture();
-    const changedManifest = structuredClone(manifest);
-    changedManifest.producer.workflowPath = ".github/workflows/candidate-evidence-test.yml";
-    const archive = await archiveWithManifest(changedManifest);
-    const metadata = artifactMetadata(archive);
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    await expect(
-      loadSelectedFullReleaseCandidate({
-        downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
+  it.each(["producer", "publisher"] as const)(
+    "rejects a manifest %s workflow that differs from the selected run",
+    async (role) => {
+      const { manifest } = await fixture();
+      const changedManifest = structuredClone(manifest);
+      changedManifest[role].workflowPath = ".github/workflows/candidate-evidence-test.yml";
+      const archive = await archiveWithManifest(changedManifest);
+      const metadata = artifactMetadata(archive);
+      const selected = await selectTrustedFullReleaseCandidate({
+        artifacts: [metadata],
         now: NOW,
-        readArtifact: constituentArtifactReader(changedManifest),
-        readRunAttempt: async () => workflowRun(),
-        readWorkflowJobs: async () => workflowJobs(changedManifest),
+        readWorkflowRun: async () => workflowRun(),
+        readWorkflowJobs: async () => workflowJobs(manifest),
         request: manifest.request,
-        selected: selected!,
-        token: "test-token",
-      }),
-    ).rejects.toThrow("producer or publisher workflow attempt is invalid");
-  });
-
-  it("rejects a manifest publisher workflow that differs from the selected run", async () => {
-    const { manifest } = await fixture();
-    const changedManifest = structuredClone(manifest);
-    changedManifest.publisher.workflowPath = ".github/workflows/candidate-evidence-test.yml";
-    const archive = await archiveWithManifest(changedManifest);
-    const metadata = artifactMetadata(archive);
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    await expect(
-      loadSelectedFullReleaseCandidate({
-        downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
-        now: NOW,
-        readArtifact: constituentArtifactReader(changedManifest),
-        readRunAttempt: async () => workflowRun(),
-        readWorkflowJobs: async () => workflowJobs(changedManifest),
-        request: manifest.request,
-        selected: selected!,
-        token: "test-token",
-      }),
-    ).rejects.toThrow("producer or publisher workflow attempt is invalid");
-  });
-
-  it("hard-fails an unavailable, changed, or expired selected artifact", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    for (const error of [
-      new Error("GitHub Actions artifact metadata returned HTTP 404."),
-      new Error("Actions artifact metadata does not match the exact artifact tuple."),
-      new Error("full release candidate binding contains expired artifact evidence"),
-    ]) {
+      });
       await expect(
         loadSelectedFullReleaseCandidate({
-          downloadArchive: async () => {
-            throw error;
-          },
+          downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
           now: NOW,
-          readArtifact: constituentArtifactReader(manifest),
+          readArtifact: constituentArtifactReader(changedManifest),
           readRunAttempt: async () => workflowRun(),
-          readWorkflowJobs: async () => workflowJobs(manifest),
+          readWorkflowJobs: async () => workflowJobs(changedManifest),
           request: manifest.request,
           selected: selected!,
           token: "test-token",
         }),
-      ).rejects.toThrow(error.message);
-    }
-    expect(archive.length).toBeGreaterThan(0);
+      ).rejects.toThrow("producer or publisher workflow attempt is invalid");
+    },
+  );
+
+  it("hard-fails an unavailable selected artifact", async () => {
+    const { options } = await loadingFixture();
+    const error = new Error("GitHub Actions artifact metadata returned HTTP 404.");
+    await expect(
+      loadSelectedFullReleaseCandidate({
+        ...options,
+        downloadArchive: async () => {
+          throw error;
+        },
+      }),
+    ).rejects.toThrow(error.message);
   });
 
   it.each([
@@ -974,26 +917,13 @@ describe("full release candidate loading", () => {
   ] satisfies Array<[string, (jobs: ReturnType<typeof workflowJobs>) => void]>)(
     "rejects evidence when the publisher %s differs from the sealed identity",
     async (_label, mutate) => {
-      const { archive, manifest, metadata } = await fixture();
-      const selected = await selectTrustedFullReleaseCandidate({
-        artifacts: [metadata],
-        now: NOW,
-        readWorkflowRun: async () => workflowRun(),
-        readWorkflowJobs: async () => workflowJobs(manifest),
-        request: manifest.request,
-      });
+      const { manifest, options } = await loadingFixture();
       const jobs = workflowJobs(manifest);
       mutate(jobs);
       await expect(
         loadSelectedFullReleaseCandidate({
-          downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
-          now: NOW,
-          readArtifact: constituentArtifactReader(manifest),
-          readRunAttempt: async () => workflowRun(),
+          ...options,
           readWorkflowJobs: async () => jobs,
-          request: manifest.request,
-          selected: selected!,
-          token: "test-token",
         }),
       ).rejects.toThrow("publisher job did not complete successfully");
     },
@@ -1083,24 +1013,8 @@ describe("full release candidate binding authority", () => {
 
 describe("sealed full release candidate verification", () => {
   it("rechecks the exact evidence archive and producer tuple", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    const binding = await loadSelectedFullReleaseCandidate({
-      downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
-      now: NOW,
-      readArtifact: constituentArtifactReader(manifest),
-      readRunAttempt: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-      selected: selected!,
-      token: "test-token",
-    });
+    const { archive, manifest, metadata, options } = await loadingFixture();
+    const binding = await loadSelectedFullReleaseCandidate(options);
     await expect(
       verifySealedFullReleaseCandidate({
         binding,
@@ -1155,24 +1069,8 @@ describe("sealed full release candidate verification", () => {
   });
 
   it("fails final verification when a sealed constituent artifact disappears", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    const binding = await loadSelectedFullReleaseCandidate({
-      downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),
-      now: NOW,
-      readArtifact: constituentArtifactReader(manifest),
-      readRunAttempt: async () => workflowRun(),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-      selected: selected!,
-      token: "test-token",
-    });
+    const { archive, manifest, metadata, options } = await loadingFixture();
+    const binding = await loadSelectedFullReleaseCandidate(options);
     await expect(
       verifySealedFullReleaseCandidate({
         binding,

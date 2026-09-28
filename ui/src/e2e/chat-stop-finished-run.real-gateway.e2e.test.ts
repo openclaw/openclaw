@@ -1,4 +1,4 @@
-// Fault injection withholds only this run's terminal notifications; Stop must recover from the real Gateway's no-active-run answer.
+// Withhold this run's terminal notifications and delay terminal descriptors until Stop recovers from the Gateway's no-active-run answer.
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -17,6 +17,12 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const sessionKey = "agent:main:stop-finished";
 const replyText = "Finished reply from the fixture provider.";
+type SessionDescriptor = {
+  key?: string;
+  lastRunId?: string | null;
+  hasActiveRun?: boolean;
+  status?: string;
+};
 type EventPayload = {
   sessionKey?: string;
   sessionId?: string;
@@ -30,7 +36,8 @@ type EventPayload = {
   phase?: string;
   stream?: string;
   data?: { phase?: string };
-  session?: { lastRunId?: string | null; hasActiveRun?: boolean; status?: string };
+  session?: SessionDescriptor;
+  sessions?: SessionDescriptor[];
   ok?: boolean;
   aborted?: boolean;
   runIds?: string[];
@@ -192,6 +199,9 @@ suite.define(() => {
         let runId: string | undefined;
         let sockets = 0;
         let dropped = 0;
+        let delayTerminalDescriptors = true;
+        let delayedTerminalDescriptors = 0;
+        const deferredDescriptors: Array<() => void> = [];
         let stage = "create session";
         const call = async (method: string, params: Record<string, unknown>) => {
           const args = ["gateway", "call", method, "--json", "--params", JSON.stringify(params)];
@@ -247,7 +257,7 @@ suite.define(() => {
         const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
         const url = new URL(browserUrl);
         url.pathname = "/chat/main/stop-finished";
-        url.search = "?nav=collapsed";
+        url.search = "";
         try {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
@@ -292,11 +302,9 @@ suite.define(() => {
                 server.onMessage((message) => {
                   const raw = message.toString();
                   const frame: Frame = JSON.parse(raw);
+                  const request = frame.id ? pending.get(frame.id) : undefined;
                   if (frame.type === "res") {
                     received.push(frame);
-                    if (frame.id) {
-                      pending.delete(frame.id);
-                    }
                   }
                   if (terminalNotification(frame)) {
                     dropped += 1;
@@ -308,8 +316,40 @@ suite.define(() => {
                     });
                     socket.send(replacement);
                   } else {
-                    delivered.push(frame);
-                    socket.send(message);
+                    const deliver = () => {
+                      if (frame.type === "res" && frame.id) {
+                        pending.delete(frame.id);
+                      }
+                      delivered.push(frame);
+                      socket.send(message);
+                    };
+                    const session = frame.payload?.session;
+                    const hasTerminalDescriptor =
+                      (request?.method === "sessions.describe" &&
+                        request.params?.key === sessionKey &&
+                        session?.lastRunId === runId &&
+                        session?.status === "done") ||
+                      (request?.method === "sessions.list" &&
+                        frame.payload?.sessions?.some(
+                          (row) =>
+                            row.key === sessionKey &&
+                            row.lastRunId === runId &&
+                            row.status === "done",
+                        ));
+                    if (
+                      delayTerminalDescriptors &&
+                      runId &&
+                      frame.type === "res" &&
+                      frame.ok === true &&
+                      hasTerminalDescriptor
+                    ) {
+                      // Shared descriptor observations can settle ownership before Stop.
+                      // Delay this exact terminal fact, then deliver the real reply unchanged.
+                      delayedTerminalDescriptors += 1;
+                      deferredDescriptors.push(deliver);
+                    } else {
+                      deliver();
+                    }
                   }
                 });
               });
@@ -511,6 +551,10 @@ suite.define(() => {
                   }),
                   "Recovered ownership requires a post-Stop authoritative history response",
                 ).toBe(true);
+                delayTerminalDescriptors = false;
+                for (const deliver of deferredDescriptors.splice(0)) {
+                  deliver();
+                }
                 await page.locator(".chat-bubble").getByText(replyText, { exact: true }).waitFor();
                 await composer.fill("Next draft");
                 await page
@@ -531,6 +575,8 @@ suite.define(() => {
                 proof.browserSockets = sockets;
                 proof.connectRequests = sent.filter((frame) => frame.method === "connect").length;
                 proof.droppedTerminalNotifications = dropped;
+                proof.delayedTerminalDescriptors = delayedTerminalDescriptors;
+                proof.pendingTerminalDescriptors = deferredDescriptors.length;
                 proof.abortRequests = sent.filter((frame) => frame.method === "chat.abort").length;
                 proof.pendingBrowserRequests = pending.size;
                 proof.providerRequests = provider.requests();

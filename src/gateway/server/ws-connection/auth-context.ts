@@ -232,19 +232,20 @@ async function resolveConnectAuthDecisionCore(
     };
   }
 
-  // Proxy attribution is an ingress failure, not another credential candidate.
-  // Device and bootstrap fallbacks must not turn an untrusted forwarded chain
-  // into an authenticated request.
-  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+  // Invalid ingress or a redacted configured credential cannot be repaired by
+  // trying another device/bootstrap credential during this handshake.
+  if (
+    authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON ||
+    authResult.reason === "token_redacted_config" ||
+    authResult.reason === "password_redacted_config"
+  ) {
     return await finish();
   }
 
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
-    // Per-IP gate on the bootstrap-token verify path.
-    // verifyDeviceBootstrapToken is mutex-serialized and runs fs read + fs
-    // write per attempt, so unrate-limited attackers can queue the bootstrap
-    // pairing flow behind their requests and block legitimate onboarding.
+    // Bootstrap verification shares the SQLite worker mutation queue.
+    // Limit attempts before they can delay legitimate onboarding.
     let bootstrapRateLimited = false;
     if (params.rateLimiter) {
       const bootstrapRateCheck = params.rateLimiter.check(

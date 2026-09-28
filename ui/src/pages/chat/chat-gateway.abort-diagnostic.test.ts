@@ -65,37 +65,49 @@ describe("aborted chat diagnostics", () => {
   });
 
   it.each([
-    { name: "plain cancellation", errorMessage: undefined, expectedError: null },
+    { name: "plain cancellation", stopReason: "rpc", errorMessage: undefined, expectedError: null },
+    {
+      name: "provider sign-out",
+      stopReason: "auth-revoked",
+      errorMessage: undefined,
+      expectedError:
+        "Error: This reply stopped because the provider was signed out. Sign in again or choose another model.",
+    },
     {
       name: "validation self-abort",
+      stopReason: undefined,
       errorMessage: "edit tool validation failed: edits: must be an array",
       expectedError: "Error: edit tool validation failed: edits: must be an array",
     },
-  ])("keeps first-terminal $name killed and interrupted", ({ errorMessage, expectedError }) => {
-    const state = createAbortDiagnosticState();
-    const payload: ChatEventPayload = {
-      runId: "run-validation-abort",
-      sessionKey: "main",
-      state: "aborted",
-      ...(errorMessage ? { errorMessage } : {}),
-    };
+  ])(
+    "keeps first-terminal $name killed and interrupted",
+    ({ stopReason, errorMessage, expectedError }) => {
+      const state = createAbortDiagnosticState();
+      const payload: ChatEventPayload = {
+        runId: "run-validation-abort",
+        sessionKey: "main",
+        state: "aborted",
+        stopReason,
+        ...(errorMessage ? { errorMessage } : {}),
+      };
 
-    expect(handleChatGatewayEvent(state, payload)).toBe("aborted");
+      expect(handleChatGatewayEvent(state, payload)).toBe("aborted");
 
-    expect(state.chatRunError?.summary ?? null).toBe(expectedError);
-    expect(state.chatRunStatus).toMatchObject({
-      phase: "interrupted",
-      runId: "run-validation-abort",
-      sessionKey: "main",
-    });
-    expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe("killed");
-    expect(state.sessionsResult?.sessions[0]).toMatchObject({
-      activeRunIds: [],
-      hasActiveRun: false,
-      status: "killed",
-    });
-    expect(state.chatRunId).toBeNull();
-  });
+      expect(state.chatRunError?.summary ?? null).toBe(expectedError);
+      expect(state.chatRunStatus).toMatchObject({
+        phase: "interrupted",
+        runId: "run-validation-abort",
+        sessionKey: "main",
+      });
+      expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe("killed");
+      expect(state.sessionsResult?.sessions[0]).toMatchObject({
+        activeRunIds: [],
+        hasActiveRun: false,
+        status: "killed",
+      });
+      expect(state.chatRunId).toBeNull();
+    },
+  );
 
   it("surfaces one late aborted diagnostic and ignores its replay", () => {
     const state = createAbortDiagnosticState();

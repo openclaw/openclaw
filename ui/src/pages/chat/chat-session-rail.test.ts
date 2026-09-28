@@ -5,6 +5,10 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
+import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
   requestSessionCompanionState,
@@ -65,19 +69,6 @@ describe("ChatSessionRailState", () => {
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
   });
 
-  it("opens the panel from a hidden rail without persisting card", () => {
-    const state = new ChatSessionRailState("pill");
-    state.hide();
-
-    state.openExplicitly();
-
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    // A fresh state reads the stored preference: the next session gets the
-    // ambient pill, not a sticky panel.
-    expect(new ChatSessionRailState().mode(input())).toBe("pill");
-  });
-
   it("opens digest-less on an idle session and resets per session", () => {
     const state = new ChatSessionRailState("pill");
     const idle = { running: false, activeRunId: null, digest: null } as const;
@@ -99,55 +90,6 @@ describe("ChatSessionRailState", () => {
     runningState.openExplicitly();
     runningState.collapse();
     expect(runningState.mode(input())).toBe("pill");
-  });
-
-  it("auto-opens pill transiently without changing the persisted preference", () => {
-    localStorage.setItem(displayPreferenceKey, "pill");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    expect(new ChatSessionRailState().mode(input())).toBe("pill");
-  });
-
-  it("rejects auto-open while hidden and preserves the off preference", () => {
-    localStorage.setItem(displayPreferenceKey, "off");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(false);
-    expect(state.mode(input())).toBe("hidden");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(new ChatSessionRailState().mode(input())).toBe("hidden");
-  });
-
-  it("persists explicit collapse and hide after transient auto-open", () => {
-    const state = new ChatSessionRailState("pill");
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    state.collapse();
-    expect(state.mode(input())).toBe("pill");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-
-    expect(state.tryAutoOpen()).toBe(true);
-    state.hide();
-    expect(state.mode(input())).toBe("hidden");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(state.tryAutoOpen()).toBe(false);
-  });
-
-  it("clears transient auto-open when the session changes", () => {
-    localStorage.setItem(displayPreferenceKey, "pill");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    state.resetTransientState();
-    expect(state.mode(input())).toBe("pill");
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });
 
   it("keeps a companion thread renderable without an observer digest", () => {
@@ -210,8 +152,12 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.hydrate("one", load);
     await threads.hydrate("two", load);
 
-    expect(threads.view("one").exchanges[0]?.answer).toBe("Answer for one");
-    expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Question for one", status: "answered", answer: "Answer for one", ts: 1 },
+    ]);
+    expect(threads.view("two").turns).toMatchObject([
+      { question: "Question for two", status: "answered", answer: "Answer for two", ts: 2 },
+    ]);
   });
 
   it("records hydration until the authoritative companion state settles", async () => {
@@ -253,16 +199,18 @@ describe("ChatSessionCompanionThreads", () => {
         }),
     );
 
-    expect(threads.view("one").pendingQuestion).toBe("Why is it rerunning that test?");
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Why is it rerunning that test?", status: "pending" },
+    ]);
     expect(threads.view("one").draft).toBe("");
     resolveAnswer({ answer: "It is verifying the focused regression.", ts: 42 });
     await pending;
 
     expect(threads.view("one")).toMatchObject({
-      pendingQuestion: null,
-      exchanges: [
+      turns: [
         {
           question: "Why is it rerunning that test?",
+          status: "answered",
           answer: "It is verifying the focused regression.",
           ts: 42,
         },
@@ -279,11 +227,9 @@ describe("ChatSessionCompanionThreads", () => {
       });
     });
 
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "Is it stuck?",
-      hint: "busy",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "Is it stuck?", status: "failed", hint: "busy", retryable: true },
+    ]);
   });
 
   it("preserves a context failure for an explicit retry", async () => {
@@ -295,18 +241,13 @@ describe("ChatSessionCompanionThreads", () => {
       });
     });
 
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "history-unavailable",
-      pendingQuestion: null,
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "failed", hint: "history-unavailable", retryable: true },
+    ]);
     await threads.hydrate("one", async () => ({ exchanges: [] }));
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "history-unavailable",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "failed", hint: "history-unavailable", retryable: true },
+    ]);
   });
 
   it.each([
@@ -322,10 +263,14 @@ describe("ChatSessionCompanionThreads", () => {
       });
     });
 
-    expect(threads.view("one")).toMatchObject({
-      hint: expected.hint,
-      retryable: expected.retryable,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      {
+        question: "What changed?",
+        status: "failed",
+        hint: expected.hint,
+        retryable: expected.retryable,
+      },
+    ]);
   });
 
   it("hydrates only a newly committed repeated question after a lost response", async () => {
@@ -336,20 +281,18 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.submit("one", "What changed?", async () => {
       throw new Error("socket closed");
     });
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "unavailable",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "failed", hint: "unavailable", retryable: true },
+    ]);
 
     await threads.hydrate("one", async () => ({
       exchanges: [{ question: "What changed?", answer: "Earlier answer.", ts: 1 }],
     }));
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: "What changed?",
-      hint: "unavailable",
-      retryable: true,
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "failed", hint: "unavailable", retryable: true },
+    ]);
 
     await threads.hydrate("one", async () => ({
       exchanges: [
@@ -358,15 +301,10 @@ describe("ChatSessionCompanionThreads", () => {
       ],
     }));
 
-    expect(threads.view("one")).toMatchObject({
-      failedQuestion: null,
-      hint: null,
-      retryable: false,
-      exchanges: [
-        { question: "What changed?", answer: "Earlier answer.", ts: 1 },
-        { question: "What changed?", answer: "The fix committed.", ts: 4 },
-      ],
-    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "answered", answer: "The fix committed.", ts: 4 },
+    ]);
   });
 
   it("clears local state only after the reset RPC succeeds", async () => {
@@ -379,10 +317,10 @@ describe("ChatSessionCompanionThreads", () => {
         throw new Error("offline");
       }),
     ).rejects.toThrow("offline");
-    expect(threads.view("one").exchanges).toHaveLength(1);
+    expect(threads.view("one").turns).toHaveLength(1);
 
     await threads.reset("one", async () => ({ ok: true as const }));
-    expect(threads.view("one").exchanges).toEqual([]);
+    expect(threads.view("one").turns).toMatchObject([]);
   });
 
   it("retires one session without clearing unrelated companion state", () => {
@@ -407,7 +345,7 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("one")).toMatchObject({
       draft: "unsent local draft",
-      exchanges: [],
+      turns: [],
     });
   });
 
@@ -435,11 +373,7 @@ describe("ChatSessionCompanionThreads", () => {
       }
       await pending;
 
-      expect(threads.view("one")).toMatchObject({
-        exchanges: [],
-        failedQuestion: null,
-        pendingQuestion: null,
-      });
+      expect(threads.view("one").turns).toMatchObject([]);
     },
   );
 });
@@ -491,17 +425,15 @@ describe("ChatSessionRailElement", () => {
     const element = await mount({
       onSubmit,
       companion: {
-        exchanges: [
+        turns: [
           {
             question: "What changed?",
+            status: "answered",
             answer: "**Only** the UI. <script>bad()</script>",
             ts: 300_000,
           },
         ],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "What should I verify?",
       },
     });
@@ -513,36 +445,168 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
   });
 
+  it("explains unsupported image input and retries the retained image only on user action", async () => {
+    const threads = new ChatSessionCompanionThreads(() => {
+      element.companion = { ...threads.view("one") };
+    });
+    const image = registerChatAttachmentPayload({
+      attachment: { id: "retry-image", mimeType: "image/png", fileName: "retry.png" },
+      dataUrl: "data:image/png;base64,aW1hZ2U=",
+      file: new File(["image"], "retry.png", { type: "image/png" }),
+    });
+    const ask = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Image input unsupported"), {
+          details: { reason: "image-input-unsupported" },
+          retryable: false,
+        }),
+      )
+      .mockResolvedValue({ answer: "The image is now visible.", ts: 123 });
+    let submitted: Promise<void> | undefined;
+    const element = await mount({
+      companion: threads.view("one"),
+      onSubmit: (turn) => {
+        submitted = threads.submit("one", turn, ask);
+      },
+    });
+    try {
+      threads.setAttachments("one", [image]);
+      await threads.submit("one", "Explain this image", ask);
+      await element.updateComplete;
+      expect(element.textContent).toContain(
+        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+      );
+      expect(element.textContent).not.toContain("No utility model is configured");
+      expect(ask).toHaveBeenCalledOnce();
+      expect(getChatAttachmentDataUrl(image)).not.toBeNull();
+      threads.setDraft("one", "Keep my next question");
+      await element.updateComplete;
+      const retry = element.querySelector<HTMLButtonElement>(".chat-session-rail__retry");
+      expect(retry).not.toBeNull();
+      expect(retry?.disabled).toBe(false);
+      retry!.click();
+      await submitted;
+      await element.updateComplete;
+      expect(ask).toHaveBeenCalledTimes(2);
+      expect(ask).toHaveBeenLastCalledWith("one", "Explain this image", [image]);
+      expect(element.textContent).toContain("The image is now visible.");
+      expect(element.querySelector(".chat-session-rail__retry")).toBeNull();
+      expect(threads.view("one").draft).toBe("Keep my next question");
+      expect(getChatAttachmentDataUrl(image)).toBeNull();
+    } finally {
+      threads.retire();
+    }
+  });
+
   it("renders one pending state and retries a retryable failure", async () => {
     const onSubmit = vi.fn();
     const element = await mount({
       onSubmit,
       companion: {
-        exchanges: [],
+        turns: [{ question: "What changed?", status: "pending" }],
         loading: false,
-        pendingQuestion: "What changed?",
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
     expect(element.textContent).toContain("Answering from this session…");
 
     element.companion = {
-      exchanges: [],
+      turns: [
+        {
+          question: "What changed?",
+          status: "failed",
+          hint: "history-unavailable",
+          retryable: true,
+        },
+      ],
       loading: false,
-      pendingQuestion: null,
-      failedQuestion: "What changed?",
-      hint: "history-unavailable",
-      retryable: true,
       draft: "",
     };
     await element.updateComplete;
     expect(element.textContent).toContain("Couldn't load this session's history.");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
     (element.querySelector(".chat-session-rail__retry") as HTMLButtonElement).click();
-    expect(onSubmit).toHaveBeenCalledWith("What changed?");
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(element.companion.turns[0]);
+    expect(onSubmit.mock.calls[0]?.[0]).toBe(element.companion.turns[0]);
   });
+
+  it.each(["answered", "failed"] as const)(
+    "keeps a follow-up editable while answering and retains it when %s",
+    async (outcome) => {
+      const threads = new ChatSessionCompanionThreads(() => {
+        element.companion = { ...threads.view("one") };
+      });
+      const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      ask.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveAnswer = resolve;
+            rejectAnswer = reject;
+          }),
+      );
+      let submission: Promise<void> | undefined;
+      const element = await mount({
+        companion: threads.view("one"),
+        onDraftChange: (draft) => threads.setDraft("one", draft),
+        onSubmit: (question) => {
+          submission = threads.submit("one", question, ask);
+        },
+      });
+      const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
+      const send = element.querySelector<HTMLButtonElement>(".chat-send-btn")!;
+      const type = async (draft: string) => {
+        textarea.value = draft;
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        await element.updateComplete;
+      };
+      const enter = () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      expect(send.disabled).toBe(true);
+      await type("What changed?");
+      expect(send.disabled).toBe(false);
+      enter();
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("");
+      expect(textarea.placeholder).toBe("Ask a question");
+      await type("What should I verify next?");
+      expect(send.disabled).toBe(true);
+      enter();
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(textarea.value).toBe("What should I verify next?");
+      if (outcome === "answered") {
+        resolveAnswer({ answer: "The composer changed.", ts: 42 });
+      } else {
+        rejectAnswer(new Error("Side chat timed out."));
+      }
+      await submission;
+      await element.updateComplete;
+      expect(threads.view("one").turns[0]?.status).toBe(outcome);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+      element.connected = false;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(true);
+      expect(send.disabled).toBe(true);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      element.connected = true;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+    },
+  );
 
   it("freezes terminal relative time from digest.updatedAt", async () => {
     const element = await mount({
@@ -550,11 +614,8 @@ describe("ChatSessionRailElement", () => {
       running: false,
       activeRunId: null,
       companion: {
-        exchanges: [{ question: "Q", answer: "A", ts: 1 }],
+        turns: [{ question: "Q", status: "answered", answer: "A", ts: 1 }],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
@@ -578,11 +639,8 @@ describe("ChatSessionRailElement", () => {
   it("shows the shared chat skeleton instead of the empty state during hydration", async () => {
     const element = await mount({
       companion: {
-        exchanges: [],
+        turns: [],
         loading: true,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
@@ -591,15 +649,6 @@ describe("ChatSessionRailElement", () => {
     await skeleton?.updateComplete;
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
-  });
-
-  it("collapses on Escape", async () => {
-    const element = await mount();
-    element
-      .querySelector(".chat-session-rail--expanded")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await element.updateComplete;
-    expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
   });
 
   it("keeps the ticking rail section out of screen-reader live regions", async () => {
@@ -683,38 +732,21 @@ describe("ChatSessionRailElement", () => {
   it("replaces the starters once the thread has an exchange", async () => {
     const element = await mount({
       companion: {
-        exchanges: [{ question: "What changed?", answer: "The rail toggle.", ts: 300_000 }],
+        turns: [
+          {
+            question: "What changed?",
+            status: "answered",
+            answer: "The rail toggle.",
+            ts: 300_000,
+          },
+        ],
         loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
         draft: "",
       },
     });
 
     expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
     expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
-  });
-
-  it("drops the digest band when there is no digest to show", async () => {
-    const withDigest = await mount({ digest: { ...digest(), assessment: "Steady progress." } });
-    expect(withDigest.querySelector(".chat-session-rail__digest")).not.toBeNull();
-
-    const withoutDigest = await mount({
-      digest: null,
-      running: false,
-      activeRunId: null,
-      companion: {
-        exchanges: [],
-        loading: false,
-        pendingQuestion: null,
-        failedQuestion: null,
-        hint: null,
-        draft: "What changed?",
-      },
-    });
-    expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-    expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {

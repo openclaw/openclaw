@@ -3,20 +3,14 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   projectAgentHarnessTranscriptMessageForDisplay,
-  restorePreparedUserTurnOperationalMetaForRuntime,
-  runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { withCodexSessionTranscriptMirrorWriteLock } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import {
-  publishSessionTranscriptUpdateByIdentity,
-  type TranscriptEntryAnchor,
-  type SessionTranscriptTargetParams,
-  type SessionTranscriptWriteLockParams,
+import type {
+  TranscriptEntryAnchor,
+  SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readCodexAsyncQuestions } from "./async-questions.js";
 import type { AttemptSettlementWarning, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAsyncDeliverySettlement } from "./event-projector-options.js";
 import type { CodexThread } from "./protocol.js";
@@ -25,15 +19,17 @@ import {
   type CodexThreadHistoryImportResult,
 } from "./transcript-history-projection.js";
 import {
-  applyCodexTranscriptTaint,
-  attachCodexMirrorAttestation,
-  attachCodexMirrorRunId,
-  buildCodexMirrorDedupeIdentity,
   fingerprintCodexMirrorSourceMessage,
   isMirroredAgentMessage,
   readCodexMirrorSourceFingerprint,
   type MirroredAgentMessage,
 } from "./transcript-mirror-attestation.js";
+import {
+  mirror,
+  readMirroredAssistantText,
+  type CodexAppServerTranscriptMirrorResult,
+  type MirroredUserMessageReceipt,
+} from "./transcript-mirror-write.js";
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
@@ -48,26 +44,7 @@ import {
 export { buildCodexUserPromptMessage };
 export { projectBoundedCodexThreadHistory };
 
-type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
-type MirroredUserMessageReceipt = {
-  anchor: TranscriptEntryAnchor;
-  appended: boolean;
-  message: MirroredUserMessage;
-};
 type UserMessagePersistenceNotifier = (receipt: MirroredUserMessageReceipt) => void;
-type CodexAppServerTranscriptMirrorResult = {
-  assistantMirrorIdentitiesOwned: string[];
-  anchorsByMirrorIdentity: Map<string, TranscriptEntryAnchor>;
-  messagesPresent: MirroredAgentMessage[];
-  userMessageReceipts: MirroredUserMessageReceipt[];
-};
-
-function readMirroredAssistantText(message: MirroredAgentMessage | undefined): string | undefined {
-  return message?.role === "assistant"
-    ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n") ||
-        undefined
-    : undefined;
-}
 
 /** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
 export async function importCodexThreadHistoryToTranscript(params: {
@@ -131,6 +108,11 @@ async function mirrorBestEffort(params: {
       messagesSnapshot: params.result.messagesSnapshot,
       turnId: params.turnId,
     });
+    const recorder = params.params.userTurnTranscriptRecorder;
+    const admittedPromptIdentity = recorder?.getAdmissionReceipt()
+      ? `${params.turnId}:prompt`
+      : undefined;
+    const admittedPrompt = admittedPromptIdentity ? recorder?.getPersistedMessage?.() : undefined;
     params.assertWriteCurrent?.();
     const mirrorResult = await mirror({
       assertWriteCurrent: params.assertWriteCurrent,
@@ -139,12 +121,12 @@ async function mirrorBestEffort(params: {
       sessionId: params.params.sessionId,
       storePath: params.params.sessionTarget?.storePath,
       cwd: params.cwd,
-      messages,
-      // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
-      // with a per-turn `attachCodexMirrorIdentity` value carrying its own
-      // turnId, so distinct turns produce distinct dedupe keys via the
-      // identity (not via the scope). Dropping `turnId` from the scope here is
-      // what lets a re-emitted prior-turn entry collide with its existing key.
+      // The host owns admitted user rows. Settlement may reuse their evidence,
+      // but must not recreate a removed admission through the generic writer.
+      messages: admittedPromptIdentity
+        ? messages.filter((message) => readMirrorIdentity(message) !== admittedPromptIdentity)
+        : messages,
+      // Thread-scoped keys dedupe re-emitted prior-turn messages by their original identity.
       idempotencyScope: `codex-app-server:${params.threadId}`,
       runId: params.params.runId,
       runMirrorIdentityPrefix: `${params.turnId}:`,
@@ -179,11 +161,15 @@ async function mirrorBestEffort(params: {
         return identity ? [[identity, fingerprintCodexMirrorSourceMessage(message)] as const] : [];
       }),
     );
-    const mirroredMessages = mirrorResult.messagesPresent.filter((message) => {
+    const mirroredMessages = [
+      ...(admittedPrompt ? [admittedPrompt] : []),
+      ...mirrorResult.messagesPresent,
+    ].filter((message) => {
       const identity = readMirrorIdentity(message);
+      const expectedFingerprint = identity ? expectedFingerprints.get(identity) : undefined;
       return (
-        identity !== undefined &&
-        readCodexMirrorSourceFingerprint(message) === expectedFingerprints.get(identity)
+        expectedFingerprint !== undefined &&
+        readCodexMirrorSourceFingerprint(message) === expectedFingerprint
       );
     });
     const assistantMirrorIdentity = `${params.turnId}:assistant`;
@@ -262,6 +248,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
     const mirrorPromise = (async () => {
       const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
         hidden: params.params.trigger === "memory",
+        inputProvenance: params.params.inputProvenance,
         message: attachUpstreamUserText(
           attachCodexMirrorIdentity(
             await buildResolvedCodexUserPromptMessage(params.params),
@@ -270,14 +257,8 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           params.upstreamUserText,
         ),
       });
-      const recorder = params.params.userTurnTranscriptRecorder;
-      // Hidden admissions intentionally have no annotation authority. Use the host's
-      // persisted row, since hooks can change visibility after prompt preparation.
-      if (recorder?.getAdmissionReceipt() && recorder.getPersistedMessage?.()?.display !== false) {
-        const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
-        if (!annotate || userPromptMessage.role !== "user") {
-          throw new Error("current host admission is unavailable for native prompt annotation");
-        }
+      const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
+      if (annotate) {
         // Native turn acceptance supplies the identity. Annotate before taking the mirror lock:
         // the anchored writer owns that same queue and must never be nested under it.
         await annotate({
@@ -286,6 +267,16 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           mirrorOrigin: "codex-app-server",
           mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
         });
+      }
+      const recorder = params.params.userTurnTranscriptRecorder;
+      const admission = recorder?.getAdmissionReceipt();
+      if (admission) {
+        const message = recorder?.getPersistedMessage?.();
+        if (message) {
+          params.params.hostCapabilities.assertActive();
+          params.notifyUserMessagePersisted({ anchor: admission, appended: false, message });
+        }
+        return;
       }
       const mirrorResult = await mirror({
         assertCurrent: params.params.hostCapabilities.assertActive,
@@ -313,310 +304,6 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
       sessionId: params.params.sessionId,
     });
   }
-}
-
-async function mirror(params: {
-  assertCurrent?: () => void;
-  assertWriteCurrent?: () => void;
-  sessionId: string;
-  cwd?: string;
-  sessionKey?: string;
-  agentId?: string;
-  storePath?: string;
-  messages: AgentMessage[];
-  idempotencyScope?: string;
-  runId?: string;
-  runMirrorIdentityPrefix?: string;
-  terminalAssistantOwner?: {
-    mirrorIdentity: string;
-    runId: string;
-    settlementWarning?: AttemptSettlementWarning;
-  };
-  prepareAssistantTranscriptMessage?: EmbeddedRunAttemptParams["prepareAssistantTranscriptMessage"];
-  config?: SessionTranscriptWriteLockParams["config"];
-  skipBeforeMessageWriteHooks?: boolean;
-}): Promise<CodexAppServerTranscriptMirrorResult> {
-  const messages = params.messages.filter(isMirroredAgentMessage);
-  if (messages.length === 0) {
-    return {
-      assistantMirrorIdentitiesOwned: [],
-      anchorsByMirrorIdentity: new Map(),
-      messagesPresent: [],
-      userMessageReceipts: [],
-    };
-  }
-
-  const candidates = messages.map((message) => {
-    const dedupeIdentity = buildCodexMirrorDedupeIdentity(message);
-    const sourceFingerprint = fingerprintCodexMirrorSourceMessage(message);
-    const sourceUserIdempotencyKey =
-      message.role === "user"
-        ? normalizeOptionalString("idempotencyKey" in message ? message.idempotencyKey : undefined)
-        : undefined;
-    // Gateway-owned user keys keep optimistic client rows stable. Other rows use
-    // the provider mirror identity so retries find the exact logical message.
-    const idempotencyKey =
-      sourceUserIdempotencyKey ??
-      (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
-    return { dedupeIdentity, idempotencyKey, message, sourceFingerprint };
-  });
-  const candidateIdempotencyKeys = candidates.flatMap(({ idempotencyKey }) =>
-    idempotencyKey ? [idempotencyKey] : [],
-  );
-  const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  // A queued terminal must still match its prepared outcome before committing.
-  // Publication may trigger Stop afterward; that cannot erase a committed receipt.
-  const assertWritable = () => {
-    params.assertCurrent?.();
-    params.assertWriteCurrent?.();
-  };
-  assertWritable();
-  const mirrorBatch = await withCodexSessionTranscriptMirrorWriteLock(
-    { ...transcriptTarget, config: params.config },
-    async (transcript) => {
-      assertWritable();
-      const nextAppendedUpdates: Array<{
-        messageId: string;
-        message: AgentMessage;
-        messageSeq?: number;
-      }> = [];
-      const nextAssistantMirrorIdentitiesOwned = new Set<string>();
-      const nextAnchorsByMirrorIdentity = new Map<string, TranscriptEntryAnchor>();
-      const nextMessagesPresent: MirroredAgentMessage[] = [];
-      const nextUserMessageReceipts: MirroredUserMessageReceipt[] = [];
-      const mirrorFacts = await transcript.readMessageFacts({
-        idempotencyKeys: candidateIdempotencyKeys,
-      });
-      assertWritable();
-      const taint = { tainted: false };
-      for (const { dedupeIdentity, idempotencyKey, message, sourceFingerprint } of candidates) {
-        const sourceMessage = applyCodexTranscriptTaint(message, taint);
-        const mirrorIdentity = readMirrorIdentity(message);
-        const ownsRun = Boolean(
-          params.runId &&
-          (!params.runMirrorIdentityPrefix ||
-            mirrorIdentity?.startsWith(params.runMirrorIdentityPrefix)),
-        );
-        const terminalOwner = params.terminalAssistantOwner;
-        const ownsTerminal = Boolean(
-          ownsRun && terminalOwner && mirrorIdentity === terminalOwner.mirrorIdentity,
-        );
-        const ownedMessage =
-          ownsRun && params.runId
-            ? attachCodexMirrorRunId(
-                sourceMessage,
-                params.runId,
-                ownsTerminal,
-                terminalOwner?.settlementWarning,
-              )
-            : sourceMessage;
-        const transcriptMessage = {
-          ...attachCodexMirrorAttestation(ownedMessage, sourceFingerprint),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-        } as AgentMessage;
-        if (idempotencyKey && mirrorFacts.existingIdempotencyKeys.has(idempotencyKey)) {
-          const persistedMessage = mirrorFacts.messagesByIdempotencyKey.get(idempotencyKey);
-          const persistedAnchor = mirrorFacts.anchorsByIdempotencyKey.get(idempotencyKey);
-          if (persistedMessage && isMirroredAgentMessage(persistedMessage)) {
-            nextMessagesPresent.push(persistedMessage);
-            if (persistedMessage.role === "user" && persistedAnchor) {
-              nextUserMessageReceipts.push({
-                anchor: persistedAnchor,
-                appended: false,
-                message: persistedMessage,
-              });
-            }
-          }
-          if (persistedAnchor) {
-            nextAnchorsByMirrorIdentity.set(dedupeIdentity, persistedAnchor);
-          }
-          if (message.role === "assistant") {
-            nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
-          }
-          continue;
-        }
-        assertWritable();
-        const preparedUserMessage =
-          transcriptMessage.role === "user"
-            ? {
-                ...transcriptMessage,
-                __openclaw: { ...Reflect.get(transcriptMessage, "__openclaw") },
-              }
-            : undefined;
-        if (preparedUserMessage?.["__openclaw"].humanMentions !== undefined) {
-          // Hooks cannot move a selection by mutating the original text or spans in place.
-          preparedUserMessage.content = structuredClone(preparedUserMessage.content);
-          preparedUserMessage["__openclaw"].humanMentions = structuredClone(
-            preparedUserMessage["__openclaw"].humanMentions,
-          );
-        }
-        const asyncSourceText =
-          message.role === "assistant" && message.openclawAsyncDelivery
-            ? readMirroredAssistantText(message)
-            : undefined;
-        const nextMessage = runAgentHarnessBeforeMessageWriteHook({
-          message: transcriptMessage,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          skipBeforeMessageWriteHooks: params.skipBeforeMessageWriteHooks,
-          // Only this turn's terminal row belongs to the outer attachment dispatcher.
-          prepareAssistantTranscriptMessage: ownsTerminal
-            ? params.prepareAssistantTranscriptMessage
-            : undefined,
-        });
-        if (!nextMessage) {
-          if (message.role === "assistant") {
-            // A transcript hook deliberately blocked this logical assistant row.
-            // Treat that as an authoritative persistence decision so delivery
-            // does not bypass the hook with a fallback mirror.
-            nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
-          }
-          continue;
-        }
-        const restoredMessage = restorePreparedUserTurnOperationalMetaForRuntime({
-          runtimeMessage: nextMessage,
-          preparedMessage: preparedUserMessage,
-        });
-        let messageToAppend = (
-          idempotencyKey
-            ? {
-                ...attachCodexMirrorAttestation(restoredMessage, sourceFingerprint),
-                idempotencyKey,
-              }
-            : attachCodexMirrorAttestation(restoredMessage, sourceFingerprint)
-        ) as AgentMessage;
-        if (mirrorIdentity) {
-          // Hooks may replace the whole message. Restore the provider-owned
-          // identity so retries cannot turn a stale idempotency hit into evidence.
-          messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
-        }
-        if (ownsRun && params.runId) {
-          messageToAppend = attachCodexMirrorRunId(
-            messageToAppend,
-            params.runId,
-            ownsTerminal,
-            terminalOwner?.settlementWarning,
-          );
-        }
-        if (message.role === "assistant" && message.openclawAsyncDelivery) {
-          // Async delivery ownership is provider-authored. Whole-message hooks may
-          // rewrite content, but must not turn the durable row into a terminal answer.
-          // Controls must not re-expose source text that a hook rewrote or redacted.
-          const questions =
-            isMirroredAgentMessage(messageToAppend) &&
-            readMirroredAssistantText(messageToAppend) === asyncSourceText
-              ? readCodexAsyncQuestions(messageToAppend.openclawAsyncDelivery?.questions)
-              : undefined;
-          messageToAppend = Object.assign(messageToAppend, {
-            openclawAsyncDelivery: {
-              itemId: message.openclawAsyncDelivery.itemId,
-              ...(questions ? { questions } : {}),
-            },
-          });
-        }
-        // Whole-message hooks can replace metadata, but cannot erase source-owned taint.
-        messageToAppend = applyCodexTranscriptTaint(messageToAppend, taint);
-        messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
-          hidden: (message as { display?: boolean }).display === false,
-          message: messageToAppend,
-        });
-        assertWritable();
-        const { messageSeq, result: appended } = await transcript.appendMessageWithMessageSequence({
-          message: messageToAppend,
-          ...(params.assertCurrent || params.assertWriteCurrent
-            ? {
-                prepareMessageAfterIdempotencyCheck: (preparedMessage: typeof messageToAppend) => {
-                  assertWritable();
-                  return preparedMessage;
-                },
-              }
-            : {}),
-          // Preliminary facts avoid hooks and payload work on normal retries.
-          // SQLite repeats this lookup under BEGIN IMMEDIATE for cross-process safety.
-          idempotencyLookup: "scan",
-          cwd: params.cwd,
-        });
-        params.assertCurrent?.();
-        if (!appended) {
-          continue;
-        }
-        const { messageId, message: appendedMessage } = appended;
-        if (isMirroredAgentMessage(appendedMessage)) {
-          nextMessagesPresent.push(appendedMessage);
-          if (idempotencyKey) {
-            mirrorFacts.messagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
-          }
-        }
-        if (message.role === "assistant") {
-          nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
-        }
-        if (appended.anchor) {
-          nextAnchorsByMirrorIdentity.set(dedupeIdentity, appended.anchor);
-        }
-        if (appendedMessage.role === "user" && appended.anchor) {
-          nextUserMessageReceipts.push({
-            anchor: appended.anchor,
-            appended: appended.appended,
-            message: appendedMessage,
-          });
-        }
-        if (appended.appended) {
-          nextAppendedUpdates.push({
-            messageId,
-            message: appendedMessage,
-            ...(messageSeq !== undefined ? { messageSeq } : {}),
-          });
-        }
-        if (idempotencyKey) {
-          mirrorFacts.existingIdempotencyKeys.add(idempotencyKey);
-          if (appended.anchor) {
-            mirrorFacts.anchorsByIdempotencyKey.set(idempotencyKey, appended.anchor);
-          }
-        }
-      }
-      return {
-        appendedUpdates: nextAppendedUpdates,
-        assistantMirrorIdentitiesOwned: [...nextAssistantMirrorIdentitiesOwned],
-        anchorsByMirrorIdentity: nextAnchorsByMirrorIdentity,
-        messagesPresent: nextMessagesPresent,
-        userMessageReceipts: nextUserMessageReceipts,
-      };
-    },
-  );
-  params.assertCurrent?.();
-  const { appendedUpdates, ...result } = mirrorBatch;
-
-  for (const update of appendedUpdates) {
-    try {
-      // Commentary and tool rows share the Codex turn but cannot claim terminal run ownership.
-      const terminalOwner = params.terminalAssistantOwner;
-      const terminalRunId =
-        update.message.role === "assistant" &&
-        terminalOwner &&
-        readMirrorIdentity(update.message) === terminalOwner.mirrorIdentity
-          ? terminalOwner.runId
-          : undefined;
-      await publishSessionTranscriptUpdateByIdentity({
-        ...transcriptTarget,
-        update: {
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          message: update.message,
-          messageId: update.messageId,
-          ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
-          ...(terminalRunId ? { runId: terminalRunId } : {}),
-          sessionKey: transcriptTarget.sessionKey,
-        },
-      });
-    } catch (error) {
-      // The transcript append is already committed. A transient live-update
-      // failure must not make dispatch append a second assistant message.
-      embeddedAgentLog.warn("failed to publish codex app-server transcript update", {
-        error: formatErrorMessage(error),
-      });
-    }
-  }
-
-  return result;
 }
 
 async function deliverAsyncMessageBestEffort(params: {
@@ -650,6 +337,8 @@ async function deliverAsyncMessageBestEffort(params: {
         config: params.params.config,
         messages: [attachCodexMirrorIdentity(params.message, mirrorIdentity)],
         idempotencyScope: `codex-app-server:${params.threadId}`,
+        runId: params.params.runId,
+        runMirrorIdentityPrefix: `${params.turnId}:`,
       });
     } catch (error) {
       embeddedAgentLog.warn("failed to persist codex async agent message", {
@@ -715,23 +404,4 @@ async function deliverAsyncBlockReply(
     [],
     { intro: text },
   );
-}
-
-function resolveCodexMirrorTranscriptTarget(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  storePath?: string;
-}): SessionTranscriptTargetParams {
-  const sessionKey = params.sessionKey?.trim();
-  const storePath = params.storePath?.trim();
-  if (!sessionKey || !storePath) {
-    throw new Error("Codex transcript mirror requires a runtime session identity");
-  }
-  return {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionId: params.sessionId,
-    sessionKey,
-    storePath,
-  };
 }

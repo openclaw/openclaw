@@ -1,10 +1,16 @@
 export async function readResponseBytesWithinLimit(
   response: Response,
   maxBytes: number,
+  options: { truncate?: boolean } = {},
 ): Promise<ArrayBuffer | null> {
   const contentLengthHeader = response.headers.get("Content-Length");
   const contentLength = contentLengthHeader === null ? undefined : Number(contentLengthHeader);
-  if (contentLength !== undefined && Number.isFinite(contentLength) && contentLength > maxBytes) {
+  if (
+    !options.truncate &&
+    contentLength !== undefined &&
+    Number.isFinite(contentLength) &&
+    contentLength > maxBytes
+  ) {
     await response.body?.cancel().catch(() => undefined);
     return null;
   }
@@ -20,12 +26,18 @@ export async function readResponseBytesWithinLimit(
       if (done) {
         break;
       }
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
+      const remaining = maxBytes - totalBytes;
+      if (value.byteLength > remaining && !options.truncate) {
         await reader.cancel().catch(() => undefined);
         return null;
       }
-      chunks.push(value);
+      const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
+      chunks.push(chunk);
+      totalBytes += chunk.byteLength;
+      if (options.truncate && totalBytes === maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
     }
   } finally {
     reader.releaseLock();

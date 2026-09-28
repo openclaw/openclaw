@@ -96,6 +96,17 @@ export function blockReplyOpts(): NonNullable<HandleCommandsParams["opts"]> {
   return { onBlockReply: vi.fn(async () => {}) };
 }
 
+export async function dispatchLoginCommand(params: HandleCommandsParams) {
+  const { handleCommands } = await import("./commands-core.js");
+  return handleCommands({
+    ...params,
+    resolveModelLevels: async () => ({
+      resolvedThinkLevel: params.resolvedThinkLevel,
+      resolvedReasoningLevel: params.resolvedReasoningLevel,
+    }),
+  });
+}
+
 export { runModelsAuthLoginFlowMock, patchSessionEntryMock };
 
 export function setupLoginCommandTests() {

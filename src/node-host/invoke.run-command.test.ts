@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./invoke.test-support.js";
+import * as processExec from "../process/exec.js";
+import { runCommand } from "./invoke-run-command.js";
 
 describe("runCommand", () => {
   afterEach(() => {
@@ -11,7 +12,7 @@ describe("runCommand", () => {
 
   it("captures stdout, stderr, and exit status", async () => {
     await expect(
-      testing.runCommand(
+      runCommand(
         [
           process.execPath,
           "-e",
@@ -32,9 +33,41 @@ describe("runCommand", () => {
     });
   });
 
+  it.each(["before", "after"] as const)(
+    "checks node launch policy %s native execution",
+    async (timing) => {
+      let allowed = timing === "after";
+      const pending = runCommand(
+        [
+          process.execPath,
+          "-e",
+          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
+        ],
+        undefined,
+        { PATH: process.env.PATH ?? "" },
+        5_000,
+        undefined,
+        () => {
+          if (!allowed) {
+            throw new Error("exec approval changed before execution");
+          }
+        },
+      );
+      // The canonical node runner spawns synchronously before returning its promise.
+      allowed = false;
+      if (timing === "before") {
+        await expect(pending).rejects.toThrow("exec approval changed before execution");
+      } else {
+        const result = await pending;
+        expect(result.success).toBe(true);
+        expect(result.stdout).toBe("completed");
+      }
+    },
+  );
+
   it("closes stdin for commands that wait for EOF", async () => {
     await expect(
-      testing.runCommand(
+      runCommand(
         [
           process.execPath,
           "-e",
@@ -49,7 +82,7 @@ describe("runCommand", () => {
 
   it("preserves nonzero command results", async () => {
     await expect(
-      testing.runCommand(
+      runCommand(
         [process.execPath, "-e", "process.stderr.write('failed'); process.exit(7)"],
         undefined,
         undefined,
@@ -66,7 +99,7 @@ describe("runCommand", () => {
 
   it.runIf(process.platform !== "win32")("force-kills timed-out command trees", async () => {
     const startedAt = Date.now();
-    const result = await testing.runCommand(
+    const result = await runCommand(
       [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
       undefined,
       undefined,
@@ -81,7 +114,7 @@ describe("runCommand", () => {
     const startedAt = Date.now();
     const cancelling = setTimeout(() => controller.abort(), 25);
     try {
-      const result = await testing.runCommand(
+      const result = await runCommand(
         [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
         undefined,
         undefined,
@@ -97,7 +130,7 @@ describe("runCommand", () => {
   });
 
   it("keeps the combined output prefix bounded", async () => {
-    const result = await testing.runCommand(
+    const result = await runCommand(
       [process.execPath, "-e", "process.stdout.write('x'.repeat(200_001))"],
       undefined,
       undefined,
@@ -109,7 +142,7 @@ describe("runCommand", () => {
   });
 
   it("preserves child launch errors", async () => {
-    const result = await testing.runCommand(
+    const result = await runCommand(
       [`openclaw-missing-${process.pid}-${Date.now()}`],
       undefined,
       undefined,
@@ -123,9 +156,14 @@ describe("runCommand", () => {
     const enoent = (message: string) =>
       Object.assign(new Error(message), { code: "ENOENT" }) as NodeJS.ErrnoException;
 
-    it("blames a missing working directory instead of the shell", () => {
+    async function runCommandError(error: NodeJS.ErrnoException, cwd?: string) {
+      vi.spyOn(processExec, "runCommandWithTimeout").mockRejectedValueOnce(error);
+      return (await runCommand([process.execPath], cwd, undefined, undefined)).error;
+    }
+
+    it("blames a missing working directory instead of the shell", async () => {
       const cwd = path.join(os.tmpdir(), `node-exec-missing-${process.pid}-${Date.now()}`);
-      expect(testing.clarifyNodeExecCwdSpawnError(enoent("spawn /bin/sh ENOENT"), cwd)).toBe(
+      expect(await runCommandError(enoent("spawn /bin/sh ENOENT"), cwd)).toBe(
         `node exec working directory does not exist on the node host: ${cwd} (os reported: spawn /bin/sh ENOENT)`,
       );
     });
@@ -134,7 +172,7 @@ describe("runCommand", () => {
       const file = path.join(os.tmpdir(), `node-exec-file-${process.pid}-${Date.now()}.txt`);
       fs.writeFileSync(file, "x");
       try {
-        const result = await testing.runCommand(
+        const result = await runCommand(
           [process.execPath, "-e", "process.exit(0)"],
           file,
           undefined,
@@ -151,7 +189,7 @@ describe("runCommand", () => {
 
     it("clarifies a missing cwd during execution", async () => {
       const cwd = path.join(os.tmpdir(), `node-exec-run-missing-${process.pid}-${Date.now()}`);
-      const result = await testing.runCommand(
+      const result = await runCommand(
         [process.execPath, "-e", "process.exit(0)"],
         cwd,
         undefined,
@@ -163,26 +201,24 @@ describe("runCommand", () => {
       );
     });
 
-    it("preserves executable and unrelated errors", () => {
+    it("preserves executable and unrelated errors", async () => {
       const missingExecutable = "spawn /usr/bin/does-not-exist ENOENT";
-      expect(testing.clarifyNodeExecCwdSpawnError(enoent(missingExecutable), os.tmpdir())).toBe(
-        missingExecutable,
-      );
-      expect(testing.clarifyNodeExecCwdSpawnError(enoent("spawn /bin/sh ENOENT"), undefined)).toBe(
+      expect(await runCommandError(enoent(missingExecutable), os.tmpdir())).toBe(missingExecutable);
+      expect(await runCommandError(enoent("spawn /bin/sh ENOENT"), undefined)).toBe(
         "spawn /bin/sh ENOENT",
       );
       const denied = Object.assign(new Error("spawn EACCES"), {
         code: "EACCES",
       }) as NodeJS.ErrnoException;
-      expect(testing.clarifyNodeExecCwdSpawnError(denied, "/missing")).toBe("spawn EACCES");
+      expect(await runCommandError(denied, "/missing")).toBe("spawn EACCES");
     });
 
-    it("preserves the spawn error when the cwd cannot be inspected", () => {
+    it("preserves the spawn error when the cwd cannot be inspected", async () => {
       const message = "spawn /bin/sh ENOENT";
       vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
         throw Object.assign(new Error("permission denied"), { code: "EACCES" });
       });
-      expect(testing.clarifyNodeExecCwdSpawnError(enoent(message), "/unreadable")).toBe(message);
+      expect(await runCommandError(enoent(message), "/unreadable")).toBe(message);
     });
   });
 });

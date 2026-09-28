@@ -161,6 +161,9 @@ start time, and accumulated utterances. Supplied IDs and legacy records with an
 unknown origin stay archived; capture starts fresh without changing those notes.
 
 Notes include participants, an overview, decisions, action items, and risks.
+During capture, notes update about every five minutes when new speech has been
+saved. A quiet room does not trigger repeated summaries. Capture stop drains the
+received speech and saves final notes.
 They use the agent's utility model, falling back to its primary model and then
 deterministic heuristic notes if model generation fails. Read stored notes with
 the `transcripts` tool, the [CLI](/cli/transcripts), or the Control UI Meetings

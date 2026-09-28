@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 
 let resolveApiKeyForProviderCore: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 let closeOpenClawAgentDatabasesForTest: typeof import("../state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
@@ -48,16 +49,13 @@ describe("auth profile migration isolation", () => {
           `${JSON.stringify({ openai: { type: "api_key", key: "fake-legacy-key" } })}\n`,
         );
         await state.writeAuthProfiles(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                key: "fake-healthy-key",
-              },
+          createAuthProfileStoreFixture({
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "fake-healthy-key",
             },
-          },
+          }),
           "healthy",
         );
 

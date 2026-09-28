@@ -1,6 +1,10 @@
 // Memory Wiki tests cover claim health plugin behavior.
 import { describe, expect, it } from "vitest";
-import { assessClaimFreshness, buildPageContradictionClusters } from "./claim-health.js";
+import {
+  assessClaimFreshness,
+  assessPageFreshness,
+  buildPageContradictionClusters,
+} from "./claim-health.js";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
 function createPage(params: {
@@ -163,5 +167,38 @@ describe("assessClaimFreshness", () => {
     expect(freshness.level).toBe("unknown");
     expect(freshness.lastTouchedAt).toBeUndefined();
     expect(freshness.reason).toBe("missing updatedAt");
+  });
+});
+
+describe("wiki freshness boundaries", () => {
+  it.each([
+    { age: 29, level: "fresh", daysSinceTouch: 29 },
+    { age: 30, level: "aging", daysSinceTouch: 30 },
+    { age: 89, level: "aging", daysSinceTouch: 89 },
+    { age: 90, level: "stale", daysSinceTouch: 90 },
+    { age: -1, level: "fresh", daysSinceTouch: 0 },
+  ])("classifies a timestamp $age days old as $level", ({ age, level, daysSinceTouch }) => {
+    const now = new Date("2026-06-01T00:00:00.000Z");
+    const timestamp = new Date(now.getTime() - age * 24 * 60 * 60 * 1000).toISOString();
+    const page = createPage({
+      relativePath: "entities/alpha.md",
+      title: "Alpha",
+      contradictions: [],
+    });
+    page.updatedAt = timestamp;
+    const claim: WikiClaim = {
+      text: "Alpha has timestamped evidence.",
+      updatedAt: timestamp,
+      evidence: [],
+    };
+    const expected = {
+      level,
+      reason: `last touched ${timestamp}`,
+      daysSinceTouch,
+      lastTouchedAt: timestamp,
+    };
+
+    expect(assessPageFreshness(page, now)).toEqual(expected);
+    expect(assessClaimFreshness({ page, claim, now })).toEqual(expected);
   });
 });

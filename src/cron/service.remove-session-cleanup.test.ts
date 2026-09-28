@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -11,20 +11,21 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  listOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import * as cronCleanup from "./service/locked.js";
 
 const gatewayTestState = vi.hoisted(() => ({
   callGateway: vi.fn(),
   targetBySessionKey: new Map<string, { agentId: string; storePath: string }>(),
 }));
 
-vi.mock("../gateway/call.runtime.js", () => ({
+vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayTestState.callGateway,
 }));
 
@@ -84,6 +85,7 @@ function replaceSessionEntry(...args: Parameters<typeof replaceSessionEntryCore>
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
+  fakeTimers: false,
 });
 
 afterEach(() => {
@@ -92,10 +94,21 @@ afterEach(() => {
 });
 
 describe("CronService.remove session cleanup", () => {
+  let cleanupInFlight: Promise<unknown> | undefined;
+
+  afterEach(async () => {
+    // This nested hook drains writes before the parent closes SQLite and deletes stores.
+    if (cleanupInFlight) {
+      await Promise.allSettled([cleanupInFlight]);
+      cleanupInFlight = undefined;
+    }
+  });
+
   it("does not materialize a session database when the deleted job never ran", async () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -135,6 +148,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -186,6 +200,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -244,7 +259,7 @@ describe("CronService.remove session cleanup", () => {
       });
 
     try {
-      await vi.advanceTimersByTimeAsync(50);
+      await unrelatedAdd;
       expect(unrelatedAdded).toBe(true);
     } finally {
       releaseWriter.resolve();
@@ -259,6 +274,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -292,10 +308,11 @@ describe("CronService.remove session cleanup", () => {
     ).toBe("transport-session");
   });
 
-  it("removes a base session recreated by an already-admitted run", async () => {
+  it("removes a base session recreated by an already-admitted run", async ({ signal }) => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -322,6 +339,10 @@ describe("CronService.remove session cleanup", () => {
       { sessionId: "active-session", updatedAt: Date.now() },
     );
 
+    const cleanupRegistration = vi.spyOn(cronCleanup, "registerPendingCronSessionCleanup");
+    onTestFinished(() => {
+      cleanupRegistration.mockRestore();
+    });
     await expect(cron.remove(job.id)).resolves.toEqual({
       ok: true,
       removed: true,
@@ -334,17 +355,26 @@ describe("CronService.remove session cleanup", () => {
       { agentId: "main", storePath: sessionStorePath, sessionKey },
       { sessionId: "late-session", updatedAt: Date.now() },
     );
+    const cleanupDone = cleanupRegistration.mock.calls.find(
+      ([, registeredJobId]) => registeredJobId === job.id,
+    )?.[2];
+    if (!cleanupDone) {
+      throw new Error("Cron cleanup completion was not registered");
+    }
+    cleanupInFlight = cleanupDone;
     clearCronJobActive(job.id, marker);
 
-    await vi.waitFor(() => {
-      expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
-    });
+    // The cron owner releases pending cleanup after the real lifecycle mutation settles.
+    await racePromiseWithAbortSignal(cleanupDone, signal);
+    expect(cronCleanup.hasPendingCronSessionCleanupForAgent("main")).toBe(false);
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
   });
 
   it("preserves the session of a replacement job with the same id", async () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -387,7 +417,7 @@ describe("CronService.remove session cleanup", () => {
         replacementAdded = true;
         return job;
       });
-    await vi.advanceTimersByTimeAsync(50);
+    await cron.status();
     expect(replacementAdded).toBe(false);
 
     clearCronJobActive(original.id, originalMarker);
@@ -411,6 +441,7 @@ describe("CronService.remove session cleanup", () => {
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const createCron = () =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         defaultAgentId: "main",
@@ -454,7 +485,7 @@ describe("CronService.remove session cleanup", () => {
         replacementAdded = true;
         return job;
       });
-    await vi.advanceTimersByTimeAsync(50);
+    await replacementCron.status();
     expect(replacementAdded).toBe(false);
 
     clearCronJobActive(original.id, originalMarker);
@@ -475,6 +506,7 @@ describe("CronService.remove session cleanup", () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",

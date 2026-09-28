@@ -14,7 +14,9 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
+import { isSettledOAuthRefreshFailure, OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
@@ -116,18 +118,15 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expires: number;
     provider?: string;
   }): AuthProfileStore {
-    return {
-      version: 1,
-      profiles: {
-        [params.profileId]: {
-          type: "oauth",
-          provider: params.provider ?? "anthropic",
-          access: params.access,
-          refresh: params.refresh,
-          expires: params.expires,
-        },
+    return createAuthProfileStoreFixture({
+      [params.profileId]: {
+        type: "oauth",
+        provider: params.provider ?? "anthropic",
+        access: params.access,
+        refresh: params.refresh,
+        expires: params.expires,
       },
-    };
+    });
   }
 
   function expectOauthCredentialFields(
@@ -167,6 +166,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   afterEach(async () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    await cleanupSessionStateForTest({ stateDir: tmpDir });
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllGlobals();
 
@@ -177,18 +177,15 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
   async function resolveOauthProfileForConfiguredMode(mode: "token" | "api_key") {
     const profileId = "anthropic:default";
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "oauth-token",
-          refresh: "refresh-token",
-          expires: createUsableOAuthExpiry(),
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      [profileId]: {
+        type: "oauth",
+        provider: "anthropic",
+        access: "oauth-token",
+        refresh: "refresh-token",
+        expires: createUsableOAuthExpiry(),
       },
-    };
+    });
 
     const result = await resolveApiKeyForProfile({
       cfg: {
@@ -295,46 +292,51 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
   });
 
-  it("surfaces contention once without exposing the lock path", async () => {
-    const profileId = "openai:default";
-    const store = createOauthStore({
-      profileId,
-      provider: "openai",
-      access: "expired-access",
-      refresh: "expired-refresh",
-      expires: 1,
-    });
-    saveAuthProfileStore(store, mainAgentDir);
-    const lockPath = path.join(mainAgentDir, "oauth-refresh.lock");
-    refreshCredentialMock.mockRejectedValueOnce(
-      buildRefreshContentionError({
+  it.each([false, true])(
+    "surfaces contention once without exposing the lock path (frozen: %s)",
+    async (frozen) => {
+      const profileId = "openai:default";
+      const store = createOauthStore({
+        profileId,
+        provider: "openai",
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: 1,
+      });
+      saveAuthProfileStore(store, mainAgentDir);
+      const lockPath = path.join(mainAgentDir, "oauth-refresh.lock");
+      const refreshError = buildRefreshContentionError({
         provider: "openai",
         profileId,
         cause: Object.assign(new Error(`file lock timeout for ${lockPath}`), {
           code: FILE_LOCK_TIMEOUT_ERROR_CODE,
           lockPath,
         }),
-      }),
-    );
-    const failure = await resolveApiKeyForProfile({
-      store,
-      profileId,
-      agentDir: mainAgentDir,
-      forceRefresh: true,
-    }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
-    expect(failure).toMatchObject({
-      provider: "openai",
-      profileId,
-      reason: null,
-      cause: { code: "refresh_contention", lockPath },
-    });
-    const message = formatErrorMessage(failure);
-    expect(message.match(/OAuth token refresh failed/g)).toHaveLength(1);
-    expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)).toHaveLength(1);
-    expect(message).not.toContain(lockPath);
-    expect(message).not.toContain("file lock timeout");
-  });
+      });
+      refreshCredentialMock.mockRejectedValueOnce(
+        frozen ? Object.freeze(refreshError) : refreshError,
+      );
+      const failure = await resolveApiKeyForProfile({
+        store,
+        profileId,
+        agentDir: mainAgentDir,
+        forceRefresh: true,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
+      expect(isSettledOAuthRefreshFailure(failure)).toBe(true);
+      expect(failure).toMatchObject({
+        provider: "openai",
+        profileId,
+        reason: null,
+        cause: { code: "refresh_contention", lockPath },
+      });
+      const message = formatErrorMessage(failure);
+      expect(message.match(/OAuth token refresh failed/g)).toHaveLength(1);
+      expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)).toHaveLength(1);
+      expect(message).not.toContain(lockPath);
+      expect(message).not.toContain("file lock timeout");
+    },
+  );
 
   it.each([false, true])(
     "clears stale lastGood and respects a locked selection ($locked)",
@@ -540,17 +542,14 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
   it("accepts mode=oauth + type=token (regression)", async () => {
     const profileId = "anthropic:default";
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "token",
-          provider: "anthropic",
-          token: "static-token",
-          expires: Date.now() + 60_000,
-        },
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      [profileId]: {
+        type: "token",
+        provider: "anthropic",
+        token: "static-token",
+        expires: Date.now() + 60_000,
       },
-    };
+    });
 
     const result = await resolveApiKeyForProfile({
       cfg: {

@@ -6,7 +6,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createMSTeamsQaTransportAdapter } from "./adapter.runtime.js";
-import * as botFrameworkServer from "./bot-framework-server.js";
 
 const createdDirs: string[] = [];
 
@@ -52,7 +51,9 @@ describe("Microsoft Teams QA transport adapter", () => {
       timestamp: Date.now(),
     }));
     let inboundActivity: Record<string, unknown> | undefined;
+    let inboundAuthorization: string | undefined;
     const webhook = createServer((request, response) => {
+      inboundAuthorization = request.headers.authorization;
       void (async () => {
         const chunks: Buffer[] = [];
         for await (const chunk of request) {
@@ -63,8 +64,6 @@ describe("Microsoft Teams QA transport adapter", () => {
       })();
     });
     const webhookPort = await listenOnLoopback(webhook);
-    // Keep the webhook port owned while the adapter starts its Connector listener.
-    vi.spyOn(botFrameworkServer, "reserveMSTeamsQaWebhookPort").mockResolvedValue(webhookPort);
     const adapter = await createMSTeamsQaTransportAdapter({
       adapterOptions: { transportPolicy: { requireGroupMention: true } },
       channelId: "msteams",
@@ -83,8 +82,9 @@ describe("Microsoft Teams QA transport adapter", () => {
       const env = adapter.createRuntimeEnvPatch?.();
       expect(env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
       expect(env).not.toHaveProperty("OPENCLAW_QA_MSTEAMS_CONNECTOR_URL");
-      const bootstrapUrl = /--import=(\S+)/u.exec(env?.NODE_OPTIONS ?? "")?.[1];
+      const [bootstrapUrl] = adapter.createRuntimePreloads?.() ?? [];
       expect(bootstrapUrl).toMatch(/^file:/u);
+      expect(env?.NODE_OPTIONS).toContain(`--import=${bootstrapUrl}`);
       bootstrapPath = fileURLToPath(bootstrapUrl!);
       const bootstrap = await fs.readFile(bootstrapPath, "utf8");
       expect(bootstrap).toContain('Symbol.for("openclaw.msteams.privateQaRuntime")');
@@ -99,8 +99,9 @@ describe("Microsoft Teams QA transport adapter", () => {
       });
       expect(bootstrapConfig.botToken?.split(".")).toHaveLength(3);
 
-      const config = adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1" });
-      expect(config.channels?.msteams?.webhook?.port).toBe(webhookPort);
+      const config = adapter.createGatewayConfig({ baseUrl: `http://127.0.0.1:${webhookPort}` });
+      expect(config.channels?.msteams?.webhook).toEqual({ path: "/api/messages" });
+      expect(config.channels?.msteams?.legacyWebhook).toBe(false);
       expect(config.channels?.msteams).toMatchObject({
         dmPolicy: "allowlist",
         allowFrom: ["00000000-0000-4000-8000-000000000002"],
@@ -114,6 +115,7 @@ describe("Microsoft Teams QA transport adapter", () => {
         threadId: "thread-root",
         replyToId: "quoted-parent",
       });
+      expect(inboundAuthorization).toBe(`Bearer ${bootstrapConfig.botToken}`);
       expect(inboundActivity).toMatchObject({
         text: "<at>openclaw</at> qa ingress",
         entities: [
@@ -185,7 +187,6 @@ describe("Microsoft Teams QA transport adapter", () => {
         .end();
     });
     const webhookPort = await listenOnLoopback(webhook);
-    vi.spyOn(botFrameworkServer, "reserveMSTeamsQaWebhookPort").mockResolvedValue(webhookPort);
 
     const adapter = await createMSTeamsQaTransportAdapter({
       adapterOptions: {},
@@ -201,8 +202,9 @@ describe("Microsoft Teams QA transport adapter", () => {
     });
 
     try {
-      const config = adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1" });
-      expect(config.channels?.msteams?.webhook?.port).toBe(webhookPort);
+      const config = adapter.createGatewayConfig({ baseUrl: `http://127.0.0.1:${webhookPort}` });
+      expect(config.channels?.msteams?.webhook).toEqual({ path: "/api/messages" });
+      expect(config.channels?.msteams?.legacyWebhook).toBe(false);
       await expect(
         adapter.sendInbound({
           accountId: "default",

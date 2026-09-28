@@ -42,7 +42,7 @@ first-run failures see
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Codex** via OAuth (ChatGPT sign-in). A fresh
-    setup with no primary model uses exact `openai/gpt-5.6-sol` for
+    setup with no primary model uses exact `openai/gpt-6-astra` for
     ChatGPT/Codex subscription auth plus native Codex app-server execution.
     Reauthentication preserves an existing explicit model, including
     `openai/gpt-5.5`. If the Codex workspace does not expose GPT-5.6, select
@@ -59,7 +59,7 @@ first-run failures see
     ChatGPT/Codex OAuth - OpenAI Codex is folded into it. You may still see a legacy
     `openai-codex` prefix in older config and migration warnings:
 
-    - `openai/gpt-5.6-sol` = fresh ChatGPT/Codex subscription setup with the native Codex runtime for agent turns.
+    - `openai/gpt-6-astra` = fresh ChatGPT/Codex subscription setup with the native Codex runtime for agent turns.
     - `openai/gpt-5.5` = explicit supported selection for existing config or accounts without GPT-5.6 access.
     - Legacy `openai-codex/*` model refs = legacy route repaired by `openclaw doctor --fix`.
     - `openai/gpt-5.5` plus an ordered `openai` API-key profile = API-key auth for an OpenAI agent model.
@@ -68,7 +68,7 @@ first-run failures see
     Want direct OpenAI Platform billing? Set `OPENAI_API_KEY`. Want ChatGPT/Codex
     subscription auth? Run `openclaw models auth login --provider openai`. Keep
     model refs under the canonical `openai/*` provider. Fresh subscription
-    setup uses exact `openai/gpt-5.6-sol`; doctor repairs legacy Codex-prefixed
+    setup uses exact `openai/gpt-6-astra`; doctor repairs legacy Codex-prefixed
     refs without upgrading an explicit `openai/gpt-5.5` selection.
 
   </Accordion>

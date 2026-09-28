@@ -14,6 +14,7 @@
  * remembered per workspace so siblings do not each pay for it.
  */
 
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 
 export type CodexCyberFailoverConfig = {
@@ -157,24 +158,14 @@ export function planCodexCyberEscalation(params: {
   return { kind: "escalate", model: config.model };
 }
 
-/**
- * Structural view of the attempt outcome this owner reads. The runner's
- * `EmbeddedRunAttemptResult` satisfies it, so callers pass the real result and
- * the compiler still checks these accesses.
- */
-type AttemptMessage = {
-  role?: string;
-  diagnostics?: readonly { type: string; details?: Record<string, unknown> }[];
-  errorMessage?: string;
-  stopReason?: string;
-};
-
-export type CodexCyberAttemptOutcome = {
-  lastAssistant?: AttemptMessage | undefined;
-  currentAttemptAssistant?: AttemptMessage | undefined;
-  promptError?: unknown;
-  replayMetadata?: { replaySafe?: boolean } | undefined;
-};
+export type CodexCyberAttemptOutcome = Pick<
+  EmbeddedRunAttemptResult,
+  | "terminal"
+  | "lastAssistant"
+  | "currentAttemptAssistant"
+  | "replayMetadata"
+  | "runtimeContinuationStarted"
+>;
 
 export type CodexCyberAttemptVerdict = {
   /** OpenAI refused this attempt under its cyber policy. */
@@ -198,13 +189,17 @@ export function readCodexCyberAttemptVerdict(
   // costs nothing and stops an earlier refusal from rerouting a later turn.
   const message = result?.currentAttemptAssistant;
   const refusals = message?.role === "assistant" ? (message.diagnostics ?? []) : [];
-  const cyberRefused = refusals.some(
-    (d) =>
-      d.type === "provider_refusal" &&
-      d.details?.category === "cyber" &&
-      d.details?.provider === "openai",
-  );
-  const promptError = result?.promptError;
+  // Finalization can supersede a refusal with an interruption or failure while
+  // retaining its diagnostic; only an otherwise completed refusal may escalate.
+  const cyberRefused =
+    result?.terminal.kind === "ok" &&
+    refusals.some(
+      (d) =>
+        d.type === "provider_refusal" &&
+        d.details?.category === "cyber" &&
+        d.details?.provider === "openai",
+    );
+  const promptError = result ? attemptTerminal.project(result.terminal).promptError : undefined;
   const failed = promptError !== undefined && promptError !== null;
   // Any refusal category is a refusal, not an answer, so bio and misalignment
   // never look like a successful escalation either.
@@ -223,7 +218,8 @@ export function readCodexCyberAttemptVerdict(
   return {
     cyberRefused,
     // Absence of an explicit safe verdict counts as unsafe.
-    replaySafe: result?.replayMetadata?.replaySafe === true,
+    replaySafe:
+      result?.replayMetadata?.replaySafe === true && result.runtimeContinuationStarted !== true,
     answered,
     unavailable: errorTexts.some((t) => t !== undefined && AUTHORIZATION_FAILURE_RE.test(t)),
   };

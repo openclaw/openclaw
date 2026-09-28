@@ -12,8 +12,8 @@ function validateSandboxBindEntries(
     return;
   }
   for (let i = 0; i < binds.length; i += 1) {
-    const bind = binds[i]?.trim() ?? "";
-    if (!bind) {
+    const bind = binds[i] ?? "";
+    if (!bind.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["binds", i],
@@ -22,7 +22,7 @@ function validateSandboxBindEntries(
       continue;
     }
     const parsed = splitSandboxBindSpec(bind);
-    const source = (parsed ? parsed.host : bind).trim();
+    const source = parsed ? parsed.host : bind;
     if (!isSandboxHostPathAbsolute(source)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

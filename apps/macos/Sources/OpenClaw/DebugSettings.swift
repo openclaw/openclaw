@@ -6,12 +6,13 @@ struct DebugSettings: View {
     @Bindable var state: AppState
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
+    @AppStorage(nativeConversationForcedKey) private var useNativeConversation = false
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
     @State private var launchAgentWriteError: String?
-    @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
+    @State private var gatewayRootInput: String = CommandResolver.projectRootPath()
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
@@ -317,7 +318,10 @@ struct DebugSettings: View {
                         Task { await self.resetGatewayTunnel() }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.tunnelResetInFlight || !self.isRemoteMode)
+                    .disabled(
+                        self.tunnelResetInFlight ||
+                            self.state.connectionMode != .remote ||
+                            self.state.remoteTransport != .ssh)
                 }
 
                 if let portKillStatus {
@@ -334,9 +338,10 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text(String(
-                        format: String(localized: "Check which process owns %lld and suggest fixes."),
-                        GatewayEnvironment.gatewayPort()))
+                    Text(self.state.connectionMode == .remote && self.state.remoteTransport == .direct &&
+                        !self.state.hostsLocalGatewayWithRemotePrimary
+                        ? String(localized: "Direct Gateway connectivity is checked by the connection health check.")
+                        : String(localized: "Check which processes own the local Gateway and SSH tunnel ports."))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -516,7 +521,7 @@ struct DebugSettings: View {
                             .foregroundStyle(.secondary)
                     } else {
                         Button {
-                            LaunchdManager.startOpenClaw()
+                            LaunchAgentManager.shared.restart()
                         } label: {
                             Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
                         }
@@ -599,9 +604,8 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("Chat")
-                    Text("Native SwiftUI")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    Toggle("Use native conversation view", isOn: self.$useNativeConversation)
+                        .help("Use the Swift conversation view in newly opened chat windows.")
                 }
             }
         }
@@ -687,7 +691,7 @@ struct DebugSettings: View {
     }
 
     private func saveRelayRoot() {
-        GatewayProcessManager.shared.setProjectRoot(path: self.gatewayRootInput)
+        CommandResolver.setProjectRoot(self.gatewayRootInput)
     }
 
     private func loadSessionStorePath() {
@@ -729,10 +733,6 @@ struct DebugSettings: View {
                 }
             }
         }
-    }
-
-    private var isRemoteMode: Bool {
-        CommandResolver.connectionSettings().mode == .remote
     }
 
     private var canRestartGateway: Bool {

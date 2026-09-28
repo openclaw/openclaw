@@ -64,7 +64,7 @@ function renderEvidenceEntryButton(entry: EvidenceEntryView, selected: boolean):
     entry.artifacts.length > 0
       ? entry.artifacts.map(renderEvidenceArtifactBadge).join("")
       : '<span class="text-dimmed text-sm">No artifacts</span>';
-  return `<button class="evidence-entry-card${selected ? " selected" : ""}" data-evidence-entry-id="${esc(entry.id)}" type="button">
+  return `<button class="evidence-entry-card${selected ? " selected" : ""}" data-evidence-entry-key="${esc(entry.key)}" type="button">
     <div class="evidence-entry-card-top">
       <span class="result-card-dot scenario-item-dot-${statusTone(entry.status)}"></span>
       <div>
@@ -73,6 +73,7 @@ function renderEvidenceEntryButton(entry: EvidenceEntryView, selected: boolean):
       </div>
       ${badgeHtml(entry.status)}
     </div>
+    ${entry.effective ? "" : '<span class="capture-chip">Retained observation — not counted</span>'}
     <div class="evidence-entry-artifacts">${artifactSummary}</div>
   </button>`;
 }
@@ -129,6 +130,7 @@ function renderEvidenceDetail(entry: EvidenceEntryView | null): string {
       </div>
       ${badgeHtml(entry.status)}
     </header>
+    ${entry.effective ? "" : '<p class="text-dimmed">Retained observation — not counted in effective results.</p>'}
     ${entry.failureReason ? `<div class="capture-error">${esc(entry.failureReason)}</div>` : ""}
     <section class="evidence-detail-section">
       <div class="inspector-section-title">Coverage</div>
@@ -231,12 +233,12 @@ function renderEvidenceMatrixCell(
     ? ` Runner: ${cell.runner.lane}${cell.runner.workflow ? ` via ${cell.runner.workflow}` : ""}${cell.runner.command ? `; ${cell.runner.command}` : ""}`
     : "";
   const title = `${surface} / ${stage}: ${cell.status}${isProofGap ? " (not executed in this run)" : ""}.${coverageText}${runnerText ? ` ${runnerText}` : ""}${proofText}${artifactText}`;
-  const className = `evidence-matrix-cell evidence-matrix-cell-${matrixCellClass(cell.status)}${cell.testId ? " evidence-matrix-cell-action" : ""}`;
+  const className = `evidence-matrix-cell evidence-matrix-cell-${matrixCellClass(cell.status)}${cell.entryKey !== null ? " evidence-matrix-cell-action" : ""}`;
   const label = isProofGap ? "gap" : cell.status;
-  if (!cell.testId) {
+  if (cell.entryKey === null) {
     return `<span class="${className}" title="${esc(title)}">${esc(label)}</span>`;
   }
-  return `<button class="${className}" data-evidence-entry-id="${esc(cell.testId)}" type="button" title="${esc(cell.title ?? title)}">${esc(label)}</button>`;
+  return `<button class="${className}" data-evidence-entry-key="${esc(cell.entryKey)}" type="button" title="${esc(cell.title ?? title)}">${esc(label)}</button>`;
 }
 
 function renderEvidenceMatrixMiniGrid(matrix: EvidenceProducerContext["matrix"]): string {
@@ -345,8 +347,8 @@ export function renderEvidenceView(state: UiState): string {
   const evidence = state.evidence;
   const entries = evidence?.entries.filter((entry) => evidenceEntryMatches(state, entry)) ?? [];
   const selected =
-    entries.find((entry) => entry.id === state.selectedEvidenceEntryId) ??
-    evidence?.entries.find((entry) => entry.id === state.selectedEvidenceEntryId) ??
+    entries.find((entry) => entry.key === state.selectedEvidenceEntryKey) ??
+    evidence?.entries.find((entry) => entry.key === state.selectedEvidenceEntryKey) ??
     entries[0] ??
     null;
   const artifactCount =
@@ -363,7 +365,7 @@ export function renderEvidenceView(state: UiState): string {
         <p>Saved QA evidence bundles, proof artifacts, logs, and producer context.</p>
       </div>
       <div class="evidence-toolbar-main">
-        <label class="capture-search-field">Evidence path
+        <label class="evidence-search-field">Evidence path
           <input id="evidence-path" value="${esc(state.evidencePathDraft)}" placeholder=".artifacts/qa-e2e/suite-.../qa-evidence.json" />
         </label>
         <button class="btn-primary" data-action="load-evidence"${state.evidenceLoading ? " disabled" : ""}>Load</button>
@@ -389,7 +391,7 @@ export function renderEvidenceView(state: UiState): string {
               .join("")}
           </select>
         </label>
-        <label class="capture-search-field">Search
+        <label class="evidence-search-field">Search
           <input id="evidence-search" value="${esc(state.evidenceSearchText)}" placeholder="coverage, title, artifact..." />
         </label>
       </div>
@@ -423,7 +425,9 @@ export function renderEvidenceView(state: UiState): string {
                 ${
                   entries.length > 0
                     ? entries
-                        .map((entry) => renderEvidenceEntryButton(entry, entry.id === selected?.id))
+                        .map((entry) =>
+                          renderEvidenceEntryButton(entry, entry.key === selected?.key),
+                        )
                         .join("")
                     : '<div class="empty-state">No evidence entries match these filters.</div>'
                 }

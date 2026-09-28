@@ -53,7 +53,6 @@ describe("OpenClaw shell locale preferences", () => {
         connection: { gatewayUrl: "ws://locale.test" },
         snapshot: { phase: "connected" },
       },
-      navigation: { update: vi.fn() },
       theme: { refresh: refreshTheme },
       runtimeConfig,
     } as unknown as ApplicationContext;
@@ -92,7 +91,6 @@ describe("OpenClaw shell locale preferences", () => {
         connection: { gatewayUrl: "ws://locale.test" },
         snapshot: { phase: "connected" },
       },
-      navigation: { update: vi.fn() },
       theme: { refresh: refreshTheme },
       runtimeConfig,
     } as unknown as ApplicationContext;
@@ -128,7 +126,6 @@ describe("OpenClaw shell locale preferences", () => {
         connection: { gatewayUrl: "ws://theme.test" },
         snapshot: { phase: "connected" },
       },
-      navigation: { update: vi.fn() },
       theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
       runtimeConfig,
     } as unknown as ApplicationContext;

@@ -78,6 +78,9 @@ function isUnsafeIntegerLiteral(token: string): boolean {
 
 /** Quotes integer literals above Number.MAX_SAFE_INTEGER before JSON.parse. */
 export function quoteUnsafeIntegerLiterals(input: string): string {
+  if (!/(?:^|\D)\d{16}/.test(input)) {
+    return input;
+  }
   let out = "";
   let inString = false;
   let escaped = false;

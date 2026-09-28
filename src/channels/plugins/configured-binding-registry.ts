@@ -1,8 +1,3 @@
-/**
- * Configured binding registry.
- *
- * Primes, counts, and resolves compiled binding records from config and conversation facts.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type {
@@ -50,19 +45,10 @@ function resolveMaterializedConfiguredBinding(params: {
   };
 }
 
-/**
- * Warms and counts the compiled configured binding registry for a config snapshot.
- */
-export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }): {
-  bindingCount: number;
-  channelCount: number;
-} {
+/** Compile plugin binding rules before publishing a config or plugin generation. */
+export function validateConfiguredBindings(cfg: OpenClawConfig): void {
   ensureConfiguredBindingBuiltinsRegistered();
-  const { rulesByChannel } = resolveCompiledBindingRegistry(params.cfg);
-  return {
-    bindingCount: [...rulesByChannel.values()].reduce((sum, rules) => sum + rules.length, 0),
-    channelCount: rulesByChannel.size,
-  };
+  resolveCompiledBindingRegistry(cfg);
 }
 
 /**

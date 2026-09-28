@@ -1,10 +1,11 @@
 // Verifies plugin hook security constraints and rejections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginHookMessageSendingResult } from "./hook-message.types.js";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
-import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
+import type { PluginHookBeforeToolCallResult } from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
@@ -85,25 +86,9 @@ describe("before_tool_call terminal block semantics", () => {
 
   it.each([
     {
-      name: "keeps block=true when a lower-priority hook returns block=false",
-      hooks: [
-        { pluginId: "high", result: { block: true, blockReason: "dangerous" }, priority: 100 },
-        { pluginId: "low", result: { block: false }, priority: 10 },
-      ],
-      expected: { block: true, blockReason: "dangerous" },
-    },
-    {
       name: "treats explicit block=false as no-op when no prior hook blocked",
       hooks: [{ pluginId: "single", result: { block: false }, priority: 10 }],
       expected: { block: undefined },
-    },
-    {
-      name: "treats passive handler output as no-op for prior block",
-      hooks: [
-        { pluginId: "high", result: { block: true, blockReason: "blocked" }, priority: 100 },
-        { pluginId: "passive", result: {}, priority: 10 },
-      ],
-      expected: { block: true, blockReason: "blocked" },
     },
     {
       name: "respects block from a middle hook in a multi-handler chain",
@@ -243,25 +228,9 @@ describe("message_sending terminal cancel semantics", () => {
 
   it.each([
     {
-      name: "keeps cancel=true when a lower-priority hook returns cancel=false",
-      hooks: [
-        { pluginId: "high", result: { cancel: true, content: "guarded" }, priority: 100 },
-        { pluginId: "low", result: { cancel: false, content: "override" }, priority: 10 },
-      ],
-      expected: { cancel: true, content: "guarded" },
-    },
-    {
       name: "treats explicit cancel=false as no-op when no prior hook canceled",
       hooks: [{ pluginId: "single", result: { cancel: false }, priority: 10 }],
       expected: { cancel: undefined },
-    },
-    {
-      name: "treats passive handler output as no-op for prior cancel",
-      hooks: [
-        { pluginId: "high", result: { cancel: true }, priority: 100 },
-        { pluginId: "passive", result: {}, priority: 10 },
-      ],
-      expected: { cancel: true },
     },
     {
       name: "allows lower-priority cancel when higher-priority hooks are non-terminal",

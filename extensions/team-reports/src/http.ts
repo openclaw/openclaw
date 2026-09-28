@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { TLSSocket } from "node:tls";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { WORK_SESSIONS_PAGE_SIZE } from "./limits.js";
 import { DAY_MS, describePeriod } from "./periods.js";
 import {
   renderIndexPage,
@@ -13,13 +14,22 @@ import {
   type PageContext,
   type PeriodIndex,
 } from "./render/html.js";
+import { renderWorkSessionsPage } from "./render/work-sessions.js";
 import type { TeamReportsHealth } from "./scheduler.js";
+import type { ReportPerson } from "./store-contract.js";
 import type { TeamReportsStore } from "./store.js";
-import type { Period, Person, PersonReport } from "./types.js";
+import type { Period, Person } from "./types.js";
+import {
+  createPersonWorkSessions,
+  listMemberWorkSessions,
+  type listWorkSessions,
+} from "./work-sessions.js";
 
 type TeamReportsHttpOptions = {
   basePath: string;
   displayTimezone: string;
+  sessionRouting: () => Pick<PageContext, "controlUiBasePath" | "mainKey">;
+  workSessions: typeof listWorkSessions;
   /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
   assetsDir: string;
   getStore: () => TeamReportsStore | undefined;
@@ -83,7 +93,7 @@ function absolutePageUrl(req: IncomingMessage, path: string): string | undefined
   }
 }
 
-function personFromReport(member: PersonReport): Person {
+function personFromReport(member: ReportPerson): Person {
   return {
     github: [member.login, ...member.aliases],
     display: member.display,
@@ -95,7 +105,7 @@ function personFromReport(member: PersonReport): Person {
   };
 }
 
-function visiblePeople(configured: Person[], recentReports: PersonReport[]): Person[] {
+function visiblePeople(configured: Person[], recentReports: ReportPerson[]): Person[] {
   const aliases = new Set(
     configured.flatMap((person) => person.github.map((login) => login.toLowerCase())),
   );
@@ -118,12 +128,14 @@ function visiblePeople(configured: Person[], recentReports: PersonReport[]): Per
 export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const nonce = randomBytes(16).toString("base64url");
-    const send = (
+    const send = async (
       status: number,
       contentType: string,
       body: string | Buffer,
       headers: Record<string, string> = {},
     ) => {
+      // Discovery and stored-report reads can outlive the admitted browser grant.
+      await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       res.writeHead(status, {
         "Content-Type": typeof body === "string" ? `${contentType}; charset=utf-8` : contentType,
         "Content-Length": Buffer.byteLength(body),
@@ -172,7 +184,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       return send(
         503,
         "text/plain",
-        "Team Reports is not running. Start or restart the Gateway service.\n",
+        "Team Reports is not running. Check plugin configuration and reload the plugin.\n",
       );
     }
     const json = (body: unknown) => send(200, "application/json", JSON.stringify(body));
@@ -211,28 +223,53 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     const ctx: PageContext = {
       basePath: options.basePath,
       displayTimezone: options.displayTimezone,
+      ...options.sessionRouting(),
       nonce,
       absoluteUrl,
     };
     const html = (body: string) => send(200, "text/html", body);
+    const personWorkSessions = createPersonWorkSessions(options.workSessions);
+    if (first === "sessions" && route.segments.length === 1) {
+      const rawOffset = new URL(req.url ?? "", absoluteUrl).searchParams.get("offset") ?? "0";
+      const offset = Number(rawOffset);
+      if (!/^\d+$/.test(rawOffset) || !Number.isSafeInteger(offset)) {
+        return send(400, "text/plain", "Invalid session page offset.\n");
+      }
+      const login = new URL(req.url ?? "", absoluteUrl).searchParams.get("person") || undefined;
+      let person: Person | undefined;
+      if (login) {
+        const latest = await store.latestPeople();
+        person = visiblePeople(options.people(), latest?.members ?? []).find((candidate) =>
+          candidate.github.some((alias) => alias.toLowerCase() === login.toLowerCase()),
+        ) ?? { github: [login] };
+      }
+      return html(
+        renderWorkSessionsPage(
+          ctx,
+          person
+            ? await personWorkSessions(person, offset, WORK_SESSIONS_PAGE_SIZE)
+            : await options.workSessions(offset, WORK_SESSIONS_PAGE_SIZE),
+          offset,
+          person?.github[0],
+        ),
+      );
+    }
     if (route.segments.length === 0) {
       const periods = await index();
       const latest = periods.day[0];
-      const stored = latest ? await store.getPeriod("day", latest.key) : undefined;
+      const stored = latest ? await store.getPeriodDocument("day", latest.key) : undefined;
       return html(
         renderIndexPage(ctx, periods, {
           orgs: stored?.report.orgs ?? options.orgs(),
           latest: stored,
           health: await options.health(),
+          workSessions: await options.workSessions(0, 8),
         }),
       );
     }
     if (first === "people" && route.segments.length <= 2) {
-      const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
-      const recent = latest
-        ? ((await store.getPeriod("day", latest.key))?.report.members ?? [])
-        : [];
-      const people = visiblePeople(options.people(), recent);
+      const latest = await store.latestPeople();
+      const people = visiblePeople(options.people(), latest?.members ?? []);
       if (!key) {
         const endKey = latest?.key ?? new Date().toISOString().slice(0, 10);
         const since = new Date(Date.parse(`${endKey}T00:00:00Z`) - 27 * DAY_MS)
@@ -248,7 +285,8 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       if (!person && days.length === 0) {
         return notFound();
       }
-      return html(renderPersonPage(ctx, person ?? { github: [key] }, days));
+      const member = person ?? { github: [key] };
+      return html(renderPersonPage(ctx, member, days, await personWorkSessions(member)));
     }
     if (
       (first === "day" || first === "week" || first === "month") &&
@@ -266,16 +304,31 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       } catch {
         return notFound();
       }
-      const stored = await store.getPeriod(first, key);
+      if (format === "report.md") {
+        const stored = await store.getPeriod(first, key);
+        return stored ? send(200, "text/markdown", stored.markdown) : notFound();
+      }
+      const stored = await store.getPeriodDocument(first, key);
       if (!stored) {
         return notFound();
       }
       if (format === "data.json") {
         return json(stored.report);
       }
-      if (format === "report.md") {
-        return send(200, "text/markdown", stored.markdown);
-      }
+      const configured = options.people();
+      const members = stored.report.members.map((member) => {
+        const person = personFromReport(member);
+        const aliases = new Set(person.github.map((login) => login.toLowerCase()));
+        // Reports retain old aliases; use current configured aliases as additional verified lookup keys.
+        const matches = configured.filter((entry) =>
+          entry.github.some((login) => aliases.has(login.toLowerCase())),
+        );
+        return {
+          ...person,
+          github: [...person.github, ...matches.flatMap((entry) => entry.github)],
+        };
+      });
+      const workSessions = await listMemberWorkSessions(members, personWorkSessions);
       return html(
         renderReportPage(
           ctx,
@@ -284,6 +337,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
           (await store.listPeriods({ period: first, limit: 400 })).filter(
             (entry) => entry.key <= key,
           ),
+          workSessions,
         ),
       );
     }

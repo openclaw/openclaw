@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { execFileUtf8 } from "./exec-file.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -12,10 +13,13 @@ import {
   launchctlInspectionReason,
   type LaunchctlResult,
 } from "./launchd-exec.js";
-import type { ServiceInspectionReason } from "./service-inspection-error.js";
+import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
+import {
+  ServiceOwnershipRefusalError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
-const PLUTIL_PATH = "/usr/bin/plutil";
 
 type SystemLaunchDaemonOwnership =
   | { status: "absent"; serviceTarget: string }
@@ -36,10 +40,6 @@ function formatUnknownError(error: unknown): string {
   return truncateUtf16Safe(sanitizeForLog(raw), 500);
 }
 
-function quotePosixArgument(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 /**
  * Renders the package-independent ownership probe used by detached restart helpers.
  * The caller must refuse activation when `openclaw_system_launchd_conflict` is non-empty.
@@ -48,9 +48,9 @@ export function renderSystemLaunchDaemonOwnershipShellProbe(label: string): stri
   const serviceTarget = `system/${label}`;
   return `openclaw_system_launchd_conflict=""
 openclaw_system_launchd_detail=""
-openclaw_system_launchd_target=${quotePosixArgument(serviceTarget)}
-openclaw_system_launchd_dir=${quotePosixArgument(SYSTEM_LAUNCH_DAEMON_DIR)}
-openclaw_system_launchd_label=${quotePosixArgument(label)}
+openclaw_system_launchd_target=${quoteCliArg(serviceTarget)}
+openclaw_system_launchd_dir=${quoteCliArg(SYSTEM_LAUNCH_DAEMON_DIR)}
+openclaw_system_launchd_label=${quoteCliArg(label)}
 openclaw_query_system_launchd() {
   openclaw_system_launchd_probe=$(launchctl print "$openclaw_system_launchd_target" 2>&1)
   openclaw_system_launchd_probe_status=$?
@@ -82,16 +82,74 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
           if [ ! -r "$openclaw_system_launchd_plist" ]; then
             continue
           fi
-          if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist" 2>&1); then
+          # Preserve exact string labels, including trailing newlines, on both parser paths.
+          # plutil documents exit 1 for parse failure. Signals/execution errors cannot
+          # establish a missing Label, even if a later lint accepts the same plist.
+          if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist" 2>&1; openclaw_system_launchd_parse_status=$?; printf '.'; exit "$openclaw_system_launchd_parse_status"); then
+            openclaw_system_launchd_plist_label=\${openclaw_system_launchd_plist_label%.}
             if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]; then
               continue
             fi
             openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
             openclaw_system_launchd_detail="installed same-label system LaunchDaemon plist $openclaw_system_launchd_plist"
             break
-          elif /usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1; then
+          elif [ "$?" -eq 1 ] && /usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1; then
             continue
           else
+            # Endpoint protection can deny plutil while allowing a real read. The system
+            # Perl reader survives package swaps and classifies errno, not diagnostic text.
+            openclaw_system_launchd_snapshot=$(/usr/bin/mktemp "\${TMPDIR:-/tmp}/openclaw-launchd-plist.XXXXXX")
+            if [ -n "$openclaw_system_launchd_snapshot" ]; then
+              /usr/bin/perl -e '
+use strict;
+use Fcntl qw(O_RDONLY O_NONBLOCK);
+use Errno qw(EACCES EPERM ENOENT ENOTDIR);
+sub read_failed {
+  my $code = 0 + $!;
+  exit(($code == EACCES || $code == EPERM) ? 77 :
+       ($code == ENOENT || $code == ENOTDIR) ? 66 : 74);
+}
+$SIG{ALRM} = sub { exit 74; };
+alarm 5;
+sysopen(my $file, $ARGV[0], O_RDONLY | O_NONBLOCK) or read_failed();
+-f $file or exit 74;
+# Inherited PERL_UNICODE must not turn binary plist input into a UTF-8 handle.
+binmode $file;
+binmode STDOUT;
+my $total = 0;
+while (1) {
+  my $count = sysread($file, my $bytes, 65536);
+  defined($count) or read_failed();
+  last if !$count;
+  $total += $count;
+  $total <= 1048576 or exit 75;
+  print STDOUT $bytes or exit 74;
+}
+close($file) or read_failed();
+close(STDOUT) or exit 74;
+' "$openclaw_system_launchd_plist" >"$openclaw_system_launchd_snapshot" 2>/dev/null
+              openclaw_system_launchd_read_status=$?
+              if [ "$openclaw_system_launchd_read_status" -eq 77 ] || [ "$openclaw_system_launchd_read_status" -eq 66 ]; then
+                /bin/rm -f "$openclaw_system_launchd_snapshot"
+                continue
+              elif [ "$openclaw_system_launchd_read_status" -eq 0 ]; then
+                # The sentinel preserves label newlines through command substitution.
+                if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -expect string -n -o - -- - <"$openclaw_system_launchd_snapshot" 2>/dev/null; openclaw_system_launchd_parse_status=$?; printf '.'; exit "$openclaw_system_launchd_parse_status"); then
+                  openclaw_system_launchd_plist_label=\${openclaw_system_launchd_plist_label%.}
+                  /bin/rm -f "$openclaw_system_launchd_snapshot"
+                  if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]; then
+                    continue
+                  fi
+                  openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
+                  openclaw_system_launchd_detail="installed same-label system LaunchDaemon plist $openclaw_system_launchd_plist"
+                  break
+                elif [ "$?" -eq 1 ] && /usr/bin/plutil -lint -- - <"$openclaw_system_launchd_snapshot" >/dev/null 2>&1; then
+                  /bin/rm -f "$openclaw_system_launchd_snapshot"
+                  continue
+                fi
+              fi
+              /bin/rm -f "$openclaw_system_launchd_snapshot"
+            fi
             openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
             openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
             break
@@ -114,54 +172,6 @@ fi
 `;
 }
 
-type LaunchDaemonPlistLabelResult =
-  | { status: "ok"; label: string }
-  | { status: "unlabeled" }
-  | { status: "missing" }
-  | { status: "unreadable" }
-  | { status: "unverifiable"; detail: string };
-
-/** Reads the top-level Label through the native parser for XML and binary plists. */
-export async function readLaunchDaemonPlistLabel(
-  plistPath: string,
-): Promise<LaunchDaemonPlistLabelResult> {
-  const converted = await execFileUtf8(PLUTIL_PATH, [
-    "-convert",
-    "json",
-    "-o",
-    "-",
-    "--",
-    plistPath,
-  ]);
-  if (converted.code === 0) {
-    try {
-      const plist = JSON.parse(converted.stdout) as { Label?: unknown } | null;
-      const label = plist?.Label;
-      return typeof label === "string" && label.length > 0
-        ? { status: "ok", label }
-        : { status: "unlabeled" };
-    } catch (error) {
-      return { status: "unverifiable", detail: formatUnknownError(error) };
-    }
-  }
-  try {
-    await fs.access(plistPath, fs.constants.R_OK);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return { status: "missing" };
-    }
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EACCES" || code === "EPERM") {
-      return { status: "unreadable" };
-    }
-    return { status: "unverifiable", detail: formatUnknownError(error) };
-  }
-  return {
-    status: "unverifiable",
-    detail: formatLaunchctlResultDetail(converted) || "plutil could not decode the plist",
-  };
-}
-
 type InstalledSystemLaunchDaemonScan =
   | { status: "absent" }
   | { status: "installed"; plistPath: string }
@@ -182,17 +192,28 @@ async function findInstalledSystemLaunchDaemon(
 
   for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
     const plistPath = path.posix.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
-    const result = await readLaunchDaemonPlistLabel(plistPath);
-    if (result.status === "ok" && result.label === label) {
-      return { status: "installed", plistPath };
-    }
-    // Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
-    // bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
-    if (result.status === "unreadable") {
-      continue;
-    }
-    if (result.status === "unverifiable") {
-      return { status: "unverifiable", detail: `${plistPath}: ${result.detail}` };
+    try {
+      const contents = await fs.readFile(plistPath).catch((error: unknown) => {
+        // Unreadable plists are foreign: bracketing queries catch loaded same-label daemons;
+        // an unloaded unreadable same-label plist is an accepted edge (#120481).
+        if (
+          isMissingPathError(error) ||
+          hasErrnoCode(error, "EACCES") ||
+          hasErrnoCode(error, "EPERM")
+        ) {
+          return null;
+        }
+        throw error;
+      });
+      if (contents === null) {
+        continue;
+      }
+      const plist = await decodeLaunchdPlistMetadata(contents);
+      if (plist?.Label === label) {
+        return { status: "installed", plistPath };
+      }
+    } catch (error) {
+      return { status: "unverifiable", detail: `${plistPath}: ${formatUnknownError(error)}` };
     }
   }
   return { status: "absent" };
@@ -279,7 +300,7 @@ function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonCon
     ownership.status === "loaded"
       ? `Keep it as the sole gateway manager, or unload it with \`sudo launchctl bootout ${ownership.serviceTarget}\` and remove its plist before retrying.`
       : ownership.status === "installed"
-        ? `Keep it as the sole gateway manager, or remove or relocate ${quotePosixArgument(ownership.plistPath)} before retrying.`
+        ? `Keep it as the sole gateway manager, or remove or relocate ${quoteCliArg(ownership.plistPath)} before retrying.`
         : "Fix the reported launchctl or filesystem access error, then retry.";
   return [
     formatSystemLaunchDaemonOwnershipSummary(ownership),
@@ -289,11 +310,11 @@ function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonCon
   ].join("\n");
 }
 
-class SystemLaunchDaemonOwnershipError extends Error {
+class SystemLaunchDaemonOwnershipError extends ServiceOwnershipRefusalError {
   readonly code = "SYSTEM_LAUNCH_DAEMON_OWNERSHIP";
 
   constructor(readonly ownership: SystemLaunchDaemonConflict) {
-    super(formatSystemLaunchDaemonOwnershipError(ownership));
+    super("launchd-system-owned", formatSystemLaunchDaemonOwnershipError(ownership));
     this.name = "SystemLaunchDaemonOwnershipError";
   }
 }

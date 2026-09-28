@@ -33,6 +33,8 @@ import {
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
+export { resolveModelAuthPolicy } from "./model-auth-policy.js";
+
 export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
   if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
     return undefined;
@@ -139,12 +141,26 @@ export function projectRealtimeVoicePublicProjection(ctx: {
   config: Record<string, unknown>;
 }): {
   config: Record<string, unknown>;
-  clientHints?: { modelSource: "gateway"; gatewayRelaySupported: false };
+  clientHints?: { modelSource?: "gateway"; gatewayRelaySupported: boolean };
 } {
   const model = normalizeOptionalString(ctx.config.model) ?? ctx.providerConfig.model;
   const modelId = typeof model === "string" ? model : undefined;
-  if (!isOpenAIGptLiveModel(modelId) || isSupportedOpenAIGptLiveModel(modelId)) {
+  if (!isOpenAIGptLiveModel(modelId)) {
     return { config: ctx.config };
+  }
+  if (isSupportedOpenAIGptLiveModel(modelId)) {
+    // Advertise model/transport support, not credential readiness. Session creation
+    // still resolves the selected agent's auth and validates the relay launch.
+    return {
+      config: ctx.config,
+      // GPT-Live owns delegation; forced consult and Azure configs require native Talk.
+      clientHints: {
+        gatewayRelaySupported:
+          ctx.config.consultRouting !== "force-agent-consult" &&
+          !normalizeOptionalString(ctx.providerConfig.azureEndpoint) &&
+          !normalizeOptionalString(ctx.providerConfig.azureDeployment),
+      },
+    };
   }
   const { model: _model, ...publicConfig } = ctx.config;
   return {
@@ -216,7 +232,9 @@ function withRuntimePolicy(
     ...candidate,
     runtimePolicy: {
       compatibleIds: codexCanReproduceRoute(candidate, sourceBaseUrl)
-        ? CODEX_RUNTIME_COMPATIBLE_IDS
+        ? candidate.authRequirement === "api-key"
+          ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
+          : CODEX_RUNTIME_COMPATIBLE_IDS
         : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
     },
   };
@@ -235,7 +253,9 @@ function route(
   candidate: ProviderModelRouteCandidate,
   sourceBaseUrl?: unknown,
 ): ProviderModelRouteResolution & { kind: "routes" } {
-  const compatibleCandidate = withRuntimePolicy(candidate, sourceBaseUrl);
+  const compatibleCandidate = candidate.runtimePolicy
+    ? candidate
+    : withRuntimePolicy(candidate, sourceBaseUrl);
   return {
     kind: "routes",
     routes: [compatibleCandidate],
@@ -389,9 +409,8 @@ function resolveSingleObservedModelRoute(
 
   const modelId = normalizeOpenAIModelRouteId(context.modelId);
   const sourceBaseUrl = effectiveBaseUrl;
-  // An authored Completions adapter is a concrete transport contract, not an
-  // alias for Responses. Codex does not execute that adapter, so preserve it
-  // and let the OpenClaw runtime own the request.
+  // Retain Completions for API-key callers; older configs also used this
+  // adapter while Codex selected subscription credentials independently.
   const platformApi =
     configuredRoute && effectiveApi === OPENAI_COMPLETIONS_API
       ? OPENAI_COMPLETIONS_API
@@ -421,6 +440,16 @@ function resolveSingleObservedModelRoute(
   const subscriptionOnly = isOpenAISubscriptionOnlyRouteModelId(modelId);
   const dualRoute = isOpenAIDualRouteModelId(modelId);
 
+  const legacyCompletionsDefault =
+    effectiveApi === OPENAI_COMPLETIONS_API && requestTransportOverrides === "none";
+  if (dualRoute && (!configuredRoute || legacyCompletionsDefault)) {
+    return {
+      kind: "routes",
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
+      routes: [platformRoute, chatGPTRoute],
+    };
+  }
+
   // Observed catalog transport is not authored route intent. Known model
   // contracts stay stable regardless of which official sibling row was seen.
   if (!configuredRoute) {
@@ -429,13 +458,6 @@ function resolveSingleObservedModelRoute(
     }
     if (platformOnly) {
       return route(platformRoute, sourceBaseUrl);
-    }
-    if (dualRoute) {
-      return {
-        kind: "routes",
-        defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
-        routes: [platformRoute, chatGPTRoute],
-      };
     }
   }
 
@@ -573,7 +595,7 @@ function resolveAuthoredObservedFallback(observedRoutes: readonly ProviderModelR
 }
 
 /** Resolves every physical row for one logical OpenAI model in provider order. */
-export function resolveModelRoutes(
+function resolveModelRouteCandidates(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution {
   const observedRoutes = (context.observedRoutes ?? []).filter(
@@ -638,6 +660,47 @@ export function resolveModelRoutes(
   };
 }
 
+/** Apply billing intent independently of which runtimes can execute each candidate. */
+export function resolveModelRoutes(
+  context: ProviderResolveModelRoutesContext,
+): ProviderModelRouteResolution {
+  const resolution = resolveModelRouteCandidates(context);
+  if (resolution.kind !== "routes" || resolution.routes.length < 2) {
+    return resolution;
+  }
+  const intent = context.routeIntent;
+  const requirement = intent?.authRequirement;
+  if (requirement && intent.source === "explicit") {
+    const selected = resolution.routes.find(
+      (candidate) => candidate.authRequirement === requirement,
+    );
+    if (selected) {
+      return route(selected);
+    }
+  }
+  const explicitRuntimeId =
+    intent?.source === "explicit" ? intent.runtimeId?.trim().toLowerCase() : undefined;
+  if (explicitRuntimeId) {
+    const compatible = resolution.routes.filter((candidate) =>
+      candidate.runtimePolicy?.compatibleIds.includes(explicitRuntimeId),
+    );
+    const [first, ...rest] = compatible;
+    if (first && compatible.length < resolution.routes.length) {
+      return {
+        kind: "routes",
+        routes: [first, ...rest],
+        defaultRuntimeId: explicitRuntimeId,
+      };
+    }
+  }
+  const preferredAuthRequirement =
+    requirement ?? (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
+  return {
+    ...resolution,
+    preferredAuthRequirement,
+  };
+}
+
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
   return params.providerConfig;
 }
@@ -650,8 +713,11 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
         params.agentRuntime,
         params.compat,
         params.api,
+        params.thinkingLevelMap,
       );
     default:
       return null;
   }
 }
+
+export { resolveNativeWebSearch } from "./native-web-search-policy.js";

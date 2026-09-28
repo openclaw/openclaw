@@ -15,23 +15,24 @@ import {
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
 async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitted?: number) {
-  vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-    function (this: DatabaseSync, sql) {
-      if (sql === "SELECT sqlite_version() AS version") {
-        return {
-          get: () => ({ version }),
-        } as unknown as StatementSync;
-      }
-      if (
-        extensionLoadingOmitted !== undefined &&
-        sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
-      ) {
-        return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
-      }
-      return originalPrepare.call(this, sql);
-    },
-  );
-  return await import("./node-sqlite.js");
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+    this: DatabaseSync,
+    sql,
+  ) {
+    if (sql === "SELECT sqlite_version() AS version") {
+      return {
+        get: () => ({ version }),
+      } as unknown as StatementSync;
+    }
+    if (
+      extensionLoadingOmitted !== undefined &&
+      sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+    ) {
+      return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
+    }
+    return originalPrepare.call(this, sql);
+  });
+  return { ...(await import("./node-sqlite.js")), prepare };
 }
 
 async function withNodeSharedSqliteValue(value: unknown, run: () => Promise<void>): Promise<void> {
@@ -197,15 +198,27 @@ describe("node SQLite safety", () => {
     },
   );
 
-  it.each(["3.51.3", "3.51.4", "3.52.0", "4.0.0", "3.50.7", "3.50.8", "3.44.6"])(
-    "accepts patched SQLite %s",
-    async (version) => {
-      const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
+  it.each([
+    { version: "3.51.3", jsonb: true },
+    { version: "3.52.0", jsonb: true },
+    { version: "4.0.0", jsonb: true },
+    { version: "3.50.7", jsonb: true },
+    { version: "3.44.6", jsonb: false },
+    { version: "3.44.7", jsonb: false },
+  ])(
+    "accepts patched SQLite $version and reuses its JSONB capability",
+    async ({ version, jsonb }) => {
+      const { requireNodeSqlite, supportsNodeSqliteJsonb, prepare } =
+        await loadNodeSqliteWithVersion(version);
       expect(() => requireNodeSqlite()).not.toThrow();
+      const queries = prepare.mock.calls.length;
+      expect(supportsNodeSqliteJsonb()).toBe(jsonb);
+      expect(supportsNodeSqliteJsonb()).toBe(jsonb);
+      expect(prepare.mock.calls).toHaveLength(queries);
     },
   );
 
-  it.each(["3.51.2", "3.51.0", "3.50.6", "3.49.1", "3.46.1", "3.44.5", "invalid", "3.51"])(
+  it.each(["3.51.2", "3.50.6", "3.49.1", "3.44.5", "invalid", "3.51"])(
     "rejects vulnerable or unknown SQLite %s",
     async (version) => {
       const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
@@ -232,12 +245,6 @@ describe("node SQLite safety", () => {
       });
     },
   );
-
-  it("accepts the SQLite build embedded in the supported test runtime", () => {
-    return import("./node-sqlite.js").then(({ requireNodeSqlite }) => {
-      expect(() => requireNodeSqlite()).not.toThrow();
-    });
-  });
 });
 
 const homebrew = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";

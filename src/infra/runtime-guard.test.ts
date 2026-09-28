@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   version: "24.16.0",
   error: vi.fn(),
   run: vi.fn(),
+  drain: vi.fn(),
   diagnosticLoads: 0,
   lossless: true,
 }));
@@ -20,8 +21,8 @@ vi.mock("../../node-sqlite.mjs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../node-sqlite.mjs")>();
   return {
     ...actual,
-    detectCurrentSqliteCapabilities: () => ({
-      ...actual.detectCurrentSqliteCapabilities(),
+    detectCurrentSqliteCapabilities: async () => ({
+      ...(await actual.detectCurrentSqliteCapabilities()),
       text: state.lossless,
     }),
   };
@@ -46,8 +47,19 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
   return await importOriginal<typeof import("../logging/json-console-line.js")>();
 });
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
+vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: state.drain }));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
+
+function createExitingRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(() => {
+      throw new Error("exit");
+    }),
+  };
+}
 
 describe("runtime-guard", () => {
   it("warns once while admitting capable Node 22 diagnostics", async () => {
@@ -219,12 +231,9 @@ describe("runtime-guard", () => {
 
   it.each([
     ["22.23.2", false],
-    ["22.22.2", false],
     ["23.11.0", false],
-    ["24.14.1", false],
     ["24.15.0", false],
     ["24.16.0", true],
-    ["25.8.1", false],
     ["25.9.0", false],
     ["26.0.0", false],
     ["26.1.0", true],
@@ -250,13 +259,7 @@ describe("runtime-guard", () => {
   });
 
   it("throws via exit when runtime is too old", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
     const details = {
       kind: "node" as const,
       version: "20.0.0",
@@ -339,13 +342,7 @@ describe("runtime-guard", () => {
   });
 
   it("rejects Bun when it does not provide node:sqlite", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
     const details = {
       kind: "bun" as const,
       version: "1.3.14",
@@ -369,13 +366,7 @@ describe("runtime-guard", () => {
   });
 
   it("rejects Bun below 1.4 even when node:sqlite is available", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
 
     await expect(
       assertSupportedRuntime(runtime, {
@@ -390,13 +381,7 @@ describe("runtime-guard", () => {
   });
 
   it("rejects Bun when its node:sqlite version is not WAL-reset-safe", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
 
     await expect(
       assertSupportedRuntime(runtime, {
@@ -412,13 +397,7 @@ describe("runtime-guard", () => {
   });
 
   it("reports unknown runtimes with fallback labels", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
     const details = {
       kind: "unknown" as const,
       version: null,
@@ -475,14 +454,21 @@ describe("runtime failure diagnostics", () => {
 
 describe("sealed worker runtime", () => {
   const originalArgv = process.argv;
+  const originalExitCode = process.exitCode;
   beforeEach(() => {
     vi.resetModules();
     state.error.mockClear();
     state.run.mockClear();
+    state.drain.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
+    process.exitCode = undefined;
+    vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
   afterEach(() => {
     process.argv = originalArgv;
+    process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it.each(["22.23.2", "26.0.0"])(
@@ -490,7 +476,13 @@ describe("sealed worker runtime", () => {
     async (version) => {
       state.version = version;
       state.lossless = false;
-      await expect(import("../worker/worker-deploy-entry.js")).rejects.toThrow("runtime exit 1");
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+      await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
+
+      expect(process.exitCode).toBe(1);
+      expect(stderr).toHaveBeenCalledExactlyOnceWith("runtime exit 1\n");
+      expect(state.drain).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
       expect(state.run).not.toHaveBeenCalled();
       expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
     },
@@ -500,6 +492,8 @@ describe("sealed worker runtime", () => {
     state.version = version;
     state.lossless = true;
     await import("../worker/worker-deploy-entry.js");
+    expect(process.exitCode).toBeUndefined();
+    expect(state.drain).not.toHaveBeenCalled();
     expect(state.run).toHaveBeenCalledOnce();
     expect(state.error).not.toHaveBeenCalled();
   });

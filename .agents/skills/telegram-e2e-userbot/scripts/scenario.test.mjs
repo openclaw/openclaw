@@ -155,3 +155,34 @@ test("projects DM and group recording targets into cron delivery targets", () =>
     cronDeliveryTarget: "-100123",
   });
 });
+
+test("forum topic selection survives scenario parsing and rejects invalid topic ids", () => {
+  const action = { type: "send", atMs: 0, text: "topic proof", forumTopicId: 42 };
+  assert.deepEqual(parseScenario({ actions: [action] }).actions, [action]);
+  for (const forumTopicId of [0, -1, 1.5])
+    assert.throws(() => parseScenario({ actions: [{ ...action, forumTopicId }] }), /forumTopicId/);
+});
+
+test("photo sends allow an empty caption and replyToPrevious targets an earlier send", () => {
+  const photo = { type: "send", atMs: 0, photo: "/tmp/fixture.png" };
+  const reply = { type: "send", atMs: 5, text: "/btw check this", replyToPrevious: true };
+  assert.deepEqual(parseScenario({ actions: [photo, reply] }).actions, [
+    { ...photo, text: "" },
+    reply,
+  ]);
+  assert.deepEqual(parseScenario({ actions: [reply, photo] }).actions, [
+    { ...photo, text: "" },
+    reply,
+  ]);
+  assert.throws(
+    () => parseScenario({ actions: [{ ...photo, atMs: 10 }, reply] }),
+    /replyToPrevious/,
+  );
+  assert.throws(() => parseScenario({ actions: [reply] }), /replyToPrevious/);
+  assert.throws(
+    () =>
+      parseScenario({ actions: [{ type: "send", atMs: 0, text: "x", replyToPrevious: false }] }),
+    /replyToPrevious/,
+  );
+  assert.throws(() => parseScenario({ actions: [{ type: "send", atMs: 0 }] }), /text/);
+});

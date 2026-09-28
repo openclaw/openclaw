@@ -41,7 +41,7 @@ metadata precedence does not change MIME detection when media bytes are loaded o
 
 - Input: local file path **or** HTTP(S) URL.
 - Flow: load into a buffer, detect media kind, then build the outbound payload per kind:
-  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed, even when a stale `.heic` or `.heif` filename remains after conversion. Animated GIFs are never re-encoded, only size-checked.
+  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed, even when a stale `.heic` or `.heif` filename remains after conversion. GIFs and animated WebP images retain their original bytes; images exceeding byte caps or explicit model dimension limits are rejected rather than flattened to one frame.
   - **Audio/voice:** unless already native voice audio (`.ogg`/`.opus`, or `audio/ogg`/`audio/opus`), outbound audio is transcoded via `ffmpeg` to Opus/OGG (48kHz mono, 64kbps, capped at 20 minutes) before sending as a voice note (`ptt: true`).
   - **Video:** pass-through up to 16MB.
   - **Documents:** anything else, up to 100MB, with filename preserved when available.
@@ -99,6 +99,12 @@ image destinations retain their URL punctuation.
 - Audio default: 20MB (override with `tools.media.audio.maxBytes`, or per entry).
 - Video default: 50MB (override with `tools.media.video.maxBytes`, or per entry).
 - Oversize media skips understanding, but the reply still goes through with the original body.
+
+Image description checks the source byte cap before resizing. Recognized images
+are then prepared for the selected model's declared image limits; each fallback
+starts from the same normalized original. Models without declared image limits
+keep those normalized bytes. `agents.defaults.imageQuality` remains an image-tool
+setting and does not change media-understanding preparation.
 
 ## Notes for Tests
 

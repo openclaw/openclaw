@@ -15,7 +15,7 @@ import {
 import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -150,7 +150,9 @@ describe("gateway e2e", () => {
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(persisted.gateway?.auth?.token).toBeUndefined();
       const identity = loadOrCreateDeviceIdentity();
-      expect(loadDeviceAuthToken({ deviceId: identity.deviceId, role: "operator" })).toMatchObject({
+      expect(
+        readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
+      ).toMatchObject({
         scopes: expect.arrayContaining(["operator.admin"]),
       });
       await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
@@ -914,7 +916,7 @@ module.exports = {
           expect(result).toMatchObject({
             done: true,
             status: "error",
-            error: `Error: Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+            error: `Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
           });
           expect(result.step).toBeUndefined();
         }

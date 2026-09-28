@@ -5,6 +5,7 @@ import type { CapabilityProviderFor } from "../../plugins/capability-provider-ru
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 
 type MediaProviderKey =
   | "imageGenerationProviders"
@@ -12,19 +13,7 @@ type MediaProviderKey =
   | "videoGenerationProviders";
 type MediaProviderOptions = { cfg: OpenClawConfig; prepared?: PreparedModelRuntimeSnapshot };
 
-export function acquireImageGenerationToolProviders(params: MediaProviderOptions) {
-  return acquireMediaGenerationToolProviders("imageGenerationProviders", params);
-}
-
-export function acquireMusicGenerationToolProviders(params: MediaProviderOptions) {
-  return acquireMediaGenerationToolProviders("musicGenerationProviders", params);
-}
-
-export function acquireVideoGenerationToolProviders(params: MediaProviderOptions) {
-  return acquireMediaGenerationToolProviders("videoGenerationProviders", params);
-}
-
-async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
+export async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
   key: K,
   params: MediaProviderOptions,
 ) {
@@ -99,21 +88,10 @@ async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
       release,
     };
   } catch (error) {
-    let cleanupFailure: { error: unknown } | undefined;
-    try {
-      await release();
-    } catch (cleanupError) {
-      cleanupFailure = { error: cleanupError };
-    }
-    if (cleanupFailure) {
-      throw new AggregateError(
-        [error, cleanupFailure.error],
-        `${label} provider acquisition and cleanup failed`,
-        {
-          cause: error,
-        },
-      );
-    }
-    throw error;
+    return rethrowAfterMediaCleanup(
+      error,
+      release,
+      `${label} provider acquisition and cleanup failed`,
+    );
   }
 }

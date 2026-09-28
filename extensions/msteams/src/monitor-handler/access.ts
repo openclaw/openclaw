@@ -1,9 +1,10 @@
-// Msteams plugin module implements access behavior.
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import {
+  formatAllowlistMatchMeta,
+  resolveAllowlistMatchSimple,
+} from "openclaw/plugin-sdk/allow-from";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -22,7 +23,7 @@ import type {
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
+import { resolveMSTeamsRouteConfig } from "../policy.js";
 import { looksLikeMSTeamsConversationId } from "../resolve-allowlist.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -161,7 +162,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     allowNameMatching,
   });
 
-  const resolved = await resolveStableChannelMessageIngress({
+  const resolved = await core.channel.inbound.ingress.resolveStable({
     channelId: "msteams",
     accountId: pairing.accountId,
     identity: {
@@ -305,7 +306,7 @@ export async function admitMSTeamsMessage(params: {
       params.log.debug?.("dropping dm (dms disabled)");
       return null;
     }
-    const allowMatch = resolveMSTeamsAllowlistMatch({
+    const allowMatch = resolveAllowlistMatchSimple({
       allowFrom: effectiveDmAllowFrom,
       senderId,
       senderName,
@@ -391,7 +392,7 @@ export async function admitMSTeamsMessage(params: {
       return null;
     }
     if (!senderAccess.allowed) {
-      const allowMatch = resolveMSTeamsAllowlistMatch({
+      const allowMatch = resolveAllowlistMatchSimple({
         allowFrom: effectiveGroupAllowFrom,
         senderId,
         senderName,

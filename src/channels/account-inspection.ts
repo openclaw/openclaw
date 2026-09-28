@@ -5,6 +5,7 @@
  */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccount } from "./account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -102,7 +103,7 @@ export async function resolveInspectedChannelAccount(params: {
       snapshot,
     };
   }
-  const account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  const account = await resolveChannelAccount(params);
   const enabled = resolveChannelAccountEnabled({ plugin: params.plugin, account, cfg: params.cfg });
   const configured = await resolveChannelAccountConfigured({
     plugin: params.plugin,

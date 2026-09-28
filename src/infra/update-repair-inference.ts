@@ -3,8 +3,7 @@ import {
   resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
-import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
+import { hasAvailableAuthForProvider, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
@@ -62,26 +61,32 @@ export async function selectUpdateRepairInference(params: {
         eligibility.set(route, false);
         return false;
       }
-      const authStore = loadAuthProfileStoreForRuntime(route.agentDir, {
-        profileId: route.authProfileId,
-        readOnly: true,
-        allowKeychainPrompt: false,
-        config: route.runConfig,
-        externalCli: { mode: "none" },
-      });
-      const accepted =
-        createModelAuthAvailabilityResolver({
-          cfg: route.runConfig,
-          authStore,
-          agentDir: route.agentDir,
-          externalCliProviderIds: [],
-          allowPreparedRuntimeAuth: false,
-        }).evaluateModelAuth(route.provider, {
-          modelId: route.model,
-          api: configuredModel?.api ?? model?.api,
-          baseUrl: params.config.models?.providers?.[route.provider]?.baseUrl ?? model?.baseUrl,
-          pinnedProfileId: route.authProfileId,
-        }).availability === true;
+      const auth = {
+        provider: route.provider,
+        cfg: route.runConfig,
+        agentDir: route.agentDir,
+        modelId: route.model,
+        modelApi: configuredModel?.api ?? model?.api,
+      };
+      let accepted: boolean;
+      try {
+        // Runtime auth owns inherited profiles and OAuth refresh. Browse-only
+        // readiness cannot decide whether a refreshable credential can run.
+        accepted = route.authProfileId
+          ? Boolean(
+              await resolveApiKeyForProviderCore({
+                ...auth,
+                profileId: route.authProfileId,
+                lockedProfile: true,
+                allowAuthProfileFallback: false,
+                modelBaseUrl:
+                  params.config.models?.providers?.[route.provider]?.baseUrl ?? model?.baseUrl,
+              }),
+            )
+          : await hasAvailableAuthForProvider(auth);
+      } catch {
+        accepted = false;
+      }
       signal.throwIfAborted();
       eligibility.set(route, accepted);
       return accepted;

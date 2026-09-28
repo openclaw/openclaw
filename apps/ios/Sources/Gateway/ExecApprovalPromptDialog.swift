@@ -107,7 +107,7 @@ private struct ExecApprovalPromptCard: View {
     private var reviewContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                if self.isPluginApproval {
+                if self.prompt.kind != "exec" {
                     Text(verbatim: self.prompt.commandText)
                         .font(OpenClawType.headline)
                     if let description = self.normalized(self.prompt.descriptionText) {
@@ -124,7 +124,7 @@ private struct ExecApprovalPromptCard: View {
                 }
             }
 
-            if !self.isPluginApproval {
+            if self.prompt.kind == "exec" {
                 Text(self.prompt.commandText)
                     .font(OpenClawType.mono)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -203,6 +203,9 @@ private struct ExecApprovalPromptCard: View {
     private var actionFooter: some View {
         VStack(spacing: 10) {
             if self.resolvedText == nil {
+                if self.prompt.kind == "system-agent" {
+                    ApprovalDashboardReviewButton(prompt: self.prompt)
+                }
                 if self.prompt.allowsAllowOnce {
                     Button {
                         self.onAllowOnce()
@@ -320,6 +323,52 @@ private struct ExecApprovalPromptCard: View {
             AttributedString(
                 localized: "about ^[\(hours) hour](inflect: true)")
                 .characters)
+    }
+}
+
+struct ApprovalDashboardReviewButton: View {
+    @Environment(NodeAppModel.self) private var appModel
+    @State private var isPresented = false
+    @State private var authorityGeneration: UInt64?
+    let prompt: NodeAppModel.ExecApprovalPrompt
+
+    var body: some View {
+        Group {
+            if self.isCurrentPrompt {
+                Button {
+                    guard self.isCurrentPrompt else { return }
+                    self.authorityGeneration = self.appModel.operatorAuthorityGeneration
+                    self.isPresented = true
+                } label: {
+                    Text("Review in Dashboard")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .accessibilityIdentifier("approval-dashboard-review")
+            } else {
+                Text("Open Dashboard on an authorized device to review this approval.")
+                    .font(OpenClawType.footnote)
+            }
+        }
+        .sheet(isPresented: self.$isPresented) {
+            if self.isCurrentPrompt,
+               self.authorityGeneration == self.appModel.operatorAuthorityGeneration,
+               let id = AuthenticatedControlUI.percentEncodedPathSegment(self.prompt.id)
+            {
+                DashboardPageScreen(
+                    path: "/approve/\(id)",
+                    title: String(localized: "Review approval"),
+                    onClose: { self.isPresented = false })
+            }
+        }
+        .onChange(of: self.appModel.operatorAuthorityGeneration) { _, _ in
+            self.isPresented = false
+        }
+    }
+
+    private var isCurrentPrompt: Bool {
+        self.appModel.hasOperatorAdminScope &&
+            self.prompt.attentionSource?.authorityGeneration == self.appModel.operatorAuthorityGeneration &&
+            self.appModel.pendingExecApprovalInboxItems.contains { $0.prompt == self.prompt }
     }
 }
 

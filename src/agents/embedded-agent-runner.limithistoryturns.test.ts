@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { limitHistoryTurns } from "./embedded-agent-runner/history.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 describe("limitHistoryTurns", () => {
   const mockUsage = {
@@ -29,28 +30,20 @@ describe("limitHistoryTurns", () => {
     }) as AgentMessage;
 
   const assistantTextMessage = (text: string): AgentMessage =>
-    ({
-      role: "assistant",
+    makeAgentAssistantMessage({
       content: [{ type: "text", text }],
-      stopReason: "stop",
-      api: "openai-responses",
-      provider: "openai",
       model: "mock-1",
       usage: mockUsage,
       timestamp: Date.now(),
-    }) as AgentMessage;
+    });
 
   const assistantToolCallMessage = (id: string): AgentMessage =>
-    ({
-      role: "assistant",
+    makeAgentAssistantMessage({
       content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
-      stopReason: "stop",
-      api: "openai-responses",
-      provider: "openai",
       model: "mock-1",
       usage: mockUsage,
       timestamp: Date.now(),
-    }) as AgentMessage;
+    });
 
   const firstText = (message: AgentMessage): string | undefined => {
     // Tests only inspect visible text; helper hides provider-specific content

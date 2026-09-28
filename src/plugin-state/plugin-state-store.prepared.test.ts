@@ -1,15 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabase,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
+import { lookupPluginStateEntry } from "./plugin-state-store.kernel.js";
+import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
+import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
@@ -31,6 +37,39 @@ afterAll(async () => {
 });
 
 describe("plugin state prepared queries", () => {
+  it("uses the supplied connection and keeps registration eviction in its owner's transaction", () => {
+    const scope = { pluginId: "discord", namespace: "owned-kernel" };
+    const defaultStore = createPluginStateSyncKeyedStore<string>(scope.pluginId, {
+      namespace: scope.namespace,
+      maxEntries: 1,
+    });
+    defaultStore.register("original", "default database");
+    const pathname = testState.statePath("kernel-owned.sqlite");
+    const database = openOpenClawStateDatabase({ path: pathname, env: testState.env });
+    const options = { database, env: testState.env };
+    const entry = { ...scope, maxEntries: 1, overflowPolicy: "evict-oldest" as const };
+    runOpenClawStateWriteTransaction(() => {
+      registerPluginStateEntry(database, { ...entry, key: "original", valueJson: '"owned"' });
+    }, options);
+
+    const aborted = new Error("abort the caller's transaction");
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        registerPluginStateEntry(database, { ...entry, key: "pending", valueJson: '"pending"' });
+        expect(lookupPluginStateEntry(database, { ...scope, key: "pending" })).toBe("pending");
+        expect(lookupPluginStateEntry(database, { ...scope, key: "original" })).toBeUndefined();
+        throw aborted;
+      }, options),
+    ).toThrow(aborted);
+    expect(lookupPluginStateEntry(database, { ...scope, key: "pending" })).toBeUndefined();
+    expect(lookupPluginStateEntry(database, { ...scope, key: "original" })).toBe("owned");
+    expect(defaultStore.lookup("original")).toBe("default database");
+    closeOpenClawStateDatabaseByPath(pathname);
+    const reopened = openOpenClawStateDatabase({ path: pathname, env: testState.env });
+    expect(lookupPluginStateEntry(reopened, { ...scope, key: "original" })).toBe("owned");
+    expect(lookupPluginStateEntry(reopened, { ...scope, key: "pending" })).toBeUndefined();
+  });
+
   it("compiles exact reads once per connection with fresh scope and expiry bindings", () => {
     const now = Date.now();
     seedPluginStateEntriesForTests([
@@ -77,10 +116,14 @@ describe("plugin state prepared queries", () => {
     }
   });
 
-  it.each(["register", "registerIfAbsent"] as const)(
-    "reuses %s compilation with fresh write bindings after reopening",
-    (operation) => {
-      const options = { namespace: "prepared-writes", maxEntries: 20 };
+  it.each([
+    ["register", "evict-oldest"],
+    ["register", "reject-new"],
+    ["registerIfAbsent", "evict-oldest"],
+  ] as const)(
+    "reuses %s %s write and quota compilation with fresh bindings after reopening",
+    (operation, overflowPolicy) => {
+      const options = { namespace: "prepared-writes", maxEntries: 20, overflowPolicy };
       const stores = [
         createPluginStateSyncKeyedStore<string>("discord", options),
         createPluginStateSyncKeyedStore<string>("telegram", options),
@@ -124,6 +167,14 @@ describe("plugin state prepared queries", () => {
               (result) => result.type === "return" && result.value.sql.startsWith("insert"),
             );
             expect(writes).toHaveLength(1);
+            const counts = compile.mock.results.filter(
+              (result) =>
+                result.type === "return" &&
+                result.value.sql.startsWith(
+                  'select count(*) as "count" from "plugin_state_entries"',
+                ),
+            );
+            expect(counts).toHaveLength(1);
           } finally {
             compile.mockRestore();
           }

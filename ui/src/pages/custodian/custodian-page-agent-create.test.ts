@@ -1,15 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
@@ -21,65 +17,32 @@ type TestCustodianPage = HTMLElement & {
 };
 
 function createContext(request: ReturnType<typeof vi.fn>) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["openclaw.chat"] },
-    },
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
   const calls: string[] = [];
   const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
   const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
-  const gateway = {
-    snapshot,
-    connection: {
-      gatewayUrl: "ws://gateway.test/control",
-      token: "",
-      bootstrapToken: "",
-      password: "",
-    },
-    setSessionKey,
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } as unknown as ApplicationGateway;
   const refreshList = vi.fn().mockResolvedValue({
     defaultId: "main",
     mainKey: "main",
     scope: "global",
     agents: [{ id: "main" }, { id: "researcher" }],
   });
-  const context = {
-    gateway,
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "global",
-          agents: [
-            { id: "main", model: { primary: "openai/gpt-5.5" } },
-            { id: "researcher", model: { primary: "openai/gpt-5.5" } },
-          ],
-        },
-      },
-      refreshList,
-      subscribe: () => () => undefined,
+  const harness = createCustodianContext(request, ["openclaw.chat"], {
+    agentsList: {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [
+        { id: "main", model: { primary: "openai/gpt-5.5" } },
+        { id: "researcher", model: { primary: "openai/gpt-5.5" } },
+      ],
     },
-    agentSelection: { state: { selectedId: "main" }, set: setAgent },
-    basePath: "",
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
+  });
+  const context = {
+    ...harness.context,
+    gateway: { ...harness.context.gateway, setSessionKey },
+    agents: { ...harness.context.agents, refreshList },
+    agentSelection: { ...harness.context.agentSelection, set: setAgent },
+  } satisfies ApplicationContext;
   return { calls, context, refreshList, setAgent, setSessionKey };
 }
 

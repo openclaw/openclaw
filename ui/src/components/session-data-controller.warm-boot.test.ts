@@ -115,6 +115,7 @@ describe("sidebar warm roster publication", () => {
         selectedAgentIdForSessions: () => "main",
         sidebarSessionStatusFilter: () => statusFilter,
         sidebarSessionOwnerFilter: () => ({ ownerId: null, involvingMe: false }),
+        sessionCatalogIdsWithoutVisibleRows: () => [],
         querySelector: () => null,
       } satisfies SessionDataControllerHost;
       const controller = new SessionDataController(host);

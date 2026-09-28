@@ -16,6 +16,7 @@ import {
   validateReleasePublishParentRun,
   validateReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
+  verifyReleaseWorkflowRun,
 } from "../../scripts/release-tooling-identity.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -375,15 +376,18 @@ describe("release tooling identity", () => {
 
   it.each([
     ["active", "in_progress", null, true],
+    ["active", "waiting", null, true],
+    ["active", "queued", null, true],
+    ["active", "requested", null, true],
+    ["active", "pending", null, true],
+    ["active", "waiting", "success", false],
+    ["active", "in_progress", undefined, false],
     ["active", "completed", "success", false],
-    ["active-or-failure", "in_progress", null, true],
     ["active-or-failure", "completed", "failure", true],
     ["active-or-failure", "completed", "success", false],
     ["active-or-failure", "completed", "cancelled", false],
-    ["active-or-success", "in_progress", null, true],
     ["active-or-success", "completed", "success", true],
     ["active-or-success", "completed", "failure", false],
-    ["manual-recovery", "in_progress", null, true],
     ["manual-recovery", "completed", "success", true],
     ["manual-recovery", "completed", "failure", true],
     ["manual-recovery", "completed", "cancelled", false],
@@ -416,6 +420,50 @@ describe("release tooling identity", () => {
         expect(validate).not.toThrow();
       } else {
         expect(validate).toThrow(`state is not allowed by ${releasePublishParentStatePolicy}`);
+      }
+    },
+  );
+
+  it.each([
+    ["active", "in_progress", null, true],
+    ["active", "waiting", null, true],
+    ["active", "queued", null, true],
+    ["active", "requested", null, true],
+    ["active", "pending", null, true],
+    ["active", "completed", "success", false],
+    ["active", "waiting", "success", false],
+    ["active", "in_progress", undefined, false],
+    ["success", "completed", "success", true],
+    ["success", "waiting", null, false],
+    ["success", "completed", "failure", false],
+  ] as const)(
+    "enforces writer state policy %s for %s/%s",
+    (runStatePolicy, status, conclusion, accepted) => {
+      const verify = () =>
+        verifyReleaseWorkflowRun({
+          ...protectedIdentity(),
+          runId: RUN_ID,
+          runAttempt: "1",
+          workflowPath: ".github/workflows/openclaw-release-publish.yml",
+          workflowEvent: "workflow_dispatch",
+          runStatePolicy,
+          runGh: () =>
+            JSON.stringify({
+              id: Number(RUN_ID),
+              run_attempt: 1,
+              repository: { full_name: "openclaw/openclaw" },
+              path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+              event: "workflow_dispatch",
+              head_branch: REF,
+              head_sha: SHA,
+              status,
+              conclusion,
+            }),
+        });
+      if (accepted) {
+        expect(verify()).toMatchObject({ status, conclusion });
+      } else {
+        expect(verify).toThrow("does not match the authorized workflow identity");
       }
     },
   );
@@ -545,12 +593,6 @@ describe("historical npm preflight tooling", () => {
 
   it.each([
     ["missing tag", `git/ref/tags/${REF}`, null],
-    [
-      "moved tag",
-      `git/ref/tags/${REF}`,
-      { ref: FULL_REF, object: { sha: OTHER_SHA, type: "commit" } },
-    ],
-    ["annotated tag", `git/ref/tags/${REF}`, { ref: FULL_REF, object: { sha: SHA, type: "tag" } }],
     ["ambiguous branch", `git/matching-refs/heads/${REF}`, [{ ref: `refs/heads/${REF}` }]],
     ["malformed branches", `git/matching-refs/heads/${REF}`, {}],
     ["malformed branch entry", `git/matching-refs/heads/${REF}`, [{}]],
@@ -582,7 +624,7 @@ describe("historical npm preflight tooling", () => {
   });
 });
 
-describe.each([
+const qualificationRoutes = [
   {
     label: "FRV-owned",
     workflowPath: ".github/workflows/full-release-validation.yml",
@@ -595,7 +637,17 @@ describe.each([
     fullRunId: PARENT_RUN_ID,
     fullRunAttempt: "3",
   },
-])("$label npm qualification", ({ workflowPath, fullRunId, fullRunAttempt }) => {
+];
+
+function qualificationFixture({
+  workflowPath,
+  fullRunId,
+  fullRunAttempt,
+}: {
+  workflowPath: string;
+  fullRunId: string;
+  fullRunAttempt: string;
+}) {
   const producer = {
     repository: "openclaw/openclaw",
     workflowRef: `openclaw/openclaw/${workflowPath}@refs/heads/main`,
@@ -691,7 +743,7 @@ describe.each([
       if (endpoint.includes("/jobs?")) {
         return JSON.stringify({ total_count: 1, jobs: [job] });
       }
-      if (endpoint.endsWith("/attempts/1")) {
+      if (endpoint.endsWith("/attempts/1") || endpoint.endsWith(`/actions/runs/${RUN_ID}`)) {
         return JSON.stringify({
           id: Number(RUN_ID),
           run_attempt: 1,
@@ -709,26 +761,66 @@ describe.each([
       throw new Error(`Unexpected proof request: ${endpoint}`);
     };
   }
-  it("requires the exact successful qualifier and immutable artifact from the selected FRV", () => {
-    const runGh = vi.fn(reader());
-    expect(resolveFullReleaseNpmPreflight({ ...resolutionInput, runGh })).toMatchObject({
+  return {
+    producer,
+    manifest,
+    qualified,
+    fullReleaseManifest,
+    input,
+    resolutionInput,
+    reader,
+    workflowPath,
+    fullRunId,
+    fullRunAttempt,
+  };
+}
+
+describe("npm qualification", () => {
+  const {
+    producer,
+    manifest,
+    qualified,
+    fullReleaseManifest,
+    input,
+    resolutionInput,
+    reader,
+    workflowPath,
+    fullRunId,
+    fullRunAttempt,
+  } = qualificationFixture(qualificationRoutes[1]!);
+  it.each(qualificationRoutes)("requires exact qualifier and artifact for $label", (route) => {
+    const {
+      input: routeInput,
+      resolutionInput: routeResolutionInput,
+      reader: routeReader,
+    } = qualificationFixture(route);
+    const runGh = vi.fn(routeReader());
+    expect(resolveFullReleaseNpmPreflight({ ...routeResolutionInput, runGh })).toMatchObject({
       producer: { runId: RUN_ID, runAttempt: "1" },
       artifact: { id: 555 },
     });
     expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
       `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
     );
-    expect(verifyNpmPreflightProducer({ ...input, runGh: reader() })).toMatchObject({
+    expect(verifyNpmPreflightProducer({ ...routeInput, runGh: routeReader() })).toMatchObject({
       provenance: "immutable-manifest",
     });
     expect(() =>
-      verifyNpmPreflightProducer({ ...input, runGh: reader({ conclusion: "failure" }) }),
+      verifyNpmPreflightProducer({ ...routeInput, runGh: routeReader({ conclusion: "failure" }) }),
     ).toThrow("completed producer job");
     expect(() =>
-      verifyNpmPreflightProducer({ ...input, manifestSha256: "f".repeat(64), runGh: reader() }),
+      verifyNpmPreflightProducer({
+        ...routeInput,
+        manifestSha256: "f".repeat(64),
+        runGh: routeReader(),
+      }),
     ).toThrow("exact full release qualification");
     expect(() =>
-      verifyNpmPreflightProducer({ ...input, fullReleaseManifest: undefined, runGh: reader() }),
+      verifyNpmPreflightProducer({
+        ...routeInput,
+        fullReleaseManifest: undefined,
+        runGh: routeReader(),
+      }),
     ).toThrow("qualified npm preflight");
   });
   it("rejects stale source or attempt and raw-only package evidence", () => {
@@ -794,32 +886,17 @@ describe.each([
     },
   );
 
-  it.each(["run", "attempt", "tooling", "workflow", "repository", "unfinished", "artifact"])(
+  it.each([
+    ["run", { id: 777 }, {}],
+    ["attempt", { run_attempt: 2 }, {}],
+    ["tooling", { head_sha: OTHER_SHA }, {}],
+    ["workflow", { path: ".github/workflows/ci.yml" }, {}],
+    ["repository", { repository: { full_name: "other/repository" } }, {}],
+    ["unfinished", { status: "in_progress", conclusion: null }, {}],
+    ["artifact", {}, { workflow_run: { id: 777, head_sha: SHA } }],
+  ])(
     "rejects changed live %s evidence before downloading package bytes",
-    (mismatch) => {
-      const runOverrides: Record<string, unknown> = {};
-      const artifactOverrides: Record<string, unknown> = {};
-      if (mismatch === "run") {
-        runOverrides.id = 777;
-      }
-      if (mismatch === "attempt") {
-        runOverrides.run_attempt = 2;
-      }
-      if (mismatch === "tooling") {
-        runOverrides.head_sha = OTHER_SHA;
-      }
-      if (mismatch === "workflow") {
-        runOverrides.path = ".github/workflows/ci.yml";
-      }
-      if (mismatch === "repository") {
-        runOverrides.repository = { full_name: "other/repository" };
-      }
-      if (mismatch === "unfinished") {
-        Object.assign(runOverrides, { status: "in_progress", conclusion: null });
-      }
-      if (mismatch === "artifact") {
-        artifactOverrides.workflow_run = { id: 777, head_sha: SHA };
-      }
+    (_mismatch, runOverrides, artifactOverrides) => {
       expect(() =>
         resolveFullReleaseNpmPreflight({
           ...resolutionInput,

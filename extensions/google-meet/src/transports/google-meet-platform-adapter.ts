@@ -6,13 +6,15 @@ import {
   type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { asRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import { normalizeMeetUrl } from "../meet-url.js";
 import { createMeetWithBrowserProxyOnNode } from "./chrome-create.js";
+import { meetTranscriptScript } from "./google-meet-caption-scripts.js";
 import {
+  meetAudioCaptureScript,
   meetLeaveScript,
   meetStatusScript,
-  meetTranscriptScript,
 } from "./google-meet-page-scripts.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./google-meet-platform-constants.js";
 import {
@@ -43,10 +45,7 @@ type GoogleMeetDialInPlan = {
 };
 
 function parsePermissionGrantNotes(result: unknown): string[] {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
-    ? record.unsupportedPermissions.filter((value): value is string => typeof value === "string")
-    : [];
+  const unsupportedPermissions = filterStringEntries(asRecord(result).unsupportedPermissions);
   const notes = ["Granted Meet microphone/camera permissions through browser control."];
   if (unsupportedPermissions.includes("speakerSelection")) {
     notes.push("Chrome did not accept the optional Meet speaker-selection permission.");
@@ -129,6 +128,7 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   browser: {
+    buildAudioCaptureScript: meetAudioCaptureScript,
     allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       meetStatusScript({

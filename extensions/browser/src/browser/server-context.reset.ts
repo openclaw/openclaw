@@ -9,7 +9,11 @@ import {
   assertProfileLifecycleContext,
   beginProfileTransition,
 } from "./server-context.lifecycle.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+import type {
+  BrowserServerState,
+  ProfileContext,
+  ProfileRuntimeState,
+} from "./server-context.types.js";
 import { movePathToTrash } from "./trash.js";
 
 type ResetDeps = {
@@ -20,9 +24,7 @@ type ResetDeps = {
   resolveOpenClawUserDataDir: (profileName: string) => string;
 };
 
-type ResetOps = {
-  resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
-};
+type ResetOps = Pick<ProfileContext, "resetProfile">;
 
 /** Builds the reset-profile operation for one resolved browser profile. */
 export function createProfileResetOps({
@@ -51,6 +53,7 @@ export function createProfileResetOps({
       state: state(),
       runtime,
       reason: "profile reset requested",
+      managedChrome: "release-profile-data",
       afterCleanup: async () => {
         if (!fs.existsSync(userDataDir)) {
           return;

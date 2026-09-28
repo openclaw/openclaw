@@ -1,19 +1,23 @@
 // Nostr profile HTTP operations for the channels page: gateway REST calls for
 // publishing and importing the relay profile, plus validation-error parsing.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NostrProfile } from "../../api/types.ts";
+import { fetchWithControlUiAuth, readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
 
-type NostrProfileHttpResult<T> = {
-  data: T | null;
-  response: Response;
+type NostrProfileRequest = {
+  accountId: string;
+  authCandidates: readonly string[];
+  isCurrent: () => boolean;
 };
 
-async function requestNostrProfile<T>(
+async function requestNostrProfile(
   url: string,
-  init: Omit<RequestInit, "signal">,
-): Promise<NostrProfileHttpResult<T>> {
+  init: { method: string; headers: Record<string, string>; body: string },
+  auth: NostrProfileRequest,
+) {
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -23,16 +27,13 @@ async function requestNostrProfile<T>(
     NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
   );
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
-    let data: T | null = null;
-    try {
-      data = (await response.json()) as T;
-    } catch (error) {
-      if (controller.signal.aborted) {
-        throw controller.signal.reason ?? error;
-      }
-    }
-    return { data, response };
+    const response = await fetchWithControlUiAuth(
+      url,
+      { ...init, signal: controller.signal },
+      auth.authCandidates,
+      auth.isCurrent,
+    );
+    return await readControlUiJsonResponse(response, controller.signal);
   } finally {
     clearTimeout(timeout);
   }
@@ -64,42 +65,54 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
 }
 
-export async function putNostrProfile(params: {
-  accountId: string;
-  headers: Record<string, string>;
-  values: NostrProfile;
-}) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    persisted?: boolean;
-  }>(buildNostrProfileUrl(params.accountId), {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      ...params.headers,
+export async function putNostrProfile(
+  params: NostrProfileRequest & {
+    values: NostrProfile;
+  },
+) {
+  return await requestNostrProfile(
+    buildNostrProfileUrl(params.accountId),
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(params.values),
     },
-    body: JSON.stringify(params.values),
-  });
+    params,
+  );
 }
 
-export async function importNostrProfile(params: {
-  accountId: string;
-  headers: Record<string, string>;
-}) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  }>(buildNostrProfileUrl(params.accountId, "/import"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...params.headers,
+function isNostrProfile(value: unknown): value is NostrProfile {
+  return (
+    isRecord(value) &&
+    ["name", "displayName", "about", "picture", "banner", "website", "nip05", "lud16"].every(
+      (field) =>
+        value[field] === undefined || value[field] === null || typeof value[field] === "string",
+    )
+  );
+}
+
+export async function importNostrProfile(params: NostrProfileRequest) {
+  const result = await requestNostrProfile(
+    buildNostrProfileUrl(params.accountId, "/import"),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ autoMerge: true }),
     },
-    body: JSON.stringify({ autoMerge: true }),
-  });
+    params,
+  );
+  return {
+    ...result,
+    data: result.data && {
+      ...result.data,
+      ok: result.data.ok,
+      saved: result.data.saved,
+      imported: isNostrProfile(result.data.imported) ? result.data.imported : undefined,
+      merged: isNostrProfile(result.data.merged) ? result.data.merged : undefined,
+    },
+  };
 }

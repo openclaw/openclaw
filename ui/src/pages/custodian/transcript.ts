@@ -4,6 +4,7 @@ import type {
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -17,6 +18,7 @@ import {
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -36,6 +38,8 @@ export type CustodianMessage = {
   at: number;
   question: CustodianStructuredQuestion | null;
   step: WizardStep | null;
+  /** Gateway-recorded optional welcome; notices and required input remain visible. */
+  optionalWelcome?: boolean;
 };
 
 export function createCustodianMessage(
@@ -57,7 +61,10 @@ export function createCustodianReplyMessage(
   const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
   return silentReply && !question && !step
     ? null
-    : createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step);
+    : {
+        ...createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step),
+        optionalWelcome: result.optionalWelcome === true,
+      };
 }
 
 export function hasUnresolvedCustodianQuestion(
@@ -102,12 +109,22 @@ export function custodianErrorMessage(error: unknown): string {
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
   const rawMessage = { role: message.role, content: message.text };
+  const normalized = normalizeMessage(rawMessage);
+  const visibleContent = resolveMessageVisibleContent(rawMessage, normalized);
   return {
     kind: "group",
     key,
     role: message.role,
-    messages: [{ message: rawMessage, key }],
-    visibleContent: resolveMessageVisibleContent(rawMessage, normalizeMessage(rawMessage)),
+    messages: [
+      {
+        message: rawMessage,
+        key,
+        hasVisibleContent:
+          visibleContent === "non-text" ||
+          Boolean(resolveMessageDisplayMarkdown(rawMessage, normalized).trim()),
+      },
+    ],
+    visibleContent,
     timestamp: message.at,
     isStreaming: false,
   };
@@ -292,7 +309,6 @@ function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterI
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
   boundaryAfterId: number | null;
-  assistantAvatar: string;
   showQuestion: boolean;
   questionDisabled: boolean;
   showWizardStep: boolean;
@@ -316,7 +332,7 @@ export function renderCustodianTranscriptEntry(params: {
             showReasoning: false,
             showToolCalls: false,
             assistantName: t("custodian.title"),
-            assistantAvatar: params.assistantAvatar,
+            agentId: SYSTEM_AGENT_ID,
           })
         : nothing
     }

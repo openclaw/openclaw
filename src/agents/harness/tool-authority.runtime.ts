@@ -1,10 +1,16 @@
 import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
+import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityInput,
 } from "../../auto-reply/reply/reply-tool-authority.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
+import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import {
   getGatewayToolCallerIdentity,
@@ -31,6 +37,7 @@ type ToolAuthorityAttempt = Pick<
   | "runId"
   | "abortSignal"
   | "toolAuthorityFingerprint"
+  | "userTurnTranscriptRecorder"
 > & { hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"] };
 
 /** Execution-only: policy preparation must finish before authority reaches a publisher. */
@@ -54,6 +61,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     originatingChannel: attempt.messageChannel,
     toolsAllow: attempt.toolsAllow,
     disableTools: attempt.disableTools,
+    operatorAuthority: readAdmittedRunOperatorAuthority(admitted),
     run: {
       ...attempt,
       model: attempt.modelId,
@@ -79,6 +87,9 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     assertActive();
   }
   const fingerprint = operation ? operation.bindToolAuthorityRoute(route) : direct?.fingerprint();
+  const personalToolParticipants = operation
+    ? operation.personalToolParticipants
+    : createReplyTurnParticipants(direct?.personalToolOwner);
   function assertActive() {
     if (
       !live ||
@@ -102,35 +113,44 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
       throw new Error("embedded tool authority lost its source execution claim");
     }
   }
-  const questionAuthority = sessionKey
-    ? createAgentQuestionAnswerAuthority({
-        sessionKey,
-        fingerprint,
-        project: (caller) =>
-          operation
-            ? operation.projectToolAuthorityFingerprint(caller)
-            : direct?.project(caller, route),
-        assertActive: () => {
-          assertActive();
-          if (
-            operation &&
-            (resolveActiveReplyOperationForSessionId(sessionId) !== operation ||
-              operation.toolAuthorityRoute?.provider !== route.provider ||
-              operation.toolAuthorityRoute.model !== route.model ||
-              operation.toolAuthorityFingerprint !== fingerprint)
-          ) {
-            throw new Error("question creator reply authority is no longer active");
-          }
-        },
-      })
-    : undefined;
-  if (attempt.hostCapabilities && questionAuthority) {
-    registerAgentHarnessQuestionAnswerAuthority(attempt.hostCapabilities, questionAuthority);
-  }
+  const assertQuestionActive = () => {
+    assertActive();
+    if (
+      operation &&
+      (resolveActiveReplyOperationForSessionId(sessionId) !== operation ||
+        operation.toolAuthorityRoute?.provider !== route.provider ||
+        operation.toolAuthorityRoute.model !== route.model ||
+        operation.toolAuthorityFingerprint !== fingerprint)
+    ) {
+      throw new Error("question creator reply authority is no longer active");
+    }
+  };
   const runPrepared = () =>
-    withAgentQuestionAnswerAuthority(questionAuthority, () =>
-      run({ ...attempt, toolAuthorityFingerprint: fingerprint }),
+    withSessionTranscriptQuestionAnswers(
+      attempt.userTurnTranscriptRecorder,
+      assertQuestionActive,
+      (admitTranscriptAnswer) => {
+        const questionAuthority = sessionKey
+          ? createAgentQuestionAnswerAuthority({
+              sessionKey,
+              fingerprint,
+              project: (caller) =>
+                operation
+                  ? operation.projectToolAuthorityFingerprint(caller)
+                  : direct?.project(caller, route),
+              assertActive: assertQuestionActive,
+              admitTranscriptAnswer,
+            })
+          : undefined;
+        if (attempt.hostCapabilities && questionAuthority) {
+          registerAgentHarnessQuestionAnswerAuthority(attempt.hostCapabilities, questionAuthority);
+        }
+        return withAgentQuestionAnswerAuthority(questionAuthority, () =>
+          run({ ...attempt, toolAuthorityFingerprint: fingerprint }),
+        );
+      },
     );
+
   try {
     if (!agentId || !sessionKey) {
       return await runPrepared();
@@ -140,6 +160,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
         agentId,
         sessionKey,
         operationalRunInstance: instance,
+        personalToolParticipants,
         embeddedRunToolAuthorityBinding: (registration) => {
           assertActive();
           const { handle } = registration;
@@ -168,7 +189,9 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               operation.toolAuthorityRoute.model === route.model);
           assertRegistered();
           return {
+            personalToolParticipants,
             source: operation ? "reply" : "attempt",
+            sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
             assertActive: assertRegistered,
             project: (overlay) => {
               assertRegistered();
@@ -189,5 +212,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   } finally {
     // Retained ALS callbacks do not extend the attempt's authority.
     live = false;
+    if (!operation) {
+      personalToolParticipants?.close();
+    }
   }
 }

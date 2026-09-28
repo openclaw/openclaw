@@ -15,9 +15,9 @@ import {
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
 import {
-  cleanupTimedOutCronAgentRun,
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
+  settleTimedOutCronRun,
 } from "./agent-watchdog.js";
 import { abortErrorMessage, isSetupTimeoutErrorText } from "./execution-errors.js";
 import {
@@ -25,20 +25,19 @@ import {
   trackServiceCronRunReceiptSettlement,
 } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
-  type ExecuteJobCoreOptions,
   type CronJobRunResult,
+  type ExecuteJobCoreOptions,
   type IsolatedAgentSetupTimeoutSignal,
   runsDetachedFromMainSession,
 } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
+  type CronRunProgress,
   resolveInterruptedRunProgress,
   withPrimaryWebhookInterruption,
   withPrimaryWebhookTrace,
-  type CronRunProgress,
 } from "./timer-job-runner.interruption.js";
 import { resolveDeliveryState } from "./timer-trigger.js";
 
@@ -53,7 +52,7 @@ type CronCoreRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
-  runReceipt?: import("../store/run-receipt-store.js").CronRunReceiptHandle;
+  runReceipt?: import("../store/run-receipt.types.js").CronRunReceiptHandle;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
 };
 
@@ -76,7 +75,12 @@ async function deliverPrimaryWebhook(
     return result;
   }
   const undelivered = (error?: string, deliverySuppressionReason?: "empty") =>
-    withPrimaryWebhookTrace({ job, result, delivered: false, error, deliverySuppressionReason });
+    withPrimaryWebhookTrace({
+      job,
+      result,
+      outcome: { status: "not-delivered", error },
+      deliverySuppressionReason,
+    });
   if (result.status !== "error" && !(typeof result.summary === "string" && result.summary.trim())) {
     return settle(undelivered(undefined, "empty"));
   }
@@ -97,13 +101,17 @@ async function deliverPrimaryWebhook(
   assertRunCurrent?.();
 
   const startedAt = job.state.runningAtMs;
-  const deliveredResult = withPrimaryWebhookTrace({ job, result, delivered: true });
+  const deliveredResult = withPrimaryWebhookTrace({
+    job,
+    result,
+    outcome: { status: "delivered" },
+  });
   try {
-    await state.deps.sendCronWebhook({
+    const outcome = await state.deps.sendCronWebhook({
       job,
       abortSignal,
-      onDeliveryAccepted: () => {
-        settle(deliveredResult);
+      onDeliveryState: (delivery) => {
+        progress.webhookDelivery = delivery;
       },
       event: {
         jobId: job.id,
@@ -127,20 +135,30 @@ async function deliverPrimaryWebhook(
         usage: result.usage,
       },
     });
+    if (outcome.error) {
+      state.deps.log.warn({ jobId: job.id, err: outcome.error }, "cron: webhook delivery failed");
+    }
     if (progress.settledDeliveryResult) {
       return progress.settledDeliveryResult;
     }
     if (abortSignal.aborted) {
-      return undelivered(interruptionError());
+      return withPrimaryWebhookInterruption({ job, result, outcome, error: interruptionError() });
     }
-    return settle(deliveredResult);
+    return settle(withPrimaryWebhookTrace({ job, result, outcome }));
   } catch (error) {
     if (progress.settledDeliveryResult) {
       return progress.settledDeliveryResult;
     }
     const deliveryError = abortSignal.aborted ? interruptionError() : formatErrorMessage(error);
     state.deps.log.warn({ jobId: job.id, err: deliveryError }, "cron: webhook delivery failed");
-    return settle(undelivered(deliveryError));
+    return settle(
+      withPrimaryWebhookTrace({
+        job,
+        result,
+        outcome: progress.webhookDelivery ?? { status: "unknown" },
+        error: deliveryError,
+      }),
+    );
   }
 }
 
@@ -152,6 +170,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
+  let commandSettlement: Promise<CronCoreRunOutcome> | undefined;
   const assertRunCurrent = opts?.runReceipt
     ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!, opts.activeJobMarker)
     : undefined;
@@ -172,7 +191,17 @@ async function executeJobCoreWithTimeoutUnfinalized(
       return settled;
     }
     if (interruption !== "cancelled") {
-      await cleanupTimedOutCronAgentRun(state, job, interruption.timeoutMs, execution);
+      await settleTimedOutCronRun(state, job, interruption.timeoutMs, execution, commandSettlement);
+      if (commandSettlement) {
+        const settledAfterCleanup = resolveInterruptedRunProgress({
+          progress,
+          job,
+          error: deliveryError,
+        });
+        if (settledAfterCleanup) {
+          return settledAfterCleanup;
+        }
+      }
     }
     const isolatedAgentSetupTimeout =
       interruption !== "cancelled" &&
@@ -261,7 +290,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
       } else {
         accumulateExecution(info);
       }
-      tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
     };
     const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
     const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
@@ -281,19 +309,27 @@ async function executeJobCoreWithTimeoutUnfinalized(
       // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
       onHeartbeatExecutionStarted:
         watchdog && resolveHeartbeatTimeoutMs
-          ? (heartbeat) => watchdog.replaceTimeout(resolveHeartbeatTimeoutMs(heartbeat))
+          ? (heartbeat) => {
+              const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(heartbeat);
+              // The queue owns admission and retries; only attempts spend the deadline.
+              return {
+                onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
+                onQueued: () => watchdog.replaceTimeout(undefined),
+              };
+            }
           : undefined,
       assertRunCurrent,
       executionIdentity: executionIdentity && {
         ...executionIdentity,
         onPostAdmission: (context) => {
           bindCronJobAdmittedRun(opts?.activeJobMarker, context, runAbortController.signal);
-          executionIdentity.onPostAdmission?.(context);
+          return executionIdentity.onPostAdmission?.(context);
         },
       },
     };
     watchdog?.start();
     const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
+    commandSettlement = job.payload.kind === "command" ? corePromise : undefined;
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(
@@ -323,7 +359,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(
           { jobId: job.id, err: String(err) },
-          `cron: job core rejected after ${watchdog ? "timeout" : "cancellation"} abort`,
+          `cron: job core rejected after abort: ${abortErrorMessage(runAbortController.signal)}`,
         );
       }
     });

@@ -9,7 +9,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../state/openclaw-agent-db-lease.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -110,12 +110,12 @@ export function isPathOwnedBySurvivingAgent(
   );
 }
 
-export function prepareAgentDeleteDatabases(
+export async function prepareAgentDeleteDatabases(
   cfg: OpenClawConfig,
   agentId: string,
   agentDir: string,
   options: OpenClawStateDatabaseOptions = {},
-): AgentDeleteDatabasePlan {
+): Promise<AgentDeleteDatabasePlan> {
   const registeredDatabases = readAgentDeleteDatabaseRegistry(options);
   const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
     registeredDatabases,
@@ -135,10 +135,10 @@ export function prepareAgentDeleteDatabases(
   // A surviving directory retains files, not the deleted agent's connection. Check the
   // actual cached owner so stale registration cannot close a surviving agent's handle.
   for (const databasePath of registeredDatabasePaths) {
-    closeOpenClawAgentDatabaseByPath(databasePath, agentId);
+    await closeOpenClawAgentDatabaseByPathAsync(databasePath, agentId);
   }
   // Incognito has no registry row or files, but retained statements must also be retired.
-  closeOpenClawAgentDatabaseByPath(
+  await closeOpenClawAgentDatabaseByPathAsync(
     resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env }),
     agentId,
   );

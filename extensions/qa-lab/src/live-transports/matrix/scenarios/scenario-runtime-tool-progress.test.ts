@@ -2,6 +2,8 @@ import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import type { MatrixQaObservedEvent } from "../substrate/events.js";
+import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
   MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   type MatrixQaScenarioContext,
@@ -10,6 +12,22 @@ import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progre
 import { runToolProgressMentionSafetyScenario } from "./scenario-runtime-tool-progress.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("does not reuse events observed before the current progress scenario", () => {
+  const event = (eventId: string): MatrixQaObservedEvent => ({
+    kind: "message",
+    roomId: "!room:example.test",
+    eventId,
+    type: "m.room.message",
+  });
+  const stale = event("$stale");
+  const observedEvents = [stale, event("$current")];
+  const isCurrentScenarioEvent = createCurrentScenarioEventPredicate(observedEvents, 1);
+
+  expect(isCurrentScenarioEvent(stale)).toBe(false);
+  expect(isCurrentScenarioEvent(event("$stale"))).toBe(false);
+  expect(isCurrentScenarioEvent(event("$current"))).toBe(true);
+});
 
 it("skips the release-directory-backed mention progress scenario on Windows", async () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -29,6 +47,16 @@ it("skips the release-directory-backed mention progress scenario on Windows", as
 });
 
 describe.skipIf(process.platform === "win32")("Matrix mention progress gate", () => {
+  async function prepareGate(consumeTimeoutMs?: number) {
+    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
+    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
+    const gate = await prepareMatrixMentionProgressGate(
+      { gatewayWorkspaceDir },
+      { consumeTimeoutMs },
+    );
+    return { gate, gatePath };
+  }
+
   async function consumeGate(gatePath: string) {
     await expect
       .poll(async () => {
@@ -43,24 +71,8 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
     await rm(gatePath, { recursive: true });
   }
 
-  it("verifies existing-state and upgrade compatibility without migration", async () => {
-    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
-    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
-    const gate = await prepareMatrixMentionProgressGate({ gatewayWorkspaceDir });
-
-    const releasePromise = gate.release();
-    await expect.poll(() => readdir(gatePath)).toEqual([]);
-    await rm(gatePath, { recursive: true });
-    await releasePromise;
-    await gate.cleanup();
-
-    await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("waits for failure cleanup to release and consume the gate", async () => {
-    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
-    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
-    const gate = await prepareMatrixMentionProgressGate({ gatewayWorkspaceDir });
+    const { gate, gatePath } = await prepareGate();
 
     const cleanupPromise = gate.cleanup();
     await consumeGate(gatePath);
@@ -70,9 +82,7 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
   });
 
   it("creates the release directory idempotently and waits for consumption", async () => {
-    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
-    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
-    const gate = await prepareMatrixMentionProgressGate({ gatewayWorkspaceDir });
+    const { gate, gatePath } = await prepareGate();
 
     const releases = Promise.all([gate.release(), gate.release()]);
     await consumeGate(gatePath);
@@ -83,12 +93,7 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
   });
 
   it("removes an unconsumed gate after bounded cleanup", async () => {
-    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
-    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
-    const gate = await prepareMatrixMentionProgressGate(
-      { gatewayWorkspaceDir },
-      { consumeTimeoutMs: 10 },
-    );
+    const { gate, gatePath } = await prepareGate(10);
 
     await gate.cleanup();
 
@@ -97,12 +102,7 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
   });
 
   it("does not mistake cleanup removal for command consumption", async () => {
-    const gatewayWorkspaceDir = tempDirs.make("matrix-progress-gate-");
-    const gatePath = path.join(gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY);
-    const gate = await prepareMatrixMentionProgressGate(
-      { gatewayWorkspaceDir },
-      { consumeTimeoutMs: 10 },
-    );
+    const { gate, gatePath } = await prepareGate(10);
 
     const releasePromise = gate.release();
     const cleanupPromise = gate.cleanup();

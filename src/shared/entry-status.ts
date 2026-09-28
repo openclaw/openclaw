@@ -20,6 +20,7 @@ export function evaluateEntryRequirementsForCurrentPlatform(params: {
     } | null;
   };
   hasLocalBin: (bin: string) => boolean;
+  platform?: string;
   remote?: RequirementRemote;
   isEnvSatisfied: (envName: string) => boolean;
   isConfigSatisfied: (pathStr: string) => boolean;
@@ -41,7 +42,7 @@ export function evaluateEntryRequirementsForCurrentPlatform(params: {
     always: params.always,
     metadata: metadata ?? undefined,
     hasLocalBin: params.hasLocalBin,
-    localPlatform: process.platform,
+    localPlatform: params.platform ?? process.platform,
     remote: params.remote,
     isEnvSatisfied: params.isEnvSatisfied,
     isConfigSatisfied: params.isConfigSatisfied,

@@ -3,6 +3,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
@@ -46,7 +47,7 @@ function contextFor(
     expect(gatewayListeners.size).toBe(0);
     expect(eventListeners.size).toBe(0);
   });
-  const request = vi.fn(async (method: string, _params?: unknown) => {
+  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method !== "sessions.resolve") {
       throw new Error(`Unexpected gateway request: ${method}`);
     }
@@ -58,6 +59,8 @@ function contextFor(
   const client = { request };
   const context = {
     basePath: "",
+    chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
     // These tests invoke the loader directly; there is no outlet-owned match.
     router,
     lifecycleAbortSignal: lifecycle.signal,
@@ -83,7 +86,24 @@ function contextFor(
   const sessions = createTestSessionCapability(context.gateway, "roboclaw");
   sessions.state.result = result(cachedSessions);
   const list = vi.spyOn(sessions, "list");
-  return { context: { ...context, sessions }, list, request };
+  return {
+    context: { ...context, sessions },
+    list,
+    request,
+    listenerCounts: () => ({ gateway: gatewayListeners.size, events: eventListeners.size }),
+    publishGateway: (patch: Partial<ApplicationContext["gateway"]["snapshot"]>) => {
+      Object.assign(context.gateway.snapshot, patch);
+      for (const listener of gatewayListeners) {
+        listener(context.gateway.snapshot);
+      }
+    },
+    publishEvent: (event: Parameters<GatewayEventListener>[0]) => {
+      for (const listener of Array.from(eventListeners)) {
+        listener(event);
+      }
+    },
+    stop: () => lifecycle.abort(),
+  };
 }
 
 function installShortResolver(

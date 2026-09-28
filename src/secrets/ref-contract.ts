@@ -1,11 +1,55 @@
 /** Shared SecretRef grammar and validation helpers for config, schema, SDK, and gateway parity. */
-import {
-  DEFAULT_SECRET_PROVIDER_ALIAS,
-  isSecretRef,
-  isValidEnvSecretRefId,
-  type SecretRef,
-  type SecretRefSource,
-} from "../config/types.secrets.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
+/** Supported secret reference backends in config. */
+export type SecretRefSource = "env" | "file" | "exec" | "store"; // pragma: allowlist secret
+
+/**
+ * Stable identifier for a secret in a configured source.
+ * Examples:
+ * - env source: provider "default", id "OPENAI_API_KEY"
+ * - file source: provider "mounted-json", id "/providers/openai/apiKey"
+ * - exec source: provider "vault", id "openai/api-key"
+ * - store source: provider "default", id "OPENAI_API_KEY"
+ */
+export type SecretRef = {
+  source: SecretRefSource;
+  provider: string;
+  id: string;
+};
+
+/** Secret-bearing config input: either a literal string or a structured SecretRef. */
+export type SecretInput = string | SecretRef;
+
+/** Provider alias used when a SecretRef omits a source-specific provider. */
+export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
+/** Strict env-var id shape accepted for env-backed SecretRefs. */
+export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+
+/** Return whether an env SecretRef id is a supported uppercase environment variable name. */
+export function isValidEnvSecretRefId(value: string): boolean {
+  return ENV_SECRET_REF_ID_RE.test(value);
+}
+
+/** Narrow a value to the canonical SecretRef object shape. */
+export function isSecretRef(value: unknown): value is SecretRef {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (Object.keys(value).length !== 3) {
+    return false;
+  }
+  return (
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "store") &&
+    typeof value.provider === "string" &&
+    value.provider.trim().length > 0 &&
+    typeof value.id === "string" &&
+    value.id.trim().length > 0
+  );
+}
 
 /**
  * Runtime secret-reference grammar shared by config parsing, plugin SDK schemas,
@@ -194,4 +238,63 @@ export function formatExecSecretRefIdValidationMessage(): string {
     'and must not include "." or ".." path segments',
     '(example: "vault/openai/api-key" or "aws/secret#json_key").',
   ].join(" ");
+}
+
+export type ProviderRefGroup = {
+  source: SecretRefSource;
+  providerName: string;
+  refs: SecretRef[];
+};
+
+export function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
+  if (refs.length === 0) {
+    return [];
+  }
+  const uniqueRefs = new Map<string, SecretRef>();
+  for (const ref of refs) {
+    const id = ref.id.trim();
+    if (!id) {
+      throw new Error("Secret reference id is empty.");
+    }
+    if (!isValidSecretProviderAlias(ref.provider)) {
+      throw new Error(
+        `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "env" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "file" && !isValidFileSecretRefId(id)) {
+      throw new Error(
+        `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
+      throw new Error(
+        `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    uniqueRefs.set(secretRefKey(ref), { ...ref, id });
+  }
+
+  const grouped = new Map<string, ProviderRefGroup>();
+  for (const ref of uniqueRefs.values()) {
+    // Provider calls are batched by source/provider so exec providers receive one request for
+    // many ids and file providers parse once per payload.
+    const key = `${ref.source}:${ref.provider}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.refs.push(ref);
+      continue;
+    }
+    grouped.set(key, { source: ref.source, providerName: ref.provider, refs: [ref] });
+  }
+  return [...grouped.values()];
 }

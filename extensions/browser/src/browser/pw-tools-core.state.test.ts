@@ -46,6 +46,7 @@ vi.mock("./pw-session.js", () => ({
 
 import {
   setDeviceViaPlaywright,
+  setGeolocationViaPlaywright,
   setLocaleViaPlaywright,
   setTimezoneViaPlaywright,
 } from "./pw-tools-core.state.js";
@@ -280,4 +281,40 @@ describe("setDeviceViaPlaywright", () => {
     expect(fixture.setViewportSize).toHaveBeenCalledTimes(1);
     expect(fixture.send).toHaveBeenCalledTimes(3);
   });
+});
+
+describe("setGeolocationViaPlaywright", () => {
+  it.each(["before", "after"] as const)(
+    "settles geolocation clear cleanup when authority is revoked %s admission",
+    async (revoked) => {
+      let current = revoked !== "before";
+      const setGeolocation = vi.fn(async () => {
+        current = false;
+      });
+      const clearPermissions = vi.fn(async () => {});
+      stateMocks.ensurePageState.mockReturnValue({});
+      stateMocks.getPageForTargetId.mockResolvedValue({
+        context: () => ({ setGeolocation, clearPermissions }),
+      });
+      const clearing = setGeolocationViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        clear: true,
+        assertCurrent: async () => {
+          if (!current) {
+            throw new Error("dashboard owner stopped");
+          }
+        },
+      });
+      if (revoked === "before") {
+        await expect(clearing).rejects.toThrow("dashboard owner stopped");
+        expect(setGeolocation).not.toHaveBeenCalled();
+        expect(clearPermissions).not.toHaveBeenCalled();
+      } else {
+        await expect(clearing).resolves.toBeUndefined();
+        expect(setGeolocation).toHaveBeenCalledExactlyOnceWith(null);
+        expect(clearPermissions).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });

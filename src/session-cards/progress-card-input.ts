@@ -7,6 +7,12 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { stripInvisibleUnicode } from "../infra/unicode-visibility.js";
 
+const PLAN_PROGRESS_TOOL_NAMES = new Set(["progress_card", "update_plan"]);
+
+export function isAgentPlanProgressToolName(name: string | undefined): boolean {
+  return PLAN_PROGRESS_TOOL_NAMES.has(name?.trim().toLowerCase() ?? "");
+}
+
 export class ProgressCardInputError extends Error {}
 
 type NormalizedProgressCardInput = {

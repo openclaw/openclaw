@@ -239,12 +239,18 @@ function findPackageForPath(pathname) {
 
 function findTarballForPath(pathname) {
   for (const entry of packages.values()) {
-    const prefix = `/${entry.encodedPackageName}/-/`;
-    if (!pathname.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const prefixes = [`/${entry.encodedPackageName}/-/`, `/${entry.packageName}/-/`];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
       continue;
     }
-    for (const versionEntry of entry.versions.values()) {
-      if (pathname.endsWith(`/${versionEntry.tarballName}`)) {
+    const requestedName = pathname.slice(prefix.length);
+    const packageBaseName = entry.packageName.split("/").at(-1);
+    for (const [version, versionEntry] of entry.versions) {
+      const canonicalTarballName = `${packageBaseName}-${version}.tgz`;
+      if (requestedName === versionEntry.tarballName || requestedName === canonicalTarballName) {
         return versionEntry;
       }
     }

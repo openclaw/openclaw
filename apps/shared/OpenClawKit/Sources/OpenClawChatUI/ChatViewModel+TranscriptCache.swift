@@ -13,10 +13,11 @@ extension OpenClawChatViewModel {
         var sessionRoutingContract: String?
     }
 
-    func replaceMessages(_ messages: [OpenClawChatMessage]) {
-        guard self.messages != messages else { return }
-        self.messages = messages
-        self.seedInputHistory(from: messages)
+    func replaceMessages(_ messages: [OpenClawChatMessage], narrationSettled: Bool = false) {
+        let reconciled = self.narration.reconcile(messages, settled: narrationSettled)
+        guard self.messages != reconciled.messages || reconciled.changed else { return }
+        self.messages = reconciled.messages
+        self.seedInputHistory(from: reconciled.messages)
         markTimelineChanged()
     }
 
@@ -65,7 +66,7 @@ extension OpenClawChatViewModel {
             if let transcriptCache {
                 await transcriptCache.storeCanonicalTranscript(
                     sessionKey: session.key,
-                    agentID: Self.transcriptCacheAgentID(sessionKey: session.key, agentID: session.agentID),
+                    agentID: Self.transcriptCacheAgentID(sessionKey: session.key, agentID: session.deliveryAgentID),
                     messages: messages,
                     canonicalMessageIdempotencyKeys: canonicalMessageIdempotencyKeys)
             }
@@ -108,7 +109,7 @@ extension OpenClawChatViewModel {
                 // Session lists are always agent-scoped, even when the chat key
                 // itself has immutable routing and ignores active-agent changes.
                 guard self.isCurrentSession(session),
-                      self.activeAgentId == session.agentID,
+                      self.currentSessionSnapshot().deliveryAgentID == session.deliveryAgentID,
                       self.sessions.isEmpty,
                       !self.hasAppliedLiveSessions
                 else {
@@ -120,11 +121,11 @@ extension OpenClawChatViewModel {
                     ChatSessionSidebarModel.isSessionInActiveAgentScope(
                         key: $0.key,
                         agentID: $0.agentId,
-                        activeAgentID: self.activeAgentId)
+                        activeAgentID: session.deliveryAgentID)
                 }
                 let scoped = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
                     in: agentScoped,
-                    activeAgentId: self.activeAgentId)
+                    activeAgentId: session.deliveryAgentID)
                 self.sessions = self.applyingLocalUnreadOverrides(
                     to: scoped)
             }
@@ -133,7 +134,7 @@ extension OpenClawChatViewModel {
         Task { [weak self] in
             let cached = await transcriptCache.loadTranscript(
                 sessionKey: session.key,
-                agentID: Self.transcriptCacheAgentID(sessionKey: session.key, agentID: session.agentID))
+                agentID: Self.transcriptCacheAgentID(sessionKey: session.key, agentID: session.deliveryAgentID))
             guard let self, !cached.isEmpty else { return }
             guard self.isCurrentSession(session), !self.hasAppliedLiveHistory, self.messages.isEmpty else {
                 return

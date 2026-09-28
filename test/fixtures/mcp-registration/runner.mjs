@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
-const [repository, mode = "plain", fixtureRoot] = process.argv.slice(2);
+const [repository, mode = "plain", fixtureRoot, sdkHost] = process.argv.slice(2);
 assert.ok(repository, "Pass the new task worktree as the first argument");
 assert.ok(["plain", "nested", "close-failure"].includes(mode));
 const repo = fs.realpathSync(repository);
@@ -89,6 +89,9 @@ fs.writeFileSync(
 );
 fs.symlinkSync(path.join(repo, "node_modules"), path.join(root, "node_modules"), "dir");
 const bootstrap = path.join(root, "serve.mjs");
+const serverEntry = sdkHost
+  ? path.join(sdkHost, "dist/mcp/plugin-tools-serve.js")
+  : path.join(repo, "src/mcp/plugin-tools-serve.ts");
 const closeFault =
   mode === "close-failure"
     ? `
@@ -103,7 +106,7 @@ StdioServerTransport.prototype.close = async function() {
 fs.writeFileSync(
   bootstrap,
   `${closeFault}
-import { servePluginToolsMcp } from ${JSON.stringify(pathToFileURL(path.join(repo, "src/mcp/plugin-tools-serve.ts")).href)};
+import { servePluginToolsMcp } from ${JSON.stringify(pathToFileURL(serverEntry).href)};
 try {
   await servePluginToolsMcp();
   process.stderr.write('MCP_OWNERSHIP_PROOF {"phase":"serve-returned"}\\n');
@@ -123,6 +126,7 @@ const transport = new StdioClientTransport({
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configFile,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    ...(sdkHost ? { OPENCLAW_DEV_SOURCE_ROOT: sdkHost } : {}),
   },
 });
 const client = new Client(
@@ -241,7 +245,7 @@ try {
   }
   result = { ok: true, mode, events, phases, root };
 } catch (error) {
-  result = { ok: false, mode, error: String(error), phases, root };
+  result = { ok: false, mode, error: String(error), phases, stderr, root };
   process.exitCode = 1;
 } finally {
   release("tool.release");

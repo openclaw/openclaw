@@ -328,7 +328,7 @@ describe("config model validation with provider runtime", () => {
         expect(imported("pin-beta")).toBe(false);
         expect(imported("pin-unrelated")).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     });
   });

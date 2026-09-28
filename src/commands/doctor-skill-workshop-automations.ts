@@ -80,6 +80,7 @@ async function existingPath(filename: string): Promise<string | undefined> {
 export async function inspectWorkshopAutomationReferences(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  stateEnv?: NodeJS.ProcessEnv;
   records: readonly LegacyWorkshopProposal[];
   appliedEvents: readonly SkillProposalEvent[];
 }): Promise<WorkshopAutomationReference[]> {
@@ -123,9 +124,10 @@ export async function inspectWorkshopAutomationReferences(params: {
   if (relocations.size === 0) {
     return [];
   }
+  const stateEnv = params.stateEnv ?? params.env;
   const { store } = await loadCronJobsStoreWithConfigJobsReadOnly(
-    resolveCronJobsStorePathFromConfig(params.config, params.env),
-    params.env,
+    resolveCronJobsStorePathFromConfig(params.config, params.env, stateEnv),
+    stateEnv,
   );
   const references: WorkshopAutomationReference[] = [];
   const orderedRelocations = [...relocations].toSorted(([left], [right]) =>

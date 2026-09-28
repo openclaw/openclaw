@@ -282,7 +282,12 @@ suite.define(() => {
       await search.fill("read-file");
       await expect
         .poll(() => groups.locator(".chat-workspace-rail__file-name:visible").allTextContents())
-        .toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
+        .toEqual(["read-file-1.ts", "read-file-2.ts"]);
+      expect(
+        await groups
+          .locator(".chat-workspace-rail__file-open:visible")
+          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+      ).toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
       expect(await groups.count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);

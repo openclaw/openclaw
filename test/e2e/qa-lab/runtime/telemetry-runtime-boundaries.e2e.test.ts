@@ -101,6 +101,11 @@ describe("telemetry runtime boundaries", () => {
         nodeVersion: expect.stringMatching(/^v\d+/u),
       });
       expect(entry.execution?.artifacts).toEqual([
+        {
+          kind: "scenario-observation",
+          path: expect.stringMatching(/^artifacts\/occurrences\/[0-9a-f-]+\.json$/u),
+          source: "qa-suite",
+        },
         { kind: "summary", path: "qa-suite-summary.json", source: "qa-suite" },
         { kind: "report", path: "qa-suite-report.md", source: "qa-suite" },
       ]);

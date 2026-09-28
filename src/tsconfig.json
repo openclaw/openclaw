@@ -1,0 +1,18 @@
+{
+  "extends": "../config/tsconfig/oxlint.source.json",
+  // Each excluded area has a discoverable lint/editor project. Imports still
+  // cross these boundaries; only unrelated explicit roots are removed.
+  "exclude": [
+    "../node_modules",
+    "../dist",
+    "../**/dist/**",
+    "../**/*.test-compat.d.ts",
+    "agents/**",
+    "gateway/**",
+    "infra/**",
+    "commands/**",
+    "config/**",
+    "cli/**",
+    "auto-reply/**"
+  ]
+}

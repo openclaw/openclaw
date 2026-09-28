@@ -11,6 +11,10 @@ import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
@@ -144,6 +148,8 @@ async function rmDirWithRetries(
   dir: string,
   opts?: { attempts?: number; delayMs?: number },
 ): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const attempts = opts?.attempts ?? 10;
   const delayMs = opts?.delayMs ?? 5;
   // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
@@ -199,6 +205,8 @@ export function installWebAutoReplyTestHomeHooks() {
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     process.env.HOME = previousHome;
     tempHome = undefined;
   });
@@ -307,21 +315,22 @@ export function createMockWebListener(): MockWebListener {
 
 export function createScriptedWebListenerFactory(): AnyExport {
   const onMessages: Array<(msg: WebInboundCallbackMessage) => Promise<void>> = [];
-  const closeResolvers: Array<(reason: unknown) => void> = [];
+  const closeResolvers: Array<(reason?: WebListenerCloseReason) => void> = [];
   const listeners: MockWebListener[] = [];
 
   const listenerFactory = vi.fn(
     async (opts: { onMessage: (msg: WebInboundCallbackMessage) => Promise<void> }) => {
       onMessages.push(opts.onMessage);
-      let resolveClose: (reason: unknown) => void = () => {};
+      let resolveClose: (reason?: WebListenerCloseReason) => void = () => {};
       const onClose = new Promise<WebListenerCloseReason>((res) => {
-        resolveClose = res as (reason: unknown) => void;
+        // Match the socket-session owner: an unspecified close is not a logout.
+        resolveClose = (reason) => res(reason ?? { isLoggedOut: false, error: "closed" });
         closeResolvers.push(resolveClose);
       });
       const listener: MockWebListener = {
         ...createMockWebListener(),
         onClose,
-        signalClose: vi.fn((reason?: unknown) => resolveClose(reason)),
+        signalClose: vi.fn(resolveClose),
       };
       listeners.push(listener);
       return listener;
@@ -332,7 +341,8 @@ export function createScriptedWebListenerFactory(): AnyExport {
     listenerFactory,
     listeners,
     getOnMessage: (index = onMessages.length - 1) => onMessages[index],
-    resolveClose: (index: number, reason?: unknown) => closeResolvers[index]?.(reason),
+    resolveClose: (index: number, reason?: WebListenerCloseReason) =>
+      closeResolvers[index]?.(reason),
     getListenerCount: () => listenerFactory.mock.calls.length,
   };
 }

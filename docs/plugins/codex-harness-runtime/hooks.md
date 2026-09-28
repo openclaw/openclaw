@@ -21,13 +21,23 @@ history, verify that Codex unloaded the previous configuration, then append a
 complete superseding policy message before admitting the turn. Historical policy
 text can remain in the transcript; the later policy explicitly supersedes it.
 
-If another client lease, subscriber, or failed native unload prevents configuration
-proof, the turn stops before inference. A prewrite ownership refusal keeps the
-healthy shared client and its other conversations available. External WebSocket,
-Unix-socket, and stdio-proxy connections do not prove exclusive native-process
-ownership, so ordinary conversations cannot perform this guarded cold refresh on
-those transports. Use OpenClaw-managed local stdio; for lease contention, stop
-competing native work before reconnecting. Policy refusals and uncertain or
+Ordinary conversations use the same unsubscribe-and-resume flow over local stdio,
+WebSocket, Unix-socket, and stdio-proxy connections. The native conversation ID
+and history stay unchanged. OpenClaw verifies that the original app-server client
+is still current, the thread has no active turn, and Codex has unloaded the
+previous configuration before installing the current policy.
+
+This refresh requires OpenClaw to be the sole lifecycle owner of the native
+conversation. A gateway-owned remote app-server satisfies this deployment contract
+when no independent client can reload the same conversation during the handoff.
+The connection and unload checks do not provide an atomic handoff between
+independent clients: a competing resume can reinstall old native configuration.
+Shared app-servers with competing conversation owners are outside this refresh
+contract.
+
+If a subscriber or failed native unload prevents configuration proof, the turn
+stops before inference. A prewrite ownership refusal keeps the healthy shared
+client and its other conversations available. Policy refusals and uncertain or
 acknowledged policy-write failures preserve the conversation and stop automatic
 auth-profile, model-fallback, and whole-turn retries.
 
@@ -61,12 +71,26 @@ plugin behavior. For the native tool and permission bridge, OpenClaw injects
 per-thread Codex config for `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 and `Stop`.
 
-Before starting or resuming a thread, OpenClaw waits for the native relay's
-direct publication attempt and rechecks the current run's authority. If the
-listener or SQLite locator is unavailable, hook commands can use the existing
-Gateway fallback. A relay without a listening direct bridge can still renew its
-logical expiry; a listening bridge updates its stored locator before extending
-the visible expiry. Unregistering invalidates foreground access
+Before starting or resuming a thread, OpenClaw prepares the native relay's
+stored MCP approval snapshot and direct publication attempt, then rechecks the
+current run's authority. If the listener or SQLite locator is unavailable, hook
+commands can use the existing Gateway fallback. Policy preparation must still
+succeed; Gateway invocation waits for that snapshot independently of publication.
+Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
+field remains undefined until policy preparation finishes.
+
+The cold hook CLI reads the locator on a dedicated read-only worker, closes its
+database, and joins the worker before using the result. The worker preserves
+schema admission without loading shared-state writer startup. The caller retains
+the existing retry and deadline rules.
+
+Bridge publication, renewal, lookup, and removal run in the shared-state worker.
+Publication and renewal recheck the current host registration inside their write
+transaction, and cleanup joins accepted work before closing the listener.
+
+A relay without a listening direct bridge can still renew its logical expiry;
+a listening bridge updates its stored locator before extending the visible
+expiry. Unregistering invalidates foreground access
 immediately. Cleanup drains accepted locator writes and, once the relay is
 retired, listener closure. Existing grace windows for late hooks and direct
 children retained after a successful yield are preserved; draining pending

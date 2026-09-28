@@ -77,6 +77,8 @@ Local and data-URL agent avatars use [authenticated avatar URLs](/web/control-ui
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
 
+On phones, Chat and New Session share ordinary side gutters inside the device's safe areas. The installed app uses a full standalone canvas; browser tabs follow the dynamic viewport. When the browser reports a keyboard-sized visual viewport reduction, the shell keeps the composer above it and restores the bottom safe area when the keyboard closes, even if the editor still has focus. Pinch zoom remains browser-controlled. Browsers without VisualViewport retain the CSS layout.
+
 Inside the macOS app, the Notifications settings page shows the app's native notification permission instead of browser push because the app delivers notifications natively.
 
 See [Notifications](/web/notifications) for the browser and macOS setup steps.
@@ -156,7 +158,7 @@ See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Blank Control UI page
 
-If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup.
+If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup. While the browser is still downloading the initial app modules, the panel shows **Control UI is still loading** and leaves those downloads running. Once module loading finishes without a render, automatic recovery can request a fresh page. **Keep waiting** cancels a pending recovery request and gives the current page more time; **Try again** explicitly reloads it.
 
 Use the panel's **Try again** action after changing the browser environment, or reload manually after these checks:
 

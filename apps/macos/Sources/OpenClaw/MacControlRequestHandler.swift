@@ -5,7 +5,7 @@ import OpenClawIPC
 protocol MacControlOwner {
     func status() async throws -> MacControlStatus
     func setPrimary(_ configuration: PrimaryGatewayControlConfiguration) async throws -> MacControlPrimaryStatus
-    func gateways() async throws -> [MacControlGatewayStatus]
+    func gateways(retryKeychainAccess: Bool) async throws -> [MacControlGatewayStatus]
     func addGateway(_ request: MacControlRequest) async throws -> MacControlGatewayStatus
     func removeGateway(id: String) async throws
     func reconnectGateway(id: String) async throws -> MacControlGatewayStatus
@@ -31,7 +31,7 @@ final class MacControlRequestHandler {
                 status.gateways = status.gateways.map(Self.redacted)
                 return try Self.encode(status)
             case "gateway.list":
-                return try await Self.encode(self.owner.gateways().map(Self.redacted))
+                return try await Self.encode(self.owner.gateways(retryKeychainAccess: false).map(Self.redacted))
             case "primary.set", "primary.clear", "gateway.add", "gateway.remove", "gateway.reconnect":
                 guard !self.mutationInProgress else {
                     throw MacControlError(
@@ -74,8 +74,13 @@ final class MacControlRequestHandler {
             guard let query = request.idOrName, !query.isEmpty else {
                 throw MacControlError(code: "invalid_request", message: "Provide the saved Gateway ID or name.")
             }
-            let profiles = try await self.owner.gateways()
+            let profiles = try await self.owner.gateways(retryKeychainAccess: true)
             let profile = try Self.resolve(query, in: profiles)
+            guard profile.kind != "local" else {
+                throw MacControlError(
+                    code: "invalid_request",
+                    message: "Manage the hosted local Gateway in the Connection window.")
+            }
             try Task.checkCancellation()
             if request.operation == "gateway.remove" {
                 try await self.owner.removeGateway(id: profile.id)

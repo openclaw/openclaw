@@ -33,20 +33,23 @@ describe("resolveBranchLanding", () => {
   });
 
   it.each([
-    { scenario: "no merged PRs", mergedHeads: [] },
+    { scenario: "no merged PRs", mergedHeads: [], descendantRef: false },
+    { scenario: "an unrelated descendant ref", mergedHeads: [], descendantRef: true },
     {
       scenario: "a merge into another base without a propagation commit",
       mergedHeads: [{ sha: "1".repeat(40), baseRef: "release" }],
+      descendantRef: false,
     },
   ])(
-    "resolves an unpublished branch with $scenario without reading an unused HEAD",
-    async ({ mergedHeads }) => {
+    "resolves an unpublished branch with $scenario against captured revisions",
+    async ({ mergedHeads, descendantRef }) => {
       const base = await sha("HEAD");
       await git("checkout", "-b", "feature");
       await fs.appendFile(path.join(root, "a.txt"), "two\n");
       await git("commit", "-am", "unpublished work");
-      const runGit = vi.spyOn(worktreeGit, "runGit");
-
+      if (descendantRef) {
+        await git("update-ref", "refs/remotes/origin/feature/child", "HEAD");
+      }
       expect(
         await resolveBranchLanding(root, {
           branch: "feature",
@@ -55,13 +58,73 @@ describe("resolveBranchLanding", () => {
         }),
       ).toEqual({
         pushedSha: null,
+        defaultSha: base,
         statsBase: base,
         hasLandedPullRequest: false,
         provenNewPushedWork: false,
       });
-      expect(runGit).not.toHaveBeenCalledWith(root, ["rev-parse", "HEAD"]);
     },
   );
+
+  it.each(["malformed selected", "missing selected object", "malformed unrelated"])(
+    "preserves readable revisions with a %s ref without fetching objects",
+    async (scenario) => {
+      const base = await sha("HEAD");
+      const missingObject = "1".repeat(base.length);
+      const missingSelectedObject = scenario === "missing selected object";
+      const ref = scenario === "malformed unrelated" ? "unrelated" : "feature";
+      await fs.writeFile(
+        path.join(root, ".git", "refs", "remotes", "origin", ref),
+        `${missingSelectedObject ? missingObject : "not-an-object-id"}\n`,
+      );
+      await git("config", "extensions.partialClone", "origin");
+      await git("config", "remote.origin.promisor", "true");
+      await git("config", "remote.origin.url", path.join(root, "missing-remote"));
+      const tracePath = path.join(root, "git-trace.jsonl");
+      vi.stubEnv("GIT_TRACE2_EVENT", tracePath);
+      try {
+        await expect(
+          resolveBranchLanding(root, {
+            branch: "feature",
+            defaultBranch: "main",
+            mergedHeads: [],
+          }),
+        ).resolves.toEqual({
+          pushedSha: missingSelectedObject ? missingObject : null,
+          defaultSha: base,
+          statsBase: base,
+          hasLandedPullRequest: false,
+          provenNewPushedWork: false,
+        });
+        const trace = await fs.readFile(tracePath, "utf8");
+        expect(trace.split("\n").filter((line) => line.includes('"event":"child_start"'))).toEqual(
+          [],
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("preserves complete revisions when a batch exceeds its output limit", async () => {
+    const base = await sha("HEAD");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    const runGit = worktreeGit.runGit;
+    vi.spyOn(worktreeGit, "runGit").mockImplementationOnce(async (...args) => ({
+      ...(await runGit(...args)),
+      stdout: "truncated ref output",
+      stdoutTruncatedBytes: 1,
+    }));
+    await expect(
+      resolveBranchLanding(root, { branch: "feature", defaultBranch: "main", mergedHeads: [] }),
+    ).resolves.toEqual({
+      pushedSha: base,
+      defaultSha: base,
+      statsBase: base,
+      hasLandedPullRequest: false,
+      provenNewPushedWork: false,
+    });
+  });
 
   it("marks a squash-landed tip and bases stats on the merged head", async () => {
     await git("checkout", "-b", "feature");
@@ -79,6 +142,7 @@ describe("resolveBranchLanding", () => {
 
     expect(landing).toEqual({
       pushedSha: mergedHead,
+      defaultSha: await sha("refs/remotes/origin/main"),
       statsBase: mergedHead,
       hasLandedPullRequest: true,
       provenNewPushedWork: false,

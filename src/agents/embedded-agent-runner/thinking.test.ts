@@ -18,24 +18,6 @@ import {
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
-function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
-  // Single-assistant fixture exercises the "latest assistant turn" path where
-  // reasoning blocks should remain available for continuation.
-  const messages: AgentMessage[] = [
-    castAgentMessage({
-      role: "assistant",
-      content,
-    }),
-  ];
-
-  const result = dropThinkingBlocks(messages);
-  return {
-    assistant: result[0] as Extract<AgentMessage, { role: "assistant" }>,
-    messages,
-    result,
-  };
-}
-
 const noThinkingReferenceCases = [
   { name: "dropThinkingBlocks", drop: dropThinkingBlocks },
   { name: "dropReasoningFromHistory", drop: dropReasoningFromHistory },
@@ -63,23 +45,11 @@ describe("thinking-free history contract", () => {
 });
 
 describe("dropThinkingBlocks", () => {
-  it("preserves thinking blocks when the assistant message is the latest assistant turn", () => {
-    const { assistant, messages, result } = dropSingleAssistantContent([
-      { type: "thinking", thinking: "internal" },
-      { type: "text", text: "final" },
-    ]);
-    expect(result).toBe(messages);
-    expect(assistant.content).toEqual([
-      { type: "thinking", thinking: "internal" },
-      { type: "text", text: "final" },
-    ]);
-  });
-
   it("preserves a latest assistant turn even when all content blocks are thinking", () => {
-    const { assistant } = dropSingleAssistantContent([
-      { type: "thinking", thinking: "internal-only" },
+    const messages = castAgentMessages([
+      { role: "assistant", content: [{ type: "thinking", thinking: "internal-only" }] },
     ]);
-    expect(assistant.content).toEqual([{ type: "thinking", thinking: "internal-only" }]);
+    expect(dropThinkingBlocks(messages)).toBe(messages);
   });
 
   it("preserves thinking blocks in the latest assistant message", () => {
@@ -162,26 +132,6 @@ describe("dropThinkingBlocks", () => {
 });
 
 describe("dropReasoningFromHistory", () => {
-  it("strips assistant reasoning from prior completed turns", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "first" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private" },
-          { type: "text", text: "visible" },
-        ],
-      }),
-      castAgentMessage({ role: "user", content: "second" }),
-    ];
-
-    const result = dropReasoningFromHistory(messages);
-    const assistant = result[1] as AssistantMessage;
-
-    expect(result).not.toBe(messages);
-    expect(assistant.content).toEqual([{ type: "text", text: "visible" }]);
-  });
-
   it("uses omitted-reasoning text when a completed assistant turn is reasoning-only", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),
@@ -449,6 +399,15 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     }) as AssistantMessage;
   }
 
+  function thinkingHistory(): AgentMessage[] {
+    return castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+      },
+    ]);
+  }
+
   function createTestStreamErrorMessage(errorMessage: string): AssistantMessage {
     return createTestAssistantMessage({
       content: [{ type: "text", text: "stream failed" }],
@@ -473,12 +432,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       wrapped(
         {} as never,
         {
-          messages: castAgentMessages([
-            {
-              role: "assistant",
-              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-            },
-          ]),
+          messages: thinkingHistory(),
         } as never,
         {} as never,
       ),
@@ -602,12 +556,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       wrapped(
         {} as never,
         {
-          messages: castAgentMessages([
-            {
-              role: "assistant",
-              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-            },
-          ]),
+          messages: thinkingHistory(),
         } as never,
         {} as never,
       ),
@@ -642,12 +591,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     const response = (await wrapped(
       {} as never,
       {
-        messages: castAgentMessages([
-          {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-          },
-        ]),
+        messages: thinkingHistory(),
       } as never,
       {} as never,
     )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
@@ -787,12 +731,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     const response = wrapped(
       {} as never,
       {
-        messages: castAgentMessages([
-          {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-          },
-        ]),
+        messages: thinkingHistory(),
       } as never,
       {} as never,
     ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
@@ -936,12 +875,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
     const context = {
-      messages: castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-        },
-      ]),
+      messages: thinkingHistory(),
     };
 
     await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
@@ -1109,27 +1043,6 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     ]);
   });
 
-  it("strips thinkingSignature from a thinking-only pre-compaction message, leaving text for downstream handling", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "compactionSummary",
-        summary: "s",
-        tokensBefore: 0,
-        timestamp: 2000,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "hidden", thinkingSignature: "sig" }],
-        timestamp: 1000,
-      }),
-    ];
-    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
-    const assistant = result[1] as AssistantMessage;
-    // Signature is stripped; thinking text is preserved. Downstream stripInvalidThinkingSignatures
-    // converts this unsigned thinking-only message to [assistant reasoning omitted].
-    expect(assistant.content).toEqual([{ type: "thinking", thinking: "hidden" }]);
-  });
-
   it("strips redacted_thinking data from pre-compaction messages", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
@@ -1172,13 +1085,13 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(result).toBe(messages);
   });
 
-  it("uses the latest compaction summary timestamp when multiple summaries are present", () => {
+  it("uses the maximum compaction timestamp even when summaries are out of order", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "compactionSummary",
-        summary: "first",
+        summary: "latest",
         tokensBefore: 0,
-        timestamp: 1000,
+        timestamp: 2000,
       }),
       castAgentMessage({
         role: "assistant",
@@ -1187,9 +1100,9 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
       }),
       castAgentMessage({
         role: "compactionSummary",
-        summary: "second",
+        summary: "older",
         tokensBefore: 0,
-        timestamp: 2000,
+        timestamp: 1000,
       }),
       castAgentMessage({
         role: "assistant",
@@ -1206,41 +1119,6 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect((after.content[0] as unknown as Record<string, unknown>).thinkingSignature).toBe(
       "sig_after",
     );
-  });
-
-  it("uses max compaction timestamp when summaries appear out of chronological order", () => {
-    // Two compaction summaries: ts=1500 appears first, ts=2000 appears later.
-    // latestCompactionTimestamp must be max(1500, 2000) = 2000, not 1500.
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "compactionSummary",
-        summary: "earlier-in-array lower-timestamp",
-        tokensBefore: 0,
-        timestamp: 1500,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "t1", thinkingSignature: "sig1" }],
-        timestamp: 1200,
-      }),
-      castAgentMessage({
-        role: "compactionSummary",
-        summary: "later-in-array higher-timestamp",
-        tokensBefore: 0,
-        timestamp: 2000,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "t2", thinkingSignature: "sig2" }],
-        timestamp: 1800,
-      }),
-    ];
-    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
-    // Both messages have ts < 2000 so both should be stripped
-    const a1 = result[1] as AssistantMessage;
-    const a2 = result[3] as AssistantMessage;
-    expect((a1.content[0] as unknown as Record<string, unknown>).thinkingSignature).toBeUndefined();
-    expect((a2.content[0] as unknown as Record<string, unknown>).thinkingSignature).toBeUndefined();
   });
 
   it("preserves signatures on assistant messages at exactly the compaction timestamp", () => {

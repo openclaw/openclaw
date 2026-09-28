@@ -12,6 +12,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   legacyConfigRules,
@@ -109,6 +110,7 @@ describe("acpx doctor state migration", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -127,7 +129,7 @@ describe("acpx doctor state migration", () => {
     "does not load runtime helpers or inspect claims when the legacy directory is %s",
     async (directoryState) => {
       if (directoryState === "empty") {
-        await fs.mkdir(path.join(stateDir, "state", "sessions"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "acpx", "sessions"), { recursive: true });
       }
       const migration = expectDefined(
         stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
@@ -138,15 +140,14 @@ describe("acpx doctor state migration", () => {
           ...migrationParams(),
           serviceWorkspaceDir: stateDir,
           context: {
-            openPluginStateKeyedStore() {
-              throw new Error("No record requires a state store");
-            },
+            ...createDoctorContext(env),
             async inspectAcpSessionClaims() {
               throw new Error("No record requires canonical ownership evidence");
             },
           },
         }),
       ).resolves.toBeNull();
+      expect(await fs.readdir(stateDir)).toEqual(directoryState === "empty" ? ["acpx"] : []);
     },
   );
 

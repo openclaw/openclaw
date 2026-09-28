@@ -46,4 +46,5 @@ export type PrepareSimpleCompletionModelForAgentParams = {
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: SimpleCompletionModelResolver;
+  signal?: AbortSignal;
 };

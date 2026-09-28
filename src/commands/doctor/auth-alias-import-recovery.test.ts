@@ -1,4 +1,8 @@
 import { expect, it } from "vitest";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import { loadPersistedSharedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import {
   readPersistedAuthProfileStoreRaw,
@@ -197,16 +201,9 @@ it.each(["main", "worker"])(
           doctorOnlyStateMigrations: true,
         });
         await migrateSharedAuthStore({ detected, stateDir: fixture.stateDir, env: fixture.env });
-        const local = {
-          version: 1,
-          profiles: {
-            "anthropic:default": {
-              type: "api_key",
-              provider: "anthropic",
-              key: "different-local-account",
-            },
-          },
-        };
+        const local = createAuthProfileStoreFixture({
+          "anthropic:default": createApiKeyCredential("anthropic", "different-local-account"),
+        });
         runAuthProfileWriteTransaction(
           agentDir,
           (database) => {

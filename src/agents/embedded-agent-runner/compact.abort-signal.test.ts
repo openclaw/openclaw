@@ -64,7 +64,7 @@ vi.mock("../prepared-model-runtime.js", () => ({
         },
         createStores: () => ({}),
       },
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     }),
   ),
 }));

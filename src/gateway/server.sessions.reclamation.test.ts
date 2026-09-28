@@ -1,12 +1,12 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
-import { performance } from "node:perf_hooks";
-import { afterEach, expect, test } from "vitest";
+import { threadId } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, test } from "vitest";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSessionTranscriptFtsInserter } from "../config/sessions/session-transcript-fts.js";
+import { listSessionsNeedingTranscriptIndexReconcile } from "../config/sessions/session-transcript-index.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -23,11 +23,6 @@ const ROWS = 200_000;
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
-
 function countRows(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
   table: string,
@@ -39,12 +34,16 @@ function countRows(
   return Number(row.count);
 }
 
-function seedTranscriptState(storePath: string): void {
+function openDatabase(storePath: string) {
   const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
   if (!target.path) {
     throw new Error("expected SQLite database path");
   }
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+  return openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+}
+
+function seedTranscriptState(storePath: string): void {
+  const database = openDatabase(storePath);
   const now = Date.now();
   const eventJson = JSON.stringify({
     type: "message",
@@ -53,14 +52,23 @@ function seedTranscriptState(storePath: string): void {
   const insertEvent = database.db.prepare(
     "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
   );
+  // The fixture is already projected; NULL eligibility would schedule an
+  // unrelated background index rebuild during the deletion measurement.
   const insertActive = database.db.prepare(
     `INSERT INTO session_transcript_active_events
-       (session_id, active_position, event_seq, message_position)
-     VALUES (?, ?, ?, ?)`,
+       (session_id, active_position, event_seq, message_position, context_eligible)
+     VALUES (?, ?, ?, ?, 1)`,
   );
-  const insertFts = database.db.prepare(
-    `INSERT INTO session_transcript_fts (text, session_id, message_id, role, timestamp)
-     VALUES ('phase3 e2e transcript message', ?, ?, 'user', ?)`,
+  const ftsFields = { text: "phase3 e2e transcript message", role: "user", timestamp: now };
+  const insertIndex = database.db.prepare(
+    `INSERT INTO session_transcript_index_state (
+       session_id, indexed_seq, needs_rebuild, active_event_count,
+       active_message_count, updated_at
+     ) VALUES (?, ?, 0, ?, ?, ?)`,
+  );
+  const insertWatermark = database.db.prepare(
+    `INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
+     VALUES (?, ?, ?)`,
   );
   // sqlite-allow-raw -- bulk fixture setup stays outside the measured delete path.
   database.db.exec("BEGIN IMMEDIATE");
@@ -82,67 +90,28 @@ function seedTranscriptState(storePath: string): void {
          WHERE session_id = ?`,
       )
       .run(HISTORICAL_SESSION_ID, SESSION_ID);
-    for (let index = 0; index < ROWS; index += 1) {
-      insertEvent.run(SESSION_ID, index, eventJson, now + index);
-      insertActive.run(SESSION_ID, index, index, index);
-      insertFts.run(SESSION_ID, `${SESSION_ID}-message-${index}`, now);
+    for (const [sessionId, rows, generation] of [
+      [SESSION_ID, ROWS, "phase3-e2e-generation"],
+      [HISTORICAL_SESSION_ID, 1, "phase3-e2e-current-generation"],
+      [UNRELATED_SESSION_ID, 1, "phase3-unrelated-generation"],
+    ] as const) {
+      const insertFts = createSessionTranscriptFtsInserter(database.db, sessionId);
+      const event =
+        sessionId === UNRELATED_SESSION_ID
+          ? JSON.stringify({
+              type: "message",
+              id: `${UNRELATED_SESSION_ID}-message-0`,
+              message: { content: "unrelated transcript message", role: "assistant" },
+            })
+          : eventJson;
+      for (let index = 0; index < rows; index += 1) {
+        insertEvent.run(sessionId, index, event, now + index);
+        insertActive.run(sessionId, index, index, index);
+        insertFts({ ...ftsFields, messageId: `${sessionId}-message-${index}` });
+      }
+      insertIndex.run(sessionId, rows - 1, rows, rows, now);
+      insertWatermark.run(sessionId, generation, now);
     }
-    database.db
-      .prepare(
-        `INSERT INTO session_transcript_index_state (
-           session_id, indexed_seq, needs_rebuild, active_event_count,
-           active_message_count, updated_at
-         ) VALUES (?, ?, 0, ?, ?, ?)`,
-      )
-      .run(SESSION_ID, ROWS - 1, ROWS, ROWS, now);
-    database.db
-      .prepare(
-        `INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
-         VALUES (?, 'phase3-e2e-generation', ?)`,
-      )
-      .run(SESSION_ID, now);
-    insertEvent.run(HISTORICAL_SESSION_ID, 0, eventJson, now);
-    insertActive.run(HISTORICAL_SESSION_ID, 0, 0, 0);
-    insertFts.run(HISTORICAL_SESSION_ID, `${HISTORICAL_SESSION_ID}-message-0`, now);
-    database.db
-      .prepare(
-        `INSERT INTO session_transcript_index_state (
-           session_id, indexed_seq, needs_rebuild, active_event_count,
-           active_message_count, updated_at
-         ) VALUES (?, 0, 0, 1, 1, ?)`,
-      )
-      .run(HISTORICAL_SESSION_ID, now);
-    database.db
-      .prepare(
-        `INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
-         VALUES (?, 'phase3-e2e-current-generation', ?)`,
-      )
-      .run(HISTORICAL_SESSION_ID, now);
-    insertEvent.run(
-      UNRELATED_SESSION_ID,
-      0,
-      JSON.stringify({
-        type: "message",
-        message: { content: "unrelated transcript message", role: "assistant" },
-      }),
-      now,
-    );
-    insertActive.run(UNRELATED_SESSION_ID, 0, 0, 0);
-    insertFts.run(UNRELATED_SESSION_ID, `${UNRELATED_SESSION_ID}-message-0`, now);
-    database.db
-      .prepare(
-        `INSERT INTO session_transcript_index_state (
-           session_id, indexed_seq, needs_rebuild, active_event_count,
-           active_message_count, updated_at
-         ) VALUES (?, 0, 0, 1, 1, ?)`,
-      )
-      .run(UNRELATED_SESSION_ID, now);
-    database.db
-      .prepare(
-        `INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
-         VALUES (?, 'phase3-unrelated-generation', ?)`,
-      )
-      .run(UNRELATED_SESSION_ID, now);
     // sqlite-allow-raw -- commits the deterministic fixture before measurement.
     database.db.exec("COMMIT");
   } catch (error) {
@@ -150,9 +119,10 @@ function seedTranscriptState(storePath: string): void {
     database.db.exec("ROLLBACK");
     throw error;
   }
+  expect(listSessionsNeedingTranscriptIndexReconcile(database.db)).toEqual([]);
 }
 
-test("sessions.delete keeps the Gateway responsive while reclaiming a large session", async () => {
+test("sessions.delete reclaims a large session off the Gateway thread", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: {
@@ -163,14 +133,22 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   });
   seedTranscriptState(storePath);
 
-  const samples: number[] = [];
-  let previous = performance.now();
-  const heartbeat = setInterval(() => {
-    const current = performance.now();
-    samples.push(current - previous);
-    previous = current;
-  }, 10);
+  // Client setup prepares reply runtime before the deletion responsiveness window.
   const { ws } = await openClient();
+  const diagnostics = channel("openclaw.session.write");
+  const reclamations: Record<string, unknown>[] = [];
+  const recordReclamation = (message: unknown) => {
+    if (
+      isRecord(message) &&
+      (message.reclamationKind === "historical-generation" ||
+        message.reclamationKind === "entry") &&
+      (message.operation === "session.reclamation.worker-commit" ||
+        message.operation === "session.reclamation.in-process")
+    ) {
+      reclamations.push(message);
+    }
+  };
+  diagnostics.subscribe(recordReclamation);
   let deleted: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -181,66 +159,17 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
       }>
     >
   >;
-  let deleteMs = 0;
   try {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
-    const deleteStartedAt = performance.now();
     // The 200k-row fixture can take longer than the generic RPC helper's 10s
-    // wall-clock budget on slower CI hosts. Responsiveness is asserted
-    // independently below via the event-loop heartbeat.
+    // wall-clock budget on slower CI hosts. Completed worker facts below
+    // protect the off-thread contract independently of host scheduling delays.
     deleted = await rpcReq(ws, "sessions.delete", { key: SESSION_KEY }, 60_000);
-    deleteMs = performance.now() - deleteStartedAt;
   } finally {
-    clearInterval(heartbeat);
+    diagnostics.unsubscribe(recordReclamation);
     ws.close();
   }
-  const maxGatewayGapMs = Math.max(...samples);
 
-  const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-  if (!target.path) {
-    throw new Error("expected SQLite database path after deletion");
-  }
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-  const targetCounts = {
-    active: countRows(database, "session_transcript_active_events", SESSION_ID),
-    fts: countRows(database, "session_transcript_fts", SESSION_ID),
-    indexState: countRows(database, "session_transcript_index_state", SESSION_ID),
-    transcriptEvents: countRows(database, "transcript_events", SESSION_ID),
-    rewriteWatermarks: countRows(database, "transcript_rewrite_watermarks", SESSION_ID),
-    windows: countRows(database, "session_windows", SESSION_ID),
-  };
-  const historicalCounts = {
-    active: countRows(database, "session_transcript_active_events", HISTORICAL_SESSION_ID),
-    fts: countRows(database, "session_transcript_fts", HISTORICAL_SESSION_ID),
-    indexState: countRows(database, "session_transcript_index_state", HISTORICAL_SESSION_ID),
-    transcriptEvents: countRows(database, "transcript_events", HISTORICAL_SESSION_ID),
-    rewriteWatermarks: countRows(database, "transcript_rewrite_watermarks", HISTORICAL_SESSION_ID),
-    windows: countRows(database, "session_windows", HISTORICAL_SESSION_ID),
-  };
-  const unrelatedCounts = {
-    active: countRows(database, "session_transcript_active_events", UNRELATED_SESSION_ID),
-    fts: countRows(database, "session_transcript_fts", UNRELATED_SESSION_ID),
-    indexState: countRows(database, "session_transcript_index_state", UNRELATED_SESSION_ID),
-    transcriptEvents: countRows(database, "transcript_events", UNRELATED_SESSION_ID),
-    rewriteWatermarks: countRows(database, "transcript_rewrite_watermarks", UNRELATED_SESSION_ID),
-    windows: countRows(database, "session_windows", UNRELATED_SESSION_ID),
-  };
-  const targetNodeCount = Number(
-    (
-      database.db
-        .prepare("SELECT count(*) AS count FROM session_nodes WHERE current_session_id = ?")
-        .get(SESSION_ID) as { count: number | bigint }
-    ).count,
-  );
-  const unrelatedNodeCount = Number(
-    (
-      database.db
-        .prepare("SELECT count(*) AS count FROM session_nodes WHERE current_session_id = ?")
-        .get(UNRELATED_SESSION_ID) as { count: number | bigint }
-    ).count,
-  );
+  const database = openDatabase(storePath);
   const archives = database.db
     .prepare(
       `SELECT session_id, archive_sha256, length(archive_blob) AS archive_bytes, published_at
@@ -255,19 +184,6 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     session_id: string;
   }>;
 
-  if (process.env.OPENCLAW_TEST_RECLAMATION_LOG === "1") {
-    process.stdout.write(
-      `${JSON.stringify({
-        deleteMs,
-        maxGatewayGapMs,
-        rows: ROWS,
-        historicalCounts,
-        targetCounts,
-        unrelatedCounts,
-      })}\n`,
-    );
-  }
-
   expect(deleted.ok).toBe(true);
   expect(deleted.payload).toMatchObject({
     archived: [expect.any(String), expect.any(String)],
@@ -276,47 +192,51 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     ok: true,
   });
   expect(deleted.payload?.archived.every((archivePath) => fs.existsSync(archivePath))).toBe(true);
-  expect(targetCounts).toEqual({
-    active: 0,
-    fts: 0,
-    indexState: 0,
-    transcriptEvents: 0,
-    rewriteWatermarks: 0,
-    windows: 0,
-  });
-  expect(targetNodeCount).toBe(0);
-  expect(historicalCounts).toEqual({
-    active: 0,
-    fts: 0,
-    indexState: 0,
-    transcriptEvents: 0,
-    rewriteWatermarks: 0,
-    windows: 0,
-  });
-  expect(unrelatedCounts).toEqual({
-    active: 1,
-    fts: 1,
-    indexState: 1,
-    transcriptEvents: 1,
-    rewriteWatermarks: 1,
-    windows: 1,
-  });
-  expect(unrelatedNodeCount).toBe(1);
-  expect(archives).toEqual([
-    {
+  for (const [sessionId, expected] of [
+    [SESSION_ID, 0],
+    [HISTORICAL_SESSION_ID, 0],
+    [UNRELATED_SESSION_ID, 1],
+  ] as const) {
+    for (const table of [
+      "session_transcript_active_events",
+      "session_transcript_fts",
+      "session_transcript_fts_rows",
+      "session_transcript_index_state",
+      "transcript_events",
+      "transcript_rewrite_watermarks",
+      "session_windows",
+    ]) {
+      expect(countRows(database, table, sessionId), `${sessionId}: ${table}`).toBe(expected);
+    }
+    if (sessionId !== HISTORICAL_SESSION_ID) {
+      const node = database.db
+        .prepare("SELECT count(*) AS count FROM session_nodes WHERE current_session_id = ?")
+        .get(sessionId) as { count: number | bigint };
+      expect(Number(node.count), sessionId).toBe(expected);
+    }
+  }
+  expect(archives).toHaveLength(2);
+  for (const [index, archive] of archives.entries()) {
+    expect(archive).toEqual({
       archive_bytes: expect.any(Number),
       archive_sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
       published_at: expect.any(Number),
-      session_id: SESSION_ID,
-    },
-    {
-      archive_bytes: expect.any(Number),
-      archive_sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      published_at: expect.any(Number),
-      session_id: HISTORICAL_SESSION_ID,
-    },
+      session_id: index === 0 ? SESSION_ID : HISTORICAL_SESSION_ID,
+    });
+    expect(Number(archive.archive_bytes)).toBeGreaterThan(0);
+  }
+  expect(reclamations.map((record) => record.reclamationKind)).toEqual([
+    "historical-generation",
+    "entry",
   ]);
-  expect(archives.every((archive) => Number(archive.archive_bytes) > 0)).toBe(true);
-  expect(samples.length).toBeGreaterThan(0);
-  expect(maxGatewayGapMs).toBeLessThan(500);
+  for (const record of reclamations) {
+    expect(record).toMatchObject({
+      operation: "session.reclamation.worker-commit",
+      outcome: "ok",
+      threadId,
+      writer: "worker",
+    });
+    expect(record.workerThreadId).toBeGreaterThan(0);
+    expect(record.workerThreadId).not.toBe(threadId);
+  }
 }, 120_000);

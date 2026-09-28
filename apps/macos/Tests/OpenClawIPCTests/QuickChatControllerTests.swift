@@ -53,8 +53,14 @@ struct QuickChatControllerTests {
         #expect(createdRoutes == [firstRoute, secondRoute])
     }
 
-    @Test func `accepted global route opens chat with its agent`() async {
+    @Test(arguments: [
+        ("global", "/chat/work"),
+        ("agent:work:global", "/chat/work/~key/global"),
+        ("AGENT:WORK:GlObAl", "/chat/work/~key/GlObAl"),
+    ])
+    func `accepted global route opens the exact Dashboard session`(sessionKey: String, expectedPath: String) async {
         var openedRoute: QuickChatRoutingTarget?
+        var openedPath: String?
         let model = QuickChatModel(
             sessionKeyProvider: { "main" },
             agentsProvider: {
@@ -81,15 +87,21 @@ struct QuickChatControllerTests {
             chatOpener: { sessionKey, agentID in
                 guard let sessionKey else { return }
                 openedRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+                openedPath = WebChatRoute.dashboardPath(sessionKey: sessionKey, agentID: agentID)
             })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
         model.selectAgent("work")
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: sessionKey, displayName: "Global"))
         model.text = "hello"
 
         #expect(await model.send())
+        model.selectAgent("main")
         controller.handleSendAcceptedForTesting(openChat: true)
-        #expect(openedRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
+        #expect(openedRoute == QuickChatRoutingTarget(
+            sessionKey: sessionKey,
+            agentID: sessionKey == "global" ? "work" : nil))
+        #expect(openedPath == expectedPath)
         controller.stop()
     }
 

@@ -386,6 +386,7 @@ suite.define(() => {
         };
         const associatedSessions = sessionList.sessions;
         await installMockGateway(page, {
+          sessions: associatedSessions,
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [

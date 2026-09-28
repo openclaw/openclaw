@@ -3,10 +3,8 @@
 import { html, render } from "lit";
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
@@ -14,7 +12,7 @@ import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.
 it("keeps main content actions and focus in the task toolbar across plugin panel swaps", () => {
   const { pane, state } = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-    sessions: {} as SessionCapability,
+    sessions: createSessionCapabilityFixture(),
   });
   const slot = "plugin:fixture/notes";
   const refresh = vi.fn();
@@ -39,7 +37,6 @@ it("keeps main content actions and focus in the task toolbar across plugin panel
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         { key: state.sessionKey, kind: "direct", updatedAt: 0 },
         false,
         undefined,

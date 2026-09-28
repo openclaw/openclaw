@@ -12,23 +12,23 @@ import {
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
-import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
-const PROVIDER_LOGIN_PRESENTATION = {
+const providerLoginPresentation = (command: string) => ({
   blocks: [
     {
       type: "buttons",
       buttons: [
         {
           label: "Sign in",
-          action: { type: "command", command: "/login" },
+          action: { type: "command", command },
         },
       ],
     },
   ],
-};
+});
+const PROVIDER_LOGIN_PRESENTATION = providerLoginPresentation("/login openai");
 
 describe("executeAgentTurn: authentication failures", () => {
   it("surfaces gateway reauth guidance without a profile id", async () => {
@@ -42,7 +42,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send `/login openai` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.",
       );
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
@@ -88,7 +88,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send `/login openai` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.",
       );
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
@@ -109,23 +109,10 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai --profile-id 'openai:user@example.com'` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send `/login openai` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider openai --profile-id 'openai:user@example.com'` on the gateway.",
       );
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
-  });
-
-  it("preserves provider login recovery in known failure payloads", () => {
-    const payload = buildKnownAgentRunFailureReplyPayload({
-      err: new OAuthRefreshFailureError({
-        provider: "openai",
-        message: "refresh_token_invalidated",
-      }),
-      sessionCtx: { Provider: "telegram", ChatType: "direct" } as TemplateContext,
-      resolvedVerboseLevel: "off",
-    });
-
-    expect(payload?.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
   });
 
   it("preserves OAuth profile guidance through failover wrappers", async () => {
@@ -224,29 +211,30 @@ describe("executeAgentTurn: authentication failures", () => {
     }
   });
 
-  it.each(["openai", "xai", "minimax-portal"])(
-    "keeps disabled %s OAuth profiles actionable on later turns",
-    async (provider) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new FailoverError("All OpenAI auth profiles are unavailable", {
-          reason: "auth_permanent",
-          provider,
-          model: "fixture-model",
-          authMode: "oauth",
-          authProfileFailure: { allInCooldown: true },
-        }),
-      );
+  it.each([
+    ["openai", "/login openai"],
+    ["xai", "/login xai"],
+    ["minimax-portal", "/login minimax-portal"],
+  ])("keeps disabled %s OAuth profiles actionable on later turns", async (provider, command) => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("All OpenAI auth profiles are unavailable", {
+        reason: "auth_permanent",
+        provider,
+        model: "fixture-model",
+        authMode: "oauth",
+        authProfileFailure: { allInCooldown: true },
+      }),
+    );
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).toContain("/login");
-        expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
-      }
-    },
-  );
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain(command);
+      expect(result.payload.presentation).toEqual(providerLoginPresentation(command));
+    }
+  });
 
   it.each([
     {
@@ -300,9 +288,9 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider anthropic` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send `/login anthropic` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login --provider anthropic` on the gateway.",
       );
-      expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
+      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login anthropic"));
     }
   });
 
@@ -337,6 +325,7 @@ describe("executeAgentTurn: authentication failures", () => {
       expect(result.payload.text).toBe(
         "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
       );
+      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }
   });
 
@@ -401,7 +390,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-6-astra` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
     }
   });
@@ -551,6 +540,7 @@ describe("executeAgentTurn: authentication failures", () => {
       expect(result.payload.text).toBe(
         "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
       );
+      expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }
   });
 });

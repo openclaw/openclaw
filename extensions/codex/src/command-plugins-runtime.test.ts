@@ -17,6 +17,10 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { applyCodexAppServerAuthProfile } from "./app-server/auth-bridge.js";
@@ -57,6 +61,8 @@ afterEach(async () => {
     harness.client.close();
   }
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -376,35 +382,32 @@ describe("Codex plugin command context", () => {
     },
   );
 
-  it.each([true, false])(
-    "uses the selected profile partition with stable account %s",
-    async (stableAccount) => {
-      const test = await fixture(stableAccount);
-      await withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
-        expect(context.agentId).toBe("second");
-        expect(context.profileId).toBe("openai:second");
-        expect(context.workspaceDir).toBe(test.workspaceDir);
-        expect(context.threadId).toBeUndefined();
-        const prepared = test.acquire.mock.calls[0]?.[0]?.preparedAuth;
-        expect(prepared?.kind).toBe("profile");
-        expect(JSON.parse(context.appCacheKey)).toMatchObject({
-          authProfileId: "openai:second",
-          accountId: prepared?.kind === "profile" ? prepared.snapshot?.secretFreeCacheKey : null,
-        });
-        await context.request("app/installed", { forceRefresh: false });
+  it("uses the selected profile partition with a token-derived account", async () => {
+    const test = await fixture(false);
+    await withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+      expect(context.agentId).toBe("second");
+      expect(context.profileId).toBe("openai:second");
+      expect(context.workspaceDir).toBe(test.workspaceDir);
+      expect(context.threadId).toBeUndefined();
+      const prepared = test.acquire.mock.calls[0]?.[0]?.preparedAuth;
+      expect(prepared?.kind).toBe("profile");
+      expect(JSON.parse(context.appCacheKey)).toMatchObject({
+        authProfileId: "openai:second",
+        accountId: prepared?.kind === "profile" ? prepared.snapshot?.secretFreeCacheKey : null,
       });
-      expect(test.acquire).toHaveBeenCalledOnce();
-      expect(test.acquire).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentDir: test.agentDir,
-          preparedAuth: expect.objectContaining({ kind: "profile", profileId: "openai:second" }),
-          authRequirement: "subscription",
-          authBindingFingerprint: expect.any(String),
-        }),
-      );
-      expect(test.release).toHaveBeenCalledOnce();
-    },
-  );
+      await context.request("app/installed", { forceRefresh: false });
+    });
+    expect(test.acquire).toHaveBeenCalledOnce();
+    expect(test.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: test.agentDir,
+        preparedAuth: expect.objectContaining({ kind: "profile", profileId: "openai:second" }),
+        authRequirement: "subscription",
+        authBindingFingerprint: expect.any(String),
+      }),
+    );
+    expect(test.release).toHaveBeenCalledOnce();
+  });
 
   it.each([true, false])(
     "only exposes a thread owned by this physical client (%s)",

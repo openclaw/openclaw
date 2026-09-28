@@ -9,7 +9,7 @@ import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinkin
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -116,6 +116,26 @@ describe("configured catalog route overlays", () => {
   ])(
     "keeps capabilities with their owner: $name",
     ({ override, clearsCapturedMetadata, missingRouteField }) => {
+      function expectCapabilities(entry: ModelCatalogEntry, hasDonor: boolean) {
+        const defaults = {
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 128_000,
+          contextTokens: 96_000,
+          thinkingLevelMap: { off: null, high: "high" },
+        };
+        for (const field of [
+          "reasoning",
+          "input",
+          "contextWindow",
+          "contextTokens",
+          "thinkingLevelMap",
+        ] as const) {
+          expect(entry[field], field).toEqual(
+            override[field] ?? (hasDonor ? defaults[field] : undefined),
+          );
+        }
+      }
       const source = validateConfigObjectRaw({
         agents: {
           entries: { main: {} },
@@ -208,22 +228,7 @@ describe("configured catalog route overlays", () => {
       expect(preparedPolicy).toHaveBeenCalledTimes(clearsCapturedMetadata ? 0 : 1);
       preparedPolicy.mockClear();
       expect(selected.configuredReasoning).toBe(override.reasoning);
-      expect(selected.reasoning).toBe(
-        override.reasoning ?? (clearsCapturedMetadata ? undefined : true),
-      );
-      expect(selected.input).toEqual(
-        override.input ?? (clearsCapturedMetadata ? undefined : ["text", "image"]),
-      );
-      expect(selected.contextWindow).toBe(
-        override.contextWindow ?? (clearsCapturedMetadata ? undefined : 128_000),
-      );
-      expect(selected.contextTokens).toBe(
-        override.contextTokens ?? (clearsCapturedMetadata ? undefined : 96_000),
-      );
-      expect(selected.thinkingLevelMap).toEqual(
-        override.thinkingLevelMap ??
-          (clearsCapturedMetadata ? undefined : { off: null, high: "high" }),
-      );
+      expectCapabilities(selected, !clearsCapturedMetadata);
       if (!missingRouteField) {
         expect(selected.compat).toEqual(
           clearsCapturedMetadata ? override.compat : { supportsTools: true },
@@ -245,11 +250,10 @@ describe("configured catalog route overlays", () => {
         entry: selected,
         projection: { kind: "selected", route, policy: routePolicy },
         catalog: catalog.routeVariants,
-        overrides: resolveConfiguredModelCatalogOverrides({
+        overrides: createConfiguredModelCatalogOverridesResolver({
           cfg: source.config,
-          entry: selected,
           policy: routePolicy,
-        }),
+        })(selected),
       });
       const hasMatchingDonor = !clearsCapturedMetadata && !missingRouteField;
       expect(projected).toMatchObject({
@@ -260,19 +264,7 @@ describe("configured catalog route overlays", () => {
         api: route.api,
         baseUrl: route.baseUrl,
       });
-      expect(projected.reasoning).toBe(override.reasoning ?? (hasMatchingDonor ? true : undefined));
-      expect(projected.input).toEqual(
-        override.input ?? (hasMatchingDonor ? ["text", "image"] : undefined),
-      );
-      expect(projected.contextWindow).toBe(
-        override.contextWindow ?? (hasMatchingDonor ? 128_000 : undefined),
-      );
-      expect(projected.contextTokens).toBe(
-        override.contextTokens ?? (hasMatchingDonor ? 96_000 : undefined),
-      );
-      expect(projected.thinkingLevelMap).toEqual(
-        override.thinkingLevelMap ?? (hasMatchingDonor ? { off: null, high: "high" } : undefined),
-      );
+      expectCapabilities(projected, hasMatchingDonor);
       expect(projected.thinkingPolicyProvider).toBe(
         hasMatchingDonor ? "fixture-thinking-owner" : undefined,
       );

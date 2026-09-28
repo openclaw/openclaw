@@ -331,15 +331,7 @@ export function buildCwdBoundHashedArgPattern(
   return `${CWD_BOUND_HASHED_ARG_PATTERN_PREFIX}${digest}`;
 }
 
-function matchArgPattern(
-  argPattern: string,
-  argv: string[],
-  cwd: string | undefined,
-  platform?: string | null,
-): boolean {
-  if (argPattern.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX)) {
-    return cwd !== undefined && argPattern === buildCwdBoundHashedArgPattern(argv, cwd, platform);
-  }
+function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
   if (argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX)) {
     return false;
   }
@@ -433,6 +425,7 @@ export function matchAllowlist(
     return null;
   }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
+  let cwdBoundHash: string | undefined;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) {
@@ -455,11 +448,21 @@ export function matchAllowlist(
       }
       continue;
     }
-    // Entry has argPattern — check argv match.
-    if (entry.source === "allow-always" && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+    if (!argv) {
       continue;
     }
-    if (argv && matchArgPattern(entry.argPattern, argv, cwd, platform)) {
+    if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+      if (cwd === undefined) {
+        continue;
+      }
+      cwdBoundHash ??= buildCwdBoundHashedArgPattern(argv, cwd, platform);
+      if (entry.argPattern === cwdBoundHash) {
+        return entry;
+      }
+    } else if (
+      entry.source !== "allow-always" &&
+      matchArgPattern(entry.argPattern, argv, platform)
+    ) {
       return entry;
     }
   }

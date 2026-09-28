@@ -164,6 +164,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let name: String
     public let provider: String
     public let available: Bool?
+    public let manualSelectionAllowed: Bool?
     public let unavailableReason: String?
     public let unavailableUntil: Int?
     public let contextWindow: Int?
@@ -180,6 +181,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         name: String,
         provider: String,
         available: Bool? = nil,
+        manualSelectionAllowed: Bool? = nil,
         unavailableReason: String? = nil,
         unavailableUntil: Int? = nil,
         contextWindow: Int?,
@@ -195,6 +197,7 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         self.name = name
         self.provider = provider
         self.available = available
+        self.manualSelectionAllowed = manualSelectionAllowed
         self.unavailableReason = unavailableReason
         self.unavailableUntil = unavailableUntil
         self.contextWindow = contextWindow
@@ -559,35 +562,12 @@ public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equa
     public let updatedSessions: Int?
 }
 
-public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable {
-    public let id: String
-    public let name: String?
-    public let workspaceGit: Bool?
-
-    public init(id: String, name: String? = nil, workspaceGit: Bool? = nil) {
-        self.id = id
-        self.name = name
-        self.workspaceGit = workspaceGit
-    }
-
-    public var displayName: String {
-        let normalized = self.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let normalized, !normalized.isEmpty else { return self.id }
-        return normalized
-    }
-}
-
-public struct OpenClawChatAgentsListResponse: Codable, Sendable, Equatable {
-    public let defaultId: String
-    public let agents: [OpenClawChatAgentChoice]
-
-    public init(defaultId: String, agents: [OpenClawChatAgentChoice]) {
-        self.defaultId = defaultId
-        self.agents = agents
-    }
-}
-
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
+    /// Discovery needs only actor type, not the creator's identity or display metadata.
+    public struct CreatedActor: Codable, Sendable, Hashable {
+        public let type: String
+    }
+
     public var id: String {
         self.key
     }
@@ -620,6 +600,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var subject: String?
     public var room: String?
     public var space: String?
+    public var createdAt: Double?
+    public var createdActor: CreatedActor?
+    public var createdVia: String?
     public var updatedAt: Double?
     public var lastReadAt: Double?
     public var markedUnreadAt: Double?

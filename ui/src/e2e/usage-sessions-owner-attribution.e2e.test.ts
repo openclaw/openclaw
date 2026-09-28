@@ -136,8 +136,8 @@ suite.define(() => {
               ownership: "explicit",
               defaults: { workspace: state.workspaceDir },
               entries: {
-                main: { workspace: state.workspaceDir },
-                opus: { workspace: state.workspaceDir },
+                main: { name: "Molty", workspace: state.workspaceDir },
+                opus: { name: "Molty", workspace: state.workspaceDir },
               },
             },
             gateway: {
@@ -239,16 +239,17 @@ suite.define(() => {
               const row = page.locator(`.session-bar-row[title="${PROOF_STORE_KEY}"]`);
               await row.waitFor();
               await expect.poll(() => row.count()).toBe(1);
-              const meta = row.locator(".session-bar-meta");
-              await expect
-                .poll(async () => (await meta.textContent()) ?? "")
-                .toContain("agent:main");
-              await expect
-                .poll(async () => (await meta.textContent()) ?? "")
-                .not.toContain("agent:opus");
-              await expect
-                .poll(() => otherRow.locator(".session-bar-meta").textContent())
-                .toContain("agent:opus");
+              for (const [ownerRow, agentId] of [
+                [row, "main"],
+                [otherRow, "opus"],
+              ] as const) {
+                const chip = ownerRow.getByRole("img", {
+                  name: `Molty (agent:${agentId})`,
+                  exact: true,
+                });
+                await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
+                await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
+              }
               await expect.poll(() => page.locator(".session-bar-row").count()).toBe(2);
 
               await row.scrollIntoViewIfNeeded();

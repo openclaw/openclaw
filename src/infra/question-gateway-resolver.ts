@@ -3,6 +3,7 @@ import type {
   QuestionGetResult,
   QuestionResolveResult,
 } from "../../packages/gateway-protocol/src/schema/questions.js";
+import { bindAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 
@@ -101,9 +102,12 @@ export async function resolveQuestionOverGateway(
     clientDisplayName:
       params.clientDisplayName ?? `Question (${params.senderId?.trim() || "unknown"})`,
   };
+  const request = params.gatewayUrl?.trim()
+    ? callGateway
+    : bindAgentToolGatewayRequest({ hostedOnly: true });
   let getResult: QuestionGetResult;
   try {
-    getResult = await callGateway<QuestionGetResult>({
+    getResult = await request<QuestionGetResult>({
       ...gatewayOptions,
       method: "question.get",
       params: { id: params.questionId },
@@ -138,7 +142,7 @@ export async function resolveQuestionOverGateway(
     return { status: "denied" };
   }
   try {
-    await callGateway<QuestionResolveResult>({
+    await request<QuestionResolveResult>({
       ...gatewayOptions,
       method: "question.resolve",
       params: {

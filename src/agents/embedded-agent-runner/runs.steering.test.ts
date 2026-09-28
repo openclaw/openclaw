@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -94,6 +98,109 @@ describe("embedded-agent active-run steering", () => {
         expect(await result).toEqual(outcome === "claimed" ? { runId: "question-owner" } : null);
       }
       expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "answer",
+    "no-pending",
+    "wrong-authority",
+    "unconfirmed",
+    "image",
+    "wrong-authority-image",
+    "overlay",
+    "wrong-authority-overlay",
+  ] as const)(
+    "keeps hidden-run input with its question owner or visible followup: %s",
+    async (input) => {
+      const runId = "hidden-question-owner";
+      const sessionId = "hidden-question-session";
+      const ownerRun = createQueueTestRun({ prompt: "pending question" });
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:hidden-question",
+        sessionId,
+        resetTriggered: false,
+      });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(ownerRun));
+      const fingerprint = operation.bindToolAuthorityRoute({
+        provider: ownerRun.run.provider,
+        model: ownerRun.run.model,
+      });
+      const queueMessage = vi.fn(async () => {});
+      const error = new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable"));
+      const claim = vi.fn(async () => {
+        if (input === "unconfirmed") {
+          throw error;
+        }
+        return input !== "no-pending";
+      });
+      const cancel = vi.fn(async () => true);
+      const handle = {
+        ...createEmbeddedRunHandle({ runId, queueMessage }),
+        kind: "embedded" as const,
+        cancel: vi.fn(),
+        toolAuthorityFingerprint: fingerprint,
+      };
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer: async (_text, _options, assertCurrent, authorityKind) => {
+          expect(authorityKind).toBe("source-bound");
+          assertCurrent();
+          return claim();
+        },
+        cancelPendingUserInput: async (_resolvedBy, assertCurrent, authorityKind) => {
+          expect(authorityKind).toBe("source-bound");
+          assertCurrent();
+          return cancel();
+        },
+      };
+      operation.attachBackend(handle);
+      operation.setPhase("running");
+      setActiveEmbeddedRun(sessionId, handle);
+      registerAgentRunContext(runId, { isControlUiVisible: false, projectSessionMessages: false });
+      const image = input.endsWith("image");
+      const overlay = input.endsWith("overlay");
+      const authorized = !input.startsWith("wrong-authority");
+      const options: Parameters<typeof queueGuardedEmbeddedAgentMessageWithOutcomeAsync>[2] = {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: authorized || overlay ? fingerprint : "other-authority",
+        ...(overlay
+          ? {
+              toolAuthorityOverlay: {
+                senderIsOwner: false,
+                disableTools: !authorized,
+                traceAuthorized: false,
+              },
+              pendingInputAuthorityFingerprint: fingerprint,
+            }
+          : {}),
+        ...(image ? { images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] } : {}),
+      };
+      try {
+        const result = queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+          sessionId,
+          "Green",
+          options,
+          () => true,
+        );
+        if (input === "unconfirmed") {
+          await expect(result).rejects.toBe(error);
+        } else {
+          await expect(result).resolves.toMatchObject(
+            input === "answer" || input === "overlay"
+              ? { queued: true }
+              : { queued: false, reason: "input_visibility_mismatch" },
+          );
+        }
+        expect(claim).toHaveBeenCalledTimes(authorized && !image ? 1 : 0);
+        expect(cancel).toHaveBeenCalledTimes(authorized && image ? 1 : 0);
+        expect(queueMessage).not.toHaveBeenCalled();
+      } finally {
+        clearAgentRunContext(runId);
+        operation.complete();
+      }
     },
   );
 
@@ -319,20 +426,6 @@ describe("embedded-agent active-run steering", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("defaults active embedded steering to all pending messages", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-default-steer", {
-      ...createEmbeddedRunHandle(),
-      queueMessage,
-    });
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-default-steer", "continue").queued).toBe(
-      true,
-    );
-
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
   it("queues into active non-streaming handles that expose live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
@@ -496,6 +589,34 @@ describe("embedded-agent active-run steering", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the compacting state check throws", async () => {
+    const warnings = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-bad-compacting-state", {
+      ...createEmbeddedRunHandle({ queueMessage }),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-bad-compacting-state",
+      "continue",
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-bad-compacting-state",
+      reason: "compacting",
+      gatewayHealth: "live",
+    });
+    await expect(
+      queueEmbeddedAgentMessageWithOutcomeAsync("session-bad-compacting-state", "retry"),
+    ).resolves.toEqual(outcome);
+    expect(warnings).toHaveBeenCalledTimes(1);
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
   it("returns a structured no-active-run queue failure", () => {
     const outcome = queueEmbeddedAgentMessageWithOutcome("session-missing", "continue");
 
@@ -510,7 +631,7 @@ describe("embedded-agent active-run steering", () => {
     );
   });
 
-  it("returns structured queue failures for legacy, unavailable, or compacting runs", () => {
+  it("preserves backend refusal and legacy compaction rejection", () => {
     const legacyQueue = vi.fn(async () => {});
     const unavailableQueue = vi.fn(async () => {});
     setActiveEmbeddedRun(
@@ -520,10 +641,18 @@ describe("embedded-agent active-run steering", () => {
     setActiveEmbeddedRun(
       "session-unavailable",
       createEmbeddedRunHandle({
+        isCompacting: true,
         messageInjection: { isAvailable: () => false, queueMessage: unavailableQueue },
       }),
     );
     setActiveEmbeddedRun("session-compacting", createEmbeddedRunHandle({ isCompacting: true }));
+    setActiveEmbeddedRun(
+      "session-compacting-v1",
+      createEmbeddedRunHandle({
+        isCompacting: true,
+        messageInjection: { isAvailable: () => true, queueMessage: legacyQueue },
+      }),
+    );
 
     expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
       { queued: false, reason: "not_streaming" },
@@ -538,6 +667,10 @@ describe("embedded-agent active-run steering", () => {
       queued: false,
       reason: "compacting",
     });
+    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting-v1", "continue")).toMatchObject(
+      { queued: false, reason: "compacting" },
+    );
+    expect(legacyQueue).not.toHaveBeenCalled();
   });
 
   it("returns runtime rejection details when async queue delivery fails", async () => {

@@ -13,10 +13,14 @@ import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { createLifecycleDiagnosticOperation } from "./session-lifecycle-diagnostics.js";
-import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  collectSessionIdentityTargets,
+  normalizeSessionIdentities,
+} from "./session-lifecycle-identity.js";
 import { createSessionIdentityLockRunner } from "./session-lifecycle-locks.js";
 import {
   clearSessionWorkAdmissionHandoffs,
@@ -24,19 +28,26 @@ import {
   type HandoffSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "./session-work-admission-handoff.js";
+import {
+  waitForSessionWorkAdmissionRelease,
+  type SessionWorkAdmissionInterrupt,
+} from "./session-work-admission-interruption.js";
 
 export {
   cancelSessionWorkAdmissionHandoff,
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "./session-work-admission-handoff.js";
+export {
+  waitForSessionWorkAdmissionRelease,
+  type SessionWorkAdmissionInterrupt,
+} from "./session-work-admission-interruption.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   lifecycleGeneration: string;
   phase: "pending" | "acquired";
   owner?: symbol;
-  interrupt?: (reason?: Error) => void;
   released: Promise<void>;
 };
 
@@ -411,18 +422,29 @@ export function isCompetingSessionWorkAdmissionActive(
 
 type SessionWorkAdmissionReleaseParams = SessionLifecycleMutationTarget;
 
+function collectSessionWorkAdmissions(
+  identities: Iterable<string>,
+  matches: (admission: SessionWorkAdmission) => boolean,
+): Set<SessionWorkAdmission> {
+  const matching = new Set<SessionWorkAdmission>();
+  for (const identity of identities) {
+    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
+      if (matches(admission)) {
+        matching.add(admission);
+      }
+    }
+  }
+  return matching;
+}
+
 /** Completion of the currently active turns that own a session. */
 export function getSessionWorkAdmissionRelease(
   params: SessionWorkAdmissionReleaseParams,
 ): Promise<void> | undefined {
-  const matchingAdmissions = new Set<SessionWorkAdmission>();
-  for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
-    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (admission.phase === "acquired") {
-        matchingAdmissions.add(admission);
-      }
-    }
-  }
+  const matchingAdmissions = collectSessionWorkAdmissions(
+    normalizeSessionIdentities(params.scope, params.identities),
+    (admission) => admission.phase === "acquired",
+  );
   if (matchingAdmissions.size === 0) {
     return undefined;
   }
@@ -438,14 +460,10 @@ export function getSessionWorkAdmissionRelease(
 export function getSessionWorkAdmissionOwnerRelease(
   params: SessionWorkAdmissionReleaseParams & { owner: symbol },
 ): Promise<void> | undefined {
-  const matching = new Set<SessionWorkAdmission>();
-  for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
-    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (admission.owner === params.owner) {
-        matching.add(admission);
-      }
-    }
-  }
+  const matching = collectSessionWorkAdmissions(
+    normalizeSessionIdentities(params.scope, params.identities),
+    (admission) => admission.owner === params.owner,
+  );
   return matching.size > 0
     ? Promise.all(Array.from(matching, (admission) => admission.released)).then(() => undefined)
     : undefined;
@@ -455,37 +473,24 @@ export function getSessionWorkAdmissionOwnerRelease(
 export function collectActiveSessionWorkAdmissions(
   owners?: ReadonlySet<object>,
 ): Map<string, Set<string>> {
-  const targets = new Map<string, Set<string>>();
-  for (const [normalizedIdentity, admissions] of ACTIVE_SESSION_WORK_ADMISSIONS) {
-    if (
-      ![...admissions].some(
+  const identities = [...ACTIVE_SESSION_WORK_ADMISSIONS]
+    .filter(([, admissions]) =>
+      [...admissions].some(
         (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
-      )
-    ) {
-      continue;
-    }
-    const decoded = decodeSessionIdentity(normalizedIdentity);
-    if (!decoded) {
-      continue;
-    }
-    const identities = targets.get(decoded.scope) ?? new Set<string>();
-    identities.add(decoded.identity);
-    targets.set(decoded.scope, identities);
-  }
-  return targets;
+      ),
+    )
+    .map(([identity]) => identity);
+  return collectSessionIdentityTargets(identities);
 }
 
 /** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
 export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: GatewayContextResolver) {
-  const owners = new Set(
-    [...ACTIVE_SESSION_WORK_ADMISSIONS.values()].flatMap((admissions) =>
-      [...admissions].filter(
-        (admission) =>
-          admission.phase === "acquired" &&
-          admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
-          hasGatewayContextOwner(admission, resolveGatewayContext),
-      ),
-    ),
+  const owners = collectSessionWorkAdmissions(
+    ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
+    (admission) =>
+      admission.phase === "acquired" &&
+      admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
+      hasGatewayContextOwner(admission, resolveGatewayContext),
   );
   return {
     targets: collectActiveSessionWorkAdmissions(owners),
@@ -496,15 +501,10 @@ export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: Gatew
 
 /** Unique admitted turns; one lease can be indexed under several identities. */
 export function getActiveSessionWorkAdmissionCount(): number {
-  const admissions = new Set<SessionWorkAdmission>();
-  for (const active of ACTIVE_SESSION_WORK_ADMISSIONS.values()) {
-    for (const admission of active) {
-      if (admission.phase === "acquired") {
-        admissions.add(admission);
-      }
-    }
-  }
-  return admissions.size;
+  return collectSessionWorkAdmissions(
+    ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
+    (admission) => admission.phase === "acquired",
+  ).size;
 }
 
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
@@ -516,16 +516,24 @@ export function getActiveSessionLifecycleMutationCount(): number {
   return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;
 }
 
+/** Snapshot the existing lifecycle identity index for off-thread maintenance planning. */
+export function collectActiveSessionLifecycleMutationIdentities(scope: string): string[] {
+  const identities = [...ACTIVE_SESSION_LIFECYCLE_MUTATIONS]
+    .filter(([, count]) => count > 0)
+    .map(([identity]) => identity);
+  return [...(collectSessionIdentityTargets(identities).get(scope.trim()) ?? [])].toSorted();
+}
+
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
   resolveGatewayContext?: GatewayContextResolver;
-  assertAllowed: () => Promise<void> | void;
+  assertAllowed: (signal: AbortSignal) => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
-  onInterrupt?: (reason?: Error) => void;
+  onInterrupt?: SessionWorkAdmissionInterrupt;
   signal?: AbortSignal;
 }): Promise<SessionWorkAdmissionLease> {
   if (isGatewaySubordinateWorkAdmissionClosed()) {
@@ -542,7 +550,7 @@ export async function beginSessionWorkAdmission(params: {
     ? AbortSignal.any([params.signal, pendingController.signal])
     : pendingController.signal;
   let writerBarrierStarted = false;
-  let resolveReleased = () => {};
+  const { promise: releasedPromise, resolve: resolveReleased } = createDeferredCore();
   const admission: SessionWorkAdmission = {
     lifecycleGeneration: getAgentRunLifecycleGeneration(),
     phase: "pending",
@@ -553,16 +561,14 @@ export async function beginSessionWorkAdmission(params: {
     interrupt: (reason) => {
       admission.interrupted ??= reason ?? new Error("Session work admission interrupted");
       try {
-        params.onInterrupt?.(admission.interrupted);
+        return params.onInterrupt?.(admission.interrupted);
       } finally {
         if (!writerBarrierStarted) {
           pendingController.abort(admission.interrupted);
         }
       }
     },
-    released: new Promise<void>((resolve) => {
-      resolveReleased = resolve;
-    }),
+    released: releasedPromise,
   };
   bindGatewayContextResolver(admission, resolveGatewayContext);
   // Reserve before waiting: Stop must own queued ingress as well as running work.
@@ -636,7 +642,7 @@ export async function beginSessionWorkAdmission(params: {
       run: async () => {
         const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
         current.add(admission);
-        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed);
+        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed, signal);
         if (isGatewaySubordinateWorkAdmissionClosed()) {
           throw new GatewayDrainingError();
         }
@@ -647,7 +653,8 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             signal.throwIfAborted();
-            await lease.run(async () => await (params.revalidateAllowed ?? params.assertAllowed)());
+            const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
+            await lease.run(async () => await revalidate());
           },
           { reentrant: true },
         );
@@ -696,27 +703,25 @@ function startNormalizedSessionWorkAdmissionInterruption(params: {
   reason?: Error;
   identities: readonly string[];
   pendingOnly?: boolean;
-}): { released: Promise<void> } {
-  const admissions = new Set<SessionWorkAdmission>();
+}): { released: Promise<void>; interruptedRunIds: ReadonlySet<string> } {
+  const interruptedRunIds = new Set<string>();
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  for (const identity of params.identities) {
-    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (params.pendingOnly && admission.phase !== "pending") {
-        continue;
-      }
-      // In-band lifecycle commands suspend their own admitted turn while the
-      // mutation runs. Interrupt competing work, not the initiating stack.
-      if (currentAdmissions?.has(admission)) {
-        continue;
-      }
-      admissions.add(admission);
-    }
-  }
+  // In-band lifecycle commands suspend their own admitted turn while the
+  // mutation runs. Interrupt competing work, not the initiating stack.
+  const admissions = collectSessionWorkAdmissions(
+    params.identities,
+    (admission) =>
+      (!params.pendingOnly || admission.phase === "pending") && !currentAdmissions?.has(admission),
+  );
   for (const admission of admissions) {
     admission.interrupted ??= params.reason ?? new Error("Session work admission interrupted");
-    admission.interrupt?.(admission.interrupted);
+    const receipt = admission.interrupt?.(admission.interrupted);
+    if (receipt) {
+      interruptedRunIds.add(receipt.runId);
+    }
   }
   return {
+    interruptedRunIds,
     released: Promise.all(Array.from(admissions, (admission) => admission.released)).then(
       () => undefined,
     ),
@@ -727,7 +732,7 @@ export function startSessionWorkAdmissionInterruption(params: {
   reason?: Error;
   scope: string;
   identities: Iterable<string | undefined>;
-}): { released: Promise<void> } {
+}): { released: Promise<void>; interruptedRunIds: ReadonlySet<string> } {
   return startNormalizedSessionWorkAdmissionInterruption({
     identities: normalizeSessionIdentities(params.scope, params.identities),
     reason: params.reason,
@@ -741,25 +746,7 @@ export async function interruptSessionWorkAdmissions(params: {
   timeoutMs?: number;
 }): Promise<boolean> {
   const { released } = startSessionWorkAdmissionInterruption(params);
-  if (params.timeoutMs === undefined) {
-    await released;
-    return true;
-  }
-  const timeoutMs = params.timeoutMs;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      released.then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return waitForSessionWorkAdmissionRelease(released, params.timeoutMs);
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

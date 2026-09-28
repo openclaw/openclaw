@@ -30,6 +30,13 @@ import { isDeepStrictEqual } from "node:util";
 import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import {
+  decodePublicationDispatchEnvelope,
+  normalizePublicationIntent,
+  normalizePublicationLaneInputs,
+  publicationDispatchEnvelope,
+  publicationIntentInputs,
+} from "./full-release-publication-contract.mjs";
+import {
   classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
@@ -137,7 +144,6 @@ type DispatchRequest = {
   targetVersion: string;
   targetContextRef: string;
   workflowRef: string;
-  targetRef: string;
   wireInputs: Record<string, string>;
   inputs: DispatchInputs;
   effectiveSoak: boolean;
@@ -146,10 +152,7 @@ type DispatchRecord = {
   kind: typeof REQUEST_KIND;
   request: DispatchRequest;
   phase: "prepared" | "attempted" | "observed" | "rejected";
-  refs: {
-    target: "intended" | "uncertain" | "created";
-    workflow: "intended" | "uncertain" | "created";
-  };
+  refs: { workflow: "intended" | "uncertain" | "created" };
   error: "none" | "transport" | "unclassified" | "http-rejection";
   run: DispatchRun | null;
 };
@@ -182,12 +185,13 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
 
-Creates temporary remote branches pinned to the exact Tooling SHA and Validation SHA,
+Preflights the Validation SHA with a bare-SHA fetch into a fresh temporary repository.
+Creates one immutable release-ci/* workflow ref pinned to the exact Tooling SHA,
 dispatches Full Release Validation with the full Validation SHA as its ref input
 and expected_sha as its immutable identity,
 watches the parent run, verifies all child workflow head SHAs match the trusted
-workflow lineage through the release evidence manifest, then deletes both
-temporary branches by default. --keep-branch retains both branches. Exact-target and changelog-only Release SHA
+workflow lineage through the release evidence manifest, then deletes the temporary
+workflow ref by default. --keep-branch retains that ref. Exact-target and changelog-only Release SHA
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
 -f fail_fast=true to cancel only an exact still-active child after Release
@@ -214,7 +218,7 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
   return typeof output === "string" ? output.trim() : "";
 }
 
-function runStatus(command: string, args: string[], options: CommandOptions = {}) {
+function runStatus(command: string, args: string[], options: CommandOptions = {}): CommandStatus {
   if (options.dryRun) {
     console.log(["+", command, ...args].join(" "));
     return { status: 0, stderr: "", stdout: "" };
@@ -353,35 +357,20 @@ function createTemporaryRef(ref: string, sha: string, dryRun: boolean) {
       { dryRun, stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (error) {
-    const message = commandFailureMessage(error);
-    if (!message.includes("Object does not exist")) {
-      throw new Error(message, { cause: error });
-    }
-    // The refs API cannot transfer a commit that exists only in the local
-    // object database. Preserve the shipped local-candidate contract.
-    run("git", ["push", "origin", `${sha}:${ref}`], {
-      dryRun,
-      stdio: "inherit",
-    });
+    throw new Error(commandFailureMessage(error), { cause: error });
   }
 }
 
-function deleteTemporaryRefs(refs: string[], dryRun: boolean) {
-  const failures: string[] = [];
-  for (const ref of refs) {
-    try {
-      runGh(
-        ["api", "--method", "DELETE", `repos/${REPOSITORY}/git/refs/${ref.slice("refs/".length)}`],
-        {
-          dryRun,
-        },
-      );
-    } catch (error) {
-      failures.push(`${ref}: ${commandFailureMessage(error)}`);
-    }
-  }
-  if (failures.length > 0) {
-    throw new Error(`Failed to delete temporary refs: ${failures.join("; ")}`);
+function deleteTemporaryRef(ref: string, dryRun: boolean) {
+  try {
+    runGh(
+      ["api", "--method", "DELETE", `repos/${REPOSITORY}/git/refs/${ref.slice("refs/".length)}`],
+      { dryRun },
+    );
+  } catch (error) {
+    throw new Error(`Failed to delete temporary ref ${ref}: ${commandFailureMessage(error)}`, {
+      cause: error,
+    });
   }
 }
 
@@ -399,6 +388,22 @@ export function parseArgs(argv: string[]) {
     dryRun: false,
     inputs,
   };
+  const valueOptions = [
+    ["--sha", "sha"],
+    ["--request-file", "requestFile"],
+    ["--reconcile-request", "reconcileRequest"],
+    ["--workflow-sha", "workflowSha"],
+    ["--trusted-workflow-ref", "trustedWorkflowRef"],
+    ["--target-ref", "targetRef"],
+  ] as const;
+  const assignInput = (assignment: string, errorMessage: string) => {
+    const [key, ...valueParts] = assignment.split("=");
+    if (!key || valueParts.length === 0) {
+      throw new Error(errorMessage);
+    }
+    args.inputs[key] = valueParts.join("=");
+    args.specifiedInputs.push(key);
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -406,32 +411,9 @@ export function parseArgs(argv: string[]) {
       usage();
       process.exit(0);
     }
-    if (arg === "--sha") {
-      args.sha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--request-file" || arg === "--reconcile-request") {
-      args[arg === "--request-file" ? "requestFile" : "reconcileRequest"] = requireOptionArgument(
-        argv,
-        i,
-        arg,
-      );
-      i += 1;
-      continue;
-    }
-    if (arg === "--workflow-sha") {
-      args.workflowSha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--trusted-workflow-ref") {
-      args.trustedWorkflowRef = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--target-ref") {
-      args.targetRef = requireOptionArgument(argv, i, arg);
+    const valueKey = valueOptions.find(([flag]) => flag === arg)?.[1];
+    if (valueKey) {
+      args[valueKey] = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
@@ -454,34 +436,19 @@ export function parseArgs(argv: string[]) {
         } else {
           assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
         }
-        const [key, ...valueParts] = assignment.split("=");
-        if (!key || valueParts.length === 0) {
-          throw new Error(`Unsupported extra argument after --: ${extra}`);
-        }
-        args.inputs[key] = valueParts.join("=");
-        args.specifiedInputs.push(key);
+        assignInput(assignment, `Unsupported extra argument after --: ${extra}`);
       }
       break;
     }
     if (arg === "-f") {
       const assignment = requireOptionArgument(argv, i, arg);
       i += 1;
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${assignment}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${assignment}`);
       continue;
     }
     if (arg.startsWith("-f") && arg.includes("=")) {
       const assignment = arg.slice(2).trim();
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${arg}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${arg}`);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -654,6 +621,35 @@ function resolveTargetSha(requestedSha: string, targetRef: string) {
   return resolvedSha;
 }
 
+function preflightTargetShaFetch(targetSha: string) {
+  const directory = mkdtempSync(join(tmpdir(), "openclaw-release-fetch-"));
+  try {
+    run("git", ["-C", directory, "init", "-q"]);
+    const result = runStatus(
+      "git",
+      [
+        "-C",
+        directory,
+        "fetch",
+        "--no-tags",
+        "--depth=1",
+        "--filter=blob:none",
+        `https://github.com/${REPOSITORY}.git`,
+        targetSha,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `GitHub refused to serve Validation SHA ${targetSha} by bare SHA; child checkouts fetch it the same way, so dispatch would fail. Push it to a GitHub branch first. ${stringValue(result.stderr).trim().slice(-2000) || result.error?.message || "git fetch failed"}`,
+      );
+    }
+    console.log(`Validation SHA fetchable by bare SHA: ${targetSha}`);
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
 function targetVersionForTarget(
   targetSha: string,
   readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
@@ -774,7 +770,6 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       "targetVersion",
       "targetContextRef",
       "workflowRef",
-      "targetRef",
       "wireInputs",
       "inputs",
       "effectiveSoak",
@@ -800,10 +795,6 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       typeof request.workflowRef === "string" &&
       new RegExp(`^release-ci/${request.workflowSha.slice(0, 12)}-[0-9]+$`, "u").test(
         request.workflowRef,
-      ) &&
-      typeof request.targetRef === "string" &&
-      new RegExp(`^validation/target-${request.targetSha.slice(0, 12)}-[0-9]+$`, "u").test(
-        request.targetRef,
       ) &&
       isJsonRecord(request.wireInputs) &&
       isJsonRecord(request.inputs) &&
@@ -837,8 +828,24 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
   );
   if (request.inputs.trusted_workflow_json) {
     requireDispatch(
+      typeof request.inputs.trusted_workflow_json === "string",
+      "Invalid retained tooling input",
+    );
+    const supplied = JSON.parse(request.inputs.trusted_workflow_json);
+    const enveloped = isJsonRecord(supplied) && Object.hasOwn(supplied, "trustedWorkflow");
+    const identity = enveloped
+      ? decodePublicationDispatchEnvelope(request.inputs.trusted_workflow_json).trustedWorkflow
+      : supplied;
+    requireDispatch(
+      !enveloped ||
+        (!Object.hasOwn(request.inputs, "validation_purpose") &&
+          !Object.hasOwn(request.inputs, "publication_selection_json") &&
+          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json")),
+      "Retained dispatch contains conflicting source intent representations",
+    );
+    requireDispatch(
       typeof request.inputs.trusted_workflow_json === "string" &&
-        isDeepStrictEqual(JSON.parse(request.inputs.trusted_workflow_json), {
+        isDeepStrictEqual(identity, {
           fullRef:
             request.trustedWorkflowRef === "main"
               ? "refs/heads/main"
@@ -850,7 +857,7 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
     );
   }
   requireDispatch(
-    exactKeys(value.refs, ["target", "workflow"]) &&
+    exactKeys(value.refs, ["workflow"]) &&
       Object.values(value.refs).every((state) =>
         ["intended", "uncertain", "created"].includes(stringValue(state)),
       ) &&
@@ -960,6 +967,10 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     `Tooling SHA ${workflowSha} does not support FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1; no remote refs or run were created. Keep the frozen Tooling SHA. Existing runs use frv status; a new request needs separately approved witness-capable tooling.`,
   );
   requireDispatch(
+    workflow.env.FULL_RELEASE_SOURCE_ADMISSION_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support source admission; no remote refs or run were created. Keep the frozen tooling SHA. Reopen existing requests read-only; new tooling requires separate approval.`,
+  );
+  requireDispatch(
     isJsonRecord(workflow.on) &&
       isJsonRecord(workflow.on.workflow_dispatch) &&
       isJsonRecord(workflow.on.workflow_dispatch.inputs),
@@ -967,7 +978,41 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
   );
   const definitions = workflow.on.workflow_dispatch.inputs;
   requireDispatch(
-    Object.keys(overrides).every((key) => Object.hasOwn(definitions, key)),
+    Object.keys(definitions).length <= 25,
+    "Pinned workflow exceeds 25 dispatch inputs",
+  );
+  const {
+    validation_purpose,
+    publication_selection_json,
+    extension_test_exclude_patterns_json,
+    known_flaky_jobs_json,
+    ...wireOverrides
+  } = overrides;
+  const laneInputs =
+    extension_test_exclude_patterns_json === undefined
+      ? undefined
+      : { extension_test_exclude_patterns_json };
+  requireDispatch(
+    laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
+  requireDispatch(
+    known_flaky_jobs_json === undefined,
+    "Automatic test retries are disabled; remove known_flaky_jobs_json and diagnose the failed job.",
+  );
+  const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
+  requireDispatch(
+    intent.validationPurpose !== "publish" ||
+      workflow.env.FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support registry admission for fresh publish requests; no remote refs or run were created. Keep the frozen tooling SHA. Reopen existing requests read-only; new tooling requires separate approval.`,
+  );
+  wireOverrides.trusted_workflow_json = publicationDispatchEnvelope(
+    JSON.parse(overrides.trusted_workflow_json || "null"),
+    intent,
+    laneInputs,
+  );
+  requireDispatch(
+    Object.keys(wireOverrides).every((key) => Object.hasOwn(definitions, key)),
     "Undeclared workflow input",
   );
   const inputs: DispatchInputs = {};
@@ -978,7 +1023,7 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
       "Invalid workflow input definition",
     );
     const raw: unknown =
-      overrides[key] ?? definition.default ?? (definition.type === "boolean" ? false : "");
+      wireOverrides[key] ?? definition.default ?? (definition.type === "boolean" ? false : "");
     const text = String(raw);
     let value: string | number | boolean = text;
     if (definition.type === "boolean") {
@@ -1005,6 +1050,7 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     inputs[key] = value;
     wireInputs[key] = String(value);
   }
+  decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
   return {
     inputs,
     wireInputs,
@@ -1289,13 +1335,35 @@ async function reconcileDispatch(record: DispatchRecord): Promise<DispatchRun> {
 async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, argv: string[]) {
   const record = readDispatchRecord(path);
   const request = record.request;
+  let retainedInputs = request.wireInputs;
+  let retainedIntent: ReturnType<typeof publicationIntentInputs> | undefined;
+  const rawIdentity = request.wireInputs.trusted_workflow_json;
+  if (rawIdentity && Object.hasOwn(JSON.parse(rawIdentity), "trustedWorkflow")) {
+    const envelope = decodePublicationDispatchEnvelope(rawIdentity);
+    retainedIntent = publicationIntentInputs(envelope);
+    retainedInputs = {
+      ...retainedInputs,
+      ...envelope.laneInputs,
+      validation_purpose: retainedIntent.validationPurpose,
+      publication_selection_json: retainedIntent.publicationSelectionJson,
+    };
+  }
   requireDispatch(
     (!args.sha || args.sha === request.targetSha) &&
       (!args.workflowSha || args.workflowSha === request.workflowSha) &&
       (!args.targetRef || args.targetRef === request.targetContextRef) &&
       (!argv.includes("--trusted-workflow-ref") ||
         args.trustedWorkflowRef === request.trustedWorkflowRef) &&
-      args.specifiedInputs.every((key) => args.inputs[key] === request.wireInputs[key]),
+      args.specifiedInputs.every((key) =>
+        key === "publication_selection_json" && retainedIntent
+          ? publicationIntentInputs(
+              normalizePublicationIntent(retainedIntent.validationPurpose, args.inputs[key]),
+            ).publicationSelectionJson === retainedIntent.publicationSelectionJson
+          : key === "extension_test_exclude_patterns_json"
+            ? normalizePublicationLaneInputs({ [key]: args.inputs[key] })[key] ===
+              retainedInputs[key]
+            : args.inputs[key] === retainedInputs[key],
+      ),
     "Reopen arguments conflict with the retained request",
   );
   try {
@@ -1307,9 +1375,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
     console.error(
       `dispatch=${record.phase === "rejected" ? "rejected" : "unknown"} error=${record.error}`,
     );
-    console.error(
-      `Retained refs: refs/heads/${request.workflowRef} and refs/heads/${request.targetRef}`,
-    );
+    console.error(`Retained workflow ref: refs/heads/${request.workflowRef}`);
     throw error;
   }
 }
@@ -1749,13 +1815,14 @@ async function main() {
     }
   }
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
+  preflightTargetShaFetch(targetSha);
   const targetVersion = targetVersionForTarget(targetSha);
   args.inputs.release_profile ??= releaseProfileForVersion(targetVersion);
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
   const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
-  // Read target blobs with trusted tooling before creating remote transport refs.
+  // Read target blobs with trusted tooling before creating the workflow ref.
   validatePackageSourceRef(targetSha, {
     allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
   });
@@ -1765,8 +1832,6 @@ async function main() {
   const shortSha = workflowSha.slice(0, 12);
   const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
-  const targetBranch = `validation/target-${targetSha.slice(0, 12)}-${Date.now()}`;
-  const remoteTargetBranchRef = `refs/heads/${targetBranch}`;
   const dispatchInputs = {
     ref: targetSha,
     expected_sha: targetSha,
@@ -1817,11 +1882,10 @@ async function main() {
         targetVersion,
         targetContextRef,
         workflowRef: branch,
-        targetRef: targetBranch,
         ...selection,
       },
       phase: "prepared",
-      refs: { target: "intended", workflow: "intended" },
+      refs: { workflow: "intended" },
       error: "none",
       run: null,
     };
@@ -1835,13 +1899,11 @@ async function main() {
   console.log(
     `Frozen validation tuple: candidate=${targetSha} tooling=${workflowSha} rerun_group=${args.inputs.rerun_group}`,
   );
-  console.log(`Temporary target ref: ${targetBranch}`);
   console.log(`Temporary workflow ref: ${branch}`);
 
   let parentRunId: string | undefined;
   let parentConclusion = "";
   let evidenceVerified = false;
-  let targetRefCreated = false;
   let workflowRefCreated = false;
   let dispatchAttempted = false;
   let operationError: Error | undefined;
@@ -1866,17 +1928,12 @@ async function main() {
         writeFileSync(payloadPath, payload, { flag: "wx", mode: 0o600 });
       }
       if (record) {
-        retain({ ...record, refs: { ...record.refs, target: "uncertain" } });
-      }
-      createTemporaryRef(remoteTargetBranchRef, targetSha, args.dryRun);
-      targetRefCreated = true;
-      if (record) {
-        retain({ ...record, refs: { ...record.refs, target: "created", workflow: "uncertain" } });
+        retain({ ...record, refs: { workflow: "uncertain" } });
       }
       createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
       workflowRefCreated = true;
       if (record) {
-        retain({ ...record, phase: "attempted", refs: { target: "created", workflow: "created" } });
+        retain({ ...record, phase: "attempted", refs: { workflow: "created" } });
       }
       const dispatchArgs = [
         "api",
@@ -1890,7 +1947,7 @@ async function main() {
         payloadPath,
       ];
 
-      // Once dispatch starts, the refs may be needed for GitHub reruns even when
+      // Once dispatch starts, the workflow ref may be needed for GitHub reruns even when
       // the client loses the response. Cleanup resumes only after verified success.
       dispatchAttempted = true;
       try {
@@ -1961,21 +2018,15 @@ async function main() {
       console.error(
         `dispatch=${record.phase === "rejected" ? "rejected" : record.phase === "observed" ? "observed" : "unknown"} error=${record.error}`,
       );
-      console.error(`Retained refs: ${remoteBranchRef} and ${remoteTargetBranchRef}`);
+      console.error(`Retained workflow ref: ${remoteBranchRef}`);
       console.error(
         `node scripts/full-release-validation-at-sha.mjs --reconcile-request ${JSON.stringify(requestPath)}`,
       );
     }
   }
 
-  const createdRefs = [
-    ...(workflowRefCreated ? [remoteBranchRef] : []),
-    ...(targetRefCreated ? [remoteTargetBranchRef] : []),
-  ];
   const cleanupBeforeDispatch =
-    !dispatchAttempted &&
-    createdRefs.length > 0 &&
-    !Object.values(record?.refs ?? {}).includes("uncertain");
+    !dispatchAttempted && workflowRefCreated && record?.refs.workflow !== "uncertain";
   const cleanupAfterSuccess = shouldDeleteTemporaryWorkflowRef({
     keepBranch: args.keepBranch,
     dryRun: args.dryRun,
@@ -1983,18 +2034,17 @@ async function main() {
     evidenceVerified,
   });
   let cleanupError: Error | undefined;
-  if (cleanupBeforeDispatch || cleanupAfterSuccess) {
+  if (workflowRefCreated && (cleanupBeforeDispatch || cleanupAfterSuccess)) {
     try {
-      deleteTemporaryRefs(createdRefs, args.dryRun);
+      deleteTemporaryRef(remoteBranchRef, args.dryRun);
     } catch (error) {
       cleanupError = error instanceof Error ? error : new Error(String(error));
     }
-  } else if (createdRefs.length > 0) {
-    const keptRefs = createdRefs.join(" and ");
+  } else if (workflowRefCreated) {
     console.warn(
       args.keepBranch
-        ? `Kept ${keptRefs}`
-        : `Kept ${keptRefs}: ${
+        ? `Kept ${remoteBranchRef}`
+        : `Kept ${remoteBranchRef}: ${
             parentConclusion === "success"
               ? "release evidence was not verified"
               : `parent concluded ${parentConclusion || "without a conclusion"}`

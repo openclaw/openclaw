@@ -34,6 +34,13 @@ explicit runtime-discovery invalidation clears that lookup rather than leaving
 another provider cache holding old hooks. Attempt-prepared provider handles
 retain their selected plugin, while each hook receives the current call context.
 
+Synthetic-auth lookup includes auth-only discovery entries from the declared
+provider or CLI backend owner. Static model-catalog rows do not replace those
+auth implementations. If the owner supplies no synthetic-auth hook, lookup
+returns no synthetic result without loading unrelated discovery entries. A
+lightweight entry fallback remains available for aliases with no declared owner.
+External-auth captures still prepare fresh outcomes before read-only worker work.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`

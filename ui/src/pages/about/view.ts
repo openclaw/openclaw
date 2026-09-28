@@ -8,6 +8,7 @@ import {
   renderLobsterSvg,
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { currentThemeBranding } from "../../components/neutral-mark.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -161,15 +162,19 @@ function renderHero(props: AboutProps) {
   const look = canonicalLobsterLook(palette);
   return html`
     <section class="about-hero">
-      <button
-        type="button"
-        class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${lobsterLookStyle(look)}
-        aria-label=${t("aboutPage.waveHello")}
-        @click=${props.onPokeClawd}
-      >
-        ${renderLobsterSvg(look)}
-      </button>
+      ${
+        currentThemeBranding().mascot === "none"
+          ? html`<span class="about-hero__mark--neutral" aria-hidden="true">${icons.mark}</span>`
+          : html`<button
+              type="button"
+              class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
+              style=${lobsterLookStyle(look)}
+              aria-label=${t("aboutPage.waveHello")}
+              @click=${props.onPokeClawd}
+            >
+              ${renderLobsterSvg(look)}
+            </button>`
+      }
       <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
       ${
@@ -199,11 +204,7 @@ function renderHero(props: AboutProps) {
 export function renderAbout(props: AboutProps) {
   const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
   const buildFacts = html`
-    <dl
-      class="settings-kv about-build-grid"
-      role="group"
-      aria-label=${t("aboutPage.artifactDetails")}
-    >
+    <dl class="settings-kv about-build-grid" aria-label=${t("aboutPage.artifactDetails")}>
       <dt>${t("aboutPage.version")}</dt>
       <dd>
         ${

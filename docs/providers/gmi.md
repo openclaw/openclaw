@@ -30,13 +30,15 @@ rate limits, and any provider-side routing policy.
 
 ## Setup
 
-Install the plugin, restart the gateway, then create an API key in GMI Cloud
+Install the plugin, then create an API key in GMI Cloud
 (`https://www.gmicloud.ai/`):
 
 ```bash
 openclaw plugins install @openclaw/gmi-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Then run:
 

@@ -6,13 +6,20 @@ import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/n
 // renders one row per machine instead of one row per historical keypair.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { parseWorkerSlotSummary } from "../../../../src/shared/node-list-parse.js";
+import type {
+  NodeListNode,
+  NodeWorkerBundleStatus,
+} from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
-type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
-type NodeWorkerSlots = { total: number; available: number };
-type NodeWorkerBundleStatus = { status: "installed"; version: string } | { status: "missing" };
+type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
 
 const hostStatsSchema = z
   .object({
@@ -34,33 +41,12 @@ const hostStatsSchema = z
         stats.diskAvailableBytes <= stats.diskTotalBytes),
   );
 
-type NodeHostStats = z.infer<typeof hostStatsSchema>;
-
 /** Typed projection of one raw `node.list` row. */
-type NodeListEntry = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  modelIdentifier?: string;
-  clientId?: string;
-  clientMode?: string;
-  remoteIp?: string;
+type NodeListEntry = NodeListNode & {
   caps: string[];
   commands: string[];
-  approvalState?: NodeApprovalState;
-  pendingRequestId?: string;
-  workerSlots?: NodeWorkerSlots;
-  workerBundle?: NodeWorkerBundleStatus;
-  hostStats?: NodeHostStats;
   connected: boolean;
   paired: boolean;
-  connectedAtMs?: number;
-  lastSeenAtMs?: number;
-  approvedAtMs?: number;
 };
 
 export type DeviceInventoryEntry = {
@@ -100,47 +86,15 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "unapproved",
 ]);
 
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => entry !== undefined);
-}
-
-function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= 1_024 &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : undefined;
-}
-
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const raw = value;
-  if (raw.status === "missing" && Object.keys(raw).length === 1) {
+  if (value.status === "missing" && Object.keys(value).length === 1) {
     return { status: "missing" };
   }
-  const version = normalizeOptionalString(raw.version);
-  return raw.status === "installed" && version && Object.keys(raw).length === 2
+  const version = normalizeOptionalString(value.version);
+  return value.status === "installed" && version && Object.keys(value).length === 2
     ? { status: "installed", version }
     : undefined;
 }
@@ -163,14 +117,14 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     clientId: normalizeOptionalString(raw.clientId),
     clientMode: normalizeOptionalString(raw.clientMode),
     remoteIp: normalizeOptionalString(raw.remoteIp),
-    caps: stringList(raw.caps),
-    commands: stringList(raw.commands),
+    caps: normalizeTrimmedStringList(raw.caps),
+    commands: normalizeTrimmedStringList(raw.commands),
     approvalState:
       approvalState && NODE_APPROVAL_STATES.has(approvalState)
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerSlots(raw.workerSlots),
+    workerSlots: parseWorkerSlotSummary(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,
@@ -179,17 +133,6 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     lastSeenAtMs: optionalNumber(raw.lastSeenAtMs),
     approvedAtMs: optionalNumber(raw.approvedAtMs),
   };
-}
-
-function deviceRoles(device: PairedDevice): string[] {
-  const roles = new Set<string>();
-  for (const role of [...(device.roles ?? []), device.role]) {
-    const normalized = normalizeOptionalString(role);
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles];
 }
 
 function maxDefined(...values: Array<number | undefined>): number | undefined {
@@ -208,7 +151,9 @@ function buildEntry(
   node?: NodeListEntry,
   presence?: PresenceEntry,
 ): DeviceInventoryEntry {
-  const roles = device ? deviceRoles(device) : [];
+  const roles = device
+    ? normalizeUniqueTrimmedStringList([...(device.roles ?? []), device.role])
+    : [];
   if (node?.paired && !roles.includes("node")) {
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
     roles.push("node");
@@ -236,7 +181,7 @@ function buildEntry(
     modelIdentifier: normalizeOptionalString(presence?.modelIdentifier) ?? node?.modelIdentifier,
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,
     roles,
-    scopes: stringList(device?.scopes),
+    scopes: normalizeTrimmedStringList(device?.scopes),
     // Server-computed device/node connectivity accounts for multiple live
     // connections sharing one device id; one disconnect beacon cannot.
     connected: node?.connected === true || device?.connected === true,

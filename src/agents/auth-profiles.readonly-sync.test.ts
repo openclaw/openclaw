@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -70,11 +71,7 @@ describe("auth profiles read-only external auth overlay", () => {
       const baseline: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-test",
-          },
+          "openai:default": createApiKeyCredential("openai", "sk-test"),
         },
       };
       saveAuthProfileStore(baseline, agentDir, {

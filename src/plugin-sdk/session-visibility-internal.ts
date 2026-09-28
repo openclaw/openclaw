@@ -7,7 +7,7 @@ import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
   isGatewayTransportError,
-  callGateway as defaultCallGateway,
+  type callGateway as defaultCallGateway,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
@@ -300,22 +300,20 @@ export function lookupFailedDenialMessage(
   action: "history" | "send" | "status" | "list" | "search",
   kind: LookupFailureKind,
 ): string {
-  const label = action === "list" ? "Session list" : `Session ${action}`;
-  return `${label} denied because ${lookupFailedDenialSuffix(kind)}`;
+  return `${actionPrefix(action)} denied because ${lookupFailedDenialSuffix(kind)}`;
 }
 
 export function lookupFailedOperationMessage(
   action: "history" | "send" | "status" | "list" | "search",
   kind: LookupFailureKind,
 ): string {
-  const label = action === "list" ? "Session list" : `Session ${action}`;
   const guidance =
     kind === "transient"
       ? "retry once, then ask the operator to inspect OpenClaw logs"
       : kind === "credentials"
         ? "ask the operator to check gateway configuration and credentials"
         : "ask the operator to inspect OpenClaw logs";
-  return `${label} failed because session lookup failed${kind === "transient" ? " (transient)" : ""}; ${guidance}.`;
+  return `${actionPrefix(action)} failed because session lookup failed${kind === "transient" ? " (transient)" : ""}; ${guidance}.`;
 }
 
 export type SessionOwnershipLookupFailure = {
@@ -350,7 +348,12 @@ export async function listSpawnedSessionKeysWithResult(params: {
       ? Math.max(1, Math.floor(params.limit))
       : undefined;
   try {
-    const list = await (params.callGateway ?? defaultCallGateway)<{
+    const callGateway =
+      params.callGateway ??
+      (await import("../agents/tools/in-process-gateway.js")).bindAgentToolGatewayRequest({
+        hostedOnly: true,
+      });
+    const list = await callGateway<{
       sessions: Array<{ key?: unknown }>;
     }>({
       method: "sessions.list",

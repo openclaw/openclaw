@@ -1,10 +1,12 @@
 import type { Message } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type {
   OpenClawConfig,
@@ -12,14 +14,20 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { firstDefined, type NormalizedAllowFrom } from "./bot-access.js";
+import type { NormalizedAllowFrom } from "./bot-access.js";
 import {
   hasInboundMedia,
   isDurablyRetryableInboundMediaError,
   isRecoverableMediaGroupError,
 } from "./bot-handlers.media.js";
+import {
+  latestPromptContextAmbientWatermark,
+  latestPromptContextMinTimestampMs,
+  promptContextBoundaryOptions,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -40,15 +48,14 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
-import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type MediaAuthorization = {
   authorizationCfg: OpenClawConfig;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
   threadSpec: TelegramThreadSpec;
   senderId: string;
   effectiveGroupAllow: NormalizedAllowFrom;
@@ -63,7 +70,7 @@ type TelegramMediaGroupInput = MediaAuthorization & {
   storeAllowFrom: string[];
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  dispatchDedupeClaims: ChannelReplayClaimHandle[];
   channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
@@ -88,6 +95,8 @@ export function createTelegramInboundMedia({
   params: Pick<
     RegisterTelegramHandlerParams,
     | "accountId"
+    | "ownerAgentId"
+    | "telegramDeps"
     | "bot"
     | "opts"
     | "runtime"
@@ -100,6 +109,8 @@ export function createTelegramInboundMedia({
 }): TelegramInboundMedia {
   const {
     accountId,
+    ownerAgentId,
+    telegramDeps,
     bot,
     opts,
     runtime,
@@ -111,9 +122,6 @@ export function createTelegramInboundMedia({
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
-    promptContextBoundaryOptions,
-    latestPromptContextMinTimestampMs,
-    latestPromptContextAmbientWatermark,
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
@@ -151,7 +159,7 @@ export function createTelegramInboundMedia({
     if (!isGroup || !hasInboundMedia(msg) || mayNeedDownload) {
       return "process";
     }
-    const sessionState = resolveTelegramSessionState({
+    const sessionState = await resolveTelegramSessionState({
       chatId,
       isGroup,
       threadSpec,
@@ -163,12 +171,47 @@ export function createTelegramInboundMedia({
       agentId: sessionState.agentId,
       cfg: authorization.authorizationCfg,
     });
-    const requireMention = firstDefined(
+    const configuredRequireMention = firstDefined(
       authorization.topicConfig?.requireMention,
       activationOverride,
       authorization.groupConfig?.requireMention,
       resolveGroupRequireMention(chatId, authorization.authorizationCfg),
     );
+    const requireMentionInBotThreads = firstDefined(
+      authorization.topicConfig?.requireMentionInBotThreads,
+      authorization.groupConfig?.requireMentionInBotThreads,
+    );
+    let creatorUserId: number | undefined;
+    if (
+      threadSpec.scope === "forum" &&
+      threadSpec.id !== undefined &&
+      requireMentionInBotThreads !== undefined
+    ) {
+      const topicScope = telegramDeps.resolveStorePath(
+        authorization.authorizationCfg.session?.store,
+        {
+          agentId: ownerAgentId,
+        },
+      );
+      ({ creatorUserId } = await resolveTelegramForumTopicMetadata({
+        msg,
+        threadId: threadSpec.id,
+        scope: topicScope,
+      }));
+    }
+    const replyToBotMessage = ctx.me?.id != null && msg.reply_to_message?.from?.id === ctx.me.id;
+    const { requireMention: threadRequireMention, implicitMentionKinds } =
+      resolveBotThreadMentionPolicy({
+        isBotOwnedThread: ctx.me?.id !== undefined && creatorUserId === ctx.me.id,
+        requireMentionInBotThreads,
+        requireMention: Boolean(configuredRequireMention),
+        implicitMentionKinds: implicitMentionKindWhen(
+          "reply_to_bot",
+          replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
+        ),
+      });
+    const requireMention =
+      sessionState.bindingMode.kind === "plugin-owned-runtime" ? false : threadRequireMention;
     const botUsername = ctx.me?.username?.trim().toLowerCase();
     const hasControlCommandInMessage = hasControlCommand(
       textParts.text,
@@ -188,7 +231,6 @@ export function createTelegramInboundMedia({
       senderId,
       effectiveDmAllow: authorization.effectiveDmAllow,
       effectiveGroupAllow: authorization.effectiveGroupAllow,
-      ownerAccess: { ownerList: [], senderIsOwner: false },
       eventKind: "message",
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
@@ -228,11 +270,6 @@ export function createTelegramInboundMedia({
         canResolveExplicit: Boolean(botUsername),
       },
     });
-    const replyToBotMessage = ctx.me?.id != null && msg.reply_to_message?.from?.id === ctx.me.id;
-    const implicitMentionKinds = implicitMentionKindWhen(
-      "reply_to_bot",
-      replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
-    );
     const decision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: Boolean(botUsername) || mentionRegexes.length > 0,

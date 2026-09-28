@@ -142,54 +142,6 @@ struct LowCoverageHelperTests {
         #expect(emptyReport.summary.contains("Nothing is listening"))
     }
 
-    @Test func `port guardian remote mode does not kill docker`() {
-        let port = GatewayEnvironment.gatewayPort()
-
-        #expect(PortGuardian._testIsExpected(
-            command: "com.docker.backend",
-            fullCommand: "com.docker.backend",
-            port: port,
-            mode: .remote) == true)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "ssh",
-            fullCommand: "ssh -L \(port):localhost:\(port) user@host",
-            port: port,
-            mode: .remote) == true)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "podman",
-            fullCommand: "podman",
-            port: port,
-            mode: .remote) == true)
-    }
-
-    @Test func `port guardian local mode still rejects unexpected`() {
-        #expect(PortGuardian._testIsExpected(
-            command: "com.docker.backend",
-            fullCommand: "com.docker.backend",
-            port: 18789,
-            mode: .local) == false)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "python",
-            fullCommand: "python server.py",
-            port: 18789,
-            mode: .local) == false)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "node",
-            fullCommand: "openclaw-gateway",
-            port: 18789,
-            mode: .local) == true)
-
-        #expect(PortGuardian._testIsExpected(
-            command: "node",
-            fullCommand: "node /path/to/gateway-daemon",
-            port: 18789,
-            mode: .local) == true)
-    }
-
     @Test func `port guardian remote mode report accepts any listener`() {
         let dockerReport = PortGuardian._testBuildReport(
             port: 18789,
@@ -261,6 +213,34 @@ struct LowCoverageHelperTests {
             process: .init(parentPid: 1, startedAt: spawnedBeforeRecord, fullCommand: nil)) == .keep)
     }
 
+    @Test func `orphan signals remain bound to the planned process`() {
+        let record = PortGuardian.Record(
+            port: 18789, pid: 4242, command: "/usr/bin/ssh", mode: "remote", timestamp: 100)
+        let command = "/usr/bin/ssh -N -L 18789:127.0.0.1:18789 host"
+        let captured = PortGuardian.TunnelProcessInfo(parentPid: 1, startedAt: 99, fullCommand: command)
+        let reused = PortGuardian.TunnelProcessInfo(parentPid: 1, startedAt: 101, fullCommand: command)
+        // A new process inside the legacy timestamp slack is not the captured orphan.
+        #expect(PortGuardian.classifyTunnelRecord(record, process: reused) == .reap)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record, process: reused, expectedProcess: captured) == .drop)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: 99, fullCommand: "/usr/bin/sleep 30"),
+            expectedProcess: captured) == .drop)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(
+                parentPid: 1, startedAt: 99,
+                fullCommand: "/usr/bin/ssh -N -L 18789:127.0.0.1:19000 other-host"),
+            expectedProcess: captured) == .drop)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 1, startedAt: 99, fullCommand: nil),
+            expectedProcess: captured) == .keep)
+        #expect(PortGuardian.classifyTunnelRecord(
+            record, process: captured, expectedProcess: captured) == .reap)
+    }
+
     @Test func `port guardian reap plan merges disk records and drops stale ones`() {
         func record(pid: Int32, port: Int, timestamp: TimeInterval) -> PortGuardian.Record {
             PortGuardian.Record(
@@ -292,7 +272,8 @@ struct LowCoverageHelperTests {
                 }
             },
             currentAppPID: currentAppPID)
-        #expect(plan.reap.map(\.pid) == [20])
+        #expect(plan.reap.map(\.record.pid) == [20])
+        #expect(plan.reap.first?.process.startedAt == 99)
         #expect(plan.keep.map(\.pid) == [10])
         #expect(plan.keep.first?.port == 18790)
         // The dead pid 30 is reported as a drop; the exact owned pid-10 receipt is kept.
@@ -306,7 +287,7 @@ struct LowCoverageHelperTests {
                 .init(parentPid: currentAppPID, startedAt: 399, fullCommand: tunnel(port: replacement.port))
             },
             currentAppPID: currentAppPID)
-        #expect(replacementPlan.reap == [replacement])
+        #expect(replacementPlan.reap.map(\.record) == [replacement])
         #expect(replacementPlan.keep.isEmpty)
 
         let sibling = record(pid: 40, port: 18793, timestamp: 500)

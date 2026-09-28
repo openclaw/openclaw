@@ -1,6 +1,6 @@
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
-// Qa Lab plugin module implements qa transport registry behavior.
 import type { QaBusState } from "./bus-state.js";
+import { createQaCrablineTransportAdapterFactory } from "./crabline-transport-factory.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -9,9 +9,15 @@ import {
   createQaChannelTransport,
   QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
 } from "./qa-channel-transport.js";
+import type {
+  QaTransportAdapterFactory,
+  QaTransportFactoryMatchContext,
+} from "./qa-transport-factory.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaStateBackedTransportAdapter } from "./qa-transport.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
+
+export type { QaTransportAdapterFactory } from "./qa-transport-factory.js";
 
 export type QaTransportId = "qa-channel";
 export type QaTransportDriver = QaTransportId | "crabline" | "live";
@@ -35,9 +41,7 @@ export type QaTransportAdapterFactoryResult<
   cleanupWithoutGateway: () => Promise<void>;
 };
 
-export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]> & {
-  prepareSelectedScenarios?: (scenarioIds: readonly string[]) => Promise<void>;
-};
+const QA_CRABLINE_TRANSPORT_FACTORY_METADATA = createQaCrablineTransportAdapterFactory();
 
 export async function prepareQaTransportAdapterFactories(params: {
   factories: readonly QaTransportAdapterFactory[] | undefined;
@@ -76,10 +80,6 @@ export async function prepareQaTransportAdapterFactories(params: {
   );
 }
 
-type QaTransportAdapterFactoryRegistry = {
-  create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;
-};
-
 const DEFAULT_QA_TRANSPORT_ID: QaTransportId = "qa-channel";
 
 async function createBuiltInQaTransport(
@@ -87,17 +87,6 @@ async function createBuiltInQaTransport(
 ): Promise<QaTransportAdapter | undefined> {
   if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
     return createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
-  }
-  if (context.driver === "crabline") {
-    const { resolveOpenClawCrablineChannelDriverSelection } = await import("@openclaw/crabline");
-    const selection = resolveOpenClawCrablineChannelDriverSelection({ channel: context.channelId });
-    const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
-    return await createQaCrablineTransportAdapter({
-      outputDir: context.outputDir,
-      transportPolicy: context.adapterOptions?.transportPolicy,
-      selection,
-      state: context.state,
-    });
   }
   return undefined;
 }
@@ -117,7 +106,17 @@ export function qaTransportSupportsModuleFlows(
   factories: readonly QaTransportAdapterFactory[] | undefined,
   context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
 ): boolean {
-  return factories?.find((factory) => factory.matches(context))?.supportsModuleFlows === true;
+  const factory = [...(factories ?? []), QA_CRABLINE_TRANSPORT_FACTORY_METADATA].find((candidate) =>
+    candidate.matches(context),
+  );
+  return resolveQaTransportFactoryModuleFlowSupport(factory, context);
+}
+
+function resolveQaTransportFactoryModuleFlowSupport(
+  factory: QaTransportAdapterFactory | undefined,
+  context: QaTransportFactoryMatchContext,
+) {
+  return factory?.supportsModuleFlowsFor?.(context) ?? factory?.supportsModuleFlows === true;
 }
 
 function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
@@ -152,84 +151,85 @@ async function collectQaTransportCleanupErrors(
   return errors;
 }
 
-function createQaTransportAdapterFactoryRegistry(
+export async function createQaTransportAdapter(
+  context: QaTransportFactoryContext,
   factories: readonly QaTransportAdapterFactory[] = [],
-): QaTransportAdapterFactoryRegistry {
-  return {
-    async create(context) {
-      let adapter: QaTransportAdapter;
-      try {
-        const builtIn = await createBuiltInQaTransport(context);
-        if (builtIn) {
-          adapter = builtIn;
-        } else {
-          const factory = requireQaTransportFactory(factories, context);
-          const definition = await factory.create({
-            adapterOptions: context.adapterOptions,
-            channelId: context.channelId,
-            credentials: {
-              acquire: acquireQaCredentialLease,
-              startHeartbeat: startQaCredentialLeaseHeartbeat,
-            },
-            driver: context.driver,
-            messages: {
-              addInboundMessage: (input) => context.state.addInboundMessage(input),
-              addOutboundMessage: (input) => context.state.addOutboundMessage(input),
-              editMessage: (input) => context.state.editMessage(input),
-            },
-            outputDir: context.outputDir,
-          });
-          if (factory.supportsModuleFlows && typeof definition.prepareFlow !== "function") {
-            const mismatch = new Error(
-              `QA transport factory "${factory.id}" supports module flows but its adapter does not implement prepareFlow`,
-            );
-            const cleanupErrors = await collectQaTransportCleanupErrors([
-              () => definition.cleanup?.(),
-              () => definition.cleanupAfterGatewayStop?.(),
-            ]);
-            if (cleanupErrors.length > 0) {
-              throw new AggregateError([mismatch, ...cleanupErrors], mismatch.message);
-            }
-            throw mismatch;
-          }
-          adapter = createQaStateBackedTransportAdapter(context.state, definition);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `failed to create QA transport ${context.driver}:${context.channelId}: ${message}`,
-          {
-            cause: error,
-          },
-        );
-      }
-      const cleanupBeforeGatewayStop = createQaTransportCleanup(() => adapter.cleanup?.());
-      const cleanupAfterGatewayStop = createQaTransportCleanup(() =>
-        adapter.cleanupAfterGatewayStop?.(),
+): Promise<QaTransportAdapterFactoryResult> {
+  let adapter: QaTransportAdapter;
+  try {
+    const builtIn = await createBuiltInQaTransport(context);
+    if (builtIn) {
+      adapter = builtIn;
+    } else {
+      const factory = requireQaTransportFactory(
+        [...factories, createQaCrablineTransportAdapterFactory(context.state)],
+        context,
       );
-      const cleanupWithoutGateway = async () => {
-        const errors = await collectQaTransportCleanupErrors([
-          cleanupBeforeGatewayStop,
-          cleanupAfterGatewayStop,
+      const definition = await factory.create({
+        adapterOptions: context.adapterOptions,
+        channelId: context.channelId,
+        credentials: {
+          acquire: acquireQaCredentialLease,
+          startHeartbeat: startQaCredentialLeaseHeartbeat,
+        },
+        driver: context.driver,
+        messages: {
+          addInboundMessage: (input) => context.state.addInboundMessage(input),
+          addOutboundMessage: (input) => context.state.addOutboundMessage(input),
+          editMessage: (input) => context.state.editMessage(input),
+        },
+        outputDir: context.outputDir,
+      });
+      if (
+        resolveQaTransportFactoryModuleFlowSupport(factory, context) &&
+        typeof definition.prepareFlow !== "function"
+      ) {
+        const mismatch = new Error(
+          `QA transport factory "${factory.id}" supports module flows but its adapter does not implement prepareFlow`,
+        );
+        const cleanupErrors = await collectQaTransportCleanupErrors([
+          () => definition.cleanup?.(),
+          () => definition.cleanupAfterGatewayStop?.(),
         ]);
-        if (errors.length === 1) {
-          throw errors[0];
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError([mismatch, ...cleanupErrors], mismatch.message);
         }
-        if (errors.length > 1) {
-          throw new AggregateError(errors, "QA transport cleanup failed");
-        }
-      };
-      return {
-        adapter,
-        cleanupBeforeGatewayStop,
-        cleanupAfterGatewayStop,
-        cleanupWithoutGateway,
-      };
-    },
+        throw mismatch;
+      }
+      adapter = createQaStateBackedTransportAdapter(context.state, definition);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `failed to create QA transport ${context.driver}:${context.channelId}: ${message}`,
+      {
+        cause: error,
+      },
+    );
+  }
+  const cleanupBeforeGatewayStop = createQaTransportCleanup(() => adapter.cleanup?.());
+  const cleanupAfterGatewayStop = createQaTransportCleanup(() =>
+    adapter.cleanupAfterGatewayStop?.(),
+  );
+  const cleanupWithoutGateway = async () => {
+    const errors = await collectQaTransportCleanupErrors([
+      cleanupBeforeGatewayStop,
+      cleanupAfterGatewayStop,
+    ]);
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "QA transport cleanup failed");
+    }
+  };
+  return {
+    adapter,
+    cleanupBeforeGatewayStop,
+    cleanupAfterGatewayStop,
+    cleanupWithoutGateway,
   };
 }
-
-const qaTransportAdapterFactoryRegistry = createQaTransportAdapterFactoryRegistry();
 
 export function normalizeQaTransportId(input?: string | null): QaTransportId {
   const transportId = input?.trim() || DEFAULT_QA_TRANSPORT_ID;
@@ -241,37 +241,16 @@ export function normalizeQaTransportId(input?: string | null): QaTransportId {
 
 export function selectQaTransportDriver(params: {
   channelDriver?: QaTransportDriver | null;
-  channelDriverSelection?: { channelDriver: QaTransportDriver } | null;
   channelId?: string;
   transportId: QaTransportId;
 }): QaTransportDriver {
-  const setupDriver = params.channelDriverSelection?.channelDriver;
-  if (params.channelDriver && setupDriver && params.channelDriver !== setupDriver) {
-    throw new Error(
-      `channelDriver=${params.channelDriver} conflicts with adapter setup driver=${setupDriver}`,
-    );
-  }
-  if (setupDriver) {
-    return setupDriver;
-  }
-  if (params.channelDriver === "crabline") {
-    throw new Error("channelDriver=crabline requires Crabline adapter setup");
+  if (params.channelDriver === "crabline" && !params.channelId) {
+    throw new Error("channelDriver=crabline requires a channel");
   }
   if (params.channelDriver === "live") {
     return params.channelId ? "live" : params.transportId;
   }
   return params.channelDriver ?? params.transportId;
-}
-
-export async function createQaTransportAdapter(
-  context: QaTransportFactoryContext,
-  factories?: readonly QaTransportAdapterFactory[],
-): Promise<QaTransportAdapterFactoryResult> {
-  return await (
-    factories
-      ? createQaTransportAdapterFactoryRegistry(factories)
-      : qaTransportAdapterFactoryRegistry
-  ).create(context);
 }
 
 export function defaultQaSuiteConcurrencyForTransport(id: QaTransportId): number {

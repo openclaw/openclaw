@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
@@ -150,6 +151,8 @@ describe("createSmsIngressSpool", () => {
         saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
           await saveRemoteMedia({
             ...options,
+            // The guard resolves Twilio before the loopback fetch override runs.
+            lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
             fetchImpl: async (_url, init) =>
               await fetch(`${mediaOrigin}/twilio-media`, {
                 headers: init?.headers,
@@ -158,6 +161,7 @@ describe("createSmsIngressSpool", () => {
           }),
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
           deliveries.push({
             id: String(input.extra?.MessageSid),

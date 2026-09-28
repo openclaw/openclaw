@@ -1,7 +1,7 @@
+import type { AgentMessage, StreamFn } from "../../packages/agent-core/src/types.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import type { AgentMessage, StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -329,6 +329,8 @@ export type ProviderPlugin = {
    *
    * Opt in only when the provider must enforce the same wire contract outside
    * the embedded agent runtime.
+   * The factory runs once per prepared model; its returned stream retains
+   * wrapper-local state and reads per-request options on each invocation.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   /** Cheap, idempotent provider repair after local-service health and before each request. */

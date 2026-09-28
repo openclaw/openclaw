@@ -53,7 +53,7 @@ title: "Configuration — workplace chat channels"
       allowFrom: ["U123", "U456", "*"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["G123"] },
       channels: {
-        C123: { enabled: true, requireMention: true, allowBots: false },
+        C123: { enabled: true, requireMention: true },
         C456: {
           enabled: true,
           requireMention: true,
@@ -64,7 +64,7 @@ title: "Configuration — workplace chat channels"
         },
       },
       historyLimit: 50,
-      allowBots: false,
+      allowBots: true,
       reactionNotifications: "own",
       reactionAllowlist: ["U123"],
       replyToMode: "off", // off | first | all | batched
@@ -110,6 +110,7 @@ title: "Configuration — workplace chat channels"
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `allowBots` defaults to `true` and controls whether other bots can trigger turns. Explicit `false` remains an opt-out; room settings override account and root settings. Normal access, mention, bot-room authorization, self-message filtering, and [bot loop protection](/channels/bot-loop-protection) still apply. Bot-authored history and thread context remain subject to context visibility rules independently of this flag. See [Slack access control](/channels/slack/access-control#access-control-and-routing).
 - `channels.slack.joinIntro` defaults to `true`. When the bot joins an allowed channel, it posts one introduction using the channel name, purpose or topic, and available recent messages. Set this option to `false` to disable introductions, or use `channels.slack.accounts.<accountId>.joinIntro` for an account-specific override. Up to 100 recent messages are read, once per channel; see [group join introductions](/channels#group-join-introductions). Introductions never run in direct messages.
 - **User identity** (`postAs: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack/setup#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
 - Slack detects Enterprise Grid org-wide installations automatically from the
@@ -150,8 +151,8 @@ title: "Configuration — workplace chat channels"
 
 **Thread session isolation:** `thread.historyScope` is per-thread (default) or shared across channel. `thread.inheritParent` copies parent channel transcript to new threads. `thread.initialHistoryLimit` (default `20`) caps how many existing thread messages are fetched when a new thread session starts; `0` disables thread history fetching.
 
-- Slack native streaming plus the Slack assistant-style "is typing..." thread status require a reply thread target. Top-level DMs stay off-thread by default, so they can still stream through Slack draft post-and-edit previews instead of showing the thread-style native stream/status preview.
-- `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Use a Slack emoji shortcode such as `"hourglass_flowing_sand"`.
+- Slack native streaming plus the Slack assistant-style "is typing..." thread status require a reply thread target. Default `progress` turns without a reply thread, including plain top-level DMs, post only the final answer. Setting `streaming.progress.style`, setting `streaming.progress.toolProgress`, or setting `streaming.progress.nativeTaskCards: false` selects a preview. Threaded turns, Agent View, Assistant View, and explicit `off`/`partial`/`block` modes retain their behavior. See [Slack message behavior](/channels/slack/messaging#text-streaming).
+- `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Defaults to `"hourglass_flowing_sand"` for quiet top-level progress turns; configured shortcodes override it and `""` disables it.
 - `channels.slack.execApprovals`: Slack-native approval-client delivery and exec approver authorization. Same schema as Discord: `enabled` (`true`/`false`/`"auto"`), `approvers` (Slack user IDs), `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`). Plugin approvals can use this native-client path for Slack-origin requests when Slack plugin approvers resolve; Slack-native plugin approval delivery can also be enabled through `approvals.plugin` for Slack-origin sessions or Slack targets. Plugin approvals use Slack plugin approvers from `allowFrom` and default routing, not exec approvers.
 
 | Action group | Default | Notes                  |

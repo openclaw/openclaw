@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readSqliteTranscriptPayload } from "../../scripts/lib/sqlite-transcript-payload.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   lookupSessionGoalOperation,
@@ -30,7 +31,9 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
+import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
@@ -100,8 +103,59 @@ async function createHistoricalSharedStore(corruptIndex = false, schemaVersion: 
   ).toEqual(goalReceipt);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  const source = openNodeSqliteDatabase(store.sqlitePath);
+  const retained = [
+    "session_nodes",
+    "session_windows",
+    "transcript_events",
+    "transcript_rewrite_watermarks",
+    "transcript_event_identities",
+    "session_transcript_active_events",
+    "session_transcript_index_state",
+    "session_transcript_fts",
+    "session_goal_operations",
+  ].map((table) => {
+    const rows = source.prepare(`SELECT * FROM "${table}"`).all();
+    if (table === "transcript_events") {
+      for (const row of rows) {
+        row.event_json = readSqliteTranscriptPayload(row);
+      }
+    }
+    return { table, rows };
+  });
+  source.close();
+  fs.rmSync(store.sqlitePath);
   const database = openNodeSqliteDatabase(store.sqlitePath);
   try {
+    seedOpenClawAgentSchemaV21(database);
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
+    database.exec("BEGIN; PRAGMA defer_foreign_keys = ON;");
+    for (const { table, rows } of retained) {
+      const columns = database
+        .prepare(`PRAGMA table_info("${table}")`)
+        .all()
+        .map((column) => {
+          if (typeof column.name !== "string") {
+            throw new Error(`Invalid historical fixture column in ${table}`);
+          }
+          return column.name;
+        });
+      const insert = database.prepare(
+        `INSERT INTO "${table}" (${columns.map((column) => `"${column}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+      );
+      for (const row of rows) {
+        insert.run(
+          ...columns.map((column) => {
+            const value = row[column];
+            if (value === undefined) {
+              throw new Error(`Missing historical fixture value ${table}.${column}`);
+            }
+            return value;
+          }),
+        );
+      }
+    }
+    database.exec("COMMIT;");
     const goalState = readStoredGoalState(database, store.scope.sessionKey);
     // v17 has legacy participant columns; v18 already has the current table.
     // v19 changes creator data only, so restore its unqualified historical shape.
@@ -240,7 +294,13 @@ describe("Doctor canonical session SQLite targets", () => {
       const configuredAgentDatabaseTargets = resolveConfiguredAgentDatabaseTargets(store.cfg, {
         env: store.env,
       });
-      expect(configuredAgentDatabaseTargets).toEqual([{ agentId: "main", path: store.sqlitePath }]);
+      expect(configuredAgentDatabaseTargets).toEqual([
+        { agentId: "main", path: store.sqlitePath },
+        {
+          agentId: "qa",
+          path: path.join(store.stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
+        },
+      ]);
       const migrated = await migrateLegacyMediaPersistence({
         configuredAgentDatabaseTargets,
         env: store.env,

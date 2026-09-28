@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -69,10 +70,7 @@ describe("Gateway allowlist command", () => {
       }
 
       const runId = randomUUID();
-      let resolveFinal: ((payload: ChatFinalPayload) => void) | undefined;
-      const final = new Promise<ChatFinalPayload>((resolve) => {
-        resolveFinal = resolve;
-      });
+      const { promise: final, resolve: resolveFinal } = createDeferred<ChatFinalPayload>();
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {

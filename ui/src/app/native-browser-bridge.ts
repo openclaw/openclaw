@@ -1,5 +1,5 @@
 /**
- * Canonical macOS Browser bridge (DashboardBrowserMessageHandler mirrors these keys).
+ * Canonical native browser bridge (macOS and Tauri hosts mirror these keys).
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
  * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
@@ -13,12 +13,12 @@
  * Popups inherit their opener's session. Release-scope never closes tabs. If scopes present the
  * same tab, the most recent presentation wins until it is hidden or released.
  * Push: __OPENCLAW_NATIVE_BROWSER__ plus openclaw:native-browser-state detail,
- * {revision,tabs:[{id,sessionKey?,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?}]}.
+ * {revision,tabs:[{id,sessionKey?,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?,favicon?}]}.
  * Released Mac apps omit sessionKey; these legacy tabs remain window-shared.
  * Keep this bridge transition until supported app/UI releases all carry session keys.
  * Tabs are in creation order; openedBy is web|native. Snapshot adds dataUrl (PNG),
  * cssWidth,cssHeight; inspect adds node (BrowserInspectedNode|null).
- * Download saves the current tab through macOS, preserving its browser session;
+ * Download saves the current tab through its native host, preserving its browser session;
  * its reply adds cancelled (true when the save panel was dismissed).
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -37,6 +37,7 @@ export type NativeBrowserTab = {
   canGoForward: boolean;
   openedBy: "web" | "native";
   openerTabId?: string;
+  favicon?: string;
 };
 export type NativeBrowserState = { revision: number; tabs: NativeBrowserTab[] };
 type NativeBrowserRect = { x: number; y: number; width: number; height: number };
@@ -178,6 +179,10 @@ function isState(value: unknown): value is NativeBrowserState {
       ids.has(tab.id) ||
       !browserUrl(tab.url) ||
       typeof tab.title !== "string" ||
+      (tab.favicon !== undefined &&
+        (typeof tab.favicon !== "string" ||
+          tab.favicon.length > 98_304 ||
+          !/^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i.test(tab.favicon))) ||
       typeof tab.loading !== "boolean" ||
       typeof tab.canGoBack !== "boolean" ||
       typeof tab.canGoForward !== "boolean" ||

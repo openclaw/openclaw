@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeReplyPayload } from "../../../auto-reply/reply/normalize-reply.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
 import {
@@ -273,47 +274,73 @@ describe("terminal resolution", () => {
     expect(text).not.toContain("Couldn't sign in");
   });
 
-  it("retries a required empty reply even when deliberate silence is enabled", async () => {
-    const activateInternalPrompt = vi.fn();
-    const input = makeTerminalInput({
-      runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
-      activateInternalPrompt,
-    });
+  it.each(["", SILENT_REPLY_TOKEN])(
+    "retries required empty output %j even when legacy silence is enabled",
+    async (text) => {
+      const assistant = emptyAssistant({ content: [{ type: "text", text }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: text ? [text] : [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const activateInternalPrompt = vi.fn();
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        runParams: {
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "required",
+          inputProvenance: { kind: "inter_session" },
+        },
+        activateInternalPrompt,
+      });
 
-    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
-    expect(input.retryState.emptyResponseAttempts).toBe(1);
-    expect(activateInternalPrompt).toHaveBeenCalledWith(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
+      await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+      expect(input.retryState.emptyResponseAttempts).toBe(1);
+      expect(activateInternalPrompt).toHaveBeenCalledWith(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    },
+  );
 
-  it("completes an explicit silent reply without retrying", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [SILENT_REPLY_TOKEN],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const activateInternalPrompt = vi.fn();
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
-      activateInternalPrompt,
-    });
+  it.each(["explicit policy", "internal notification"])(
+    "completes NO_REPLY from %s without retrying",
+    async (source) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [SILENT_REPLY_TOKEN],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const activateInternalPrompt = vi.fn();
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        runParams:
+          source === "explicit policy"
+            ? { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "optional" }
+            : {
+                allowEmptyAssistantReplyAsSilent: false,
+                trigger: "user",
+                inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+              },
+        activateInternalPrompt,
+      });
 
-    const resolved = await resolveEmbeddedRunTerminal(input);
+      const resolved = await resolveEmbeddedRunTerminal(input);
 
-    expect(resolved.action).toBe("complete");
-    if (resolved.action !== "complete") {
-      return;
-    }
-    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
-    expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(resolved.result.meta.livenessState).toBe("working");
-    expect(activateInternalPrompt).not.toHaveBeenCalled();
-  });
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        return;
+      }
+      expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+      expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
+      expect(resolved.result.meta.livenessState).toBe("working");
+      expect(activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps an empty visible parent alive for accepted completion children", async () => {
     const attempt = makeEmbeddedRunnerAttempt({
@@ -335,7 +362,9 @@ describe("terminal resolution", () => {
 
     expect(resolved).toMatchObject({
       result: {
-        payloads: [{ text: "I’m continuing this work and will send the result when it is ready." }],
+        payloads: undefined,
+        meta: { continuationPending: true },
+        acceptedSessionSpawns: attempt.acceptedSessionSpawns,
       },
     });
   });
@@ -606,7 +635,7 @@ describe("terminal resolution", () => {
   ])(
     "keeps reply-optional subagent $label distinct at the terminal producer",
     async ({ rawText, expectedKind }) => {
-      const assistant = emptyAssistant();
+      const assistant = emptyAssistant({ content: [{ type: "text", text: rawText ?? "" }] });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: rawText ? [rawText] : [],
         toolMetas: [{ toolName: "write", replaySafe: false }],
@@ -867,11 +896,14 @@ describe("terminal resolution", () => {
       if (expectedError) {
         expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
         expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
-        expect(resolved.result.meta.terminalReplyKind).toBeUndefined();
+        expect(resolved.result.meta.terminalReplyKind).not.toBe("silent-empty");
       } else {
-        expect(resolved.result.payloads).toBeUndefined();
+        expect(
+          (resolved.result.payloads ?? []).flatMap(
+            (payload) => normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? [],
+          ),
+        ).toEqual([]);
         expect(resolved.result.meta.error).toBeUndefined();
-        expect(resolved.result.meta.terminalReplyKind).toBeUndefined();
       }
     },
   );

@@ -18,7 +18,8 @@ describe("Gateway heap snapshot checkpoints", () => {
       get pid() {
         return pid;
       },
-      async signalProcess() {
+      async signalProcess(signal: NodeJS.Signals) {
+        expect(signal).toBe("SIGQUIT");
         await fs.writeFile(snapshotPath, '{"snapshot":');
         if (outcome === "replaced-before") {
           pid += 1;

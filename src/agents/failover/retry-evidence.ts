@@ -3,7 +3,7 @@ import {
   parseRetryAfterErrorSeconds,
 } from "@openclaw/ai/internal/retry-after";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import milliseconds from "ms";
+import { durationUnitMs } from "../../infra/format-time/duration-units.js";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractErrorHttpStatus,
@@ -26,7 +26,7 @@ const RATE_LIMIT_RETRY_CONTEXT_RE =
 const TRANSIENT_RETRY_EVIDENCE_RE =
   /overloaded|rate.?limit|too many requests|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?closed|websocket.?error|ended without|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|resource[_ -]?exhausted/i;
 const LONG_WINDOW_RATE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly|tokens per day|requests per day|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|(?:go|free)usagelimiterror|available balance|out of budget)\b/i;
+  /\b(?:daily|weekly|monthly|tokens per day|requests per day|per[- ](?:day|week|month)|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|(?:go|free)usagelimiterror|available balance|out of budget)\b/i;
 const SHORT_RATE_LIMIT_UNIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
 const SHORT_WINDOW_RATE_LIMIT_RE =
@@ -34,6 +34,31 @@ const SHORT_WINDOW_RATE_LIMIT_RE =
 const RETRY_AFTER_VALUE_RE =
   /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
 const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
+const RETRY_AFTER_UNIT_MS = new Map<string, number>([
+  ["milliseconds", durationUnitMs.millisecond],
+  ["millisecond", durationUnitMs.millisecond],
+  ["msecs", durationUnitMs.millisecond],
+  ["msec", durationUnitMs.millisecond],
+  ["ms", durationUnitMs.millisecond],
+  ["seconds", durationUnitMs.second],
+  ["second", durationUnitMs.second],
+  ["secs", durationUnitMs.second],
+  ["sec", durationUnitMs.second],
+  ["s", durationUnitMs.second],
+  ["minutes", durationUnitMs.minute],
+  ["minute", durationUnitMs.minute],
+  ["mins", durationUnitMs.minute],
+  ["min", durationUnitMs.minute],
+  ["m", durationUnitMs.minute],
+  ["hours", durationUnitMs.hour],
+  ["hour", durationUnitMs.hour],
+  ["hrs", durationUnitMs.hour],
+  ["hr", durationUnitMs.hour],
+  ["h", durationUnitMs.hour],
+  ["days", durationUnitMs.day],
+  ["day", durationUnitMs.day],
+  ["d", durationUnitMs.day],
+]);
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
 
 /** Extract guarded HTTP status evidence for retry and diagnostic consumers. */
@@ -56,7 +81,7 @@ function resolveRetrySignalStatus(signal: Pick<FailoverSignal, "message" | "stat
 }
 
 /** Narrow evidence that replaying the same assistant request may succeed within this session. */
-export function hasTransientRetryEvidence(
+function hasTransientRetryEvidence(
   signal: Pick<FailoverSignal, "code" | "message" | "status">,
 ): boolean {
   const status = resolveRetrySignalStatus(signal);
@@ -83,16 +108,13 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
       return undefined;
     }
     const unit = secondsMatch[2]?.toLowerCase();
-    if (
-      unit &&
-      !/^(?:milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)$/.test(
-        unit,
-      )
-    ) {
+    const unitMilliseconds = RETRY_AFTER_UNIT_MS.get(unit ?? "s");
+    if (unitMilliseconds === undefined) {
       return undefined;
     }
-    const unitMilliseconds = milliseconds(`1${unit ?? "s"}` as Parameters<typeof milliseconds>[0]);
-    return unitMilliseconds === 1 ? value / 1000 : value * (unitMilliseconds / 1000);
+    return unitMilliseconds === durationUnitMs.millisecond
+      ? value / durationUnitMs.second
+      : value * (unitMilliseconds / durationUnitMs.second);
   }
   const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
@@ -162,10 +184,9 @@ export function classifyRateLimitWindow(
 /** Apply the intra-attempt replay policy to one already-classified failover signal. */
 export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
-  hasTransientEvidence: boolean;
   signal: Pick<FailoverSignal, "code" | "message" | "status">;
 }): boolean {
-  if (!params.hasTransientEvidence) {
+  if (!hasTransientRetryEvidence(params.signal)) {
     return false;
   }
   const reason =

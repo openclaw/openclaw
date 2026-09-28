@@ -80,7 +80,7 @@ Optional default skill allowlist for agents that do not set
 
 ## `agents.defaults.skipBootstrap`
 
-Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`).
+Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`), not injection of existing files. For the embedded runtime, use `contextInjection: "never"` to disable injection, unless overridden per agent.
 
 ```json5
 {
@@ -104,10 +104,11 @@ Skips creation of selected optional workspace files while still writing required
 
 ## `agents.defaults.contextInjection`
 
-Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+Controls workspace bootstrap-file injection in the embedded runtime. Default: `"always"`. These modes do not control CLI-backed prompt preparation or prevent an agent from reading files with tools.
 
-- `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
-- `"never"`: disable workspace bootstrap and context-file injection on every turn. Use this only for agents that fully own their prompt lifecycle (custom context engines, native runtimes that build their own context, or specialized bootstrap-free workflows). Heartbeat and compaction-recovery turns also skip injection.
+- `"always"`: use normal workspace bootstrap injection, subject to the run's context mode and file filters.
+- `"continuation-skip"`: eligible continuation turns after a recorded full-bootstrap turn skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs, pending full-bootstrap setup, and post-compaction retries still use normal context resolution.
+- `"never"`: disable workspace bootstrap and context-file injection on every turn, including heartbeat and compaction-recovery turns. Use this for embedded agents with specialized bootstrap-free workflows.
 
 ```json5
 {
@@ -316,7 +317,7 @@ Higher values preserve more visual detail.
 Image-tool compression/detail preference for images loaded from file paths, URLs, and media references.
 Default: `auto`.
 
-OpenClaw adapts the resize ladder to the selected image model. For example, Claude Opus 4.8, OpenAI GPT-5.6 Sol, Qwen VL, and hosted Llama 4 vision models can use larger images than older/default high-detail vision paths, while multi-image turns are compressed more aggressively in `auto` mode to control token and latency cost.
+OpenClaw adapts the resize ladder to the selected image model. For example, Claude Opus 4.8, OpenAI GPT-6 Astra, Qwen VL, and hosted Llama 4 vision models can use larger images than older/default high-detail vision paths, while multi-image turns are compressed more aggressively in `auto` mode to control token and latency cost.
 
 Values:
 

@@ -1,8 +1,6 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Model-backed image understanding runtime for providers without a native media
-// provider hook.
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
@@ -24,6 +22,7 @@ import {
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
+import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
@@ -200,11 +199,7 @@ async function describeImagesWithMinimax(params: {
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
   // MiniMax VLM handles its own outbound fetch, so unwrap only at this final handoff.
-  const runtimeValue = unwrapSecretSentinelsForProviderEgress(
-    params.runtimeValue,
-    "MiniMax VLM request",
-  );
-  const apiKey = runtimeValue;
+  const apiKey = unwrapSecretSentinelsForProviderEgress(params.runtimeValue, "MiniMax VLM request");
   for (const [index, image] of params.images.entries()) {
     // One MiniMax request is issued per image, so cancellation must gate every
     // iteration or a dead run can continue buying calls after the first image.
@@ -332,10 +327,6 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
-function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
-  return clampPositiveTimerTimeoutMs(timeoutMs);
-}
-
 function buildImageDescriptionTimeoutError(params: {
   phase: "setup" | "request";
   timeoutMs: number;
@@ -426,7 +417,7 @@ async function describeImagesWithModelInternal(
     const requestSignal = params.signal
       ? AbortSignal.any([params.signal, controller.signal])
       : controller.signal;
-    const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
+    const configuredTimeoutMs = clampPositiveTimerTimeoutMs(params.timeoutMs);
     const allowPrivateNetwork = resolveConfiguredProviderAllowPrivateNetwork(
       params.cfg,
       params.provider,
@@ -435,7 +426,7 @@ async function describeImagesWithModelInternal(
     let model: Model | undefined;
     const resolutionTask = trackAsyncWork(() =>
       resolveImageRuntime({ ...params, signal: requestSignal }, (resources) => {
-        onAcquired(resources);
+        onAcquired({ release: async () => await resources[Symbol.asyncDispose]() });
         assertResourcesOpen = resources.assertResourcesOpen;
       }),
     );
@@ -536,12 +527,14 @@ async function describeImagesWithModelInternal(
         ...(headers ? { headers } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
-      const task: Promise<AssistantMessage> = trackAsyncWork(() =>
-        providerStreamFn
-          ? (async () =>
-              await (await providerStreamFn(requestModel, context, streamOptions)).result())()
-          : complete(requestModel, context, streamOptions),
-      );
+      const task: Promise<AssistantMessage> = trackAsyncWork(() => {
+        if (!providerStreamFn) {
+          return complete(requestModel, context, streamOptions, assertResourcesOpen);
+        }
+        const stream = providerStreamFn(requestModel, context, streamOptions);
+        // Acquire consumption before yielding so retirement cannot strand the returned stream.
+        return runPluginStreamConsumer(stream, async () => await (await stream).result());
+      });
       return await withImageDescriptionTimeout({
         controller,
         signal: params.signal,

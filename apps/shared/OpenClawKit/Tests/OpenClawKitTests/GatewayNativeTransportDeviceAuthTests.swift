@@ -68,6 +68,8 @@ struct GatewayNativeTransportDeviceAuthTests {
             deviceId: identity.deviceId,
             role: "node")?.token == rotatedToken)
 
+        let firstRoute = try #require(await gateway.currentRoute())
+        #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: firstRoute)?.bearer == rotatedToken)
         fixture.closeConnection(at: 0)
         try await waitUntil("native legacy token rotation reconnect") {
             await fixture.capturedAuth(at: 1) != nil
@@ -77,7 +79,16 @@ struct GatewayNativeTransportDeviceAuthTests {
             bootstrapToken: nil,
             deviceToken: nil))
 
+        try await waitUntil("native HTTP bearer reconnect admission") {
+            guard let route = await gateway.currentRoute() else { return false }
+            return route != firstRoute
+        }
+        let reconnectedRoute = try #require(await gateway.currentRoute())
+        #expect(reconnectedRoute != firstRoute)
+        #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: firstRoute) == nil)
+        #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: reconnectedRoute)?.bearer == rotatedToken)
         await gateway.disconnect()
+        #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: reconnectedRoute) == nil)
     }
 
     @Test(.stateDirectoryIsolated)

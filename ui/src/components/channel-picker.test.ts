@@ -9,7 +9,7 @@ import type { SelectPicker } from "./select-picker.ts";
 afterEach(() => document.body.replaceChildren());
 
 describe("renderChannelPicker", () => {
-  it("renders neutral and channel artwork while preserving a missing current channel", async () => {
+  it("renders channel placeholders and neutral choices while preserving a missing current channel", async () => {
     const container = document.createElement("div");
     render(
       renderChannelPicker({
@@ -28,7 +28,9 @@ describe("renderChannelPicker", () => {
     expect(
       container.querySelector('[role="option"][data-value="last"] .picker-select__leading'),
     ).toBeNull();
-    expect(container.querySelector('[role="option"][data-value="telegram"] img')).not.toBeNull();
+    const telegram = container.querySelector('[role="option"][data-value="telegram"]');
+    expect(telegram?.querySelector("img")).toBeNull();
+    expect(telegram?.querySelector(".channels-tile--fallback")?.textContent?.trim()).toBe("TE");
     expect(
       container.querySelector('[role="option"][data-value="retired-channel"]')?.textContent,
     ).toContain("retired-channel");

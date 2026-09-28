@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -19,10 +19,10 @@ import {
 } from "./skill-contract.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-const buildWorkspaceSkillsPrompt = (
+const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
-): string => buildSkillSnapshot(workspaceDir, opts).prompt;
+): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({
@@ -46,11 +46,11 @@ function makeEntry(skill: Skill): SkillEntry {
   };
 }
 
-function buildPrompt(
+async function buildPrompt(
   skills: Skill[],
   limits: { maxChars?: number; maxCount?: number } = {},
-): string {
-  return buildWorkspaceSkillsPrompt("/fake", {
+): Promise<string> {
+  return await buildWorkspaceSkillsPrompt("/fake", {
     entries: skills.map(makeEntry),
     config: {
       skills: {
@@ -85,7 +85,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   afterEach(() => restoreMockSkillsHomeEnv(envSnapshot));
 
-  it("respects explicit exposure metadata before compact formatting", () => {
+  it("respects explicit exposure metadata before compact formatting", async () => {
     const hidden = makeEntry({ ...makeSkill("hidden"), disableModelInvocation: true });
     hidden.exposure = {
       includeInRuntimeRegistry: true,
@@ -93,7 +93,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       userInvocable: true,
     };
 
-    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+    const prompt = await buildWorkspaceSkillsPrompt("/fake", {
       entries: [makeEntry(makeSkill("visible")), hidden],
       config: {
         skills: {
@@ -108,22 +108,22 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("hidden");
   });
 
-  it("tier 1: uses full format when under budget", () => {
+  it("tier 1: uses full format when under budget", async () => {
     const skills = [makeSkill("weather", "Get weather data")];
-    const prompt = buildPrompt(skills, { maxChars: 50_000 });
+    const prompt = await buildPrompt(skills, { maxChars: 50_000 });
     expect(prompt).toContain("<description>");
     expect(prompt).toContain("Get weather data");
     expect(prompt).not.toContain("⚠️");
   });
 
-  it("tier 2: compact when full exceeds budget but compact fits", () => {
+  it("tier 2: compact when full exceeds budget but compact fits", async () => {
     const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const fullLen = formatSkillsForPromptCore(skills).length;
     const compactLen = formatSkillsCompact(skills).length;
     const budget = `${COMPACT_SHORTENED_NOTICE}\n${formatSkillsCompact(skills)}`.length;
     expect(fullLen).toBeGreaterThan(budget);
     expect(compactLen).toBeLessThan(budget);
-    const prompt = buildPrompt(skills, { maxChars: budget });
+    const prompt = await buildPrompt(skills, { maxChars: budget });
     expect(prompt).toContain("<description>");
     expect(prompt).toContain("compact format (descriptions shortened)");
     expect(prompt).not.toContain("included");
@@ -131,9 +131,9 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("skill-19");
   });
 
-  it("tier 3: compact + binary search when compact also exceeds budget", () => {
+  it("tier 3: compact + binary search when compact also exceeds budget", async () => {
     const skills = Array.from({ length: 100 }, (_, i) => makeSkill(`skill-${i}`, "description"));
-    const prompt = buildPrompt(skills, { maxChars: 2000 });
+    const prompt = await buildPrompt(skills, { maxChars: 2000 });
     expect(prompt).toContain("compact format");
     expect(prompt).toContain("skill-0");
     const [included, total] = requireIncludedCounts(prompt);
@@ -142,13 +142,13 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt.match(/<skill>/g)?.length ?? 0).toBe(included);
   });
 
-  it("preserves every identity before allocating description budget", () => {
+  it("preserves every identity before allocating description budget", async () => {
     const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const identityCatalog = formatSkillsCompact(skills, { descriptionMaxChars: 0 });
     const budget = `${COMPACT_OMITTED_NOTICE}\n${identityCatalog}`.length;
     expect(formatSkillsForPromptCore(skills).length).toBeGreaterThan(budget);
 
-    const prompt = buildPrompt(skills, { maxChars: budget });
+    const prompt = await buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
     expect(prompt).toContain(COMPACT_OMITTED_NOTICE);
@@ -158,12 +158,12 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("skill-49");
   });
 
-  it("uses leftover compact budget for descriptions without dropping identities", () => {
+  it("uses leftover compact budget for descriptions without dropping identities", async () => {
     const skills = Array.from({ length: 8 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const identityCatalog = formatSkillsCompact(skills, { descriptionMaxChars: 0 });
     const budget = `${COMPACT_OMITTED_NOTICE}\n${identityCatalog}`.length + 500;
 
-    const prompt = buildPrompt(skills, { maxChars: budget });
+    const prompt = await buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
     expect(prompt).toContain(COMPACT_SHORTENED_NOTICE);
@@ -172,7 +172,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt.match(/<skill>/g)).toHaveLength(skills.length);
   });
 
-  it("count truncation + compact: shows included X of Y with compact note", () => {
+  it("count truncation + compact: shows included X of Y with compact note", async () => {
     // 30 skills but maxCount=10, and full format of 10 exceeds budget
     const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const tenSkills = skills.slice(0, 10);
@@ -182,32 +182,35 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const budget = `${truncatedNotice}\n${formatSkillsCompact(tenSkills)}`.length;
     // Verify precondition: full format of 10 skills exceeds budget
     expect(fullLen).toBeGreaterThan(budget);
-    const prompt = buildPrompt(skills, { maxChars: budget, maxCount: 10 });
+    const prompt = await buildPrompt(skills, { maxChars: budget, maxCount: 10 });
     // Count-truncated (30→10) AND compact (full format of 10 exceeds budget)
     expect(prompt).toContain("included 10 of 30");
     expect(prompt).toContain("compact format, descriptions shortened");
     expect(prompt).toContain("<description>");
   });
 
-  it("extreme budget: even a single compact skill overflows", () => {
+  it("extreme budget: even a single compact skill overflows", async () => {
     const skills = [makeSkill("only-one", "desc")];
     // Budget so small that even one compact skill can't fit
-    const prompt = buildPrompt(skills, { maxChars: 10 });
+    const prompt = await buildPrompt(skills, { maxChars: 10 });
     expect(prompt).toBe("");
   });
 
-  it.each([0, 1, 10, 64])("never exceeds a tiny configured prompt budget of %i", (maxChars) => {
-    const prompt = buildPrompt([makeSkill("only-one", "desc")], { maxChars });
+  it.each([0, 1, 10, 64])(
+    "never exceeds a tiny configured prompt budget of %i",
+    async (maxChars) => {
+      const prompt = await buildPrompt([makeSkill("only-one", "desc")], { maxChars });
 
-    expect(prompt.length).toBeLessThanOrEqual(maxChars);
-    expect(prompt).toBe("");
-  });
+      expect(prompt.length).toBeLessThanOrEqual(maxChars);
+      expect(prompt).toBe("");
+    },
+  );
 
-  it("drops an oversized optional remote note before discarding a complete fitting skill catalog", () => {
+  it("drops an oversized optional remote note before discarding a complete fitting skill catalog", async () => {
     const skill = makeSkill("weather", "Get weather data");
     const maxChars = formatSkillsForPromptCore([skill]).length;
     const remoteNote = `REMOTE_NOTE_${"x".repeat(maxChars + 512)}`;
-    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+    const prompt = await buildWorkspaceSkillsPrompt("/fake", {
       entries: [makeEntry(skill)],
       config: {
         skills: {
@@ -232,7 +235,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it.each(["full", "compact", "count-limited", "empty"])(
     "preserves exact %s catalog bytes at the optional remote-note boundary",
-    (format) => {
+    async (format) => {
       const skill = makeSkill(
         "weather",
         format === "compact" ? "A".repeat(800) : "Get weather data",
@@ -254,7 +257,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       );
 
       for (const delta of [-1, 0, 1]) {
-        const prompt = buildWorkspaceSkillsPrompt("/fake", {
+        const prompt = await buildWorkspaceSkillsPrompt("/fake", {
           entries,
           config: {
             skills: {
@@ -277,33 +280,33 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     },
   );
 
-  it("budgets the final rendered prompt including limit notices", () => {
+  it("budgets the final rendered prompt including limit notices", async () => {
     const skills = Array.from({ length: 24 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(160)));
     const budget = 2_200;
 
-    const prompt = buildPrompt(skills, { maxChars: budget });
+    const prompt = await buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
     expect(prompt).toContain("included");
   });
 
-  it("keeps no-skill catalogs empty", () => {
-    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+  it("keeps no-skill catalogs empty", async () => {
+    const prompt = await buildWorkspaceSkillsPrompt("/fake", {
       entries: [],
     });
 
     expect(prompt).toBe("");
   });
 
-  it("count truncation only: shows included X of Y without compact note", () => {
+  it("count truncation only: shows included X of Y without compact note", async () => {
     const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "short"));
-    const prompt = buildPrompt(skills, { maxChars: 50_000, maxCount: 5 });
+    const prompt = await buildPrompt(skills, { maxChars: 50_000, maxCount: 5 });
     expect(prompt).toContain("included 5 of 20");
     expect(prompt).not.toContain("compact");
     expect(prompt).toContain("<description>");
   });
 
-  it("budget check uses compacted home-dir paths, not canonical paths", () => {
+  it("budget check uses compacted home-dir paths, not canonical paths", async () => {
     // Skills with home-dir prefix get compacted (e.g. /home/user/... → ~/...).
     // Budget check must use the compacted length, not the longer canonical path.
     // If it used canonical paths, it would overestimate and potentially drop
@@ -333,7 +336,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       Math.floor((compactedCompactLen + canonicalCompactLen) / 2) +
       COMPACT_OMITTED_NOTICE.length +
       1;
-    const prompt = buildPrompt(skills, { maxChars: budget });
+    const prompt = await buildPrompt(skills, { maxChars: budget });
     // All 30 skills should be preserved in compact form (tier 2, no dropping)
     expect(prompt).toContain("skill-0");
     expect(prompt).toContain("skill-29");
@@ -344,13 +347,13 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain(home);
   });
 
-  it("skills are sorted alphabetically regardless of entry insertion order", () => {
+  it("skills are sorted alphabetically regardless of entry insertion order", async () => {
     // Entries provided in reverse alphabetical order should still produce
     // an alphabetically sorted prompt (fixes #64167).
     const entries = ["zoo", "apple", "mango", "banana"].map((n) =>
       makeEntry(makeSkill(n, `${n} skill`)),
     );
-    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+    const prompt = await buildWorkspaceSkillsPrompt("/fake", {
       entries,
       config: { skills: { limits: { maxSkillsPromptChars: 50_000 } } } satisfies OpenClawConfig,
     });
@@ -358,12 +361,12 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(nameMatches).toEqual(["apple", "banana", "mango", "zoo"]);
   });
 
-  it("resolvedSkills in snapshot keeps canonical paths, not compacted", () => {
+  it("resolvedSkills in snapshot keeps canonical paths, not compacted", async () => {
     const home = os.homedir();
     const skills = Array.from({ length: 5 }, (_, i) =>
       makeSkill(`skill-${i}`, "A skill", `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`),
     );
-    const snapshot = buildSkillSnapshot("/fake", {
+    const snapshot = await buildSkillSnapshot("/fake", {
       entries: skills.map(makeEntry),
     });
     // Prompt should use compacted paths
@@ -378,13 +381,13 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 });
 
 describe("compactSkillPaths", () => {
-  function buildPromptForFixtureSkill(params: {
+  async function buildPromptForFixtureSkill(params: {
     workspaceRoot: string;
     skillDir: string;
     name: string;
     description: string;
   }) {
-    return buildWorkspaceSkillsPrompt(params.workspaceRoot, {
+    return await buildWorkspaceSkillsPrompt(params.workspaceRoot, {
       entries: [
         {
           skill: createCanonicalFixtureSkill({
@@ -407,11 +410,11 @@ describe("compactSkillPaths", () => {
     });
   }
 
-  it("replaces home directory prefix with ~ in skill locations", () => {
+  it("replaces home directory prefix with ~ in skill locations", async () => {
     const home = os.homedir();
     const skillDir = path.join(home, ".openclaw-test-skills", "test-skill");
 
-    const prompt = buildPromptForFixtureSkill({
+    const prompt = await buildPromptForFixtureSkill({
       workspaceRoot: home,
       skillDir,
       name: "test-skill",
@@ -424,39 +427,41 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("A test skill for path compaction");
   });
 
-  it("refreshes home prefixes for each prompt catalog", () => {
+  it("refreshes home prefixes for each prompt catalog", async () => {
     const root = path.parse(os.homedir()).root;
     for (const name of ["first-home", "second-home"]) {
       const home = path.join(root, "openclaw-compact-test", name);
-      const prompt = withEnv({ HOME: home, OPENCLAW_HOME: undefined }, () =>
-        buildPromptForFixtureSkill({
-          workspaceRoot: home,
-          skillDir: path.join(home, "skills", "dynamic-home"),
-          name: "dynamic-home",
-          description: "Per-catalog home resolution",
-        }),
+      const prompt = await withEnvAsync(
+        { HOME: home, OPENCLAW_HOME: undefined },
+        async () =>
+          await buildPromptForFixtureSkill({
+            workspaceRoot: home,
+            skillDir: path.join(home, "skills", "dynamic-home"),
+            name: "dynamic-home",
+            description: "Per-catalog home resolution",
+          }),
       );
       expect(prompt).toContain("<location>~/skills/dynamic-home/SKILL.md</location>");
       expect(prompt).not.toContain(home);
     }
   });
 
-  it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {
+  it("does not compact explicit state-root managed skill paths to OS-home tilde paths", async () => {
     const root = path.parse(os.homedir()).root;
     const osHome = path.join(root, "data");
     const stateDir = path.join(osHome, ".openclaw");
     const skillDir = path.join(stateDir, "skills", "world-cup-soccer-openclaw-skill");
     const skillFile = path.join(skillDir, "SKILL.md");
 
-    const prompt = withEnv(
+    const prompt = await withEnvAsync(
       {
         HOME: osHome,
         OPENCLAW_HOME: osHome,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-      () =>
-        buildPromptForFixtureSkill({
+      async () =>
+        await buildPromptForFixtureSkill({
           workspaceRoot: path.join(root, "workspace"),
           skillDir,
           name: "world-cup-soccer-openclaw-skill",
@@ -468,22 +473,22 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("~/.openclaw/skills/world-cup-soccer-openclaw-skill/SKILL.md");
   });
 
-  it("does not compact explicit state-root plugin skill paths to OS-home tilde paths", () => {
+  it("does not compact explicit state-root plugin skill paths to OS-home tilde paths", async () => {
     const root = path.parse(os.homedir()).root;
     const osHome = path.join(root, "data");
     const stateDir = path.join(osHome, ".openclaw");
     const skillDir = path.join(stateDir, "plugin-skills", "calendar-plugin-skill");
     const skillFile = path.join(skillDir, "SKILL.md");
 
-    const prompt = withEnv(
+    const prompt = await withEnvAsync(
       {
         HOME: osHome,
         OPENCLAW_HOME: osHome,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-      () =>
-        buildPromptForFixtureSkill({
+      async () =>
+        await buildPromptForFixtureSkill({
           workspaceRoot: path.join(root, "workspace"),
           skillDir,
           name: "calendar-plugin-skill",
@@ -495,19 +500,19 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("~/.openclaw/plugin-skills/calendar-plugin-skill/SKILL.md");
   });
 
-  it("compacts managed skill paths when OS-home tilde reaches the same path", () => {
+  it("compacts managed skill paths when OS-home tilde reaches the same path", async () => {
     const home = os.homedir();
     const stateDir = path.join(home, ".openclaw");
     const skillDir = path.join(stateDir, "skills", "home-managed-skill");
 
-    const prompt = withEnv(
+    const prompt = await withEnvAsync(
       {
         HOME: home,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_HOME: undefined,
       },
-      () =>
-        buildPromptForFixtureSkill({
+      async () =>
+        await buildPromptForFixtureSkill({
           workspaceRoot: path.join(home, "workspace"),
           skillDir,
           name: "home-managed-skill",
@@ -519,11 +524,11 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain(`<location>${path.join(skillDir, "SKILL.md")}</location>`);
   });
 
-  it("preserves POSIX literal backslashes after home compaction", () => {
+  it("preserves POSIX literal backslashes after home compaction", async () => {
     const home = os.homedir();
     const skillDir = path.join(home, ".openclaw-test-skills\\literal-skill");
 
-    const prompt = buildPromptForFixtureSkill({
+    const prompt = await buildPromptForFixtureSkill({
       workspaceRoot: home,
       skillDir,
       name: "literal-skill",
@@ -538,11 +543,11 @@ describe("compactSkillPaths", () => {
     expect(locationMatch[1]).toContain("\\literal-skill");
   });
 
-  it("preserves paths outside home directory", () => {
+  it("preserves paths outside home directory", async () => {
     const outsideHome = path.join(path.parse(os.homedir()).root, "openclaw-external-skills");
     const skillDir = path.join(outsideHome, "skills", "ext-skill");
 
-    const prompt = buildPromptForFixtureSkill({
+    const prompt = await buildPromptForFixtureSkill({
       workspaceRoot: outsideHome,
       skillDir,
       name: "ext-skill",
@@ -553,7 +558,7 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
   });
 
-  it("loads skills when the shared state database is unavailable", () => {
+  it("loads skills when the shared state database is unavailable", async () => {
     const root = fsSync.realpathSync(
       fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-load-")),
     );
@@ -562,13 +567,15 @@ describe("compactSkillPaths", () => {
     const skillDir = path.join(root, "workspace", "skills", "available-skill");
 
     try {
-      const prompt = withEnv({ OPENCLAW_STATE_DIR: path.join(blockedParent, "state") }, () =>
-        buildPromptForFixtureSkill({
-          workspaceRoot: path.join(root, "workspace"),
-          skillDir,
-          name: "available-skill",
-          description: "Available despite missing lifecycle state",
-        }),
+      const prompt = await withEnvAsync(
+        { OPENCLAW_STATE_DIR: path.join(blockedParent, "state") },
+        async () =>
+          await buildPromptForFixtureSkill({
+            workspaceRoot: path.join(root, "workspace"),
+            skillDir,
+            name: "available-skill",
+            description: "Available despite missing lifecycle state",
+          }),
       );
 
       expect(prompt).toContain("available-skill");

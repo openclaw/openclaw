@@ -1,7 +1,9 @@
 // Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
-import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { resolveTempPathParts } from "./nodes-media-utils.js";
 
 export {
   writeBase64ToFile as writeScreenRecordToFile,

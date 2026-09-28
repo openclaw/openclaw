@@ -3,14 +3,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewaySuspension } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
-type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend phase";
-type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
+export type GatewayShutdownTrigger = "SIGTERM" | "SIGINT" | "SIGUSR2" | "hosted Gateway stop";
+export type GatewayDrainReason =
+  | "restart"
+  | `${"stop" | "restart"} (${GatewayShutdownTrigger}${"" | `: ${string}`})`;
 
 export class GatewayDrainingError extends Error {
   constructor(message = "Gateway is draining; new tasks are not accepted") {
@@ -58,14 +60,6 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   }),
 );
 
-function logAdmissionClosed(reason: AdmissionCloseReason): void {
-  admissionLog.info(`admission closed: ${reason}`);
-}
-
-function logAdmissionReopened(reason: AdmissionReopenReason): void {
-  admissionLog.info(`admission reopened: ${reason}`);
-}
-
 type GatewayRootWorkAdmissionLease = {
   ownsRoot: boolean;
   release: () => void;
@@ -75,6 +69,8 @@ type GatewayRootWorkAdmissionLease = {
 export type GatewayRootWorkAdmissionContinuationScope = {
   release: () => void;
   run: <T>(run: () => Promise<T>) => Promise<T>;
+  /** Synchronous producers transfer accepted work to its own drain before returning. */
+  runSync: <T>(run: () => T) => T;
 };
 
 type GatewaySuspendAdmissionLease = {
@@ -171,7 +167,7 @@ function invalidateSuspendAdmission(): void {
   resolveSuspendOpenWaiters();
   // Restart drain supersedes suspension without reopening process admission.
   if (wasClosed && !GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
-    logAdmissionReopened("suspend phase");
+    admissionLog.info("admission reopened: suspend phase");
   }
   callback?.();
   if (wasClosed) {
@@ -190,7 +186,7 @@ function clearRestartSignalFence(): boolean {
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   resolveSuspendOpenWaiters();
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting") {
-    logAdmissionReopened("restart-signal fence");
+    admissionLog.info("admission reopened: restart-signal fence");
   } else {
     admissionLog.info("restart-signal fence cleared; suspension remains closed");
   }
@@ -207,20 +203,13 @@ function resolveSuspendOpenWaiters(): void {
 
 /** True while restart signal/drain or host suspension rejects new process work. */
 export function isGatewayWorkAdmissionClosed(): boolean {
-  return (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
-    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
-  );
+  return isGatewayRestartDraining() || GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting";
 }
 
 /** Existing admitted roots may finish spawning subordinate command/session work.
  * New async chains still see the global fence, preserving refuse-only suspension. */
 export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
-  if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
-  ) {
+  if (isGatewayRestartDraining()) {
     return true;
   }
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
@@ -286,7 +275,7 @@ export function isGatewayRestartDrainError(error: unknown): error is GatewayDrai
 }
 
 /** Restart drain is one-way until the in-process restart resets runtime state. */
-export function markGatewayRestartDraining(): void {
+export function markGatewayRestartDraining(reason: GatewayDrainReason = "restart"): void {
   if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
     return;
   }
@@ -299,7 +288,7 @@ export function markGatewayRestartDraining(): void {
     new GatewayDrainingError("gateway is draining for restart"),
   );
   resolveSuspendOpenWaiters();
-  logAdmissionClosed("restart drain");
+  admissionLog.info(`admission closed: ${reason}`);
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
     // A restart supersedes a reversible suspension. The coordinator callback
     // drops its timer/token without reopening the scheduler being shut down.
@@ -314,15 +303,12 @@ export function markGatewayRestartDraining(): void {
  * can stay closed after the real owner is lost.
  */
 export function beginGatewayRestartSignalAdmission(): GatewayRestartSignalAdmissionLease | null {
-  if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
-  ) {
+  if (isGatewayRestartDraining()) {
     return null;
   }
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = true;
   const generation = ++GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration;
-  logAdmissionClosed("restart-signal fence");
+  admissionLog.info("admission closed: restart-signal fence");
   return {
     rollback: () => {
       if (
@@ -358,14 +344,7 @@ export function tryBeginGatewayRootWorkAdmission(
   }
   // Existing request chains use the ALS path above; new roots stop for either
   // restart drain or host suspension.
-  if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
-    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
-  ) {
-    return null;
-  }
-  return createGatewayRootWorkAdmission(origin);
+  return tryBeginGatewayIndependentRootWorkAdmission(origin);
 }
 
 /**
@@ -373,11 +352,7 @@ export function tryBeginGatewayRootWorkAdmission(
  * The caller still owns frame/auth validation; this lease grants no method authority.
  */
 export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
-  if (
-    (!GATEWAY_WORK_ADMISSION_STATE.restartDraining &&
-      !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending) ||
-    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
-  ) {
+  if (!isGatewayRestartDraining() || GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
     return null;
   }
   return createGatewayRootWorkAdmission("restart-startup");
@@ -389,8 +364,7 @@ export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWor
  */
 export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
   if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+    isGatewayRestartDraining() ||
     GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "prepared" ||
     GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size > 0
   ) {
@@ -403,11 +377,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
 ): GatewayRootWorkAdmissionLease | null {
-  if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
-    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
-  ) {
+  if (isGatewayWorkAdmissionClosed()) {
     return null;
   }
   return createGatewayRootWorkAdmission(origin);
@@ -426,8 +396,10 @@ async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<
 /** Waits through a prepared lease, then joins the root-work set atomically. */
 export async function beginGatewayRootWorkAdmissionWhenOpen(
   origin = "gateway",
+  signal?: AbortSignal,
 ): Promise<GatewayRootWorkAdmissionLease> {
   while (true) {
+    signal?.throwIfAborted();
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError();
     }
@@ -435,7 +407,7 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(
     if (admission) {
       return admission;
     }
-    await waitForGatewayWorkAdmissionChange();
+    await waitForGatewayWorkAdmissionChange(signal);
   }
 }
 
@@ -499,11 +471,35 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
   origin = "independent",
 ): Promise<T> {
+  return runWithGatewayRootWorkContinuation(run, origin, false);
+}
+
+/**
+ * Detached continuations own their async lifetime: like the independent
+ * continuation, a live parent synchronously reserves a tracked root even
+ * across closed admission fences, but the callback runs inside a fresh
+ * detached async work scope so deferred work survives the caller's scope
+ * closing instead of inheriting it.
+ */
+export function runWithGatewayDetachedWorkContinuation<T>(
+  run: () => Promise<T>,
+  origin = "independent",
+): Promise<T> {
+  return runWithGatewayRootWorkContinuation(run, origin, true);
+}
+
+function runWithGatewayRootWorkContinuation<T>(
+  run: () => Promise<T>,
+  origin: string,
+  detachedWork: boolean,
+): Promise<T> {
   const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (!parent || parent.released) {
-    return runWithGatewayIndependentRootWorkAdmission(run, origin);
+    return detachedWork
+      ? runWithGatewayDetachedWorkAdmission(run, origin)
+      : runWithGatewayIndependentRootWorkAdmission(run, origin, getAsyncWorkSignal());
   }
-  const admission = createGatewayRootWorkAdmission(origin);
+  const admission = createGatewayRootWorkAdmission(origin, detachedWork);
   return admission.run(run).finally(admission.release);
 }
 
@@ -519,6 +515,13 @@ function createGatewayRootWorkAdmissionContinuationScope(
   }
   const releaseAdmission = retainRoot ? createGatewayRootWorkRelease(current) : undefined;
   let released = false;
+  const enter = () => {
+    if (released || current.released || !GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)) {
+      throw new GatewayDrainingError("gateway root work continuation is no longer active");
+    }
+    current.references += 1;
+    return createGatewayRootWorkRelease(current);
+  };
   return {
     release: () => {
       if (released) {
@@ -528,19 +531,19 @@ function createGatewayRootWorkAdmissionContinuationScope(
       releaseAdmission?.();
     },
     run: async <T>(run: () => Promise<T>) => {
-      if (
-        released ||
-        current.released ||
-        !GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)
-      ) {
-        throw new GatewayDrainingError("gateway root work continuation is no longer active");
-      }
       // Completion owners can settle and release their retained handle inside
       // this callback; keep the root live until that entire callback finishes.
-      current.references += 1;
-      const releaseRun = createGatewayRootWorkRelease(current);
+      const releaseRun = enter();
       try {
         return await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
+      } finally {
+        releaseRun();
+      }
+    },
+    runSync: <T>(run: () => T) => {
+      const releaseRun = enter();
+      try {
+        return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
       } finally {
         releaseRun();
       }
@@ -612,17 +615,13 @@ export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolea
 export function tryBeginGatewaySuspendAdmission(
   onInvalidated: () => void,
 ): GatewaySuspendAdmissionLease | null {
-  if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
-    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
-    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
-  ) {
+  if (isGatewayWorkAdmissionClosed()) {
     return null;
   }
   GATEWAY_WORK_ADMISSION_STATE.suspendPhase = "preparing";
   const generation = ++GATEWAY_WORK_ADMISSION_STATE.suspendGeneration;
   GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = onInvalidated;
-  logAdmissionClosed("suspend phase");
+  admissionLog.info("admission closed: suspend phase");
   notifyGatewaySuspendAdmission();
 
   const transition = (
@@ -639,7 +638,7 @@ export function tryBeginGatewaySuspendAdmission(
     if (next === "accepting") {
       GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = undefined;
       resolveSuspendOpenWaiters();
-      logAdmissionReopened("suspend phase");
+      admissionLog.info("admission reopened: suspend phase");
     }
     notifyGatewaySuspendAdmission();
     return true;
@@ -653,9 +652,9 @@ export function tryBeginGatewaySuspendAdmission(
   };
 }
 
-/** Clears restart/suspend admission during SIGUSR1 and isolated tests. */
+/** Clears restart/suspend admission during SIGUSR2 and isolated tests. */
 export function resetGatewayWorkAdmission(): void {
-  // SIGUSR1 can abandon old async chains before their finally blocks run.
+  // SIGUSR2 can abandon old async chains before their finally blocks run.
   // Retire their ALS records so surviving chains must re-enter admission.
   GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
     new GatewayDrainingError("gateway runtime reset"),

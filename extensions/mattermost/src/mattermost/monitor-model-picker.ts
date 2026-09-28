@@ -1,4 +1,3 @@
-// Mattermost plugin module owns native model-picker interactions.
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
@@ -126,14 +125,6 @@ export function createMattermostModelPickerInteractionHandler(
     if (pickerState.ownerUserId !== params.payload.user_id) {
       return { ephemeral_text: "Only the person who opened this picker can use it." };
     }
-    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
-      updateModelPickerPost({
-        channelId: params.payload.channel_id,
-        postId: params.payload.post_id,
-        message,
-        buttons,
-      });
-
     const channelInfo = await resolveChannelInfo(params.payload.channel_id);
     const pickerCommandText =
       pickerState.action === "select"
@@ -212,37 +203,36 @@ export function createMattermostModelPickerInteractionHandler(
     const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId, {
       sessionEntry,
     });
+    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
+      updateModelPickerPost({
+        channelId: params.payload.channel_id,
+        postId: params.payload.post_id,
+        message: [data.refreshWarning, message].filter(Boolean).join("\n\n"),
+        buttons,
+      });
     if (data.providers.length === 0) {
       return await updatePickerPost("No models available.");
     }
 
-    if (pickerState.action === "providers" || pickerState.action === "back") {
+    if (pickerState.action !== "select") {
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,
         route: modelSessionRoute,
         data,
       });
-      const view = renderMattermostProviderPickerView({
+      const viewParams = {
         ownerUserId: pickerState.ownerUserId,
         data,
         currentModel,
-      });
-      return await updatePickerPost(view.text, view.buttons);
-    }
-
-    if (pickerState.action === "list") {
-      const currentModel = resolveMattermostModelPickerCurrentModel({
-        cfg,
-        route: modelSessionRoute,
-        data,
-      });
-      const view = renderMattermostModelsPickerView({
-        ownerUserId: pickerState.ownerUserId,
-        data,
-        provider: pickerState.provider,
-        page: pickerState.page,
-        currentModel,
-      });
+      };
+      const view =
+        pickerState.action === "list"
+          ? renderMattermostModelsPickerView({
+              ...viewParams,
+              provider: pickerState.provider,
+              page: pickerState.page,
+            })
+          : renderMattermostProviderPickerView(viewParams);
       return await updatePickerPost(view.text, view.buttons);
     }
 

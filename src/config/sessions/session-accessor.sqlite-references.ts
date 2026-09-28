@@ -1,10 +1,13 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
+  getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson,
@@ -30,7 +33,7 @@ export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
   for (const sessionId of entry.usageFamilySessionIds ?? []) {
     add(sessionId);
   }
-  for (const checkpoint of entry.compactionCheckpoints ?? []) {
+  for (const checkpoint of readLegacyCompactionHistory(entry)) {
     add(checkpoint.sessionId);
     add(checkpoint.preCompaction.sessionId);
     add(checkpoint.postCompaction.sessionId);
@@ -40,7 +43,7 @@ export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
 
 /** Retained logical owners protect generations absent from their entry references. */
 export function addRetainedWindowSessionReferences(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: Set<string>,
   excludedSessionKeys: ReadonlySet<string>,
   candidateSessionIds?: readonly string[],
@@ -89,6 +92,55 @@ export function addRetainedWindowSessionReferences(
     }
     sessionIds.add(row.session_id);
   }
+}
+
+export function collectRecentSessionHistoryIds(params: {
+  database: Pick<OpenClawAgentDatabase, "db">;
+  preserveRecentMs?: number | null;
+}): Set<string> {
+  if (params.preserveRecentMs == null) {
+    return new Set();
+  }
+  const db = getNodeSqliteKysely<
+    Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows"> & {
+      pragma_encoding: { encoding: string };
+    }
+  >(params.database.db);
+  const rows = executeSqliteQuerySync(
+    params.database.db,
+    db
+      .selectFrom("session_windows")
+      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+      .select([
+        "session_nodes.current_session_id",
+        "session_nodes.session_key",
+        "session_nodes.updated_at",
+        "session_windows.session_id",
+      ])
+      .select((eb) =>
+        // UTF-16 JSON projection can change identity code points; retain its original TEXT.
+        eb
+          .case()
+          .when(eb(eb.selectFrom("pragma_encoding").select("encoding"), "=", "UTF-8"))
+          .then(sessionEntryMetadataJson.expression)
+          .else(eb.ref("session_nodes.entry_json"))
+          .end()
+          .as("entry_json"),
+      ),
+  ).rows;
+  return new Set(
+    rows.flatMap((row) => {
+      const entry = parseSessionEntryJson(row);
+      return entry &&
+        isRecentSessionMaintenanceEntry({
+          key: row.session_key,
+          entry,
+          preserveRecentMs: params.preserveRecentMs,
+        })
+        ? [row.session_id]
+        : [];
+    }),
+  );
 }
 
 export function isRecentHistoricalSessionId(params: {

@@ -8,15 +8,15 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { PreparedModelRuntimeLease } from "../prepared-model-runtime.js";
+import type { ContextEngineMaintenanceResources } from "./context-engine-maintenance-work.js";
 import { log } from "./logger.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type ForegroundCompactionOwner = {
-  adoptLease: (lease: PreparedModelRuntimeLease) => void;
+  adoptLease: (lease: PreparedModelRuntimeLease) => ContextEngineMaintenanceResources;
   resolveEngine: (factory: () => Promise<ContextEngine>) => Promise<ContextEngine>;
-  closeFactoryWork: () => Promise<void>;
   captureContext: () => void;
-  transferEngine: (completion: Promise<void>) => void;
+  transferEngine: () => void;
 };
 
 /** Keeps physical cleanup separate from the compaction result and transcript fences. */
@@ -33,14 +33,20 @@ export async function runForegroundCompactionWork(
     let runInContext = work.run(() => AsyncLocalStorage.snapshot());
     let factoryContext = factoryWork.run(() => AsyncLocalStorage.snapshot());
     let cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
+    let foregroundClosed: Promise<void> | undefined;
+    const closeForegroundWork = () =>
+      (foregroundClosed ??= AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () => runInContext(() => work.drain()),
+      ));
     let factoryClosed: Promise<void> | undefined;
     const closeFactoryWork = () => (factoryClosed ??= factoryContext(() => factoryWork.drain()));
     let lease: PreparedModelRuntimeLease | undefined;
     let engine: ContextEngine | undefined;
-    let deferredCompletion: Promise<void> | undefined;
+    let engineTransferred = false;
     const closeFromParent = () => {
       runInContext(() => work.beginClose(parentSignal?.reason));
-      if (!deferredCompletion) {
+      if (!engineTransferred) {
         factoryContext(() => factoryWork.beginClose(parentSignal?.reason));
       }
       cleanupContext(() => cleanupWork.beginClose(parentSignal?.reason));
@@ -55,6 +61,14 @@ export async function runForegroundCompactionWork(
           run({
             adoptLease: (acquired) => {
               lease = acquired;
+              return {
+                closeFactoryWork,
+                release: async () => {
+                  // Fast maintenance still shares any admitted foreground preparation tails.
+                  await closeForegroundWork();
+                  await acquired[Symbol.asyncDispose]();
+                },
+              };
             },
             resolveEngine: (factory) =>
               factoryWork.track(async () => {
@@ -62,13 +76,12 @@ export async function runForegroundCompactionWork(
                 engine = await factory();
                 return engine;
               }),
-            closeFactoryWork,
             captureContext: () => {
               runInContext = AsyncLocalStorage.snapshot();
             },
-            transferEngine: (completion) => {
+            transferEngine: () => {
               engine = undefined;
-              deferredCompletion = completion;
+              engineTransferred = true;
             },
           }),
         ),
@@ -77,11 +90,8 @@ export async function runForegroundCompactionWork(
       result.reject(error);
     } finally {
       try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => runInContext(() => work.drain()),
-        );
-        if (!deferredCompletion) {
+        await closeForegroundWork();
+        if (!engineTransferred) {
           cleanupContext = factoryContext(() =>
             cleanupWork.run(() => AsyncLocalStorage.snapshot()),
           );
@@ -105,14 +115,8 @@ export async function runForegroundCompactionWork(
         }
       } finally {
         parentSignal?.removeEventListener("abort", closeFromParent);
-        const retained = lease;
-        if (retained && deferredCompletion) {
-          // Background maintenance retains its independent shutdown owner.
-          void deferredCompletion
-            .then(closeFactoryWork, closeFactoryWork)
-            .then(retained.release, retained.release);
-        } else {
-          retained?.release();
+        if (!engineTransferred) {
+          await lease?.[Symbol.asyncDispose]();
         }
       }
     }

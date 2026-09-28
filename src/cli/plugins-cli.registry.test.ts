@@ -1,5 +1,9 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
+  inspectPluginRegistryMock,
+  pluginsCliRuntimeLogs,
   refreshPluginRegistryMock,
   resetPluginsCliTestState,
   runPluginsCommand,
@@ -13,9 +17,42 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-describe("plugins registry refresh", () => {
+describe("plugins registry", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+  });
+
+  it.each([
+    { directory: "p-home", expectedRoot: "$OPENCLAW_HOME" },
+    { directory: "p-home-other", expectedRoot: path.resolve(path.sep, "tmp", "p-home-other") },
+  ])("preserves differing registry source paths for $directory", async (testCase) => {
+    const homeDir = path.resolve(path.sep, "tmp", "p-home");
+    const sourceDir = path.resolve(path.sep, "tmp", testCase.directory);
+    const differences = [
+      {
+        pluginId: "source-probe",
+        changed: ["source"],
+        persistedSource: path.join(sourceDir, "old.js"),
+        derivedSource: path.join(sourceDir, "new.js"),
+      },
+    ];
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences,
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      await runPluginsCommand(["plugins", "registry"]);
+      expect(pluginsCliRuntimeLogs.join("\n")).toContain(
+        `persisted ${path.join(testCase.expectedRoot, "old.js")}; derived ${path.join(testCase.expectedRoot, "new.js")}`,
+      );
+      pluginsCliRuntimeLogs.length = 0;
+      await runPluginsCommand(["plugins", "registry", "--json"]);
+      expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({ differences });
+    });
   });
 
   it("serializes registry rebuilds with other plugin lifecycle mutations", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listCoreGatewayMethodMetadata } from "./core-descriptors.js";
+import { listCoreGatewayMethodMetadata } from "./core-method-policy.js";
 
 const TRAIN_2026_7_METHODS = [
   "question.request",
@@ -76,8 +76,6 @@ const TRAIN_2026_7_METHODS = [
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
   "hooks.status",
-  "tasks.retry",
-  "tasks.dismiss",
 ] as const;
 
 const TRAIN_2026_8_METHODS = [
@@ -185,6 +183,7 @@ describe("core gateway method release trains", () => {
         .toSorted(),
     ).toEqual(TRAIN_2026_8_METHODS.toSorted());
     for (const method of [
+      "canvas.document.preview",
       "canvas.document.view",
       "plugins.controlUi.list",
       "plugins.controlUi.reload",
@@ -193,6 +192,7 @@ describe("core gateway method release trains", () => {
       "update.runs.get",
       "update.runs.list",
       "update.report",
+      "plugins.reload",
     ]) {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.9");
     }

@@ -9,6 +9,8 @@ type WidgetSandboxHostOptions = {
   sandboxOrigin: string;
   sandboxUrl: string;
   documentKey: string;
+  /** Restricts the untrusted inner document, not the trusted transport shell. */
+  allowScripts?: boolean;
   loadDocument: (signal: AbortSignal) => Promise<string>;
   onLoaded: () => void;
   onRendered?: () => void;
@@ -232,7 +234,11 @@ export class WidgetSandboxHost {
       {
         jsonrpc: "2.0",
         method: "ui/notifications/sandbox-resource-ready",
-        params: { html: document.html, renderId: this.renderId },
+        params: {
+          html: document.html,
+          renderId: this.renderId,
+          ...(this.options.allowScripts === false ? { allowScripts: false } : {}),
+        },
       },
       this.options.sandboxOrigin,
     );

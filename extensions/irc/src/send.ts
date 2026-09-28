@@ -117,10 +117,7 @@ export async function sendIrcMessages(
       if (!client.isReady()) {
         throw new Error("IRC connection closed before send");
       }
-      client.sendPrivmsg(
-        target,
-        message.replyTo ? `${message.text}\n\n[reply:${message.replyTo}]` : message.text,
-      );
+      client.sendPrivmsg(target, message.text, message.replyTo);
       recordIrcOutboundActivity(account.accountId);
 
       const messageId = makeIrcMessageId();

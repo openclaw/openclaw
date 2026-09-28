@@ -10,7 +10,7 @@ import {
   isReplayInvalidErrorMessage,
 } from "../failover/classification-rules.js";
 import { classifyFailoverReason, classifyFailoverSignal } from "../failover/classify.js";
-import { isContextOverflowErrorFromTables } from "../failover/context-overflow.js";
+import { isContextOverflowErrorFromTables } from "../failover/context-overflow-tables.js";
 import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";

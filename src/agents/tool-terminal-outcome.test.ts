@@ -254,27 +254,6 @@ describe("tool terminal outcome observer", () => {
     expect(payloads).toEqual([]);
   });
 
-  it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
-    const observe = createToolTerminalObserver("run-spawn-failed");
-    const failedArgs = { task: "Investigate the flaky gateway test", label: "Investigate" };
-
-    const terminal = observe({
-      toolName: "sessions_spawn",
-      arguments: failedArgs,
-      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
-      outcome: "failure",
-      failure: { error: "cwd is outside the workspace" },
-    });
-
-    const payloads = buildPayloads({
-      assistantTexts: ["Started Investigate in a new session."],
-      lastToolError: terminal.lastToolError,
-    });
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Started Investigate in a new session.",
-    ]);
-  });
-
   it("preserves durable memory recall side-effect evidence", () => {
     const observe = createToolTerminalObserver("run-memory");
 
@@ -293,6 +272,70 @@ describe("tool terminal outcome observer", () => {
       }),
     ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
   });
+
+  it.each([
+    {
+      name: "keyword fallback",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [{ path: "memory/one.md" }, { path: "memory/two.md" }],
+      expected: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
+    },
+    {
+      name: "one keyword match",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [{ path: "memory/one.md" }],
+      expected: "⚠️ Memory Search timed out after 30s; 1 partial result is available.",
+    },
+    {
+      name: "no fallback",
+      timedOut: true,
+      timeoutMs: 30_000,
+      results: [],
+      expected: "⚠️ Memory Search timed out after 30s.",
+    },
+    {
+      name: "provider error with timeout wording",
+      timedOut: false,
+      timeoutMs: 30_000,
+      results: [],
+      expected: "⚠️ Memory Search failed",
+    },
+    {
+      name: "invalid timeout metadata",
+      timedOut: true,
+      timeoutMs: -1,
+      results: [],
+      expected: "⚠️ Memory Search failed",
+    },
+  ])(
+    "preserves $name in the final timeout warning",
+    ({ timedOut, timeoutMs, results, expected }) => {
+      const terminal = createToolTerminalObserver("run-memory-timeout")({
+        toolName: "memory_search",
+        arguments: { query: "project notes" },
+        outcome: "failure",
+        result: {
+          details: {
+            timedOut,
+            timeoutMs,
+            partial: true,
+            results,
+            error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC",
+          },
+        },
+        failure: { error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC" },
+      });
+
+      const payloads = buildPayloads({
+        lastToolError: terminal.lastToolError,
+        verboseLevel: "off",
+      });
+      expect(payloads).toEqual([expect.objectContaining({ text: expected, isError: true })]);
+      expect(terminal.sideEffectEvidence).toBe(true);
+    },
+  );
 
   it("treats the assistant reply as authoritative after a failed persistence call", () => {
     const observation = {

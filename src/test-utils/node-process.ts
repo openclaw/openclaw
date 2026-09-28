@@ -1,6 +1,6 @@
 // Test helpers for spawning Node processes and asserting their output.
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import path from "node:path";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 
 type NodeEvalArgsOptions = {
   evalFlag?: "--eval" | "-e";
@@ -18,43 +18,10 @@ type SpawnNodeEvalOptions = Omit<NonNullable<Parameters<typeof spawnSync>[2]>, "
   };
 
 export function resolveTestNodeExecPath(): string {
-  if (!process.versions.bun) {
-    return process.execPath;
+  const nodePath = resolveNodeRuntimeExecutable();
+  if (nodePath) {
+    return nodePath;
   }
-
-  // Bun's --bun mode prepends a node shim that points back to Bun. Walk every
-  // PATH candidate and accept only a process that identifies itself as Node.
-  const executableNames =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .filter(Boolean)
-          .map((extension) => `node${extension.toLowerCase()}`)
-      : ["node"];
-  const candidates = (process.env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .flatMap((directory) => executableNames.map((name) => path.join(directory, name)));
-
-  for (const candidate of new Set(candidates)) {
-    try {
-      const nodePath = execFileSync(
-        candidate,
-        ["-p", "process.versions.bun ? '' : process.execPath"],
-        {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 5_000,
-        },
-      ).trim();
-      if (nodePath) {
-        return nodePath;
-      }
-    } catch {
-      // Missing, non-executable, and broken PATH entries are not Node candidates.
-    }
-  }
-
   throw new Error("Unable to locate a Node executable while running tests under Bun");
 }
 

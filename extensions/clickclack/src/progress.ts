@@ -3,31 +3,14 @@
  * OpenClaw turn. ClickClack renders this as its compact "Agent is
  * responding" status and the detailed progress lines above the composer.
  */
-import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildChannelProgressDraftLine,
+  isCompleteAgentPreamble,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { ClickClackClient } from "./http-client.js";
 
-export type ClickClackItemEventPayload = {
-  itemId?: string;
-  toolCallId?: string;
-  kind?: string;
-  title?: string;
-  name?: string;
-  phase?: string;
-  status?: string;
-  summary?: string;
-  progressText?: string;
-  meta?: string;
-  commandBearing?: boolean;
-};
-
-type ClickClackProgressClient = {
-  publishEphemeral(params: {
-    workspaceId: string;
-    channelId?: string;
-    conversationId?: string;
-    type: "agent.progress";
-    payload?: Record<string, unknown>;
-  }): Promise<void>;
-};
+export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
 
 type ClickClackProgressTarget = {
   workspaceId: string;
@@ -51,6 +34,9 @@ function normalizedKind(payload: ClickClackItemEventPayload): string {
 }
 
 function progressText(payload: ClickClackItemEventPayload): string {
+  if (payload.kind !== "preamble" && payload.title) {
+    return payload.title;
+  }
   const line = buildChannelProgressDraftLine({
     event: "item",
     itemId: payload.itemId,
@@ -88,27 +74,13 @@ function isFinal(payload: ClickClackItemEventPayload): boolean {
 type AnonymousLine = { id: string; active: boolean };
 
 function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string {
-  const lineIdsByIdentity = new Map<string, string>();
   const anonymousLinesByKind = new Map<string, AnonymousLine[]>();
   let anonymousSequence = 0;
 
   return (payload) => {
-    const identities = [payload.itemId?.replace(/^(tool|command):/, ""), payload.toolCallId]
-      .map((value) => value?.trim())
-      .filter((value): value is string => Boolean(value));
-    const existingId = identities.map((identity) => lineIdsByIdentity.get(identity)).find(Boolean);
-    if (existingId) {
-      for (const identity of identities) {
-        lineIdsByIdentity.set(identity, existingId);
-      }
-      return existingId;
-    }
-    if (identities.length > 0) {
-      const id = `item:${identities[0]}`;
-      for (const identity of identities) {
-        lineIdsByIdentity.set(identity, id);
-      }
-      return id;
+    const identity = payload.itemId?.trim() || payload.toolCallId?.trim();
+    if (identity) {
+      return `item:${identity}`;
     }
 
     const kind = normalizedKind(payload);
@@ -146,7 +118,7 @@ const CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS = 100;
 const CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS = 1_000;
 
 export function createClickClackAgentProgressPublisher(params: {
-  client: ClickClackProgressClient;
+  client: Pick<ClickClackClient, "publishEphemeral">;
   target: ClickClackProgressTarget;
   turnId: string;
   agentLabel?: string;
@@ -291,7 +263,19 @@ export function createClickClackAgentProgressPublisher(params: {
       if (!started || cleared) {
         return false;
       }
+      if (
+        payload.suppressChannelProgress ||
+        (payload.kind === "preamble" && !isCompleteAgentPreamble(payload))
+      ) {
+        return false;
+      }
       const id = resolveLineId(payload);
+      if (payload.hideFromChannelProgress) {
+        if (seenLines.delete(id)) {
+          enqueueLine(id, { op: "update", line: { id, kind: normalizedKind(payload), text: "" } });
+        }
+        return false;
+      }
       const final = isFinal(payload);
       const kind = normalizedKind(payload);
       const retractsExistingCommentary =
@@ -308,7 +292,7 @@ export function createClickClackAgentProgressPublisher(params: {
         id,
         kind,
         text: retractsExistingCommentary ? "" : progressText(payload),
-        status: payload.status?.trim() || (final ? "completed" : "running"),
+        status: payload.status?.trim() || (final ? "blocked" : "running"),
       };
       if (payload.name?.trim()) {
         line.tool_name = payload.name.trim();

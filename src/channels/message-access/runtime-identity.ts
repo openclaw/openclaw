@@ -11,7 +11,6 @@ import {
  */
 import type {
   ChannelIngressAdapter,
-  ChannelIngressAdapterEntry,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
@@ -74,10 +73,6 @@ export function identityEntryAuthenticationClassifier(
   };
 }
 
-function defaultNormalize(value: string): string {
-  return value;
-}
-
 function normalizeFieldValue(
   field: ResolvedIdentityField,
   value: string,
@@ -85,9 +80,9 @@ function normalizeFieldValue(
 ): string | null {
   const normalize =
     mode === "entry"
-      ? (field.normalizeEntry ?? field.normalize ?? defaultNormalize)
-      : (field.normalizeSubject ?? field.normalize ?? defaultNormalize);
-  const normalized = normalize(value);
+      ? (field.normalizeEntry ?? field.normalize)
+      : (field.normalizeSubject ?? field.normalize);
+  const normalized = normalize ? normalize(value) : value;
   return normalized == null ? null : normalized.trim() || null;
 }
 
@@ -120,10 +115,6 @@ function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIde
     });
   }
   return fields;
-}
-
-function identityMatchKey(entry: Pick<ChannelIngressAdapterEntry, "kind" | "value">): string {
-  return `${entry.kind}:${entry.value}`;
 }
 
 function adapterEntry(params: {
@@ -214,28 +205,21 @@ export function createIdentityAdapter(
               ({ identifier, value }) =>
                 identifier.opaqueId === entry.identityFieldKey &&
                 identifier.kind === entry.kind &&
-                identityMatchKey({ kind: identifier.kind, value }) === identityMatchKey(entry),
+                value === entry.value,
             );
         if (candidates.length === 0) {
           // A legacy positive whole-subject matcher has no exact subject provenance. Preserve
           // its shipped asserted behavior, but never reinterpret it as a stronger claim.
-          return legacyMatch === true
+          return legacyMatch === true || entry.wildcard
             ? [
                 {
                   opaqueEntryId: entry.opaqueEntryId,
-                  opaqueSubjectId: "legacy-subject-match",
+                  opaqueSubjectId:
+                    legacyMatch === true ? "legacy-subject-match" : "wildcard-subject",
                   subjectAuthentication: "asserted" as const,
                 },
               ]
-            : entry.wildcard
-              ? [
-                  {
-                    opaqueEntryId: entry.opaqueEntryId,
-                    opaqueSubjectId: "wildcard-subject",
-                    subjectAuthentication: "asserted" as const,
-                  },
-                ]
-              : [];
+            : [];
         }
         return candidates.map(({ identifier }) => ({
           opaqueEntryId: entry.opaqueEntryId,

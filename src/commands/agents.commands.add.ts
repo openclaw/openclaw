@@ -1,4 +1,3 @@
-// Implements `openclaw agents add`, including config mutation, workspace setup, auth copy, and route binding setup.
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -9,6 +8,7 @@ import {
   createAgent,
   validateAgentIdInput,
 } from "../agents/agent-create.js";
+import { loadAgentRole } from "../agents/agent-roles.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -30,7 +30,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { createChannelSetupHooks } from "../flows/channel-setup.js";
+import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
@@ -46,18 +46,20 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
-import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import { prepareAuthChoice } from "./auth-choice.apply.js";
+import { warnIfModelConfigLooksOff } from "./auth-choice.model-check.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
+  applyOnboardingUtilityModel,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
-import { setupChannels } from "./onboard-channels.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 type AgentsAddOptions = {
   name?: string;
   workspace?: string;
+  role?: string;
   model?: string;
   agentDir?: string;
   bind?: string[];
@@ -96,12 +98,18 @@ function formatSkippedOAuthProfilesMessage(
     : `OAuth profiles were not copied from "${sourceAgentId}"; sign in separately for this agent.`;
 }
 
-/** Create or update an agent through the non-interactive path or guided wizard. */
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
+  if (opts.role !== undefined) {
+    try {
+      await loadAgentRole(opts.role);
+    } catch (error) {
+      failAgentsAdd(error instanceof Error ? error.message : String(error));
+    }
+  }
   const hasAutomationFlags = params?.hasAutomationFlags === true;
   const nonInteractive = opts.nonInteractive === true || hasAutomationFlags;
   const wizardOutput = opts.json ? process.stderr : process.stdout;
@@ -121,7 +129,7 @@ export async function agentsAddCommand(
   const nameInput = opts.name?.trim();
 
   if (nonInteractive) {
-    if (!workspaceFlag) {
+    if (!workspaceFlag && !opts.role) {
       failAgentsAdd(
         `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
@@ -140,7 +148,7 @@ export async function agentsAddCommand(
       );
     }
     const agentId = validation.agentId;
-    if (agentId !== nameInput) {
+    if (!opts.json && agentId !== nameInput) {
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
@@ -148,6 +156,7 @@ export async function agentsAddCommand(
       return await createAgent({
         name: nameInput,
         workspace: workspaceFlag,
+        ...(opts.role ? { role: opts.role } : {}),
         ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
@@ -251,6 +260,11 @@ export async function agentsAddCommand(
       (agent) => normalizeAgentId(agent.id) === agentId,
     );
     if (existingAgent) {
+      if (opts.role) {
+        failAgentsAdd(
+          `Agent "${agentId}" already exists. Choose a new id to create an agent from a role.`,
+        );
+      }
       const shouldUpdate = await prompter.confirm({
         message: `Agent "${agentId}" already exists. Update it?`,
         initialValue: false,
@@ -339,15 +353,12 @@ export async function agentsAddCommand(
             const copiedOAuthProfileIds = copiedProfileIds.filter(
               (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
             );
-            const sourceAgentId = copySourceAgentId;
-            const sourceInheritedMain = sourceIsInheritedMain;
-            const destinationAgentDir = agentDir;
             for (const [profileId, credential] of Object.entries(portable.store.profiles)) {
               stagedAuthProfiles.push({ profileId, credential, replaceExisting: false });
             }
             stagedAuthOrder = portable.store.order;
             reportPortableAuthCopy = async () => {
-              const persisted = loadPersistedAuthProfileStore(destinationAgentDir);
+              const persisted = loadPersistedAuthProfileStore(agentDir);
               const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
               const copiedCount = copiedProfileIds.filter((profileId) =>
                 persistedIds.has(profileId),
@@ -356,20 +367,18 @@ export async function agentsAddCommand(
                 skippedOAuthProfiles ||
                 copiedOAuthProfileIds.some((profileId) => !persistedIds.has(profileId));
               const copied = copiedCount
-                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${sourceAgentId}".`
+                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${copySourceAgentId}".`
                 : "";
               const skipped = skippedOAuth
-                ? ` ${formatSkippedOAuthProfilesMessage(sourceAgentId, sourceInheritedMain)}`
+                ? ` ${formatSkippedOAuthProfilesMessage(copySourceAgentId, sourceIsInheritedMain)}`
                 : "";
               await prompter.note(`${copied}${skipped}`.trim(), "Auth profiles");
             };
           }
         } else if (skippedOAuthProfiles) {
-          const sourceAgentId = copySourceAgentId;
-          const sourceInheritedMain = sourceIsInheritedMain;
           reportPortableAuthCopy = async () => {
             await prompter.note(
-              formatSkippedOAuthProfilesMessage(sourceAgentId, sourceInheritedMain),
+              formatSkippedOAuthProfilesMessage(copySourceAgentId, sourceIsInheritedMain),
               "Auth profiles",
             );
           };
@@ -403,6 +412,13 @@ export async function agentsAddCommand(
           continue;
         }
         stagedAuthProfiles.push(...authResult.authProfiles);
+        if (authResult.utilityModelOverride) {
+          nextConfig = applyOnboardingUtilityModel(
+            nextConfig,
+            resolveOnboardingAgentTarget(nextConfig, agentId),
+            authResult.utilityModelOverride,
+          );
+        }
         if (authResult.agentModelOverride) {
           nextConfig = applyAgentConfig(nextConfig, {
             agentId,
@@ -509,7 +525,6 @@ export async function agentsAddCommand(
           baseHash: writeSnapshot.snapshot.hash,
         });
         await channelSetup.runPostWriteHooks(committed.path);
-        nextConfig = committed.nextConfig;
       } catch (error) {
         await authPersistence?.rollback();
         throw error;
@@ -528,6 +543,7 @@ export async function agentsAddCommand(
       const created = await withPluginLifecycleLease({}, async () => {
         return await createAgent({
           entry: { ...stagedEntry, id: agentId },
+          ...(opts.role ? { role: opts.role } : {}),
           stagedConfig: { config: nextConfig, writeSnapshot },
           transformConfig: transformConfigWithPendingPluginInstalls,
           ...(stagedAuthBatch
@@ -542,7 +558,6 @@ export async function agentsAddCommand(
         await prompter.outro(created.message);
         return;
       }
-      nextConfig = created.config;
       payload = {
         agentId: created.agentId,
         name: created.name,

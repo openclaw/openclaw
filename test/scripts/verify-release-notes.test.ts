@@ -10,10 +10,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalMainCommitMatches,
   canonicalPullRequests,
+  classifyUnavailableContextualReferences,
   collectReleaseProvenanceOverrides,
   contaminatingPullRequestReferences,
   contributionRecordTarget,
@@ -22,6 +23,7 @@ import {
   cumulativeShippedPullRequests,
   defaultGithubSnapshotPath,
   githubApiWithSnapshot,
+  githubNotFoundReferences,
   highlightCountError,
   isEligibleHandle,
   ledgerChecks,
@@ -39,6 +41,10 @@ import {
   validateReleaseProvenanceOverrides,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
+import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createReleaseNotesFixtureLines(): string[] {
   return [
@@ -81,6 +87,48 @@ function git(cwd: string, args: string[], extraEnv: Record<string, string> = {})
 }
 
 describe("release-note verification", () => {
+  it("refuses docs mirrors before source or GitHub work and preserves frozen records", () => {
+    const cwd = tempDirs.make("openclaw-mirror-generation-");
+    writeFileSync(
+      join(cwd, "CHANGELOG.md"),
+      [
+        ...createReleaseNotesFixtureLines(),
+        "### Complete contribution record",
+        "",
+        "#### Pull requests",
+        "",
+        "- **PR #12** Original accounting.",
+        "",
+      ].join("\n"),
+    );
+    splitChangelog({ rootDir: cwd });
+    const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
+    const recordPath = join(cwd, "CHANGELOG/records/2026.7.1.md");
+    const mirror = "## 2026.7.1\n\n<!-- openclaw-docs-mirror-v1 {} -->\n\nApproved reader prose.\n";
+    writeFileSync(entryPath, mirror);
+    const record = readFileSync(recordPath, "utf8");
+    const index = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifier,
+        "--base",
+        "absent",
+        "--target",
+        "absent",
+        "--version",
+        "2026.7.1",
+        "--write-ledger",
+      ],
+      { cwd, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("docs-publication workflow");
+    expect(readFileSync(entryPath, "utf8")).toBe(mirror);
+    expect(readFileSync(recordPath, "utf8")).toBe(record);
+    expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
+  });
+
   it("excludes maintainer and automation identities from contributor credit", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(false);
@@ -119,6 +167,176 @@ describe("release-note verification", () => {
         ].join("\n"),
       }),
     ).toBe(target);
+  });
+
+  it("reports deleted contextual references without rendering or crediting them", () => {
+    const cwd = tempDirs.make("openclaw-release-notes-deleted-ref-");
+    git(cwd, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+    git(cwd, ["add", "CHANGELOG.md"]);
+    git(cwd, ["commit", "-qm", "chore: baseline"]);
+    const base = git(cwd, ["rev-parse", "HEAD"]);
+    git(cwd, [
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "fix: preserve release references (#156166)",
+      "-m",
+      "#155121 took a similar approach and was closed by its author.",
+    ]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const gh = join(cwd, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+const errors = [];
+const pullRequest = {
+  __typename: "PullRequest", number: 156166, title: "fix: preserve release references",
+  baseRefName: "main", mergedAt: "2026-01-01T00:00:00Z",
+  mergeCommit: { oid: ${JSON.stringify(target)} },
+  author: { __typename: "User", login: "contributor" },
+  closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+};
+for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
+  data[alias] = { object: { associatedPullRequests: { nodes: [pullRequest], pageInfo: { hasNextPage: false } } } };
+}
+for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
+  data[alias] = { issueOrPullRequest: alias === "n156166" ? pullRequest : null };
+  if (alias === "n155121") errors.push({ type: "NOT_FOUND", path: [alias, "issueOrPullRequest"], message: "Could not resolve ..." });
+}
+console.log(JSON.stringify({ data, errors }));
+process.exitCode = errors.length ? 1 : 0;
+`,
+    );
+    chmodSync(gh, 0o755);
+    splitChangelog({ rootDir: cwd });
+    const manifestPath = join(cwd, "manifest.json");
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifier,
+        "--base",
+        base,
+        "--target",
+        target,
+        "--main-ref",
+        target,
+        "--version",
+        "2026.7.1",
+        "--manifest",
+        manifestPath,
+        "--write-ledger",
+        "--no-github-snapshot",
+        "--json",
+      ],
+      { cwd, encoding: "utf8", env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("unavailable contextual references (GitHub NOT_FOUND): #155121\n");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.schemaVersion).toBe(3);
+    expect(manifest.unavailableReferences).toEqual([
+      { number: 155121, commits: [target.slice(0, 12)] },
+    ]);
+    expect(manifest.pullRequests).toMatchObject([{ number: 156166, thanks: ["contributor"] }]);
+    expect(manifest.pullRequests).toHaveLength(1);
+    expect(manifest.pullRequests[0].relatedReferences).toEqual([]);
+    expect(JSON.parse(result.stdout).source.references).toBe(1);
+    const record = readFileSync(join(cwd, "CHANGELOG/records/2026.7.1.md"), "utf8");
+    expect(record).toContain("**PR #156166** Thanks @contributor.");
+    expect(record).not.toContain("155121");
+  });
+
+  it("classifies unavailable body context with sorted references and unique commit SHAs", () => {
+    expect(
+      classifyUnavailableContextualReferences({
+        unresolved: [155121, 155120, 155119],
+        notFound: new Set([155120, 155121]),
+        activeCommits: [
+          {
+            hash: "b6b45244ab750".padEnd(40, "0"),
+            subject: "fix: preserve release references (#156166)",
+            body: "#155121 took a similar approach and was closed by its author. See #155121 and #155120.",
+          },
+          {
+            hash: "a".repeat(40),
+            subject: "fix: follow-up",
+            body: "Related discussion: #155121.",
+          },
+        ],
+        protectedReferences: new Set(),
+        highestResolved: 156166,
+      }),
+    ).toEqual({
+      unavailable: [
+        { number: 155120, commits: ["b6b45244ab75"] },
+        { number: 155121, commits: ["aaaaaaaaaaaa", "b6b45244ab75"] },
+      ],
+      stillUnresolved: [155119],
+    });
+  });
+
+  it.each([
+    { name: "subject PR suffix", subject: "fix: implementation (#155121)" },
+    { name: "closing reference", body: "Fixes #155121." },
+    { name: "closing reference list", body: "Resolves #12 and #155121." },
+    { name: "release-note prose/record or provenance", protectedReference: true },
+    { name: "other GraphQL error", errorType: "FORBIDDEN" },
+    { name: "missing node without an error", errorType: "" },
+    { name: "number above the resolved maximum", highestResolved: 155120 },
+    { name: "number equal to the resolved maximum", highestResolved: 155121 },
+    { name: "no resolved references", highestResolved: 0 },
+    { name: "no active body occurrence", body: "No contextual reference." },
+    { name: "subject reference in another active commit", otherSubject: "fix: #155121" },
+  ])("keeps $name unresolved despite contextual mentions", (scenario) => {
+    const number = 155121;
+    const response = {
+      data: { n155121: { issueOrPullRequest: null } },
+      errors:
+        scenario.errorType === ""
+          ? []
+          : [{ type: scenario.errorType ?? "NOT_FOUND", path: ["n155121", "issueOrPullRequest"] }],
+    };
+    expect(
+      classifyUnavailableContextualReferences({
+        unresolved: [number],
+        notFound: new Set(githubNotFoundReferences(response, [number])),
+        activeCommits: [
+          {
+            hash: "a".repeat(40),
+            subject: scenario.subject ?? "fix: implementation (#156166)",
+            body: scenario.body ?? "#155121 took a similar approach.",
+          },
+          { hash: "b".repeat(40), subject: scenario.otherSubject ?? "fix: follow-up", body: "" },
+        ],
+        protectedReferences: new Set(scenario.protectedReference ? [number] : []),
+        highestResolved: scenario.highestResolved ?? 156166,
+      }),
+    ).toEqual({ unavailable: [], stillUnresolved: [number] });
+  });
+
+  it.each([
+    { type: "NOT_FOUND", path: ["n155121", "issueOrPullRequest"], expected: [155121] },
+    { type: "FORBIDDEN", path: ["n155121", "issueOrPullRequest"], expected: [] },
+    { type: "not_found", path: ["n155121", "issueOrPullRequest"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155122", "issueOrPullRequest"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155121"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155121", "issueOrPullRequest", "author"], expected: [] },
+    { type: "NOT_FOUND", path: ["n155121", "otherField"], expected: [] },
+    { type: "NOT_FOUND", path: undefined, expected: [] },
+  ])("captures only exact NOT_FOUND issue/PR paths: %j", ({ type, path, expected }) => {
+    expect(
+      githubNotFoundReferences(
+        {
+          data: { n155121: { issueOrPullRequest: null } },
+          errors: [{ type, path, message: "Could not resolve ..." }],
+        },
+        [155121],
+      ),
+    ).toEqual(expected);
+    expect(githubNotFoundReferences({ data: { n155121: null } }, [155121])).toEqual([]);
   });
 
   it("recovers a vanished PR only from an exact covered commit and prior record", () => {
@@ -1077,6 +1295,7 @@ console.log(JSON.stringify({ data }));
         );
         chmodSync(gh, 0o755);
         const manifestPath = join(cwd, "manifest.json");
+        splitChangelog({ rootDir: cwd });
         const result = spawnSync(
           process.execPath,
           [
@@ -1109,7 +1328,7 @@ console.log(JSON.stringify({ data }));
           { ref: "v2026.6.1", count: 1, pullRequests: [12] },
         ]);
         expect(
-          readFileSync(join(cwd, "CHANGELOG.md"), "utf8").match(/\*\*PR #10\*\*/g),
+          readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8").match(/\*\*PR #10\*\*/g),
         ).toHaveLength(1);
       } finally {
         rmSync(cwd, { recursive: true, force: true });
@@ -1218,6 +1437,7 @@ console.log(JSON.stringify({ data }));
       );
       chmodSync(gh, 0o755);
       const manifestPath = join(cwd, "manifest.json");
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1408,6 +1628,7 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["config", "diff.external", hook]);
 
       const manifestPath = join(cwd, "manifest.json");
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1586,6 +1807,7 @@ console.log(JSON.stringify({ data }));
         ...(seed ? ["--seed-ref", seed] : []),
         ...(mode === "provenance-carrier" ? ["--release-provenance", `${carrier} -> #22`] : []),
       ];
+      splitChangelog({ rootDir: cwd });
       const run = (write: boolean) =>
         spawnSync(process.execPath, [...args, ...(write ? ["--write-ledger"] : [])], {
           cwd,
@@ -1614,11 +1836,12 @@ console.log(JSON.stringify({ data }));
       expect(manifest.source.retainedSeedOnlyPullRequests).toBe(seed ? 1 : 0);
       expect(manifest.source.references).toBe(2);
       if (mode === "body-only") {
-        const generated = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
-        writeFileSync(
-          join(cwd, "CHANGELOG.md"),
-          generated.replace("**PR #21**", "**PR #21** Related #22."),
-        );
+        const generated = readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8");
+        writeReleaseChangelog({
+          rootDir: cwd,
+          version: "2026.7.1",
+          section: generated.replace("**PR #21**", "**PR #21** Related #22."),
+        });
         const verified = run(false);
         expect(verified.stderr).toBe("");
         expect(verified.status, verified.stdout).toBe(0);
@@ -1629,11 +1852,11 @@ console.log(JSON.stringify({ data }));
   });
 
   it.each([
-    { mode: "recover", attempts: 2, error: undefined },
-    { mode: "exhaust", attempts: 5, error: "unexpected EOF" },
-    { mode: "auth", attempts: 1, error: "Bad credentials" },
-    { mode: "missing-data", attempts: 1, error: "did not include data" },
-    { mode: "schema", attempts: 1, error: "Field unknownField does not exist" },
+    { mode: "recover", attempts: 2, error: undefined, waits: [500] },
+    { mode: "exhaust", attempts: 5, error: "unexpected EOF", waits: [500, 1000, 2000, 4000] },
+    { mode: "auth", attempts: 1, error: "Bad credentials", waits: [] },
+    { mode: "missing-data", attempts: 1, error: "did not include data", waits: [] },
+    { mode: "schema", attempts: 1, error: "Field unknownField does not exist", waits: [] },
   ])("handles GraphQL transport failure at the CLI boundary: $mode", (scenario) => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-transport-"));
     try {
@@ -1684,10 +1907,26 @@ console.log(JSON.stringify({ data }));
 `,
       );
       chmodSync(gh, 0o755);
+      const waitsPath = join(cwd, "waits.jsonl");
+      const preload = join(cwd, "record-waits.mjs");
+      writeFileSync(waitsPath, "");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+Atomics.wait = function (...args) {
+  const result = "timed-out";
+  fs.appendFileSync(${JSON.stringify(waitsPath)}, JSON.stringify({ timeout: args[3], result }) + "\\n");
+  return result;
+};
+`,
+      );
       const manifestPath = join(cwd, "manifest.json");
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
+          "--import",
+          preload,
           verifier,
           "--base",
           base,
@@ -1709,14 +1948,21 @@ console.log(JSON.stringify({ data }));
       if (scenario.error) {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(scenario.error);
-        expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+        expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(
+          changelog.slice(changelog.indexOf("## 2026.7.1")),
+        );
       } else {
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(readFileSync(manifestPath, "utf8")).source.directCommits).toBe(1);
-        expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
+        expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toContain(
           "### Complete contribution record",
         );
       }
+      const waits = readFileSync(waitsPath, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { timeout: number; result: string });
+      expect(waits).toEqual(scenario.waits.map((timeout) => ({ timeout, result: "timed-out" })));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -1750,6 +1996,7 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "initial"]);
       const targetSha = git(cwd, ["rev-parse", "HEAD"]);
 
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1771,7 +2018,7 @@ console.log(JSON.stringify({ data }));
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout).target).toBe(targetSha);
-      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
+      expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toContain(
         `This audited record covers the complete HEAD..${targetSha} history:`,
       );
     } finally {
@@ -1818,6 +2065,7 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "release"]);
       git(cwd, ["tag", "beta-base"]);
 
+      splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
@@ -1842,7 +2090,7 @@ console.log(JSON.stringify({ data }));
     }
   });
 
-  it("leaves CHANGELOG.md untouched when the rendered ledger fails validation", () => {
+  it("leaves split artifacts untouched when the rendered ledger fails validation", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
     try {
       git(cwd, ["init", "-q"]);
@@ -1865,6 +2113,8 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["commit", "-qm", "initial"]);
       const manifestPath = join(cwd, "release-manifest.json");
 
+      splitChangelog({ rootDir: cwd });
+      const index = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
       const result = spawnSync(
         process.execPath,
         [
@@ -1895,7 +2145,10 @@ console.log(JSON.stringify({ data }));
           uniquePullRequests: 0,
         },
       });
-      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
+      expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(
+        changelog.slice(changelog.indexOf("## 2026.7.1")),
+      );
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

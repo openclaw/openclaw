@@ -33,7 +33,19 @@ Use the phase-specific hooks for new plugins:
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
-- `before_prompt_build`: receives the current prompt and session messages.
+- `before_prompt_build`: receives the prepared prompt and session messages.
+  Harnesses may also supply `currentUserMessage`, the current request before
+  history/context projection, and `currentUserMessageId`, its native admission
+  identity. The ID stays stable across rebuilds and retries of one admitted
+  request and differs between admissions. Use the explicit request for intent
+  detection when available; `prompt` may contain reconstructed history. Do not
+  parse envelope markers to recover request boundaries. An explicit empty string
+  means no textual request, including image-only input or a continuation without
+  a retained request. It must not fall back to history. Codex runtime refresh
+  retains the original recorder's text and identity. Without a recorder, Codex
+  supplies current text but no admission ID; equal text and a correlation run ID
+  alone do not identify an admission. Omitted fields preserve existing harness
+  behavior.
   Return `prependContext`, `appendContext`, `systemPrompt`,
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
@@ -66,6 +78,22 @@ the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+
+### Handler lifetime
+
+Each `before_prompt_build` handler receives a read-only
+`ctx.hookInvocation.assertActive()` capability in both ordinary and authorized
+prompt phases. It throws after the runner stops awaiting that individual
+handler, including timeout, return, or error, before the next handler starts.
+Call it after awaited work and immediately before a synchronous side effect
+whose result must still be eligible for this hook invocation. Other handlers
+have independent capabilities, even within the same prompt dispatch.
+
+This capability checks only the handler's result-acceptance lifetime. It grants
+no tool authorization, does not cancel underlying work, and does not guarantee
+that a later model call consumes the context. The field is optional for SDK
+compatibility; a plugin that requires it must handle an unsupported host
+explicitly instead of substituting its own copy of the timeout budget.
 
 ### Authorized prompt enrichment
 
@@ -302,6 +330,11 @@ next turn but should not become permanent system prompt text.
 Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
 agents are configured. Enqueueing, consumption, and plugin session state stay in
 that agent's store; the owner selector is not part of the persisted injection.
+
+Consumption stays bound to the selected stored session. A reset or a conflicting
+legacy and qualified identity prevents the drain from consuming another
+conversation's queue. Reading or consuming a legacy alias does not rename its
+stored session key.
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or

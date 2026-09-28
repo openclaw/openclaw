@@ -109,9 +109,7 @@ export class ClickClackDiscussionBindingStore {
   }
 
   hasCapacity(sessionKey: string): boolean {
-    return (
-      this.get(sessionKey) !== undefined || this.#store.entries().length < MAX_DISCUSSION_BINDINGS
-    );
+    return this.get(sessionKey) !== undefined || this.count() < MAX_DISCUSSION_BINDINGS;
   }
 
   getByChannel(
@@ -162,6 +160,10 @@ export class ClickClackDiscussionBindingStore {
 
   entries(): Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }> {
     return this.#store.entries().map((entry) => ({ sessionKey: entry.key, binding: entry.value }));
+  }
+
+  count(): number {
+    return this.#store.count?.() ?? this.#store.entries().length;
   }
 
   detachedCount(): number {

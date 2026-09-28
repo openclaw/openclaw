@@ -26,7 +26,7 @@ vi.mock("openai", () => ({
 
 import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
 import { buildOpenAIResponsesParams } from "../transports/openai-responses-params-internal.js";
-import { streamOpenAIResponses } from "./openai-responses.js";
+import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -67,6 +67,19 @@ describe("OpenAI Responses provider", () => {
       expect(openAiMockState.configs[0]).toMatchObject({
         defaultHeaders: { "x-opencode-session": "conversation-123" },
       });
+    },
+  );
+
+  it.each([undefined, "default", "priority"] as const)(
+    "sends service tier %s from simple completions",
+    async (serviceTier) => {
+      await streamSimpleOpenAIResponses(model(), context, { apiKey: "test", serviceTier }).result();
+      expect(openAiMockState.params).toHaveLength(1);
+      if (serviceTier) {
+        expect(openAiMockState.params[0]).toMatchObject({ service_tier: serviceTier });
+      } else {
+        expect(openAiMockState.params[0]).not.toHaveProperty("service_tier");
+      }
     },
   );
 
@@ -153,7 +166,7 @@ describe("OpenAI Responses provider", () => {
 
     expect(result.stopReason).toBe("error");
     for (const params of [transportParams, openAiMockState.params[0]]) {
-      expect(params).toMatchObject({ max_output_tokens: 16, store: false });
+      expect(params).toMatchObject({ store: false, max_output_tokens: 16 });
     }
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
@@ -204,14 +217,18 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
-    { reasoningEffort: undefined, expectedEffort: undefined },
-    { reasoningEffort: "minimal", expectedEffort: "low" },
-    { reasoningEffort: "xhigh", expectedEffort: "xhigh" },
-    { reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6-astra", reasoningEffort: undefined, expectedEffort: undefined },
+    { id: "gpt-6-astra", reasoningEffort: "minimal", expectedEffort: "low" },
+    { id: "gpt-6-astra", reasoningEffort: "xhigh", expectedEffort: "xhigh" },
+    { id: "gpt-6-astra", reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6-sol", reasoningEffort: "none", expectedEffort: "none" },
+    { id: "gpt-6-sol", reasoningEffort: "max", expectedEffort: "max" },
+    { id: "gpt-6-luna", reasoningEffort: "none", expectedEffort: "none" },
+    { id: "gpt-6-luna", reasoningEffort: "max", expectedEffort: "max" },
   ] as const)(
-    "honors Astra reasoning and sampling without catalog metadata for $reasoningEffort",
-    async ({ reasoningEffort, expectedEffort }) => {
-      const requestModel = model({ id: "gpt-6-astra" });
+    "honors $id reasoning and sampling without catalog metadata for $reasoningEffort",
+    async ({ id, reasoningEffort, expectedEffort }) => {
+      const requestModel = model({ id });
       const options = { apiKey: "sentinel-key", reasoningEffort, temperature: 0.5, topP: 0.8 };
       const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
       await streamOpenAIResponses(requestModel, context, options).result();

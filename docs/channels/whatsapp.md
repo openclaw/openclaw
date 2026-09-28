@@ -139,6 +139,8 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). With the default `session.groupScope: "per-group"`, group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
+- Media uploads use the same proxy environment, with `NO_PROXY` evaluated for each actual upload host independently of the WebSocket destination.
+- Media proxy URLs must use HTTP or HTTPS. Invalid media proxy settings fail uploads without blocking login or text messaging.
 
 ## Call the current requester with MeowCaller (experimental)
 
@@ -151,7 +153,7 @@ MeowCaller is experimental, has no tagged release, and uses a separately paired 
 <Steps>
   <Step title="Enable experimental calls">
 
-    Add `actions.calls: true` to the WhatsApp channel config and restart the gateway:
+    Add `actions.calls: true` to the WhatsApp channel config. Changes follow [hot reload](/gateway/configuration/hot-reload):
 
 ```json
 {
@@ -181,7 +183,7 @@ mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/meowcaller" ./cmd/meowcaller
 ```
 
-    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
+    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
 
   </Step>
 
@@ -202,7 +204,7 @@ meowcaller pair --store "$state_dir/wa-voip.db"
 
   <Step title="Configure TTS and call from WhatsApp">
 
-    Configure a telephony-capable [TTS provider](/tools/tts), restart the gateway, then send a request such as `Call me and say the build finished.` The tool resolves the sender from trusted inbound context, synthesizes a temporary private WAV file, runs MeowCaller for a bounded call window, and deletes the audio file afterward. OpenClaw passes the account's store explicitly, waits for a zero exit status after answer/playback/hangup, and treats a timeout or nonzero exit as a failed tool call.
+    Configure a telephony-capable [TTS provider](/tools/tts), then send a request such as `Call me and say the build finished.` The tool resolves the sender from trusted inbound context, synthesizes a temporary private WAV file, runs MeowCaller for a bounded call window, and deletes the audio file afterward. OpenClaw passes the account's store explicitly, waits for a zero exit status after answer/playback/hangup, and treats a timeout or nonzero exit as a failed tool call.
 
   </Step>
 </Steps>

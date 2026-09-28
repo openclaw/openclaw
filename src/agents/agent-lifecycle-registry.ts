@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
 import {
   beginAgentDeletionJournal,
@@ -237,8 +239,13 @@ export function claimCompletedAgentDeletion(
 export function isAgentDeletionBlocked(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
+  database?: DatabaseSync,
 ): boolean {
-  return Boolean(readAgentDeletionJournal(normalizeAgentId(agentId), options));
+  return Boolean(
+    database
+      ? readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime")
+      : readAgentDeletionJournal(agentId, options, "runtime"),
+  );
 }
 
 /** Captures the exact durable incarnation of an existing, deletion-safe agent. */
@@ -248,7 +255,11 @@ export function captureAgentLifecycleBinding(
   options: OpenClawStateDatabaseOptions = {},
 ): AgentLifecycleBinding | undefined {
   const id = normalizeAgentId(agentId);
-  if (!resolveAgentConfig(config, id) || isAgentDeletionBlocked(id, options)) {
+  if (
+    !resolveAgentConfig(config, id) ||
+    readAgentDatabaseAdmissionRefusal(id, options) ||
+    isAgentDeletionBlocked(id, options)
+  ) {
     return undefined;
   }
   return Object.freeze({
@@ -267,6 +278,7 @@ export function matchesAgentLifecycleBinding(
   return (
     id === binding.agentId &&
     Boolean(resolveAgentConfig(config, id)) &&
+    !readAgentDatabaseAdmissionRefusal(id, options) &&
     !isAgentDeletionBlocked(id, options) &&
     isDeepStrictEqual(readAgentProvenance(id, options) ?? null, binding.provenance)
   );

@@ -24,7 +24,7 @@ provider plugin hooks, and diagnostics logging) can be injected with
 `configureAiTransportHost`; the defaults are inert.
 
 The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
-`openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
+`openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
 `tool-schema` subpaths exist for the OpenClaw application itself.
 They carry no semver guarantee and can change or disappear in any release; do
 not depend on them outside OpenClaw.

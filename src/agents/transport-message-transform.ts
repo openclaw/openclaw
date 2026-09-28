@@ -9,6 +9,11 @@ import {
   isReasoningOnlyLengthAssistantTurn,
   resolveFailedAssistantReplay,
 } from "@openclaw/ai/internal/shared";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isSyntheticMissingToolResult,
+  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -69,10 +74,29 @@ export function transformTransportMessages(
       return msg;
     }
     if (msg.role === "toolResult") {
+      // Earlier history repair may already have paired this call. Apply the same
+      // transport placeholder without rewriting persisted diagnostics or real output.
+      const normalizeRepairText =
+        isSyntheticMissingToolResult(msg) &&
+        (msg.content.length !== 1 ||
+          msg.content[0]?.type !== "text" ||
+          msg.content[0].text !== syntheticToolResultText);
+      const result = normalizeRepairText
+        ? {
+            ...msg,
+            content: [{ type: "text" as const, text: syntheticToolResultText }],
+            // Legacy placeholders were identified by prose alone. Preserve their
+            // provenance so pairing can still replace them with a later real result.
+            details: {
+              ...(isRecord(msg.details) ? msg.details : {}),
+              [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true,
+            },
+          }
+        : msg;
       const normalizedId = toolCallIdMap.get(msg.toolCallId);
       return normalizedId && normalizedId !== msg.toolCallId
-        ? { ...msg, toolCallId: normalizedId }
-        : msg;
+        ? { ...result, toolCallId: normalizedId }
+        : result;
     }
     if (msg.role !== "assistant") {
       return msg;
@@ -161,34 +185,39 @@ export function transformTransportMessages(
   // their adjacent results together; pre-filtering the call can misattribute its result
   // to an older turn that reused the same provider id.
   const requiresPairing = allowSyntheticToolResults || hasCrossModelAsyncCalls;
-  const replayable = transformed.flatMap((msg, index) => {
+  let replayLength = 0;
+  transformed.forEach((msg, index) => {
     const original = messages[index];
-    if (!original) {
-      return [msg];
+    let replayMessage = msg;
+    if (original) {
+      if (isReasoningOnlyLengthAssistantTurn(original)) {
+        return;
+      }
+      switch (resolveFailedAssistantReplay(original, { pairingAware: requiresPairing })) {
+        case "drop":
+          return;
+        case "marker":
+          replayMessage = {
+            ...msg,
+            content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+          };
+          break;
+        case "keep":
+          break;
+      }
     }
-    if (isReasoningOnlyLengthAssistantTurn(original)) {
-      return [];
-    }
-    switch (resolveFailedAssistantReplay(original, { pairingAware: requiresPairing })) {
-      case "drop":
-        return [];
-      case "marker":
-        return [
-          { ...msg, content: [{ type: "text" as const, text: FAILED_ASSISTANT_REPLAY_TEXT }] },
-        ];
-      default:
-        return [msg];
-    }
+    transformed[replayLength++] = replayMessage;
   });
+  transformed.length = replayLength;
 
   if (!requiresPairing) {
-    return replayable;
+    return transformed;
   }
 
   // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
   // handles both and drops aborted/error turns together with their owned results.
-  return repairToolUseResultPairing(replayable, {
+  return repairToolUseResultPairing(transformed, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
     preserveUnframedToolResults: options?.preserveUnframedToolResults,

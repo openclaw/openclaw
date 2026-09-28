@@ -2,13 +2,13 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "../plugins/types.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 const authProfileMocks = vi.hoisted(() => {

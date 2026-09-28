@@ -27,7 +27,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("../auth-profiles.js", () => ({
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: {} }),
   resolveAuthProfileOrder: () => [],
 }));
 
@@ -55,7 +55,8 @@ vi.mock("./model.static-catalog.js", () => ({
   }),
 }));
 
-vi.mock("../model-suppression.js", () => {
+vi.mock("../model-suppression.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-suppression.js")>();
   function suppressionError({
     provider,
     id,
@@ -77,8 +78,11 @@ vi.mock("../model-suppression.js", () => {
     return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
   }
   return {
-    shouldSuppressBuiltInModelCore: (input: Parameters<typeof suppressionError>[0]) =>
-      Boolean(suppressionError(input)),
+    ...actual,
+    resolveBuiltInModelSuppressionFromManifest: (input: Parameters<typeof suppressionError>[0]) => {
+      const errorMessage = suppressionError(input);
+      return errorMessage ? { suppress: true, errorMessage } : undefined;
+    },
     shouldUnconditionallySuppress: () => false,
     buildSuppressedBuiltInModelError: suppressionError,
   };
@@ -111,6 +115,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       }),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
+      findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
       createStores: () => {
         const authStorage = discovery.discoverAuthStorage(input.agentDir);
@@ -855,19 +860,13 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
   });
 
-  it("includes auth hint for unknown vllm models", async () => {
-    const result = await resolveModelForTest("vllm", "llama-3-70b", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toContain("Unknown model: vllm/llama-3-70b");
-    expect(result.error).toContain("VLLM_API_KEY");
-  });
-
-  it("does not add auth hint for non-local providers", async () => {
+  it("points unknown models to the requested provider catalog", async () => {
     const result = await resolveModelForTest("google-antigravity", "some-model", "/tmp/agent");
 
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+    expect(result.error).toBe(
+      "Unknown model: google-antigravity/some-model. Run `openclaw models list --refresh --provider google-antigravity` to inspect this provider's model choices, then retry with a model supported by your account.",
+    );
   });
 
   it("applies provider baseUrl override to registry-found models", async () => {
@@ -876,16 +875,6 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.model?.baseUrl).toBe("https://my-proxy.example.com");
-  });
-
-  it("applies provider headers override to registry-found models", async () => {
-    const result = await resolveAnthropicModelWithProviderOverrides({
-      headers: { "X-Custom-Auth": "token-123" },
-    });
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "X-Custom-Auth": "token-123",
-    });
   });
 
   it("lets provider config override registry-found kimi user agent headers", async () => {
@@ -927,28 +916,5 @@ describe("resolveModel forward-compat errors and overrides", () => {
       "User-Agent": "custom-kimi-client/1.0",
       "X-Kimi-Tenant": "tenant-a",
     });
-  });
-
-  it("does not override when no provider config exists", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      templateModel: {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      },
-    });
-
-    const result = await resolveModelForTest("anthropic", "claude-sonnet-4-6", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 });

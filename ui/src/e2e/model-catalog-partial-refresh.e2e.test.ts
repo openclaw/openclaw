@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import type { ModelCatalogResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Partial provider refresh controls" });
@@ -79,10 +80,12 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          const sessionId = "partial-catalog-session";
           const gateway = await installMockGateway(page, {
             agentModel: partialConfig.agents.defaults.model,
             models: catalog.models,
             sessionInfo: {
+              sessionId,
               model: "gpt-5.4",
               modelProvider: "openai",
               thinkingLevels: levels,
@@ -103,6 +106,7 @@ suite.define(() => {
                 sessions: [
                   {
                     key: "agent:main:main",
+                    sessionId,
                     kind: "direct",
                     model: "gpt-5.4",
                     modelProvider: "openai",
@@ -118,13 +122,10 @@ suite.define(() => {
           const model = composer.locator("[data-chat-model-select]");
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
           await model.click();
-          await page
-            .getByText("Some models could not be refreshed. Open Models to try again.", {
-              exact: true,
-            })
-            .waitFor();
           const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
+          await revealChatModelOption(available);
           await expect.poll(() => available.isVisible()).toBe(true);
+          expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           await page.screenshot({
             path: path.join(suite.artifactDir, `${route}-catalog.png`),
             animations: "disabled",
@@ -138,9 +139,11 @@ suite.define(() => {
           await expect.poll(() => effort.isVisible()).toBe(true);
           await effort.click();
           const slider = composer.locator("[data-chat-thinking-slider]");
+          await slider.waitFor({ state: "visible" });
           await expect
             .poll(() => slider.getAttribute("data-chat-thinking-values"))
             .toBe(levels.map(({ id }) => id).join(","));
+          await expect.poll(() => slider.isVisible()).toBe(true);
           const sliderBounds = await slider.boundingBox();
           expect(sliderBounds).not.toBeNull();
           await slider.click({
@@ -148,8 +151,9 @@ suite.define(() => {
           });
           await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
           if (route === "chat") {
-            expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+            expect((await gateway.waitForRequest("sessions.patch")).params).toEqual({
               key: "agent:main:main",
+              expectedSessionId: sessionId,
               thinkingLevel: "ultra",
             });
           }
@@ -165,7 +169,11 @@ suite.define(() => {
               .poll(async () =>
                 (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
               )
-              .toContainEqual({ key: "agent:main:main", fastMode: true });
+              .toContainEqual({
+                key: "agent:main:main",
+                expectedSessionId: sessionId,
+                fastMode: true,
+              });
           }
           await page.keyboard.press("Escape");
           await model.click();
@@ -181,7 +189,7 @@ suite.define(() => {
             });
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
             const notice = composer.locator("[data-chat-model-catalog-state]");
-            await expect.poll(() => notice.count()).toBe(refreshFailed ? 1 : 0);
+            await expect.poll(() => notice.count()).toBe(0);
             await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
             expect(await effort.getAttribute("data-chat-fast-mode")).toBe("true");
             expect(await model.textContent()).toContain("GPT-5.4");
@@ -194,8 +202,9 @@ suite.define(() => {
 
   it("keeps usable effort controls when the selected model is locked during a partial refresh", async () => {
     await suite.withPage({ locale: "en-US" }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         agentModel: partialConfig.agents.defaults.model,
+        heldMethods: ["chat.startup"],
         models: catalog.models,
         methodResponses: {
           "models.list": catalog,
@@ -219,8 +228,12 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
       const effort = page.locator("[data-chat-thinking-select]");
       await expect.poll(() => effort.isVisible()).toBe(true);
+      expect(await effort.getAttribute("aria-disabled")).toBe("true");
+      await gateway.resolveDeferred("chat.startup");
+      await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
       expect(await effort.getAttribute("aria-disabled")).toBe("false");
       expect(await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden")).toBe(
         "false",
@@ -292,9 +305,12 @@ suite.define(() => {
           await gateway.setMethodResponse("models.list", failure);
         }
         await model.click();
-        await expect
-          .poll(() => page.locator("[data-chat-model-catalog-state]").isVisible())
-          .toBe(true);
+        const notice = page.locator("[data-chat-model-catalog-state]");
+        if (["empty", "rejected", "retained rejection"].includes(condition)) {
+          await expect.poll(() => notice.isVisible()).toBe(true);
+        } else {
+          expect(await notice.count()).toBe(0);
+        }
         await expect
           .poll(async () => {
             const { effort } = await readControls(page);

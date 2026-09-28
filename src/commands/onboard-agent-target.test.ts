@@ -4,11 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   applyOnboardingPrimaryModel,
+  applyOnboardingUtilityModel,
   applyAgentModelDefaults,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -19,6 +21,91 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("onboarding agent target", () => {
+  it.each([
+    { ownership: undefined, priorUtility: undefined, writesAgent: false },
+    { ownership: undefined, priorUtility: "", writesAgent: true },
+    { ownership: "explicit", priorUtility: undefined, writesAgent: true },
+  ] as const)("keeps a utility selection on its existing configuration owner: %j", (scenario) => {
+    const config: OpenClawConfig = {
+      agents: {
+        ...(scenario.ownership ? { ownership: scenario.ownership } : {}),
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+          utilityModel: "local-utility/shared",
+        },
+        entries: {
+          main: { utilityModel: "local-utility/main" },
+          OPS: {
+            model: "openai/gpt-5.4",
+            agentDir: "/tmp/ops-auth",
+            ...(scenario.priorUtility !== undefined ? { utilityModel: scenario.priorUtility } : {}),
+          },
+        },
+      },
+    };
+    const original = structuredClone(config);
+    const target = resolveOnboardingAgentTarget(config, "ops");
+
+    const result = applyOnboardingUtilityModel(config, target, "local-utility/tiny");
+
+    expect(result.agents?.defaults).toEqual({
+      ...config.agents?.defaults,
+      utilityModel: scenario.writesAgent ? "local-utility/shared" : "local-utility/tiny",
+    });
+    expect(result.agents?.entries).toEqual({
+      ...config.agents?.entries,
+      OPS: {
+        ...config.agents?.entries?.OPS,
+        ...(scenario.writesAgent ? { utilityModel: "local-utility/tiny" } : {}),
+      },
+    });
+    expect(config).toEqual(original);
+  });
+
+  it.each([undefined, "", "local-utility/ops"])(
+    "projects a provider utility mutation only onto the selected agent: %j",
+    (utilityModel) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: "openai/gpt-5.5",
+            utilityModel: "local-utility/shared",
+          },
+          entries: {
+            main: { utilityModel: "local-utility/main" },
+            OPS: {
+              model: { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.5"] },
+              ...(utilityModel !== undefined ? { utilityModel } : {}),
+            },
+          },
+        },
+      };
+      const target = resolveOnboardingAgentTarget(config, "ops");
+
+      const updated = applyAgentModelDefaults(config, target, (projected) => {
+        expect(projected.agents?.defaults?.utilityModel).toBe(
+          utilityModel ?? "local-utility/shared",
+        );
+        return {
+          ...projected,
+          plugins: { entries: { "local-utility": { enabled: true } } },
+          agents: {
+            ...projected.agents,
+            defaults: { ...projected.agents?.defaults, utilityModel: "local-utility/tiny" },
+          },
+        };
+      });
+
+      expect(updated.agents?.defaults).toEqual(config.agents?.defaults);
+      expect(updated.agents?.entries).toEqual({
+        ...config.agents?.entries,
+        OPS: { ...config.agents?.entries?.OPS, utilityModel: "local-utility/tiny" },
+      });
+      expect(updated.plugins?.entries?.["local-utility"]?.enabled).toBe(true);
+    },
+  );
+
   it("preserves an uppercase authored entry key when applying the primary model", () => {
     const config = {
       agents: {
@@ -177,26 +264,6 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.entries?.ops?.model).toEqual({ primary: "openai/new" });
     expect(updated.agents?.defaults?.model).toEqual({ primary: "openai/global" });
     expect(updated.agents?.entries?.main?.model).toBeUndefined();
-  });
-
-  it("preserves the authored key when projecting explicit agent defaults", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {}, OPS: { model: { primary: "old/model" } } },
-      },
-    };
-    const target = resolveOnboardingAgentTarget(config, "ops");
-    const updated = applyAgentModelDefaults(config, target, (projected) => ({
-      ...projected,
-      agents: {
-        ...projected.agents,
-        defaults: { ...projected.agents?.defaults, model: { primary: "new/model" } },
-      },
-    }));
-
-    expect(updated.agents?.entries?.OPS?.model).toEqual({ primary: "new/model" });
-    expect(updated.agents?.entries?.ops).toBeUndefined();
   });
 
   it("preserves unrelated global defaults while projecting model changes onto the authored agent", () => {

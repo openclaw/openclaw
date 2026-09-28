@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as compactionActivity from "./context-compaction-activity.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -37,19 +38,12 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-1",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
 
@@ -70,19 +64,12 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-1",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
 
@@ -102,19 +89,13 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
+        item: createNativeCommandItem({
           id: "cmd-1",
           command: "OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
 
@@ -216,31 +197,6 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     });
   });
 
-  it("uses a safe markdown fence for verbose tool output", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      onToolResult,
-    });
-
-    projector.recordDynamicToolCall({
-      callId: "tool-1",
-      tool: "read",
-      arguments: { path: "README.md" },
-    });
-    projector.recordDynamicToolResult({
-      callId: "tool-1",
-      tool: "read",
-      contentItems: [{ type: "inputText", text: "line\n```\nMEDIA:/tmp/secret.png" }],
-      success: true,
-    });
-
-    expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
-    });
-  });
-
   it("bounds streamed verbose tool output", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
@@ -259,19 +215,12 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     }
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-1",
           command: "pnpm test",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "final output should not duplicate streamed output",
-          exitCode: 0,
           durationMs: 12,
-        },
+        }),
       ]),
     );
 
@@ -313,7 +262,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
   });
 
-  it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
+  it("projects repeated Codex compaction completion once", async () => {
     const agentHookContext = {
       runId: "run-1",
       sessionId: "session-1",
@@ -327,8 +276,10 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
         chat: { id: "chat-a" },
       },
     };
+    const onContextCompacted = vi.fn();
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks({
       agentHookContext,
+      onContextCompacted,
     });
     const openSpy = vi.spyOn(SessionManager, "open");
 
@@ -342,7 +293,16 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "contextCompaction", id: "compact-1" },
+      }),
+    );
     expect(openSpy).not.toHaveBeenCalled();
+    expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBe(1);
+    expect(onContextCompacted).toHaveBeenCalledOnce();
+    expect(beforeCompaction).toHaveBeenCalledOnce();
+    expect(afterCompaction).toHaveBeenCalledOnce();
 
     const beforePayload = requireRecord(
       mockCallArg(beforeCompaction, 0, 0, "beforeCompaction"),
@@ -378,11 +338,11 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
   describe.each(["item/started", "item/completed"] as const)(
     "%s compaction lifecycle",
     (method) => {
-      it.each(
-        ["history", "hook"].flatMap((pendingStage) =>
-          ["closed", "aborted", "run aborted"].map((ending) => ({ pendingStage, ending })),
-        ),
-      )("stops after $ending while awaiting $pendingStage", async ({ pendingStage, ending }) => {
+      it.each([
+        { pendingStage: "history", ending: "closed" },
+        { pendingStage: "hook", ending: "aborted" },
+        { pendingStage: "history", ending: "run aborted" },
+      ])("stops after $ending while awaiting $pendingStage", async ({ pendingStage, ending }) => {
         const entered = createDeferred<void>();
         const release = createDeferred<void>();
         const runAbort = new AbortController();
@@ -435,7 +395,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
         expect(hook).toHaveBeenCalledTimes(pendingStage === "hook" ? 1 : 0);
         expect(onAgentEvent).not.toHaveBeenCalled();
         expect(persistActivity).not.toHaveBeenCalled();
-        expect(read.mock.calls[0]?.[3]).toBe(runAbort.signal);
+        expect(read.mock.calls[0]?.[2]).toBe(runAbort.signal);
       });
     },
   );

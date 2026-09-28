@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -21,6 +22,8 @@ import {
 } from "./kysely-sync.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDirMock: vi.fn(),
@@ -265,7 +268,7 @@ async function runOwnershipHelper(params: {
   if (params.sentinel !== undefined) {
     writeRestartSentinelRow(env, params.sentinel);
   }
-  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+  const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
   const parentClosed = new Promise<void>((resolve) => {
@@ -362,11 +365,11 @@ childProcess.spawn = function(command, args, options) {
         parentPid,
         parentStartIdentity: String(startIdentity),
         commandArgv: [
-          process.execPath,
+          testNodeExecPath,
           "-e",
           `require("node:fs").writeFileSync(${JSON.stringify(updaterPath)},"ran");setTimeout(() => process.exit(${params.commandExitCode ?? 1}), ${params.commandDelayMs ?? 0})`,
         ],
-        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
+        triageCommandArgv: [testNodeExecPath, "-e", "process.exit(0)", "--"],
         logPath,
         sensitivePaths: [],
       },
@@ -375,7 +378,7 @@ childProcess.spawn = function(command, args, options) {
     )}\n`,
   );
 
-  const helper = spawn(process.execPath, [helperScriptPath, helperParamsPath], {
+  const helper = spawn(testNodeExecPath, [helperScriptPath, helperParamsPath], {
     cwd: tmpDir,
     env: {
       ...spawnOptions.env,
@@ -723,24 +726,106 @@ describe("managed service update handoff state ownership and sentinel persistenc
     });
   });
 
-  it("repairs legacy restart sentinel columns before writing fallback failures", async () => {
+  it.each(["continuation", "stats", "empty routing"] as const)(
+    "uses canonical sentinel rows without overwriting invalid metadata (%s)",
+    async (shape) => {
+      const { DatabaseSync } = await import("node:sqlite");
+      let before: unknown;
+      const { result, env } = await runOwnershipHelper({
+        handoffId: "handoff-typed-row",
+        metaHandoffId: "handoff-typed-row",
+        prepareStateDatabase: (stateEnv) => {
+          writeRestartSentinelRow(stateEnv, {
+            version: 1,
+            revision: 100,
+            payload: {
+              kind: "update",
+              status: "skipped",
+              ts: 100,
+              sessionKey: "",
+              threadId: "",
+              message: "",
+              ...(shape === "continuation"
+                ? { continuation: { kind: "agentTurn", message: 42 } }
+                : {}),
+              stats: {
+                handoffId: "handoff-typed-row",
+                reason: "managed-service-handoff-started",
+                ...(shape === "stats" ? { durationMs: "invalid" } : {}),
+              },
+            },
+          });
+          closeOpenClawStateDatabaseForTest();
+          const db = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv), { readOnly: true });
+          try {
+            before = db
+              .prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key")
+              .all();
+          } finally {
+            db.close();
+          }
+        },
+      });
+      expect(result).toEqual({ code: 1, signal: null });
+      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+      try {
+        if (shape === "empty routing") {
+          expect(
+            db
+              .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = 'current'")
+              .get(),
+          ).toMatchObject({ status: "error", session_key: "", thread_id: "", message: "" });
+        } else {
+          expect(
+            db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
+          ).toEqual(before);
+        }
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("repairs legacy restart sentinel columns without changing the database schema version", async () => {
     const { result, env } = await runOwnershipHelper({
       handoffId: "handoff-123",
       metaHandoffId: "handoff-123",
-      prepareStateDatabase: createLegacyRestartSentinelTable,
+      prepareStateDatabase: async (stateEnv) => {
+        await createLegacyRestartSentinelTable(stateEnv);
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
+        try {
+          db.exec("PRAGMA user_version = 7");
+        } finally {
+          db.close();
+        }
+      },
     });
 
     expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelPayload(env)).toMatchObject({
-      version: 1,
-      payload: {
-        kind: "update",
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-failed",
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+    try {
+      expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 7 });
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+        { name: "gateway_restart_sentinel" },
+      ]);
+      expect(readRestartSentinelRowSync(db)).toMatchObject({
+        kind: "valid",
+        sentinel: {
+          version: 1,
+          payload: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "managed-service-handoff-failed",
+            },
+          },
         },
-      },
-    });
+      });
+    } finally {
+      db.close();
+    }
   });
 
   it("does not overwrite a restart sentinel owned by another startup task", async () => {

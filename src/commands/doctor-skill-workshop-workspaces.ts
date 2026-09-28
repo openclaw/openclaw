@@ -20,6 +20,7 @@ import {
   recordLegacyMigrationSource,
   resolveLegacyMigrationSourceKey,
 } from "../infra/state-migrations.receipts.js";
+import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-bundle.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -109,6 +110,13 @@ export async function prepareWorkshopWorkspaceRelocation(
   moves: readonly { source: string; destination: string }[],
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
+  if (
+    [workspaceDir, ...moves.flatMap((move) => [move.source, move.destination])].some((filePath) =>
+      isUpdateRehearsalReadOnlyPath(filePath, env),
+    )
+  ) {
+    return;
+  }
   const sourceKey = resolveLegacyMigrationSourceKey(MIGRATION_KIND, workspaceDir);
   const database = openOpenClawStateDatabase({ env });
   const kysely = getNodeSqliteKysely<Pick<DB, "migration_sources">>(database.db);
@@ -209,6 +217,14 @@ export async function finishWorkshopWorkspaceRelocations(env: NodeJS.ProcessEnv)
   ).rows;
   for (const receipt of receipts) {
     const captured = relocationSchema.parse(JSON.parse(receipt.report_json));
+    const retainedPaths = [
+      captured.workspaceDir,
+      captured.workspacePath,
+      ...captured.moves.flatMap((move) => [move.source, move.destination]),
+    ];
+    if (retainedPaths.some((filePath) => isUpdateRehearsalReadOnlyPath(filePath, env))) {
+      continue;
+    }
     const sources = captured.moves.map((move) => move.source);
     let complete = (await directoryIdentity(captured.workspaceDir)) === captured.directoryIdentity;
     if (complete) {
@@ -231,6 +247,9 @@ export async function finishWorkshopWorkspaceRelocations(env: NodeJS.ProcessEnv)
     }
     runOpenClawStateWriteTransaction(
       (writeDatabase) => {
+        if (retainedPaths.some((filePath) => isUpdateRehearsalReadOnlyPath(filePath, env))) {
+          return;
+        }
         const { db } = writeDatabase;
         const current = executeSqliteQueryTakeFirstSync(
           db,

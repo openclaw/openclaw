@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+  writeNativeFixtureFile,
+} from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const sourceRoot = process.cwd();
@@ -134,8 +138,12 @@ process.exitCode = result.status ?? 1;
     if (process.platform === "win32") {
       write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
     }
+    overrideNativeFixtureExecutable(root, launcher);
     const cwd = path.join(root, "src");
-    const result = runTsgoEntry(root, ["-p", "tsconfig.json"], { cwd });
+    const result = runTsgoEntry(root, ["-p", "tsconfig.json"], {
+      cwd,
+      env: { ...process.env, OPENCLAW_CI_STATIC_EVIDENCE: "1" },
+    });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const selected: { cwd: string; args: string[] } = JSON.parse(
@@ -143,6 +151,26 @@ process.exitCode = result.status ?? 1;
     );
     expect(selected.cwd).toBe(cwd);
     expect(selected.args.slice(0, 2)).toEqual(["-p", "tsconfig.json"]);
+    if (process.platform !== "win32") {
+      const receipts = result.stdout.trim().split("\n");
+      expect(receipts).toHaveLength(2);
+      const leaf = JSON.parse(receipts[0]!.slice(receipts[0]!.indexOf(" ") + 1));
+      expect(leaf).toEqual({
+        version: 1,
+        id: expect.any(String),
+        config: "tsconfig.json",
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      });
+      expect(JSON.parse(receipts[1]!.slice(receipts[1]!.indexOf(" ") + 1))).toEqual({
+        version: 1,
+        id: expect.any(String),
+        planned: 1,
+        completed: 1,
+        leaves: [leaf.id],
+      });
+    }
     expect(fs.lstatSync(path.join(cwd, "node_modules"), { throwIfNoEntry: false })).toBeUndefined();
   }, 30_000);
 
@@ -176,12 +204,13 @@ process.exitCode = result.status ?? 1;
         "--tsBuildInfoFile",
         ".artifacts/should-not-exist.tsbuildinfo",
       ],
-      { env: { ...process.env, OPENCLAW_TSGO_SPARSE_SKIP: "1" } },
+      { env: { ...process.env, OPENCLAW_TSGO_SPARSE_SKIP: "1", OPENCLAW_CI_STATIC_EVIDENCE: "1" } },
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stderr).toContain("skipping sparse-missing project");
     expect(result.stderr).toContain("OPENCLAW_TSGO_SPARSE_SKIP=1");
+    expect(result.stdout).not.toContain("[ci-static:tsgo:");
     expect(
       fs.lstatSync(path.join(root, "node_modules"), { throwIfNoEntry: false }),
     ).toBeUndefined();

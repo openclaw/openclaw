@@ -9,7 +9,7 @@ extension DashboardWindowController {
         guard message.name == DashboardBrowserMessageHandler.name,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
-              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
+              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               self.canUseBrowserDocument(sourceID: self.notificationSourceID)
         else {
             replyHandler(["ok": false, "error": DashboardBrowserError.unavailable.localizedDescription], nil)
@@ -59,13 +59,13 @@ extension DashboardWindowController {
         """
         // The JavaScript guard rechecks the destination if a sign-in redirect
         // commits between this call and WebKit's queued main-frame evaluation.
-        self.webView.evaluateJavaScript(Self.scopedDashboardScript(script, url: self.currentURL))
+        self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(script, url: self.currentURL))
     }
 
     private func canUseBrowserDocument(sourceID: String) -> Bool {
-        self.window != nil && self.canDeliverNativeCommands &&
+        self.window != nil && !self.isHiddenForExperience && self.canDeliverNativeCommands &&
             self.notificationSourceID == sourceID && self.hasCurrentBrowserSession &&
-            Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
     private func downloadBrowserReply(

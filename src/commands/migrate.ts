@@ -19,14 +19,12 @@ import type {
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { runMigrationApply } from "./migrate/apply.js";
-import { applyMigrationItemSelection } from "./migrate/item-selection.js";
 import { formatMigrationPreview } from "./migrate/output.js";
 import { createMigrationPlan, withMigrationProvider } from "./migrate/providers.js";
 import {
-  applyMigrationPluginSelection,
   applyMigrationSelectedPluginItemIds,
   applyMigrationSelectedSkillItemIds,
-  applyMigrationSkillSelection,
+  applyMigrationSelections,
   formatMigrationPluginSelectionHint,
   formatMigrationPluginSelectionLabel,
   formatMigrationSkillSelectionHint,
@@ -45,13 +43,6 @@ import type {
   MigrateCommonOptions,
   MigrateDefaultOptions,
 } from "./migrate/types.js";
-
-function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return applyMigrationItemSelection(
-    applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
-    opts.itemIds,
-  );
-}
 
 function hasAuthCredentialCandidate(plan: MigrationPlan): boolean {
   return plan.items.some(
@@ -72,9 +63,6 @@ function resolveDefaultIncludeSecrets<T extends MigrateCommonOptions & { yes?: b
 ): T {
   if (opts.authCredentials === false) {
     return { ...opts, includeSecrets: false };
-  }
-  if (opts.includeSecrets !== undefined) {
-    return opts;
   }
   return opts;
 }
@@ -97,7 +85,7 @@ async function createMigrationPlanWithProgress(
   const createPlan = async (): Promise<MigrationPlan> =>
     await createMigrationPlan(runtime, opts, provider);
   if (opts.json) {
-    return selectMigrationItems(await createPlan(), opts);
+    return applyMigrationSelections(await createPlan(), opts);
   }
   const plan = await withProgress(
     { label: `Scanning ${opts.provider} migration…`, indeterminate: true },
@@ -108,7 +96,7 @@ async function createMigrationPlanWithProgress(
       return planLocal;
     },
   );
-  return selectMigrationItems(plan, opts);
+  return applyMigrationSelections(plan, opts);
 }
 
 async function createInteractiveMigrationPlanWithAuthPrompt(
@@ -229,7 +217,7 @@ async function promptCodexMigrationSelection(
     selectableValues: items.map((item) => item.id),
     cursorAt: MIGRATION_SELECTION_ACCEPT,
   });
-  if (isCancel(selected)) {
+  if (typeof selected === "symbol") {
     cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
     runtime.log("Migration cancelled.");
     return null;
@@ -488,7 +476,7 @@ export async function migrateDefaultCommand(
   const resolvedOpts = resolveDefaultIncludeSecrets(opts);
   const plan =
     opts.json && opts.yes && !opts.dryRun
-      ? selectMigrationItems(
+      ? applyMigrationSelections(
           await createMigrationPlan(runtime, { ...resolvedOpts, provider: providerId }, provider),
           resolvedOpts,
         )

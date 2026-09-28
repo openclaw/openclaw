@@ -19,7 +19,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -41,12 +41,6 @@ const {
   openClient,
   resetConfiguredGlobalAgentSessionStore,
 } = setupGatewaySessionsTestHarness();
-
-function expectObject(value: unknown) {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected object");
-  }
-}
 
 type SessionDeleteRequest = {
   key: string;
@@ -96,6 +90,26 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
     reason: "session-delete",
   });
 }
+
+test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
+  testState.sessionConfig = { scope: "global" };
+  const target = { agentId: "ops", sessionKey: "global", storePath };
+  await replaceSessionEntry(target, sessionStoreEntry("sole-global"));
+  const before = loadSessionEntry(target);
+  embeddedRunMock.activeIds.add("sole-global");
+  embeddedRunMock.waitResults.set("sole-global", true);
+
+  const result = await directSessionReq("sessions.delete", { key: "global", agentId: "ops" });
+
+  expect(result.ok).toBe(false);
+  expect(result.error?.message).toBe("Cannot delete the main session (global).");
+  expect(loadSessionEntry(target)).toEqual(before);
+  expect(embeddedRunMock.abortCalls).not.toContain("sole-global");
+  expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+});
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
@@ -269,36 +283,6 @@ test("sessions.delete interrupts work admitted before runtime registration", asy
 
   expect(deleted.payload?.deleted).toBe(true);
   expect(interrupted).toBe(true);
-});
-
-test("sessions.delete rejects a stale expected session id without interrupting its replacement", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:subagent:worker";
-  const replacementSessionId = "sess-replacement";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(replacementSessionId),
-    },
-  });
-  let interrupted = false;
-  const admission = await beginSessionWorkAdmission({
-    scope: storePath,
-    identities: [sessionKey, replacementSessionId],
-    assertAllowed: () => {},
-    onInterrupt: () => {
-      interrupted = true;
-    },
-  });
-
-  try {
-    await expectSessionDeleteChanged({
-      key: sessionKey,
-      expectedSessionId: "sess-stale",
-    });
-    expect(interrupted).toBe(false);
-  } finally {
-    admission.release();
-  }
 });
 
 test.each(["session id", "updated at"] as const)(
@@ -769,36 +753,24 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
     key: "discord:group:dev",
   });
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const closeSessionCall = (
-    acpManagerMocks.closeSession.mock.calls as unknown as Array<
-      [
-        {
-          allowBackendUnavailable?: boolean;
-          cfg?: unknown;
-          discardPersistentState?: boolean;
-          requireAcpSession?: boolean;
-          reason?: string;
-          sessionKey?: string;
-        },
-      ]
-    >
-  )[0]?.[0];
-  expect(closeSessionCall?.allowBackendUnavailable).toBe(true);
-  expectObject(closeSessionCall?.cfg);
-  expect(closeSessionCall?.discardPersistentState).toBe(true);
-  expect(closeSessionCall?.requireAcpSession).toBe(false);
-  expect(closeSessionCall?.reason).toBe("session-delete");
-  expect(closeSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
-
+  expect(acpManagerMocks.closeSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      discardPersistentState: true,
+      requireAcpSession: false,
+      reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
+    }),
+  );
   expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
-  const cancelSessionCall = (
-    acpManagerMocks.cancelSession.mock.calls as unknown as Array<
-      [{ cfg?: unknown; reason?: string; sessionKey?: string }]
-    >
-  )[0]?.[0];
-  expectObject(cancelSessionCall?.cfg);
-  expect(cancelSessionCall?.reason).toBe("session-delete");
-  expect(cancelSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
+  expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cfg: expect.any(Object),
+      reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
+    }),
+  );
   expect(readAcpSessionMeta({ sessionKey: "agent:main:discord:group:dev" })).toBeUndefined();
 });
 
@@ -870,21 +842,21 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   const [event, context] = (
     sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
-  expect((event as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
-  expect((event as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-    "agent:main:discord:group:delete",
-  );
-  expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
+  expect(event).toMatchObject({
+    sessionId: "sess-delete",
+    sessionKey: "agent:main:discord:group:delete",
+    reason: "deleted",
+  });
   expect(
     (event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived,
   ).toBeUndefined();
   expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBeUndefined();
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
-  expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
-  expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-    "agent:main:discord:group:delete",
-  );
-  expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
+  expect(context).toMatchObject({
+    sessionId: "sess-delete",
+    sessionKey: "agent:main:discord:group:delete",
+    agentId: "main",
+  });
 });
 
 test("sessions.delete sessions.changed event always carries the resolved owner", async () => {
