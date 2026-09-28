@@ -281,6 +281,21 @@ describe("checkGatewayHealth", () => {
     },
   );
 
+  it("reports a deleted Gateway Node path without marking the gateway unhealthy", async () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    callGateway
+      .mockResolvedValueOnce({
+        childRuntime: { execPath, available: false },
+      })
+      .mockResolvedValue({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
+    expect(note).toHaveBeenCalledWith(
+      `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+      "Gateway runtime",
+    );
+  });
+
   it.each([
     ["startupMigrationWarning", "Startup migration warnings"],
     ["startupRecoveryWarning", "Startup session recovery"],

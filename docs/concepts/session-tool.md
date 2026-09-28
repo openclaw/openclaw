@@ -181,6 +181,12 @@ one final result; an empty yielded predecessor is not a completed `no_reply`.
 A positive wait can transfer to asynchronous delivery without a second consumer.
 This custody is process-local: it does not restore caller authority after a
 Gateway restart, and it closes when that authority or either conversation changes.
+An owner-started follow-up also retains the original channel owner identity for
+its one-way result turn in the same requester conversation. Successful results
+and child failures can therefore continue already authorized work with owner-only
+plugin tools. This does not make the child an owner or treat its text as a user
+instruction. A new user turn, revoked ownership, changed conversation, or Gateway
+restart invalidates the retained authority.
 The original paused child task remains separate from an explicit followup.
 
 Retries with the same input ID reconcile retained Gateway admission and reply

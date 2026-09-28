@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   BUNDLE_HASH,
@@ -22,7 +21,7 @@ import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
 const it = createCommandTest();
 
 describe("worker placement dispatch reclaim", () => {
@@ -34,11 +33,6 @@ describe("worker placement dispatch reclaim", () => {
     root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    tempDirs.cleanup();
   });
 
   it("admits an unrelated provider provision after Stop while another provision never settles", async () => {
