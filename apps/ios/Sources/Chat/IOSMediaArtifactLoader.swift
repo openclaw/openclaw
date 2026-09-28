@@ -28,19 +28,15 @@ struct IOSMediaArtifactLoader: Sendable {
     private let connectionProvider: ConnectionProvider
     private let requestFactory: RequestFactory
 
-    init(connectionProvider: @escaping ConnectionProvider) {
-        self.init(connectionProvider: connectionProvider) { tls, maximumBytes in
+    init(
+        connectionProvider: @escaping ConnectionProvider,
+        requestFactory: @escaping RequestFactory = { tls, maximumBytes in
             let session = GatewayTLSPinningSession(params: tls)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)
             }
-        }
-    }
-
-    init(
-        connectionProvider: @escaping ConnectionProvider,
-        requestFactory: @escaping RequestFactory)
+        })
     {
         self.connectionProvider = connectionProvider
         self.requestFactory = requestFactory
