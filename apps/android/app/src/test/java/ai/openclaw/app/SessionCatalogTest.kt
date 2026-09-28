@@ -27,7 +27,7 @@ class SessionCatalogTest {
               "capabilities": {
                 "continueSession": true,
                 "archive": false,
-                "startTerminal": true
+                "createSession": {"model": "openai/gpt-5.6-luna"}
               },
               "hosts": [{
                 "hostId": "desktop",
@@ -72,7 +72,7 @@ class SessionCatalogTest {
     assertEquals(1, catalogs.size)
     val catalog = catalogs.single()
     assertEquals("catalog warning", catalog.errorText)
-    assertTrue(catalog.canStartTerminal)
+    assertTrue(catalog.canCreateSession)
     assertEquals(listOf("desktop", "offline"), catalog.hosts.map(SessionCatalogHost::hostId))
     val host = catalog.hosts.first()
     assertTrue(host.connected)
@@ -280,7 +280,7 @@ class SessionCatalogTest {
     val merged = mergeSessionCatalogHostProgress(current, progress)
 
     assertEquals("progress-1", progress.progressId)
-    assertFalse(progress.catalog.canStartTerminal)
+    assertFalse(progress.catalog.canCreateSession)
     assertEquals(
       listOf("fresh"),
       merged

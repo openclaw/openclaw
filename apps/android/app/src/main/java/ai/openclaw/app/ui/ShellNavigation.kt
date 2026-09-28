@@ -4,15 +4,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
-import java.util.UUID
-
-// Each explicit start gets its own WebView, including repeated starts for the same catalog.
-internal class CatalogSessionStart(
-  val gatewayBaseUrl: String,
-  val agentId: String,
-  val catalogId: String,
-  val requestId: String = UUID.randomUUID().toString(),
-)
 
 /**
  * Shell navigation state: the visible tab, the open settings route, and where Back
@@ -25,15 +16,12 @@ internal class ShellNavigation(
   returnTab: Tab? = null,
   settingsRouteFromHome: Boolean = false,
   dashboardSessionKey: String = "main",
-  catalogSessionStart: CatalogSessionStart? = null,
 ) {
   var activeTab by mutableStateOf(activeTab)
     private set
   var settingsRoute by mutableStateOf(settingsRoute)
     private set
   var dashboardSessionKey by mutableStateOf(dashboardSessionKey)
-    private set
-  var catalogSessionStart by mutableStateOf(catalogSessionStart)
     private set
 
   // Single-slot origin: Back from a cross-tab detail (settings route, Sessions,
@@ -47,7 +35,6 @@ internal class ShellNavigation(
 
   /** Tab-bar-style switch: Back from the selected tab returns to Overview. */
   fun selectTab(tab: Tab) {
-    catalogSessionStart = null
     if (tab == Tab.Settings) settingsRoute = SettingsRoute.Home
     settingsRouteFromHome = false
     returnTab = null
@@ -56,7 +43,6 @@ internal class ShellNavigation(
 
   /** Opens a settings route from another tab, remembering the origin for Back. */
   fun openSettingsRoute(route: SettingsRoute) {
-    catalogSessionStart = null
     settingsRoute = route
     settingsRouteFromHome = false
     openDetailTab(Tab.Settings)
@@ -64,14 +50,12 @@ internal class ShellNavigation(
 
   /** Opens a settings route from the Settings Home list; Back returns to Home. */
   fun openSettingsRouteFromHome(route: SettingsRoute) {
-    catalogSessionStart = null
     settingsRoute = route
     settingsRouteFromHome = true
   }
 
   /** Opens a detail tab (Sessions, Providers) from another tab, remembering the origin for Back. */
   fun openDetailTab(tab: Tab) {
-    if (tab != Tab.Settings) catalogSessionStart = null
     if (activeTab != tab) returnTab = activeTab
     activeTab = tab
   }
@@ -82,14 +66,8 @@ internal class ShellNavigation(
     openDetailTab(Tab.Dashboard)
   }
 
-  fun openCatalogSession(start: CatalogSessionStart) {
-    openSettingsRoute(SettingsRoute.Terminal)
-    catalogSessionStart = start
-  }
-
   /** Unwinds one Back step: settings detail to Home or origin, otherwise tab to origin or Overview. */
   fun back() {
-    catalogSessionStart = null
     if (activeTab == Tab.Settings && settingsRoute != SettingsRoute.Home) {
       settingsRoute = SettingsRoute.Home
       if (settingsRouteFromHome) {
@@ -117,7 +95,7 @@ internal class ShellNavigation(
             nav.returnTab?.name.orEmpty(),
             nav.settingsRouteFromHome.toString(),
             nav.dashboardSessionKey,
-          ) + nav.catalogSessionStart?.let { listOf(it.gatewayBaseUrl, it.agentId, it.catalogId, it.requestId) }.orEmpty()
+          )
         },
         restore = { saved ->
           ShellNavigation(
@@ -126,7 +104,6 @@ internal class ShellNavigation(
             returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(::restoreTab),
             settingsRouteFromHome = saved[3].toBoolean(),
             dashboardSessionKey = saved.getOrNull(4) ?: "main",
-            catalogSessionStart = saved.getOrNull(5)?.takeIf(String::isNotEmpty)?.let { CatalogSessionStart(it, saved[6], saved[7], saved[8]) },
           )
         },
       )

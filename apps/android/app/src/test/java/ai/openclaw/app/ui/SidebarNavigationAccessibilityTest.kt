@@ -275,7 +275,6 @@ class SidebarNavigationAccessibilityTest {
             onSelectSession = {},
             onSelectCatalogSession = {},
             onCreateCatalogSession = {},
-            onStartCatalogSession = {},
             onSelectDestination = { selections += it },
           )
         }

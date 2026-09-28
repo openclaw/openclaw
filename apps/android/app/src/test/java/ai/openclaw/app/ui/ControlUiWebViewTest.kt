@@ -13,7 +13,6 @@ import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.junit.Assert.assertEquals
@@ -32,47 +31,6 @@ import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
 class ControlUiWebViewTest {
-  @Test
-  @Config(sdk = [31], qualifiers = "notnight")
-  fun catalogTerminalNavigationSurvivesWebViewReplacement() {
-    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
-    val page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, null, null)
-    var mode by mutableStateOf(AppearanceThemeMode.Light)
-    var startUrl by mutableStateOf("${page.baseUrl}/new?agent=main&catalog=codex")
-    controller.get().setContent {
-      OpenClawTheme(themeMode = mode) {
-        key(page, startUrl) { ControlUiWebView(page = page, url = startUrl) }
-      }
-    }
-    try {
-      idleMainLooper()
-      val initial = requireNotNull(findWebView(controller.get().window.decorView))
-      val terminalUrl = "${page.baseUrl}/terminal/native-session"
-      initial.webViewClient.doUpdateVisitedHistory(initial, terminalUrl, false)
-      initial.webViewClient.doUpdateVisitedHistory(initial, "https://unrelated.example/terminal/other", false)
-      mode = AppearanceThemeMode.Dark
-      idleMainLooper()
-      val themed = requireNotNull(findWebView(controller.get().window.decorView))
-      assertNotSame(initial, themed)
-      assertEquals(terminalUrl, shadowOf(themed).lastLoadedUrl)
-
-      themed.webViewClient.onRenderProcessGone(themed, CrashedRenderProcessDetail)
-      idleMainLooper()
-      val recovered = requireNotNull(findWebView(controller.get().window.decorView))
-      assertNotSame(themed, recovered)
-      assertEquals(terminalUrl, shadowOf(recovered).lastLoadedUrl)
-
-      startUrl = "${page.baseUrl}/new?agent=research&catalog=claude"
-      idleMainLooper()
-      val nextStart = requireNotNull(findWebView(controller.get().window.decorView))
-      assertNotSame(recovered, nextStart)
-      assertEquals(startUrl, shadowOf(nextStart).lastLoadedUrl)
-    } finally {
-      controller.pause().stop().destroy()
-      idleMainLooper()
-    }
-  }
-
   @Test
   @Config(sdk = [31])
   fun browserPreviewRetainsItsWebViewAndExternalNavigationRequiresAGesture() {

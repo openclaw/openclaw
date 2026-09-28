@@ -217,7 +217,7 @@ class SidebarCatalogGroupingTest {
   fun catalogSectionsMatchWebVisibilityAndKeepExpansionIndependent() {
     val catalogs =
       listOf(
-        SessionCatalog(id = "codex", label = "Codex", hosts = emptyList(), canStartTerminal = true),
+        SessionCatalog(id = "codex", label = "Codex", hosts = emptyList(), canCreateSession = true),
         SessionCatalog(
           id = "claude",
           label = "Claude Code",
@@ -257,16 +257,13 @@ class SidebarCatalogGroupingTest {
   }
 
   @Test
-  fun catalogCreationRequiresAccessForTheAdvertisedOperation() {
-    val creatable = SessionCatalog(id = "codex", label = "Codex", hosts = emptyList(), canStartTerminal = true)
-    for (canCreate in listOf(false, true)) {
-      for (canWrite in listOf(false, true)) {
-        for (canStart in listOf(false, true)) {
-          assertEquals(if (canCreate) canWrite else canStart, sidebarCatalogSessionCreationEnabled(creatable.copy(canCreateSession = canCreate), canWrite, canStart))
-          assertEquals(canCreate && canWrite, sidebarCatalogSessionCreationEnabled(creatable.copy(canCreateSession = canCreate, canStartTerminal = false), canWrite, canStart))
-        }
-      }
-    }
+  fun catalogCreationRequiresAdvertisedCapabilityAndWriteScope() {
+    val creatable = SessionCatalog(id = "codex", label = "Codex", hosts = emptyList(), canCreateSession = true)
+    val unavailable = creatable.copy(canCreateSession = false)
+
+    assertTrue(sidebarCatalogSessionCreationEnabled(creatable, canMutateSessions = true))
+    assertFalse(sidebarCatalogSessionCreationEnabled(creatable, canMutateSessions = false))
+    assertFalse(sidebarCatalogSessionCreationEnabled(unavailable, canMutateSessions = true))
   }
 
   @Test
@@ -353,7 +350,6 @@ class SidebarCatalogGroupingTest {
             onSelectSession = {},
             onSelectCatalogSession = {},
             onCreateCatalogSession = {},
-            onStartCatalogSession = {},
             onSelectDestination = {},
           )
         }
@@ -450,7 +446,6 @@ class SidebarCatalogGroupingTest {
             onSelectSession = { selectedSessionKey = it.key },
             onSelectCatalogSession = {},
             onCreateCatalogSession = {},
-            onStartCatalogSession = {},
             onSelectDestination = {},
           )
         }
@@ -539,7 +534,6 @@ class SidebarCatalogGroupingTest {
             onSelectSession = {},
             onSelectCatalogSession = {},
             onCreateCatalogSession = {},
-            onStartCatalogSession = {},
             onSelectDestination = {},
           )
         }

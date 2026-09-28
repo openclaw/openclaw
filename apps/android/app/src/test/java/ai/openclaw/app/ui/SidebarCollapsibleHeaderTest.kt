@@ -99,7 +99,6 @@ class SidebarCollapsibleHeaderTest {
                 onSelectSession = {},
                 onSelectCatalogSession = {},
                 onCreateCatalogSession = {},
-                onStartCatalogSession = {},
                 onSelectDestination = {},
               )
             }

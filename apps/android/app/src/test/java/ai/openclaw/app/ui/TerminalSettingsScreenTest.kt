@@ -10,15 +10,6 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class TerminalSettingsScreenTest {
   @Test
-  fun catalogStartUsesNewSessionRouteWithoutCredentialsOrInheritedQuery() {
-    val baseUrl = "https://gateway.example.com:8443/openclaw/"
-    assertEquals(
-      "https://gateway.example.com:8443/openclaw/new?agent=research&catalog=codex",
-      terminalUrl("$baseUrl?discard=true#old", CatalogSessionStart(baseUrl, "research", "codex")),
-    )
-  }
-
-  @Test
   fun terminalUrlBuildsCanonicalFocusPath() {
     val cases =
       listOf(

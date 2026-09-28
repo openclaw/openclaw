@@ -286,12 +286,6 @@ fun ShellScreen(
                 closeSidebar()
                 viewModel.createSessionCatalogEntry(catalogId)
               },
-              onStartCatalogSession = { catalog ->
-                viewModel.gatewayControlPage.value?.let { page ->
-                  nav.openCatalogSession(CatalogSessionStart(page.baseUrl, (chatSessionOwnerAgentId ?: gatewayDefaultAgentId).orEmpty(), catalog.id))
-                  closeSidebar()
-                }
-              },
               onSelectDestination = selectSidebarDestination,
             )
           },
@@ -356,7 +350,6 @@ fun ShellScreen(
               SettingsShellScreen(
                 viewModel = viewModel,
                 route = nav.settingsRoute,
-                catalogSessionStart = nav.catalogSessionStart,
                 showSidebarButton = !permanentSidebar,
                 onOpenSidebar = openSidebar,
                 onRouteChange = nav::openSettingsRouteFromHome,
@@ -1304,7 +1297,6 @@ private fun RecentSessionRowContent(
 private fun SettingsShellScreen(
   viewModel: MainViewModel,
   route: SettingsRoute,
-  catalogSessionStart: CatalogSessionStart?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
   onRouteChange: (SettingsRoute) -> Unit,
@@ -1314,7 +1306,7 @@ private fun SettingsShellScreen(
   // Detail destinations own their own refreshes; opening an operational page must
   // not start all of the Settings Home subscriptions and requests.
   if (route != SettingsRoute.Home) {
-    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onBack, catalogSessionStart = catalogSessionStart)
+    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onBack)
     return
   }
   val displayName by viewModel.displayName.collectAsState()

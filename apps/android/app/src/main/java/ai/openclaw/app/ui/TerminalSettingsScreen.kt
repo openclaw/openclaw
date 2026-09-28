@@ -12,14 +12,14 @@ import androidx.compose.ui.Modifier
 import androidx.core.net.toUri
 
 /**
- * Reuses the gateway's terminal UI and native-session setup, keeping startup
- * and terminal output on the same WebView connection.
+ * Full-height terminal surface: embeds the gateway-served terminal-only
+ * Control UI focus document (`/focus/terminal`, the same ghostty-web surface the
+ * desktop Control UI uses) for the currently connected gateway.
  */
 @Composable
 internal fun TerminalSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
-  catalogSessionStart: CatalogSessionStart? = null,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val controlPage by viewModel.gatewayControlPage.collectAsState()
@@ -30,12 +30,12 @@ internal fun TerminalSettingsScreen(
     modifier = Modifier.imePadding(),
   ) {
     val page = controlPage
-    if (isConnected && page != null && (catalogSessionStart == null || catalogSessionStart.gatewayBaseUrl == page.baseUrl)) {
-      // The saved request ID survives restoration but distinguishes repeated explicit starts.
-      key(page.baseUrl, catalogSessionStart?.requestId) {
+    if (isConnected && page != null) {
+      // Trust changes recreate the WebView; unrelated recompositions preserve live shells.
+      key(page) {
         ControlUiWebView(
           page = page,
-          url = terminalUrl(page.baseUrl, catalogSessionStart),
+          url = terminalUrl(page.baseUrl),
           modifier = Modifier.fillMaxSize(),
         )
       }
@@ -48,25 +48,15 @@ internal fun TerminalSettingsScreen(
   }
 }
 
-/** Builds the terminal or native-session setup route without gateway credentials in the URL. */
-internal fun terminalUrl(
-  baseUrl: String,
-  catalogSessionStart: CatalogSessionStart? = null,
-): String =
+/** Builds the terminal focus route without putting gateway credentials in the URL. */
+internal fun terminalUrl(baseUrl: String): String =
   baseUrl
     .trimEnd('/')
     .toUri()
     .buildUpon()
     .clearQuery()
     .fragment(null)
-    .apply {
-      if (catalogSessionStart == null) {
-        appendPath("focus")
-        appendPath("terminal")
-      } else {
-        appendPath("new")
-        if (catalogSessionStart.agentId.isNotEmpty()) appendQueryParameter("agent", catalogSessionStart.agentId)
-        appendQueryParameter("catalog", catalogSessionStart.catalogId)
-      }
-    }.build()
+    .appendPath("focus")
+    .appendPath("terminal")
+    .build()
     .toString()

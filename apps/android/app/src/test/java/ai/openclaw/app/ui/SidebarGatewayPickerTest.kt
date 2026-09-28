@@ -34,9 +34,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.provider.Settings
-import android.view.ViewGroup
 import android.view.inspector.WindowInspector
-import android.webkit.WebView
 import androidx.activity.ComponentDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -66,8 +64,10 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.filter
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -76,6 +76,8 @@ import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onChildren
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -92,7 +94,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.descendants
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -190,125 +191,48 @@ class SidebarGatewayPickerTest {
 
   @Test
   @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun modelOnlyCatalogPlusCreatesChatWithWriteScope() = assertCatalogChatCreation(terminalCapable = false)
-
-  @Test
-  @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun dualCapabilityCatalogKeepsChatForWriteOnlyOperators() = assertCatalogChatCreation(terminalCapable = true)
-
-  private fun assertCatalogChatCreation(terminalCapable: Boolean) {
+  fun catalogPlusCreatesIntegratedChatWithoutTerminalAction() {
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
     val catalogs =
       parseSessionCatalogs(
-        """{"catalogs":[{"id":"model-only","label":"Model chat","capabilities":{"createSession":{"model":"example/chat"},"startTerminal":$terminalCapable},"hosts":[]}]}""",
+        """{"catalogs":[{"id":"codex","label":"Codex","capabilities":{"createSession":{"model":"example/chat"},"startTerminal":true},"hosts":[]}]}""",
         requestedAgentId = "main",
       )
     ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState").value =
       SessionCatalogState(catalogs = catalogs, agentId = "main")
     ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
     val scopes = ReflectionHelpers.getField<MutableStateFlow<List<String>>>(runtime, "_operatorScopes")
-    val controlPage = ReflectionHelpers.getField<MutableStateFlow<NodeRuntime.GatewayControlPage?>>(runtime, "_gatewayControlPage")
-    scopes.value = listOf("operator.read", "operator.write") + if (terminalCapable) listOf("operator.admin") else emptyList()
-    if (!terminalCapable) controlPage.value = null
+    scopes.value = listOf("operator.read", "operator.write", "operator.admin")
     val requests = mutableListOf<Pair<String, String?>>()
     val request = ReflectionHelpers.getField<suspend (String, String?) -> String>(runtime.chat, "requestGateway")
     val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
       GatewaySession.RequestLease(endpointStableId = scope?.gatewayId.orEmpty()) { method, params, _, withEnqueue ->
         withEnqueue {}
         requests += method to params
-        if (method == "sessions.create") """{"key":"agent:main:dashboard:model-chat"}""" else request(method, params)
+        if (method == "sessions.create") """{"key":"agent:main:dashboard:catalog-chat"}""" else request(method, params)
       }
     }
     ReflectionHelpers.setField(runtime.chat, "captureRequestLease", captureLease)
-    showSidebarAndComposer(dark = false, showShell = true)
+    showSidebarAndComposer(showShell = true)
     composeRule.runOnIdle { runtime.chat.load("agent:main:dashboard:existing") }
     drainWithMainLooper { withTimeout(5_000) { model.chatHistoryLoading.first { !it } } }
-    composeRule.runOnIdle { assertEquals(0, model.pendingRunCount.value) }
     composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-    capture(if (terminalCapable) "dual-catalog-actions" else "model-catalog-plus")
-    if (terminalCapable) {
-      composeRule.onNodeWithContentDescription("New session — Model chat").assertIsEnabled()
-      composeRule.onNodeWithContentDescription("New terminal session — Model chat").assertIsEnabled()
-      composeRule.runOnIdle {
-        scopes.value = listOf("operator.read", "operator.write")
-        controlPage.value = null
-      }
-      composeRule.onNodeWithContentDescription("New terminal session — Model chat").assertDoesNotExist()
-    }
-    composeRule
-      .onNodeWithContentDescription("New session — Model chat")
-      .performScrollTo()
-      .assertIsEnabled()
-      .performClick()
-    drainWithMainLooper { withTimeout(5_000) { model.chatSessionKey.first { it == "agent:main:dashboard:model-chat" } } }
+    capture("catalog-chat-sidebar")
+    val actions = composeRule.onNodeWithText("Codex").onChildren().filter(hasClickAction())
+    actions.assertCountEquals(1)
     composeRule.runOnIdle {
-      assertEquals(listOf("sessions.create" to """{"agentId":"main","catalogId":"model-only"}"""), requests.filter { it.first == "sessions.create" })
+      scopes.value = listOf("operator.read", "operator.write")
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime.GatewayControlPage?>>(runtime, "_gatewayControlPage").value = null
+    }
+    actions.onFirst().assertIsEnabled().performClick()
+    drainWithMainLooper { withTimeout(5_000) { model.chatSessionKey.first { it == "agent:main:dashboard:catalog-chat" } } }
+    composeRule.runOnIdle {
+      assertEquals(listOf("sessions.create" to """{"agentId":"main","catalogId":"codex"}"""), requests.filter { it.first == "sessions.create" })
       assertFalse(requests.any { it.first == "sessions.catalog.startTerminal" })
     }
     composeRule.onNodeWithText("Terminal").assertDoesNotExist()
-  }
-
-  @Test
-  @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun nativeCatalogPlusOpensGatewaySetupInsteadOfCreatingChat() = assertNativeCatalogStart(dualCapability = false)
-
-  @Test
-  @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun dualCatalogTerminalActionOpensGatewaySetup() = assertNativeCatalogStart(dualCapability = true)
-
-  private fun assertNativeCatalogStart(dualCapability: Boolean) {
-    model.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
-    val catalogs =
-      parseSessionCatalogs(
-        """{"catalogs":[{"id":"codex","label":"Codex","capabilities":{"startTerminal":true},"hosts":[{"hostId":"gateway:local","label":"Gateway","kind":"gateway","connected":true,"canStartTerminal":true,"sessions":[{"threadId":"example","name":"Existing Codex session","status":"idle","canContinue":true}]}]}]}""",
-        requestedAgentId = "main",
-      )
-    ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState").value =
-      SessionCatalogState(catalogs = catalogs, agentId = "main")
-    ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
-    if (dualCapability) {
-      val state = ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState")
-      state.value = state.value.copy(catalogs = state.value.catalogs.map { it.copy(canCreateSession = true) })
-    }
-    val originalSession = model.chatSessionKey.value
-    val controlPage = ReflectionHelpers.getField<MutableStateFlow<NodeRuntime.GatewayControlPage?>>(runtime, "_gatewayControlPage")
-    val page = requireNotNull(controlPage.value)
-    controlPage.value = null
-    showSidebarAndComposer(dark = false, showShell = true)
-    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-    composeRule.onNodeWithText("Codex").performScrollTo().assertIsDisplayed()
-    composeRule.onNodeWithContentDescription("New terminal session — Codex").assertDoesNotExist()
-    composeRule.runOnIdle { controlPage.value = page }
-    capture("catalog-plus")
-    composeRule.onNodeWithContentDescription("New terminal session — Codex").assertIsEnabled().performClick()
-    composeRule.onNodeWithText("Terminal").assertIsDisplayed()
-    capture("native-terminal-setup")
-    composeRule.runOnIdle {
-      val webView =
-        WindowInspector
-          .getGlobalWindowViews()
-          .filterIsInstance<ViewGroup>()
-          .asSequence()
-          .flatMap { it.descendants }
-          .filterIsInstance<WebView>()
-          .single()
-      assertEquals("${AndroidScreenshotFixture.controlUiBaseUrl}/new?agent=main&catalog=codex", shadowOf(webView).lastLoadedUrl)
-      assertEquals(originalSession, model.chatSessionKey.value)
-      assertFalse(model.chatSessionCreating.value)
-      webView.webViewClient.doUpdateVisitedHistory(webView, "${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session", false)
-    }
-    restoration.emulateSavedInstanceStateRestore()
-    composeRule.runOnIdle {
-      val restored =
-        WindowInspector
-          .getGlobalWindowViews()
-          .filterIsInstance<ViewGroup>()
-          .asSequence()
-          .flatMap { it.descendants }
-          .filterIsInstance<WebView>()
-          .single()
-      assertEquals("${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session", shadowOf(restored).lastLoadedUrl)
-    }
+    composeRule.onNode(hasSetTextAction()).assertIsEnabled()
+    capture("catalog-chat-opened")
   }
 
   @Test
@@ -1202,7 +1126,6 @@ class SidebarGatewayPickerTest {
                     onSelectSession = {},
                     onSelectCatalogSession = {},
                     onCreateCatalogSession = {},
-                    onStartCatalogSession = {},
                     onSelectDestination = {},
                   )
                 }

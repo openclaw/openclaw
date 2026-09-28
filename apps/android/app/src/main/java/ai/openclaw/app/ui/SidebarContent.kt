@@ -12,7 +12,6 @@ import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.sanitizeSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawColors
@@ -274,7 +273,7 @@ internal fun sidebarCatalogSections(
 ): List<SidebarCatalogSection> =
   catalogs
     .filter { catalog ->
-      catalog.canCreateSession || catalog.canStartTerminal ||
+      catalog.canCreateSession ||
         catalog.errorText != null ||
         catalog.hosts.any { host ->
           host.errorText != null || host.nextCursor != null || host.sessions.any { !it.archived }
@@ -289,8 +288,7 @@ internal fun sidebarCatalogSections(
 internal fun sidebarCatalogSessionCreationEnabled(
   catalog: SessionCatalog,
   canMutateSessions: Boolean,
-  canStartTerminal: Boolean,
-): Boolean = if (catalog.canCreateSession) canMutateSessions else catalog.canStartTerminal && canStartTerminal
+): Boolean = catalog.canCreateSession && canMutateSessions
 
 internal fun toggleSidebarCatalogExpansion(
   expandedCatalogIds: List<String>,
@@ -426,7 +424,6 @@ internal fun OpenClawSidebar(
   onSelectSession: (ChatSessionEntry) -> Unit,
   onSelectCatalogSession: (SessionCatalogEntry) -> Unit,
   onCreateCatalogSession: (String) -> Unit,
-  onStartCatalogSession: (SessionCatalog) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
   rowHostBand: IntRect? = null,
 ) {
@@ -451,9 +448,7 @@ internal fun OpenClawSidebar(
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val catalogAvailable by viewModel.sessionCatalogAvailable.collectAsState()
   val operatorScopes by viewModel.operatorScopes.collectAsState()
-  val controlPage by viewModel.gatewayControlPage.collectAsState()
   val canMutateSessions = operatorScopesAllowWrite(operatorScopes)
-  val canStartTerminal = connection.isConnected && controlPage != null && operatorScopesAllowAdmin(operatorScopes)
   val liveSessionsByKey = remember(sessions) { sessions.associateBy(ChatSessionEntry::key) }
   val pageOrder by viewModel.sidebarPageOrder.collectAsState()
   val visiblePageIds by viewModel.sidebarVisiblePages.collectAsState()
@@ -806,8 +801,6 @@ internal fun OpenClawSidebar(
                 }
                 catalogSections.forEach { section ->
                   val catalog = section.catalog
-                  val primaryActionAvailable = sidebarCatalogSessionCreationEnabled(catalog, canMutateSessions, canStartTerminal)
-                  val separateTerminalAvailable = catalog.canCreateSession && catalog.canStartTerminal && canStartTerminal
                   key("catalog:${catalog.id}") {
                     SidebarCollapsibleHeader(
                       label = catalog.label,
@@ -819,39 +812,21 @@ internal fun OpenClawSidebar(
                       },
                       trailingContent =
                         if (
-                          (primaryActionAvailable || separateTerminalAvailable) &&
+                          sidebarCatalogSessionCreationEnabled(catalog, canMutateSessions) &&
                           catalogState.continuingEntryId == null
                         ) {
                           {
-                            Row {
-                              if (separateTerminalAvailable) {
-                                IconButton(
-                                  onClick = { onStartCatalogSession(catalog) },
-                                  enabled = !sessionCreating,
-                                  modifier = Modifier.size(40.dp),
-                                ) {
-                                  Icon(
-                                    imageVector = ClawIcons.Terminal,
-                                    contentDescription = nativeString("\$action — \$catalog", nativeString("New terminal session"), catalog.label),
-                                    tint = palette.text,
-                                    modifier = Modifier.size(18.dp),
-                                  )
-                                }
-                              }
-                              if (primaryActionAvailable) {
-                                IconButton(
-                                  onClick = { if (catalog.canCreateSession) onCreateCatalogSession(catalog.id) else onStartCatalogSession(catalog) },
-                                  enabled = !sessionCreating,
-                                  modifier = Modifier.size(40.dp),
-                                ) {
-                                  Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = nativeString("\$action — \$catalog", if (catalog.canCreateSession) nativeString("New session") else nativeString("New terminal session"), catalog.label),
-                                    tint = palette.text,
-                                    modifier = Modifier.size(18.dp),
-                                  )
-                                }
-                              }
+                            IconButton(
+                              onClick = { onCreateCatalogSession(catalog.id) },
+                              enabled = !sessionCreating,
+                              modifier = Modifier.size(40.dp),
+                            ) {
+                              Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = nativeString("New session"),
+                                tint = palette.text,
+                                modifier = Modifier.size(18.dp),
+                              )
                             }
                           }
                         } else {

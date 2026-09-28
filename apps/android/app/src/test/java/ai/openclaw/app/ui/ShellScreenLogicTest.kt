@@ -173,27 +173,6 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun catalogStartRestoresItsTargetButNeverLeaksIntoOrdinaryTerminal() {
-    val nav = ShellNavigation()
-    nav.selectTab(Tab.Chat)
-    nav.openCatalogSession(CatalogSessionStart("https://gateway.example", "research", "codex"))
-    val saved = with(ShellNavigation.Saver) { SaverScope { true }.save(nav) }!!
-    val restored = ShellNavigation.Saver.restore(saved)!!
-
-    assertEquals(Tab.Settings, restored.activeTab)
-    assertEquals(SettingsRoute.Terminal, restored.settingsRoute)
-    assertEquals("research", restored.catalogSessionStart?.agentId)
-    assertEquals("codex", restored.catalogSessionStart?.catalogId)
-    assertEquals("https://gateway.example", restored.catalogSessionStart?.gatewayBaseUrl)
-    restored.back()
-    assertEquals(Tab.Chat, restored.activeTab)
-    assertNull(restored.catalogSessionStart)
-
-    nav.openSettingsRoute(SettingsRoute.Terminal)
-    assertNull(nav.catalogSessionStart)
-  }
-
-  @Test
   fun shellNavigationSaverRestoresLegacyVoiceDestinationsToChat() {
     val activeVoice = ShellNavigation.Saver.restore(listOf("Voice", "Home", "", "false", "main"))!!
     assertEquals(Tab.Chat, activeVoice.activeTab)
