@@ -20,8 +20,8 @@ import {
   withSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
 import * as workspaceManifestWorker from "./workspace-manifest-worker.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import * as workspaceResultGit from "./workspace-result-git.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
@@ -55,7 +55,7 @@ async function fixture() {
   await fs.mkdir(remote);
   await fs.writeFile(path.join(remote, "keep.txt"), "upstream\n");
   await fs.writeFile(path.join(remote, "remove.txt"), "remove me\n");
-  const base = await readActualWorkspaceManifest({ root: remote, baseCommit });
+  const base = await captureWorkspaceManifest({ root: remote, baseCommit });
   const baseManifestRaw = serializeWorkerWorkspaceManifest(base.manifest);
   const initial = store.create({
     agentId: "main",
@@ -74,7 +74,7 @@ async function fixture() {
     claim: string,
     extra: Partial<Parameters<typeof stageSessionRepositoryCheckpoint>[0]> = {},
   ) => {
-    const current = await readActualWorkspaceManifest({ root: remote, baseCommit });
+    const current = await captureWorkspaceManifest({ root: remote, baseCommit });
     return await stageSessionRepositoryCheckpoint({
       store,
       workspaceId: workspace.workspaceId,
@@ -908,7 +908,7 @@ it("rejects mismatched transferred bytes and cannot replace an immutable checkpo
     assertCurrent,
   });
   expect(snapshot.preview).toEqual(new Uint8Array(Buffer.from("first\n")));
-  const expected = await readActualWorkspaceManifest({ root: remote, baseCommit });
+  const expected = await captureWorkspaceManifest({ root: remote, baseCommit });
   await fs.writeFile(path.join(remote, "edit.txt"), "tampered\n");
   await expect(
     stage("turn-tampered", {

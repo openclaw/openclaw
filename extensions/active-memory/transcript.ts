@@ -23,7 +23,7 @@ import {
   type TranscriptReadLimits,
 } from "./types.js";
 
-function resolveTranscriptReadLimits(
+export function resolveTranscriptReadLimits(
   limits?: TranscriptReadLimits,
 ): Required<TranscriptReadLimits> {
   return {
@@ -42,7 +42,7 @@ function resolveTranscriptReadLimits(
   };
 }
 
-async function streamActiveMemoryTranscriptRecords(params: {
+export async function streamActiveMemoryTranscriptRecords(params: {
   source: ActiveMemoryTranscriptSource;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
@@ -103,7 +103,7 @@ function extractActiveMemorySearchDebug(
   };
 }
 
-function readMemoryResultFromSessionRecord(
+export function readMemoryResultFromSessionRecord(
   value: unknown,
   toolsAllow: readonly string[] = [
     ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
@@ -150,7 +150,7 @@ type ActiveMemoryHookDeadline = {
   stop: () => void;
 };
 
-function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
+export function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let deadlineAt = 0;
@@ -252,10 +252,3 @@ function hasUsableMemoryResult(
   // the lookup was empty; explicit failures are rejected above.
   return Boolean(normalizedContent) && explicitEvidence !== false && structuredEvidence !== false;
 }
-
-export {
-  createActiveMemoryHookDeadline,
-  readMemoryResultFromSessionRecord,
-  resolveTranscriptReadLimits,
-  streamActiveMemoryTranscriptRecords,
-};

@@ -89,6 +89,8 @@ describe("worker deploy build plugin", () => {
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
+          // Declaration partitions repeat the root entries; they are not runtime siblings.
+          !(typeof candidate.dts === "object" && candidate.dts.emitDtsOnly) &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
           Object.keys(candidate.entry).length > 0 &&

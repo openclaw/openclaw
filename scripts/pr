@@ -538,15 +538,18 @@ Usage:
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
     Empty files are valid. Explicit/source co-authors and preview credit backed by tree-changing PR commits or PR authorship are retained; known machine credit is excluded. Queue merges reject it.
-    --admin-evidence explicitly admits prior successful CI plus reviewed conflict validation, with active organization-admin authority.
-    Only pending/skipped normal CI may be waived; security checks and enforced reviews remain required.
-    This requires --confirmed-operator-admin, immediate squash, and no auto/recovery request.
+    --admin-evidence admits reviewed prior-green conflict repairs or attributed pre-existing CI failures, with active organization-admin authority.
+    Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
+    This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
-    Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
-    freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
-    Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
+    Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
+    freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
+    a replacement repairing the same scope; new scope or another method needs authorization. Never rebases automatically.
+    Ordinary recovery keeps prior evidence and requires the same method with immediate non-admin admission.
+    Paired admin flags permit same-head recovery only for the complete known prior-CI REST base-modified HTTP 405 rejection.
+    This reruns current admin admission and retains the original captures; other admin failures remain fenced.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
@@ -666,12 +669,12 @@ main() {
             shift
             ;;
           --admin-evidence)
-            [ "$cmd" = merge-run ] && [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$admin_evidence" ] || { usage; exit 2; }
+            [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$admin_evidence" ] || { usage; exit 2; }
             admin_evidence="$2"
             shift 2
             ;;
           --confirmed-operator-admin)
-            [ "$cmd" = merge-run ] && [ "$confirmed_admin" = false ] || { usage; exit 2; }
+            [ "$confirmed_admin" = false ] || { usage; exit 2; }
             confirmed_admin=true
             shift
             ;;
@@ -709,6 +712,7 @@ main() {
       fi
       if [ -n "$admin_evidence" ] || [ "$confirmed_admin" = true ]; then
         [ -n "$admin_evidence" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge" = false ] &&
+          [ -z "$replacement_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
           [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || { usage; exit 2; }
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }

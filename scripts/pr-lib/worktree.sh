@@ -285,9 +285,26 @@ fetch_pr_head() {
   before_identity=$(printf '%s\n' "$before" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   refspec="$expected_sha"
   [ -z "$destination" ] || refspec="+$expected_sha:$destination"
-  # GitHub's pull/head projection can lag live PR metadata and the branch.
-  # Fetch immutable source bytes without overwriting the operation's main checkpoint.
-  fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  local reused=false local_ref="" visibility_status=0
+  if [ -n "$destination" ]; then
+    pr_git config --get-regexp '^(fetch|transfer)\.hiderefs$' >/dev/null 2>&1 || visibility_status=$?
+    if [ "$visibility_status" -eq 1 ]; then
+      local_ref=$(GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch for-each-ref \
+        --format='%(refname) %(objectname) %(objecttype) %(symref)' "$destination" 2>/dev/null) || local_ref=""
+      if [ "$local_ref" = "$destination $expected_sha commit " ]; then
+        # A dangling commit can need objects that fetch repairs. Reuse only the
+        # already-bound ref, retaining Git's checked-out/rebasing branch refusal.
+        GIT_NO_LAZY_FETCH=1 pr_git branch --force --no-track \
+          "${destination#refs/heads/}" "$expected_sha" || return 1
+        reused=true
+      fi
+    fi
+  fi
+  if [ "$reused" = false ]; then
+    # GitHub's pull/head projection can lag live PR metadata and the branch.
+    # Preserve canonical filtering and errors when source acquisition is needed.
+    fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  fi
   fetched_sha=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "${destination:-$expected_sha}^{commit}") || return 1
   if [ "$fetched_sha" != "$expected_sha" ]; then
     echo "PR head changed while fetching it (expected $expected_sha, fetched $fetched_sha)." >&2

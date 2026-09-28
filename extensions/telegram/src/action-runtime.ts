@@ -25,6 +25,7 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import {
   createTelegramActionGate,
@@ -177,21 +178,13 @@ function readTelegramSendContent(params: {
 }
 
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
-  const delivery = params.delivery;
-  const pin =
-    delivery && typeof delivery === "object" && !Array.isArray(delivery)
-      ? (delivery as { pin?: unknown }).pin
-      : params.pin === true
-        ? true
-        : undefined;
+  const delivery = asOptionalRecord(params.delivery);
+  const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
   if (pin === true) {
     return { enabled: true } as const;
   }
-  if (!pin || typeof pin !== "object" || Array.isArray(pin)) {
-    return undefined;
-  }
-  const raw = pin as { enabled?: unknown; notify?: unknown; required?: unknown };
-  if (raw.enabled !== true) {
+  const raw = asOptionalRecord(pin);
+  if (raw?.enabled !== true) {
     return undefined;
   }
   return {

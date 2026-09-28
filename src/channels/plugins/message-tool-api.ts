@@ -10,26 +10,17 @@ export type ChannelMessageToolDiscoveryAdapter = Pick<
 >;
 
 /**
- * Lightweight public artifact shape for bundled channel message-tool hooks.
- */
-type MessageToolApi = {
-  describeMessageTool?: ChannelMessageToolDiscoveryAdapter["describeMessageTool"];
-};
-
-function loadBundledChannelMessageToolApi(channelId: string): MessageToolApi | undefined {
-  return loadOptionalBundledChannelPublicArtifact({
-    channelId,
-    artifactBasename: "message-tool-api.js",
-  });
-}
-
-/**
  * Resolves a bundled channel's message-tool discovery adapter without loading the full plugin.
  */
 export function resolveBundledChannelMessageToolDiscoveryAdapter(
   channelId: string,
 ): ChannelMessageToolDiscoveryAdapter | undefined {
-  const describeMessageTool = loadBundledChannelMessageToolApi(channelId)?.describeMessageTool;
+  const api: Partial<ChannelMessageToolDiscoveryAdapter> | undefined =
+    loadOptionalBundledChannelPublicArtifact({
+      channelId,
+      artifactBasename: "message-tool-api.js",
+    });
+  const describeMessageTool = api?.describeMessageTool;
   if (typeof describeMessageTool !== "function") {
     return undefined;
   }

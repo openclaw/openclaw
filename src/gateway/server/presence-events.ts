@@ -18,7 +18,7 @@ export function createPresencePublisher(params: {
   let stopped = false;
   const schedule = () => {
     if (!stopped && !pending && !flushing) {
-      pending = setTimeout(() => void flush(), 50);
+      pending = setTimeout(() => void flush(), 200);
       pending.unref();
     }
   };

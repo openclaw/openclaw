@@ -11,7 +11,7 @@ import {
   type TerminalMemorySearchWatch,
 } from "./types.js";
 
-async function readMergedActiveMemoryTranscriptState(params: {
+export async function readMergedActiveMemoryTranscriptState(params: {
   sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
 }): Promise<{
@@ -94,7 +94,7 @@ async function readTerminalMemorySearchResultFromSources(
   return undefined;
 }
 
-function watchTerminalMemorySearchResult(params: {
+export function watchTerminalMemorySearchResult(params: {
   getTranscriptSources: () => readonly ActiveMemoryTranscriptSource[];
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
@@ -155,5 +155,3 @@ function watchTerminalMemorySearchResult(params: {
     stop,
   };
 }
-
-export { readMergedActiveMemoryTranscriptState, watchTerminalMemorySearchResult };

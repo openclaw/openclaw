@@ -238,7 +238,11 @@ describe("sessions_history redaction", () => {
 
     expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
     expect(serialized).toContain("OPENROUTER_API_KEY=");
-    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
+    expect(result.details).toMatchObject({
+      contentRedacted: true,
+      contentTruncated: false,
+      truncated: false,
+    });
   });
 
   it("keeps accepted inputs separate, redacted, bounded, and addressable by their own cursor", async () => {
@@ -509,7 +513,7 @@ describe("sessions_history redaction", () => {
     expect(details.nextOffset).not.toBe(30);
   });
 
-  it("uses the oldest visible message for pagination after tool messages are filtered", async () => {
+  it("paginates history with default filtering and explicit tool inclusion", async () => {
     const tool = createSessionsHistoryTool({
       config: {},
       callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
@@ -539,6 +543,16 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 10,
     });
+
+    const withTools = readHistoryDetails(
+      await tool.execute("with-tools", { sessionKey: "main", offset: 0, includeTools: true }),
+    );
+    expect(withTools.messages).toEqual([
+      { role: "tool", content: "hidden", __openclaw: { seq: 6 } },
+      { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
+      { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
+    ]);
+    expect(withTools.nextOffset).toBe(5);
   });
 
   it("preserves the Gateway replay cursor for projected siblings from the same row", async () => {

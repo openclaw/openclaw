@@ -15,6 +15,7 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
+import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import {
@@ -43,7 +44,7 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
+import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   confirmDoctorServiceRepair,
@@ -69,7 +70,7 @@ function noteGatewayRuntime(
   serviceRuntime: GatewayServiceRuntime | undefined,
   env: Record<string, string | undefined>,
 ): void {
-  const summary = formatGatewayRuntimeSummary(serviceRuntime);
+  const summary = formatRuntimeStatus(serviceRuntime);
   const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
   const sqliteLibrary = ensureSqliteLibrarySelected();

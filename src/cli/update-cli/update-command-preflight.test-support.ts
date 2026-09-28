@@ -7,7 +7,6 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 
 type UpdatePreflightFixture = {
   mockPackageInstallAtCaseDir: () => Promise<string>;
-  mockCurrentProcessFreshDoctor: () => void;
   statfsFixture: (params: {
     bavail: number;
     bsize?: number;
@@ -31,7 +30,6 @@ type UpdatePreflightFixture = {
 
 export function registerUpdatePreflightTests({
   mockPackageInstallAtCaseDir,
-  mockCurrentProcessFreshDoctor,
   statfsFixture,
   resolveNpmChannelTag,
   fetchNpmPackageTargetStatus,
@@ -50,7 +48,6 @@ export function registerUpdatePreflightTests({
 }: UpdatePreflightFixture) {
   it("records low disk space before target lookup and still runs package updates", async () => {
     await mockPackageInstallAtCaseDir();
-    mockCurrentProcessFreshDoctor();
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(
       statfsFixture({
         bavail: 256,
@@ -99,7 +96,6 @@ export function registerUpdatePreflightTests({
     async (outcome) => {
       const failed = outcome === "failed";
       const packageRoot = await mockPackageInstallAtCaseDir();
-      mockCurrentProcessFreshDoctor();
       const retention = {
         inventoryMs: 17,
         materializationMs: 23,

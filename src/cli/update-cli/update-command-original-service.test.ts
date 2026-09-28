@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -10,7 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
 import * as packageIntegrity from "../../infra/package-update-integrity.js";
-import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
+import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -265,7 +265,9 @@ beforeEach(async () => {
   // Prepare its unchanged install inventory through the real metadata owner.
   expect(loadInstalledPluginIndexInstallRecordsSync({ env: state.env })).toEqual({});
 });
-aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
+const inspectionWorkers = createSqliteReadOnlyWorkerScope();
+aroundEach((runTest) => inspectionWorkers.run(runTest));
+afterAll(() => inspectionWorkers.close());
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

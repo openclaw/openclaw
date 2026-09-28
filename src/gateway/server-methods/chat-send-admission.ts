@@ -63,6 +63,7 @@ import {
   type PreparedChatSendSession,
 } from "./chat-send-session.js";
 import {
+  admitChatSendUploads,
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
   releaseChatSendCallerAuthority,
@@ -150,6 +151,10 @@ export async function admitChatSend(
   }
   if (!request.goalOperation && respondChatSendRetry(params)) {
     return { ok: false as const };
+  }
+  const uploadAdmission = admitChatSendUploads({ params: p, client, context, respond });
+  if (!uploadAdmission.ok) {
+    return uploadAdmission;
   }
   // Keep the run abortable while lifecycle mutation owns the session. Admission
   // must reject an expired/missing reservation instead of reviving evicted work.
@@ -273,7 +278,9 @@ export async function admitChatSend(
         ? replyRunRegistry.resolveCurrentInterruptTarget(activeRunScopeKey)
         : undefined;
     if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId);
+      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId, {
+        allowEmptyAncestor: true,
+      });
     }
     // Admission can queue behind reset. Never route a request captured
     // against the old session into the replacement transcript. Check the expected
@@ -683,6 +690,7 @@ export async function admitChatSend(
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
+      assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {
         const queued = context.chatQueuedTurns.get(clientRunId);
         // Collect retires source cancellation while retaining the original

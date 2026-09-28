@@ -24,6 +24,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
+import type { CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { parsePositiveInt, readPositiveEnvInt } from "./lib/numeric-options.mjs";
@@ -36,7 +37,7 @@ import {
 import type { VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 
 // CI admits at most two plans only when the actual host has room. Each plan
-// keeps inner test-projects parallelism 1; runner labels cannot establish capacity.
+// normally keeps inner parallelism 1; qualified singleton envelopes have a separate admission.
 const FS_MODULE_CACHE_ROOT_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
@@ -77,6 +78,8 @@ function reportCiResourceSnapshot(phase: "start" | "end") {
 export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
   configs: string[];
+  requiresDist?: boolean;
+  pretestBuildMode?: "runtime" | "private-qa";
   fallbackMaxWorkers?: number;
   minTotalMemoryBytes?: number;
   env?: Record<string, unknown> | null;
@@ -424,6 +427,7 @@ function createWorkerContext(
   );
   return {
     workerRun: owner.createWorkerRun(compilerEnv),
+    normalCompletion: true,
     spawn: owner.spawn,
     exitBySignal: owner.exitBySignal,
     installCleanup: owner.installCleanup,
@@ -471,6 +475,7 @@ async function runChild(
         if (!result.groupJoined) {
           throw new Error("CI group descendant completion is unverified");
         }
+        context.normalCompletion &&= typeof result.code === "number" && result.signal === null;
         return result.code ?? 1;
       }),
     );
@@ -540,6 +545,19 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  if (
+    baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
+    fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
+  ) {
+    const { preparePrebuiltAiPackage } = await import("./lib/vitest-build-prerequisites.mts");
+    for (const entry of plans) {
+      const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
+      const code = await preparePrebuiltAiPackage([selection], prepareChildEnv(entry, baseEnv));
+      if (code !== 0) {
+        return code;
+      }
+    }
+  }
   // Historical targets use a workflow-owned adapter. Their Node
   // contract must not import current target discovery or runtime policy code.
   const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
@@ -590,7 +608,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     concurrency = Math.min(plans.length, 1);
   }
   // Final plan admission owns both compiler and child worker budgets.
-  const admittedPlans = plans.map((entry): ShardPlan => {
+  let admittedPlans = plans.map((entry): ShardPlan => {
     if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
       return entry;
     }
@@ -616,6 +634,81 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       },
     };
   });
+  const preparedRuntimeSelections = new Map<ShardPlan, CiTestRuntimeSelection[]>();
+  const overlapRequests = admittedPlans.filter(
+    (entry): entry is ShardGroupPlan =>
+      entry.kind === "group" &&
+      entry.name.startsWith("changed-extensions-config") &&
+      entry.plan.env?.OPENCLAW_TEST_PROJECTS_PARALLEL === "2",
+  );
+  if (overlapRequests.length > 0) {
+    const constrained = process.constrainedMemory?.() ?? 0;
+    const memory = hostResources
+      ? Math.min(
+          hostResources.totalMemoryBytes,
+          Number.isFinite(constrained) && constrained > 0
+            ? constrained
+            : hostResources.totalMemoryBytes,
+        )
+      : 0;
+    const hostAdmitted =
+      ci &&
+      process.platform === "linux" &&
+      baseEnv.RUNNER_ENVIRONMENT === "self-hosted" &&
+      baseEnv.FROZEN_TARGET === "false" &&
+      hostResources !== null &&
+      Number.isFinite(hostResources.logicalCpuCount) &&
+      hostResources.logicalCpuCount >= 2 &&
+      Number.isFinite(memory) &&
+      memory >= 7.5 * 1024 ** 3 &&
+      concurrency === 1 &&
+      Boolean(workerOwner) &&
+      !callerCacheLeaf;
+    const canOverlap = hostAdmitted
+      ? (await import("./lib/extension-test-plan.mts")).canOverlapTelegramSingletonProcesses
+      : undefined;
+    admittedPlans = admittedPlans.map((entry) => {
+      if (entry.kind !== "group" || !overlapRequests.includes(entry)) {
+        return entry;
+      }
+      const env = prepareChildEnv(entry, baseEnv);
+      const shapeAdmitted =
+        canOverlap !== undefined &&
+        entry.plan.configs.length === 1 &&
+        !entry.plan.requiresDist &&
+        entry.plan.pretestBuildMode === undefined &&
+        env.OPENCLAW_VITEST_MAX_WORKERS === "2" &&
+        [inheritedEnv[VITEST_EXTRA_ARGS_ENV_KEY], env[VITEST_EXTRA_ARGS_ENV_KEY]].every(
+          (args) => !args?.trim() || args.trim() === "[]",
+        ) &&
+        canOverlap(entry.plan.configs[0]!, entry.plan.includePatterns);
+      const selections: CiTestRuntimeSelection[] = shapeAdmitted
+        ? (runtimeOwner?.resolveCiTestRuntimeSelections(
+            { ...entry.plan, env, vitestArgs: [] },
+            policy,
+          ) ?? [{ runtime: "node" }])
+        : [];
+      const [selected] = selections;
+      const admitted =
+        selections.length === 1 &&
+        selected?.runtime === "node" &&
+        selected.configs === undefined &&
+        selected.includePatterns === undefined &&
+        selected.includeAfterShard === undefined &&
+        selected.env === undefined;
+      const prepared: ShardGroupPlan = {
+        ...entry,
+        plan: {
+          ...entry.plan,
+          env: { ...entry.plan.env, OPENCLAW_TEST_PROJECTS_PARALLEL: admitted ? "2" : "1" },
+        },
+      };
+      if (admitted) {
+        preparedRuntimeSelections.set(prepared, selections);
+      }
+      return prepared;
+    });
+  }
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot =
     baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
@@ -624,6 +717,14 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   let unverifiedChild = false;
   let scratchCleanupPending = options.scratchDir === undefined;
   let interrupted: NodeJS.Signals | undefined;
+  let exitCode = 0;
+  const completion = {
+    version: 1,
+    planned: admittedPlans.length,
+    completed: 0,
+    invocations: 0,
+    failedInvocations: 0,
+  };
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
   };
@@ -648,7 +749,6 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     const runner: typeof runChild =
       options.runChild ??
       ((args, childEnv, label, timingKey) => runChild(args, childEnv, label, timingKey, context));
-    let exitCode = 0;
     await runVitestPlans(admittedPlans, {
       concurrency,
       isExclusive: exclusive,
@@ -669,14 +769,15 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
           return isStringArray(value) ? value : [];
         });
-        const selections = runtimeOwner?.resolveCiTestRuntimeSelections(
-          {
-            ...(entry.kind === "target" ? { targets: [entry.target] } : entry.plan),
-            env: prepareChildEnv(entry, baseEnv),
-            vitestArgs: vitestExtraArgs,
-          },
-          policy,
-        ) ?? [{ runtime: "node" as const }];
+        const selections = preparedRuntimeSelections.get(entry) ??
+          runtimeOwner?.resolveCiTestRuntimeSelections(
+            {
+              ...(entry.kind === "target" ? { targets: [entry.target] } : entry.plan),
+              env: prepareChildEnv(entry, baseEnv),
+              vitestArgs: vitestExtraArgs,
+            },
+            policy,
+          ) ?? [{ runtime: "node" as const }];
         const [nodeSelection, bunSelection] = selections;
         // Only the proven UI partition has native sharding after discovery.
         // Run it once on Bun and reuse that owner's facts, never its algorithm.
@@ -769,6 +870,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 ? "node-subset:"
                 : "";
           unverifiedChild ||= !context;
+          completion.invocations++;
           const code = await runner(
             args,
             childEnv,
@@ -790,9 +892,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           // A dual-runtime envelope always completes both ordinary test runs;
           // its first failure still stops admission of later envelopes.
           if (code !== 0) {
+            completion.failedInvocations++;
             exitCode = exitCode || code;
           }
         }
+        completion.completed++;
       },
     });
     if (persistentCacheRoot && baseEnv[FS_MODULE_CACHE_WRITER_ENV_KEY] === "1") {
@@ -821,7 +925,6 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         console.warn(`[shard:cache] failed to prune Node compile cache: ${String(error)}`);
       }
     }
-    return exitCode;
   } finally {
     try {
       await context?.workerRun.dispose();
@@ -851,6 +954,18 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       }
     }
   }
+  // Publish after disposal; custom or portable runners cannot certify child joins.
+  if (
+    completion.completed === completion.planned &&
+    context?.normalCompletion &&
+    !interrupted &&
+    !unverifiedChild &&
+    !options.runChild &&
+    !scratchCleanupPending
+  ) {
+    process.stdout.write(`[shard:completion] ${JSON.stringify(completion)}\n`);
+  }
+  return exitCode;
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

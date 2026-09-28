@@ -158,7 +158,7 @@ export function latestDurableWorkspaceConflict(
 }
 
 export async function waitForTurnOperation<T>(params: {
-  operation: Promise<T>;
+  start: () => Promise<T>;
   signal?: AbortSignal;
   timeoutMs: number;
 }): Promise<T> {
@@ -171,12 +171,16 @@ export async function waitForTurnOperation<T>(params: {
   if (signal.aborted) {
     throw abortError();
   }
+  // Never start for a cancelled caller; always observe a started operation.
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(abortError());
     signal.addEventListener("abort", onAbort, { once: true });
-    params.operation.then(resolve, reject).finally(() => {
-      signal.removeEventListener("abort", onAbort);
-    });
+    params
+      .start()
+      .then(resolve, reject)
+      .finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
   });
 }
 

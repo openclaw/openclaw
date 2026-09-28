@@ -7,6 +7,7 @@ export function startDiagnosticHeartbeatForTest(
 ) {
   return startGatewayDiagnosticHeartbeat(createTestGatewayScheduler("fake-timers"), config, {
     testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+    recoverStuckSession: () => undefined,
     ...opts,
   });
 }

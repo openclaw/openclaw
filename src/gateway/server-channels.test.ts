@@ -45,7 +45,7 @@ import {
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  clearActiveCredentialDegradedOwner,
+  clearActiveCredentialDegradedOwners,
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
@@ -226,6 +226,7 @@ function createManager(options?: {
     channelRuntimeEnvs[channelId] ??= runtime;
   }
   const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
     getPluginRegistry: options?.getPluginRegistry ?? requireActivePluginChannelRegistry,
     channelLogs,
@@ -265,9 +266,7 @@ describe("server-channels auto restart", () => {
     hoisted.sleepWithAbort.mockClear();
     hoisted.startChannelApprovalHandlerBootstrap.mockReset();
     hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(async () => {});
-    for (const owner of listActiveDegradedSecretOwners()) {
-      clearActiveCredentialDegradedOwner(owner.ownerKind, owner.ownerId);
-    }
+    clearActiveCredentialDegradedOwners();
     setActiveDegradedSecretOwners([]);
   });
 
@@ -283,9 +282,7 @@ describe("server-channels auto restart", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetGatewayWorkAdmission();
-    for (const owner of listActiveDegradedSecretOwners()) {
-      clearActiveCredentialDegradedOwner(owner.ownerKind, owner.ownerId);
-    }
+    clearActiveCredentialDegradedOwners();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
@@ -3711,6 +3708,7 @@ describe("server-channels auto restart", () => {
     const channelLogs = {} as Record<ChannelId, SubsystemLogger>;
     const channelRuntimeEnvs = {} as Record<ChannelId, RuntimeEnv>;
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => ({}),
       getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs,

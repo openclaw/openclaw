@@ -144,6 +144,8 @@ deployments unchanged.
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin
 requires `accessPolicyPlugin: "visitor-access"` on its restricted default role.
+A denied connection receives the `OPERATOR_ACCESS_DENIED` connect error detail,
+and the Control UI explains that the account has no access.
 The requirement belongs to Gateway configuration and remains enforced when the
 plugin or its manifest is missing, disabled, broken, or still starting. A loaded
 plugin must return current authority for the person; another plugin's policy

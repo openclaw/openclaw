@@ -18,6 +18,7 @@ import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-s
 import { CronService } from "../service.js";
 import { createCronStoreHarness, createNoopLogger } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 
@@ -142,7 +143,9 @@ it.each(["cleared", "write-failed"] as const)(
       throw new Error("Expected cron mutation completion");
     }
     if (failure === "write-failed") {
-      database.exec(`CREATE TEMP TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+      database.exec(`CREATE TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+        WHEN NEW.store_key = '${cronStoreKey(storePath).replaceAll("'", "''")}'
+          AND NEW.job_id = '${job.id}'
         BEGIN SELECT RAISE(ABORT, 'manual receipt unavailable'); END;`);
     }
     try {

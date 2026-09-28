@@ -4475,6 +4475,7 @@ class ChatComposerLayoutTest {
               if (it.providerQualifiedRef() == "openai/gpt-5.2") it.copy(available = reason == null, unavailableReason = reason) else it
             }
         }
+        composeRule.waitUntil { composeRule.runOnIdle { model.chatModelCatalog.value == catalog.value } }
         composeRule.runOnIdle {
           assertEquals(
             reason,

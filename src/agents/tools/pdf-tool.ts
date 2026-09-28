@@ -1,4 +1,5 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -401,14 +402,8 @@ export function createPdfTool(options?: {
 
   const maxBytesMbDefault = options?.config?.agents?.defaults?.pdfMaxMb;
   const maxPagesDefault = options?.config?.agents?.defaults?.pdfMaxPages;
-  const configuredMaxBytesMb =
-    typeof maxBytesMbDefault === "number" && Number.isFinite(maxBytesMbDefault)
-      ? maxBytesMbDefault
-      : DEFAULT_MAX_BYTES_MB;
-  const configuredMaxPages =
-    typeof maxPagesDefault === "number" && Number.isFinite(maxPagesDefault)
-      ? Math.floor(maxPagesDefault)
-      : DEFAULT_MAX_PAGES;
+  const configuredMaxBytesMb = asFiniteNumber(maxBytesMbDefault) ?? DEFAULT_MAX_BYTES_MB;
+  const configuredMaxPages = Math.floor(asFiniteNumber(maxPagesDefault) ?? DEFAULT_MAX_PAGES);
 
   const description =
     'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects up to the configured page limit from a range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';

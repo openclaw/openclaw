@@ -65,7 +65,7 @@ afterEach(async () => {
 });
 
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-  return advancePlacementFixtureToActive(store, database, SESSION, executionMode);
+  return advancePlacementFixtureToActive(store, database, { ...SESSION, executionMode });
 }
 
 it("rejects an unbounded claim wait when its signal is already aborted", async () => {

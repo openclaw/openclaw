@@ -17,6 +17,7 @@ import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.PendingAttachment
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -626,6 +627,11 @@ class SidebarGatewayPickerTest {
     val alpha = savedGateway("Local QA Alpha")
     val beta = savedGateway("Local QA Beta")
     focus(alpha)
+    // Chat uses screenshot RPCs here; the fail-fast socket must not invalidate their history.
+    // Stop only this fixture-owned transport, preserving the selected gateway and composer.
+    drainWithMainLooper {
+      ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession").disconnectAndJoin()
+    }
     val lifecycleOwner =
       object : LifecycleOwner {
         override val lifecycle = LifecycleRegistry(this)

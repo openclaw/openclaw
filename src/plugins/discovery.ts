@@ -60,6 +60,7 @@ import {
 import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { groupPluginRecords } from "./record-groups.js";
 import { resolvePluginSourceRoots, type PluginSourceRoots } from "./roots.js";
 import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
 
@@ -460,22 +461,15 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
 export function resolvePluginPackageEntries(
   params: Parameters<typeof resolvePackageRuntimeExtensions>[0] & { manifestId?: string },
 ): Array<{ idHint: string; entryPath: string; source: string }> {
-  const entryIdSources = new Map<string, Array<{ entryPath: string; source: string }>>();
-  for (const entry of resolvePackageRuntimeExtensions(params)) {
-    const idHint = deriveIdHint({
+  const entryIdSources = groupPluginRecords(resolvePackageRuntimeExtensions(params), (entry) =>
+    deriveIdHint({
       filePath: entry.source,
       manifestId: params.manifestId,
       packageName: params.manifest?.name,
       fallbackId: path.basename(params.packageDir),
       hasMultipleExtensions: params.extensions.length > 1,
-    });
-    const sources = entryIdSources.get(idHint);
-    if (sources) {
-      sources.push(entry);
-    } else {
-      entryIdSources.set(idHint, [entry]);
-    }
-  }
+    }),
+  );
   const entries: Array<{ idHint: string; entryPath: string; source: string }> = [];
   for (const [idHint, sources] of entryIdSources) {
     // Entry ids derive from basenames; colliding entries must not silently vanish in the registry.

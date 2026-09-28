@@ -9,7 +9,7 @@ describe("process supervisor byte activity", () => {
   });
 
   it.each(["stdout", "stderr"] as const)(
-    "preserves an elapsed byte deadline when %s flushes a partial character at EOF",
+    "preserves successful exit when %s EOF is observed after its byte deadline",
     async (stream) => {
       const nowSpy = vi.spyOn(performance, "now").mockReturnValue(10_000);
       const supervisor = createProcessSupervisor();
@@ -19,13 +19,13 @@ describe("process supervisor byte activity", () => {
         argv: [process.execPath, "-e", `process.${stream}.write(Buffer.from([0xe2]))`],
         stdinMode: "pipe-closed",
         noOutputTimeoutMs: 1_000,
-        // Withhold the timer callback while real child pipes close after the deadline.
+        // Delay observation of EOF without accepting a process timeout.
         onStdoutRaw: stream === "stdout" ? afterLastByte : undefined,
         onStderrRaw: stream === "stderr" ? afterLastByte : undefined,
       });
       try {
         const result = await run.wait();
-        expect(result).toMatchObject({ reason: "no-output-timeout", noOutputTimedOut: true });
+        expect(result).toMatchObject({ reason: "exit", exitCode: 0, noOutputTimedOut: false });
         expect(result[stream]).not.toBe("");
       } finally {
         run.cancel();

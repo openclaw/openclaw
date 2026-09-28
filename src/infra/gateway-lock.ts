@@ -37,6 +37,8 @@ import {
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
   acquireGatewayStateOwner,
+  createGatewayStateProjection,
+  type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
@@ -51,6 +53,7 @@ type GatewayLockHandle = {
   stateDir: string;
   assertCurrent(this: void): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
+  retainProjection: () => GatewayStateProjection;
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
@@ -92,6 +95,8 @@ export type GatewayLockOptions = {
   sleep?: (ms: number) => Promise<void>;
   lockDir?: string;
   role?: GatewayLockRole;
+  /** Transfer a relocated Doctor root only after the target exclusion is held. */
+  relocatedMaintenanceOwner?: GatewayLockHandle;
   listenerMode?: "foreground" | "supervised";
   supervisor?: GatewayOwnerSupervisor | null;
   /** Override process command-line reader (testing seam). */
@@ -374,8 +379,19 @@ async function readVerifiedGatewayLockIdentity(
 async function assertHistoricalGatewayOwnerStopped(
   paths: ReturnType<typeof resolveGatewayLockPaths>,
   opts: GatewayLockOptions,
+  ownedProjection?: GatewayStateProjection,
 ): Promise<void> {
   for (const lockPath of [paths.stateLockPath, paths.configLockPath]) {
+    if (lockPath === paths.stateLockPath && ownedProjection) {
+      if (
+        !ownedProjection.verifyStillHeld() ||
+        resolveIdentityPathViaExistingAncestorSync(ownedProjection.lockPath) !==
+          resolveIdentityPathViaExistingAncestorSync(lockPath)
+      ) {
+        throw new GatewayLockError("Relocated maintenance projection is no longer current");
+      }
+      continue;
+    }
     const payload = await readLockPayload(lockPath, true);
     if (!payload) {
       continue;
@@ -406,6 +422,17 @@ export async function acquireGatewayLock(
   const role = opts.role ?? "gateway";
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
   const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
+  const previousOwner = opts.relocatedMaintenanceOwner;
+  if (previousOwner) {
+    previousOwner.assertCurrent();
+    if (
+      role !== "sqlite-maintenance" ||
+      resolveIdentityPathViaExistingAncestorSync(previousOwner.stateDir) !== paths.stateDir ||
+      previousOwner.lockPath === paths.ownerLockPath
+    ) {
+      throw new GatewayLockError("Maintenance ownership transfer requires its relocated root");
+    }
+  }
   const now = opts.now ?? performance.now.bind(performance);
   const startedAt = now();
   const timeoutMs = resolveTimerTimeoutMs(
@@ -446,6 +473,7 @@ export async function acquireGatewayLock(
     borrowedOwner = tryBorrowGatewayStateOwner(databasePath);
   }
   let waited = false;
+  let projection: GatewayStateProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
     stateOwner =
@@ -461,12 +489,19 @@ export async function acquireGatewayLock(
             databasePath,
             payload,
             projectionPath: paths.stateLockPath,
+            getProjection: () => projection,
           });
           try {
-            await assertHistoricalGatewayOwnerStopped(paths, opts);
+            if (previousOwner) {
+              projection = previousOwner.retainProjection();
+            }
+            await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
+            await previousOwner?.release();
             owner.assertCurrent();
             return owner;
           } catch (error) {
+            projection?.release();
+            projection = undefined;
             owner.release();
             throw error;
           }
@@ -499,7 +534,6 @@ export async function acquireGatewayLock(
   if (waited && role === "gateway") {
     log.info(`Gateway state ownership acquired after ${((now() - startedAt) / 1000).toFixed(1)} s`);
   }
-  let projection: ReturnType<typeof acquireFileLockSync> | undefined;
   const assertStateOwnerCurrent = () => {
     if (borrowedOwner) {
       parentMaintenance?.assertOwnerCurrent();
@@ -535,19 +569,21 @@ export async function acquireGatewayLock(
         readProcessCmdline: opts.readProcessCmdline,
         readProcessStartTime: opts.readProcessStartTime,
       });
-    if (!borrowedOwner) {
-      projection = acquireFileLockSync(paths.stateLockPath, {
-        lockPath: paths.stateLockPath,
-        timeoutMs: 0,
-        retry: { retries: 0 },
-        staleRecovery: "remove-if-unchanged",
-        reentrantOwner: payload.ownerId,
-        payload: () => (role === "gateway" ? payload : { ...payload, role: "agent-embedded" }),
-        parsePayload: parseGatewayLockPayload,
-        shouldReclaim: ({ payload: previous }) => shouldReclaim(previous as LockPayload | null),
-        shouldRemoveStaleLock: ({ payload: previous }) =>
-          shouldReclaim(previous as LockPayload | null),
-      });
+    if (!borrowedOwner && !projection) {
+      projection = createGatewayStateProjection(
+        acquireFileLockSync(paths.stateLockPath, {
+          lockPath: paths.stateLockPath,
+          timeoutMs: 0,
+          retry: { retries: 0 },
+          staleRecovery: "remove-if-unchanged",
+          reentrantOwner: payload.ownerId,
+          payload: () => (role === "gateway" ? payload : { ...payload, role: "agent-embedded" }),
+          parsePayload: parseGatewayLockPayload,
+          shouldReclaim: ({ payload: previous }) => shouldReclaim(previous as LockPayload | null),
+          shouldRemoveStaleLock: ({ payload: previous }) =>
+            shouldReclaim(previous as LockPayload | null),
+        }),
+      );
     }
     assertStateOwnerCurrent();
     if (role === "gateway" && opts.listenerMode && opts.port) {
@@ -588,6 +624,13 @@ export async function acquireGatewayLock(
     run: (operation) => {
       assertStateOwnerCurrent();
       return resources ? resources.run(operation) : operation();
+    },
+    retainProjection: () => {
+      assertStateOwnerCurrent();
+      if (!projection) {
+        throw new GatewayLockError("Maintenance ownership has no transferable projection");
+      }
+      return projection.retain();
     },
     releaseInTree,
     release: () =>

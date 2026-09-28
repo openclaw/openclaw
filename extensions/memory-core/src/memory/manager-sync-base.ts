@@ -21,7 +21,6 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 import {
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
-  type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
@@ -89,7 +88,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: EmbeddingProviderId;
+  protected fallbackFrom?: string;
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;

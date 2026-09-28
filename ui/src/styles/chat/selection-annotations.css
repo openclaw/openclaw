@@ -36,12 +36,12 @@
   height: 16px;
 }
 
-.chat-thread:has(> openclaw-chat-comment-pins) {
+div.chat-thread:where(.chat-thread--comment-pins) {
   position: relative;
 }
 
 /* Reserve a narrow gutter for pins even when a selected line fills the viewport. */
-.chat-thread:has(> openclaw-chat-comment-pins) .chat-thread-inner {
+div.chat-thread:where(.chat-thread--comment-pins) .chat-thread-inner {
   padding-inline-end: 28px;
 }
 

@@ -1,9 +1,14 @@
 // Workboard tests cover gateway plugin behavior.
+import { DatabaseSync } from "node:sqlite";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
+import {
+  createWorkboardSqliteTestHarness,
+  createWorkboardSqliteTestStore,
+} from "./test/sqlite-store.js";
+import { createWorkboardTools } from "./tools.js";
 
 function createGatewayMethodCapture() {
   type RegisteredMethod = {
@@ -27,6 +32,130 @@ function createGatewayMethodCapture() {
 }
 
 describe("workboard gateway methods", () => {
+  it("rejects new client attachment bytes after disabling uploads without blocking agent output or reads", async () => {
+    const { api, methods } = createGatewayMethodCapture();
+    let config: OpenClawPluginApi["config"] = {};
+    api.runtime.config = { current: () => config } as OpenClawPluginApi["runtime"]["config"];
+    const store = createWorkboardSqliteTestStore();
+    registerWorkboardGatewayMethods({ api, store });
+    const card = await store.create({ title: "Upload policy" });
+    const add = methods.get("workboard.cards.attachments.add")!.handler;
+    const input = { id: card.id, fileName: "proof.txt", contentBase64: "cHJvb2Y=" };
+    const enabled = vi.fn();
+    await add({ params: input, respond: enabled } as never);
+    expect(enabled.mock.calls[0]?.[0]).toBe(true);
+    const initial = await store.listAttachments(card.id);
+    expect(initial.attachments).toHaveLength(1);
+
+    config = { gateway: { uploads: { enabled: false } } };
+    const disabled = vi.fn();
+    await add({
+      params: { ...input, internal: { syntheticClient: true } },
+      respond: disabled,
+    } as never);
+    expect(disabled).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        details: { code: "UPLOADS_DISABLED" },
+      }),
+    );
+    expect((await store.listAttachments(card.id)).attachments).toHaveLength(1);
+
+    const synthetic = vi.fn();
+    await add({
+      params: { ...input, fileName: "internal.txt" },
+      respond: synthetic,
+      client: { internal: { syntheticClient: true } },
+    } as never);
+    expect(synthetic.mock.calls[0]?.[0]).toBe(true);
+
+    const tool = createWorkboardTools({ store }).find(
+      (candidate) => candidate.name === "workboard_attachment_add",
+    )!;
+    await tool.execute("generated-output", { ...input, fileName: "generated.txt" });
+    const read = vi.fn();
+    await methods
+      .get("workboard.cards.attachments.list")!
+      .handler({ params: { id: card.id }, respond: read } as never);
+    expect(read.mock.calls[0]?.[1]?.attachments).toHaveLength(3);
+
+    config = { gateway: { uploads: { enabled: true } } };
+    const reenabled = vi.fn();
+    await add({ params: { ...input, fileName: "reenabled.txt" }, respond: reenabled } as never);
+    expect(reenabled.mock.calls[0]?.[0]).toBe(true);
+  });
+
+  it.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
+    "rejects attachment bytes when %s observes hot disable",
+    async (phase) => {
+      const { api, methods } = createGatewayMethodCapture();
+      let disabled = false;
+      let pauseRead = false;
+      api.runtime.config = {
+        current: () => ({ gateway: { uploads: { enabled: !disabled } } }),
+      } as OpenClawPluginApi["runtime"]["config"];
+      const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
+        beforeCardWrite: async () => {
+          if (pauseRead && phase === "metadata-write") {
+            disabled = true;
+          }
+        },
+        beforeCardLookup: async () => {
+          if (pauseRead && phase === "card-read") {
+            disabled = true;
+          }
+        },
+      });
+      const register = stores.attachments.register.bind(stores.attachments);
+      using registering = vi
+        .spyOn(stores.attachments, "register")
+        .mockImplementation(async (key, value) => {
+          if (pauseRead && phase === "attachment-write") {
+            disabled = true;
+          }
+          await register(key, value);
+          if (pauseRead && (phase === "attachment-committed" || phase === "metadata-write")) {
+            // The real worker has committed the blob, but card metadata is not published yet.
+            expect(
+              db
+                .prepare(
+                  "SELECT hex(content) AS content FROM workboard_attachment_blobs WHERE attachment_id = ?",
+                )
+                .get(key),
+            ).toEqual({
+              content: Buffer.from(value.contentBase64, "base64").toString("hex").toUpperCase(),
+            });
+            disabled = phase === "attachment-committed";
+          }
+        });
+      registerWorkboardGatewayMethods({ api, store });
+      const card = await store.create({ title: "Late upload policy" });
+      using db = new DatabaseSync(dbPath, { readOnly: true });
+      pauseRead = true;
+      const respond = vi.fn();
+      await methods.get("workboard.cards.attachments.add")!.handler({
+        params: { id: card.id, fileName: "late.txt", contentBase64: "bGF0ZQ==" },
+        respond,
+      } as never);
+      expect
+        .soft(respond)
+        .toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
+        );
+      expect(registering).toHaveBeenCalledOnce();
+      expect.soft(await stores.attachments.entries()).toEqual([]);
+      expect.soft((await store.listAttachments(card.id)).attachments).toEqual([]);
+      // Public attachment reads join the index and would hide an orphaned blob.
+      expect
+        .soft(db.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all())
+        .toEqual([]);
+    },
+  );
+
   it.each(["move", "archive", "delete"] as const)(
     "returns a redacted conflict for stale %s requests",
     async (action) => {

@@ -1,4 +1,4 @@
-import { nothing, type ReactiveController } from "lit";
+import { html, nothing, type ReactiveController } from "lit";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
@@ -43,7 +43,7 @@ function menuPosition(x: number, y: number, width: number, height: number): Menu
   };
 }
 
-export type SidebarFilterMenuView = "root" | "specific-owner" | "empty-groups";
+export type SidebarFilterMenuView = "root" | "specific-owner";
 
 type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
@@ -324,7 +324,6 @@ export class SidebarMenusController implements ReactiveController {
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     this.sessionSortMenuTrigger = trigger;
-    this.filterMenuView = "root";
     this.updateState(
       "sessionSortMenuPosition",
       menuPosition(rect.right, rect.bottom + 4, 200, 280),
@@ -352,7 +351,7 @@ export class SidebarMenusController implements ReactiveController {
   }
 
   setFilterMenuView(view: SidebarFilterMenuView) {
-    if (!this.sessionSortMenuPosition && !this.catalogViewMenuPosition) {
+    if (!this.catalogViewMenuPosition) {
       return;
     }
     this.filterMenuView = view;
@@ -362,7 +361,7 @@ export class SidebarMenusController implements ReactiveController {
 
   private focusFilterMenuView() {
     void this.host.updateComplete.then(() => {
-      const trigger = this.sessionSortMenuTrigger ?? this.catalogViewMenuTrigger;
+      const trigger = this.catalogViewMenuTrigger;
       const dropdown = trigger
         ?.closest("openclaw-app-sidebar")
         ?.querySelector<HTMLElement>(".sidebar-session-sort-menu");
@@ -539,34 +538,21 @@ export class SidebarMenusController implements ReactiveController {
     this.closePositionedMenu("identity", options);
   }
 
-  renderCustomizeMenu() {
-    return this.menuRenderer?.renderSidebarCustomizeMenuForController(this) ?? nothing;
-  }
-
-  renderAgentMenu() {
-    return this.agentMenuAvatars.withActiveRoutes(
-      () => this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing,
-    );
-  }
-
-  renderIdentityMenu() {
-    return this.menuRenderer?.renderSidebarIdentityMenuForController(this) ?? nothing;
-  }
-
-  renderSessionMenu() {
-    return this.menuRenderer?.renderSidebarSessionMenuForController(this) ?? nothing;
-  }
-
-  renderSessionGroupMenu() {
-    return this.menuRenderer?.renderSidebarSessionGroupMenuForController(this) ?? nothing;
-  }
-
-  renderSessionSortMenu() {
-    return this.menuRenderer?.renderSidebarSessionSortMenuForController(this) ?? nothing;
-  }
-
-  renderCatalogViewMenu() {
-    return this.menuRenderer?.renderSidebarCatalogViewMenuForController(this) ?? nothing;
+  render() {
+    const renderer = this.menuRenderer;
+    return html`
+      ${renderer?.renderSidebarCustomizeMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarMoreMenuForController(this) ?? nothing}
+      ${this.agentMenuAvatars.withActiveRoutes(
+        () => renderer?.renderSidebarAgentMenuForController(this) ?? nothing,
+      )}
+      ${renderer?.renderSidebarIdentityMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarSessionMenuForController(this) ?? nothing}
+      ${this.catalogMenu.render()}
+      ${renderer?.renderSidebarSessionGroupMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarSessionSortMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarCatalogViewMenuForController(this) ?? nothing}
+    `;
   }
 
   renderRoute(routeId: NavigationRouteId) {
@@ -589,9 +575,5 @@ export class SidebarMenusController implements ReactiveController {
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
     });
-  }
-
-  renderMoreMenu() {
-    return this.menuRenderer?.renderSidebarMoreMenuForController(this) ?? nothing;
   }
 }

@@ -77,7 +77,7 @@ export async function hydrateSwarmSessionRows(params: {
 type SwarmHydrationParams = {
   sessions: Pick<SessionCapability, "list" | "inheritRow" | "observeRow" | "observeList">;
   agentId?: string;
-  readParent: () => Promise<GatewaySessionRow | null>;
+  readParent: (refresh?: boolean) => Promise<GatewaySessionRow | null>;
   parentKey: string;
   sourceEpoch: number;
   currentRows: () => readonly GatewaySessionRow[];
@@ -107,6 +107,7 @@ export class SwarmRosterHydrator {
   private childRows: GatewaySessionRow[] = [];
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
+  private parentRefreshForced = false;
   private publishingParentRead = false;
 
   update(params: SwarmHydrationParams): void {
@@ -246,9 +247,10 @@ export class SwarmRosterHydrator {
     }, delay);
   }
 
-  private readParent(): Promise<void> {
+  private readParent(refresh = false): Promise<void> {
     if (this.parentRequest) {
       this.parentRefreshQueued = true;
+      this.parentRefreshForced ||= refresh;
       return this.parentRequest;
     }
     const params = this.params;
@@ -276,7 +278,7 @@ export class SwarmRosterHydrator {
       }
     };
     const request = Promise.resolve()
-      .then(() => params.readParent())
+      .then(() => params.readParent(refresh))
       .then((row) => {
         if (!isCurrent()) {
           return;
@@ -299,8 +301,10 @@ export class SwarmRosterHydrator {
         }
         this.parentRequest = null;
         if (this.parentRefreshQueued) {
+          const queuedRefresh = this.parentRefreshForced;
           this.parentRefreshQueued = false;
-          void this.readParent();
+          this.parentRefreshForced = false;
+          void this.readParent(queuedRefresh);
         }
       });
     this.parentRequest = request;
@@ -344,7 +348,8 @@ export class SwarmRosterHydrator {
       );
     });
     if (this.parentRow && (removedMember || missingDetail)) {
-      void this.readParent();
+      // Child membership can change without invalidating the parent's descriptor revision.
+      void this.readParent(true);
     }
     const generation = this.generation;
     const isCurrent = () => generation === this.generation && this.childResult === result;
@@ -386,6 +391,7 @@ export class SwarmRosterHydrator {
     this.childRows = [];
     this.parentRequest = null;
     this.parentRefreshQueued = false;
+    this.parentRefreshForced = false;
     this.rows = [];
     this.key = key;
     this.generation += 1;

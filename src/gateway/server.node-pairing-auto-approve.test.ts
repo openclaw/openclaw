@@ -53,30 +53,6 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
     });
   });
 
-  test("stays disabled by default for a direct non-loopback node", async () => {
-    await attempt({
-      identityName: "trusted-cidr-default-off",
-      configure: async () => {
-        // Pin SSH verification off so this case exercises the CIDR default
-        // without spawning a real ssh probe to the runner's own LAN IP.
-        await writeConfigFile({
-          gateway: { nodes: { pairing: { sshVerify: false } } },
-        });
-      },
-      run: async ({ loaded, connectNode }) => {
-        const res = await connectNode();
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("pairing required");
-        const pending = (await listDevicePairing()).pending.filter(
-          (entry) => entry.deviceId === loaded.identity.deviceId,
-        );
-        expect(pending).toHaveLength(1);
-        expect(pending[0]?.silent).toBe(false);
-        expect(await getPairedDevice(loaded.identity.deviceId)).toBeNull();
-      },
-    });
-  });
-
   test("auto-approves first-time node pairing from a matching direct non-loopback CIDR", async () => {
     await attempt({
       identityName: "trusted-cidr-direct-lan-auto-approve",

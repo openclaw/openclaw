@@ -114,10 +114,6 @@ function expandBundleRootPlaceholders(params: {
   });
 }
 
-function normalizeBundlePath(targetPath: string): string {
-  return path.normalize(path.resolve(targetPath));
-}
-
 function normalizeExpandedAbsolutePath(value: string): string {
   return path.isAbsolute(value) ? path.normalize(value) : value;
 }
@@ -130,6 +126,21 @@ function absolutizeBundleMcpServer(params: {
   agentFormat?: boolean;
 }): BundleMcpServerConfig {
   const next: BundleMcpServerConfig = { ...params.server };
+  const expand = (value: string) =>
+    expandBundleRootPlaceholders({
+      value,
+      rootDir: params.rootDir,
+      pluginDataDir: params.pluginDataDir,
+    });
+  const resolveArgument = (value: unknown) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const expanded = expand(value);
+    return isExplicitRelativePath(expanded)
+      ? path.resolve(params.baseDir, expanded)
+      : normalizeExpandedAbsolutePath(expanded);
+  };
 
   if (
     typeof next.cwd !== "string" &&
@@ -139,70 +150,33 @@ function absolutizeBundleMcpServer(params: {
     next.cwd = params.baseDir;
   }
 
-  const command = next.command;
-  if (typeof command === "string") {
-    const expanded = expandBundleRootPlaceholders({
-      value: command,
-      rootDir: params.rootDir,
-      pluginDataDir: params.pluginDataDir,
-    });
-    next.command = isExplicitRelativePath(expanded)
-      ? path.resolve(params.baseDir, expanded)
-      : normalizeExpandedAbsolutePath(expanded);
+  if (typeof next.command === "string") {
+    next.command = resolveArgument(next.command);
   }
 
   const cwd = next.cwd;
   if (typeof cwd === "string") {
-    const expanded = expandBundleRootPlaceholders({
-      value: cwd,
-      rootDir: params.rootDir,
-      pluginDataDir: params.pluginDataDir,
-    });
+    const expanded = expand(cwd);
     next.cwd = path.isAbsolute(expanded) ? expanded : path.resolve(params.baseDir, expanded);
   }
 
   const workingDirectory = next.workingDirectory;
   if (typeof workingDirectory === "string") {
-    const expanded = expandBundleRootPlaceholders({
-      value: workingDirectory,
-      rootDir: params.rootDir,
-      pluginDataDir: params.pluginDataDir,
-    });
+    const expanded = expand(workingDirectory);
     next.workingDirectory = path.isAbsolute(expanded)
       ? path.normalize(expanded)
       : path.resolve(params.baseDir, expanded);
   }
 
   if (Array.isArray(next.args)) {
-    next.args = next.args.map((entry) => {
-      if (typeof entry !== "string") {
-        return entry;
-      }
-      const expanded = expandBundleRootPlaceholders({
-        value: entry,
-        rootDir: params.rootDir,
-        pluginDataDir: params.pluginDataDir,
-      });
-      if (!isExplicitRelativePath(expanded)) {
-        return normalizeExpandedAbsolutePath(expanded);
-      }
-      return path.resolve(params.baseDir, expanded);
-    });
+    next.args = next.args.map(resolveArgument);
   }
 
   if (isRecord(next.env)) {
     next.env = Object.fromEntries(
       Object.entries(next.env).map(([key, value]) => [
         key,
-        typeof value === "string"
-          ? normalizeExpandedAbsolutePath(
-              expandBundleRootPlaceholders({
-                value,
-                rootDir: params.rootDir,
-                pluginDataDir: params.pluginDataDir,
-              }),
-            )
-          : value,
+        typeof value === "string" ? normalizeExpandedAbsolutePath(expand(value)) : value,
       ]),
     );
   }
@@ -376,7 +350,7 @@ function loadBundleFileBackedMcpConfig(params: {
     params.bundleFormat === "agent"
       ? // SAFETY: The required Agent Plugins manifest already established this canonical root.
         pluginCacheRealpathSync(params.rootDir)!
-      : normalizeBundlePath(params.rootDir);
+      : path.resolve(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
   const result = readBundleJsonObject({
     rootDir,
@@ -407,7 +381,7 @@ function loadBundleFileBackedMcpConfig(params: {
         })
       : undefined;
   const servers = agentLoaded?.servers ?? extractMcpServerMap(result.raw);
-  const baseDir = normalizeBundlePath(path.dirname(absolutePath));
+  const baseDir = path.dirname(absolutePath);
   return {
     config: {
       mcpServers: Object.fromEntries(
@@ -439,7 +413,7 @@ function loadRootRelativeMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
-  const rootDir = normalizeBundlePath(params.rootDir);
+  const rootDir = path.resolve(params.rootDir);
   return {
     config: {
       mcpServers: Object.fromEntries(

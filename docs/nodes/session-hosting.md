@@ -116,6 +116,12 @@ the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
 
+Installed node hosts package the POSIX launch helpers separately to reduce
+per-turn startup work. Update and restart the node host to receive this
+improvement. The worker still waits for its durable launch receipt before
+starting a turn, and cleanup continues to hold its worker slot until the
+process tree is gone.
+
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
 turns additionally require captured exec-policy support and valid exact worker
@@ -207,7 +213,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:24.19.0-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.21.0-slim",
     },
   },
 }
@@ -229,7 +235,12 @@ session hosting or the affected launch fails visibly instead of falling back to
 an unisolated worker. Install or start the engine, verify `docker version` or
 `podman version`, and restart the node host.
 
-The default image is `node:24.19.0-slim`; the engine pulls it on first use when it
+Before each container launch, daemon identity revalidation allows up to 30 seconds.
+If an engine command times out, the launch error names the engine and operation
+(for example, `docker info`) and its deadline. It omits command arguments and
+environment values. Check that operation against the selected daemon before retrying.
+
+The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
 to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on
@@ -237,9 +248,13 @@ its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
 image or configure registry access before hosting sessions on an offline or
-restricted node. Existing explicit image settings are preserved; replace older Node
-images with a supported release before upgrading OpenClaw. Worker startup requires
-a supported runtime; older releases may fail before the runtime diagnostic can run.
+restricted node. The default image can advance when OpenClaw updates its dependencies.
+Before upgrading an offline node, preload the new default image or set
+`nodeHost.workerRuns.containerImage` to a supported image already cached on that node.
+For example, a cached `node:24.19.0-slim` remains supported and can be selected explicitly.
+Existing explicit image settings are preserved; replace unsupported Node images before
+upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
+fail before the runtime diagnostic can run.
 
 Each worker container receives only two host bind mounts: its verified worker
 bundle root is read-only, and its assigned session workspace is read-write.

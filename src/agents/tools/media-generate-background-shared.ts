@@ -1,8 +1,3 @@
-/**
- * Shared detached-task lifecycle for media generation tools.
- *
- * Image, video, and music generation use this to track tasks, wake sessions, and deliver generated media.
- */
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
@@ -15,7 +10,6 @@ import {
 } from "../../config/sessions/transcript-target-binding.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {
   clearAgentRunContext,
@@ -64,13 +58,10 @@ const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
-/** Schedules detached media generation work. */
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
-/** Optional callback invoked when async media generation starts. */
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
-/** Returns whether a media generation request should detach for a session. */
 function shouldDetachMediaGenerationTask(
   sessionKey: string | undefined,
   entry?: SessionEntry,
@@ -93,7 +84,6 @@ function shouldDetachMediaGenerationTask(
   );
 }
 
-/** Successful media generation output used to complete and wake detached tasks. */
 export type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
@@ -132,7 +122,6 @@ type FailMediaGenerationTaskRunParams = {
 };
 
 type WakeMediaGenerationTaskCompletionParams = {
-  config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
@@ -140,18 +129,6 @@ type WakeMediaGenerationTaskCompletionParams = {
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
-};
-
-type MediaGenerationTaskLifecycle = {
-  createTaskRun: (
-    params: CreateMediaGenerationTaskRunParams,
-  ) => Promise<MediaGenerationTaskHandle | null>;
-  recordTaskProgress: (params: RecordMediaGenerationTaskProgressParams) => void;
-  completeTaskRun: (params: CompleteMediaGenerationTaskRunParams) => void;
-  failTaskRun: (params: FailMediaGenerationTaskRunParams) => void;
-  wakeTaskCompletion: (
-    params: WakeMediaGenerationTaskCompletionParams,
-  ) => Promise<MediaGenerationCompletionWakeOutcome>;
 };
 
 function waitForMediaGenerationCompletionHandoffRetry(delayMs: number): Promise<void> {
@@ -358,7 +335,6 @@ function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): 
   );
 }
 
-/** Periodically refreshes task progress while a media generation operation runs. */
 async function withMediaGenerationTaskKeepalive<T>(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
@@ -432,7 +408,6 @@ function failMediaGenerationTaskRun(
   }
 }
 
-/** Creates the default microtask scheduler for detached media generation jobs. */
 export function createDefaultMediaGenerateBackgroundScheduler(params: {
   toolName: string;
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
@@ -450,7 +425,6 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   };
 }
 
-/** Builds the immediate tool result returned after a background media task starts. */
 export function buildMediaGenerationStartedToolResult(params: {
   toolName: string;
   generationLabel: string;
@@ -489,7 +463,6 @@ export function buildMediaGenerationStartedToolResult(params: {
   };
 }
 
-/** Notifies an optional async-start observer and logs callback failures. */
 export async function notifyMediaGenerationAsyncTaskStarted(params: {
   callback?: MediaGenerateAsyncStartCallback;
   message: string;
@@ -512,15 +485,13 @@ export async function notifyMediaGenerationAsyncTaskStarted(params: {
   }
 }
 
-/** Schedules media generation work and wires result/failure handling into task lifecycle. */
 export function scheduleMediaGenerationTaskCompletion<
   T extends MediaGenerationExecutionResult,
 >(params: {
-  lifecycle: MediaGenerationTaskLifecycle;
+  lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   handle: MediaGenerationTaskHandle | null;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   progressSummary: string;
-  config?: OpenClawConfig;
   toolName: string;
   run: () => Promise<T>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
@@ -545,7 +516,6 @@ export function scheduleMediaGenerationTaskCompletion<
         const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
           wake: async () =>
             await params.lifecycle.wakeTaskCompletion({
-              config: params.config,
               handle: params.handle,
               status: "error",
               statusLabel: "failed",
@@ -593,7 +563,6 @@ export function scheduleMediaGenerationTaskCompletion<
       const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
         wake: async () =>
           await params.lifecycle.wakeTaskCompletion({
-            config: params.config,
             handle: params.handle,
             status: "ok",
             statusLabel: "completed successfully",
@@ -665,7 +634,6 @@ export function scheduleMediaGenerationTaskCompletion<
   params.scheduleBackgroundWork(() => runWithoutOwnedSessionTranscriptWrites(runBackgroundWork));
 }
 
-/** Creates a tool-specific detached media generation lifecycle facade. */
 export function createMediaGenerationTaskLifecycle(params: {
   toolName: string;
   taskKind: string;
@@ -676,9 +644,10 @@ export function createMediaGenerationTaskLifecycle(params: {
   eventSource: AgentInternalEvent["source"];
   announceType: string;
   completionLabel: string;
-}): MediaGenerationTaskLifecycle {
+}) {
   return {
     createTaskRun(
+      this: void,
       runParams: CreateMediaGenerationTaskRunParams,
     ): Promise<MediaGenerationTaskHandle | null> {
       return createMediaGenerationTaskRun({

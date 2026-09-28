@@ -18,6 +18,7 @@ import {
   getExpansionStateVersion,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import * as chatMessage from "./chat-message.ts";
 import {
@@ -459,7 +460,11 @@ describe("chat transcript invalidation", () => {
     async (phase) => {
       vi.spyOn(Date, "now").mockReturnValue(60_000);
       const props = threadProps(`pane-terminal-status-${phase}`);
-      const transcript = createTestTranscript();
+      saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+        scrollTop: 0,
+        anchorToEnd: false,
+      });
+      const transcript = createTestTranscript(props.paneId);
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
@@ -935,7 +940,11 @@ describe("chat transcript invalidation", () => {
         },
       ],
     };
-    const toolVisibilityController = createTestTranscript();
+    saveChatSessionScrollPosition(toolVisibilityProps.paneId, toolVisibilitySession, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
     const renderToolVisibility = (next = toolVisibilityProps) =>
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);
