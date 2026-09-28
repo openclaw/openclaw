@@ -5,9 +5,9 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { SessionManagerCore } from "./session-manager-core.js";
 
 /** Restore the same manager's provisional view if its enclosing transaction rolls back. */
-export function createSessionManagerWriteViewGuard<Snapshot extends object>(
+export function createSessionManagerWriteViewGuard(
   manager: Pick<SessionManagerCore, "getSessionId" | "getSessionTarget">,
-  capture: () => Snapshot,
+  capture: () => object,
   assertAvailable: () => void,
 ): TranscriptWriteViewGuard {
   const sessionId = manager.getSessionId();

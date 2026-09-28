@@ -8,7 +8,6 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import type { SessionHistoryWorkerResult } from "./session-history-types.js";
 import {
   encodeSessionTranscriptWorkerError,
   SessionHistoryDeltaPreparationError,
@@ -596,14 +595,11 @@ serveOwnedWorkerTasks(
           if (request.kind === "history-page") {
             const { readSessionHistoryRequest } =
               await import("../../gateway/session-history-worker-reader.js");
-            return await withHistoryDatabase<SessionHistoryWorkerResult>(
-              request.database,
-              request.kind,
-              () =>
-                readSessionHistoryRequest(request.request, {
-                  ...request.target,
-                  database: request.database,
-                }),
+            return await withHistoryDatabase(request.database, request.kind, () =>
+              readSessionHistoryRequest(request.request, {
+                ...request.target,
+                database: request.database,
+              }),
             );
           }
           if (request.kind === "session-reset-recall") {
@@ -669,10 +665,7 @@ serveOwnedWorkerTasks(
   },
   {
     transferList(reply) {
-      if (!reply.ok) {
-        return [];
-      }
-      const value = reply.value;
+      const value = reply.ok ? reply.value : undefined;
       if (
         typeof value !== "object" ||
         value === null ||
