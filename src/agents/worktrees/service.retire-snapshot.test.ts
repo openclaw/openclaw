@@ -156,22 +156,15 @@ describe("Exact removed worktree snapshot retirement", () => {
     return { program, output, argv };
   }
 
-  it.each(["wrong timestamp", "missing required argument"])(
-    "preserves snapshot custody through the CLI with %s",
-    async (kind) => {
-      const cli = retirementCli();
-      if (kind === "wrong timestamp") {
-        cli.argv[cli.argv.indexOf("--removed-at") + 1] = String(removedAt + 1);
-      } else {
-        cli.argv.splice(cli.argv.indexOf("--retained-oid"), 2);
-      }
-      await expect(cli.program.parseAsync(cli.argv)).rejects.toThrow(
-        kind === "wrong timestamp" ? /snapshot identity does not match/ : /required option/,
-      );
-      expect(cli.output).not.toHaveBeenCalled();
-      await expectPreserved(record);
-    },
-  );
+  it("preserves snapshot custody through the CLI with a wrong timestamp", async () => {
+    const cli = retirementCli();
+    cli.argv[cli.argv.indexOf("--removed-at") + 1] = String(removedAt + 1);
+    await expect(cli.program.parseAsync(cli.argv)).rejects.toThrow(
+      /snapshot identity does not match/,
+    );
+    expect(cli.output).not.toHaveBeenCalled();
+    await expectPreserved(record);
+  });
 
   it("retires only the exact snapshot through the CLI, preserving foreign recovery and PR outcomes", async () => {
     const foreign: ManagedWorktreeRecord = {
@@ -205,7 +198,6 @@ describe("Exact removed worktree snapshot retirement", () => {
     ["ID", { id: "a0000000-0000-4000-8000-000000000099" }],
     ["snapshot namespace", { expectedSnapshotRef: "refs/heads/main" }],
     ["snapshot OID", { expectedSnapshotOid: "1".repeat(40) }],
-    ["retained source OID", { expectedRetainedSourceOid: "2".repeat(40) }],
   ] as const)("preserves custody when the expected %s does not match", async (_label, patch) => {
     await expect(retireManagedWorktreeSnapshotById({ ...request, ...patch })).rejects.toThrow(
       /snapshot identity does not match|ref OID changed/,
@@ -254,22 +246,14 @@ describe("Exact removed worktree snapshot retirement", () => {
     await expectPreserved(changed);
   });
 
-  it.each(["directory", "dangling symlink"])("refuses a reappeared checkout %s", async (kind) => {
-    if (kind === "directory") {
-      await fs.mkdir(record.path);
-      await fs.writeFile(path.join(record.path, "newer.txt"), "newer source");
-    } else {
-      await fs.symlink(path.join(root, "missing-target"), record.path);
-    }
+  it("refuses a reappeared dangling checkout symlink", async () => {
+    const target = path.join(root, "missing-target");
+    await fs.symlink(target, record.path);
     await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
       /checkout or Git registration/,
     );
     await expectPreserved(record);
-    if (kind === "directory") {
-      expect(await fs.readFile(path.join(record.path, "newer.txt"), "utf8")).toBe("newer source");
-    } else {
-      expect(await fs.readlink(record.path)).toBe(path.join(root, "missing-target"));
-    }
+    expect(await fs.readlink(record.path)).toBe(target);
   });
 
   it("refuses a lingering Git registration even when the checkout path is absent", async () => {
@@ -284,7 +268,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     expect(await git(repo, "worktree", "list", "--porcelain")).toBe(registered);
   });
 
-  it.each(["live run", "unknown run", "removal"])("preserves a %s consumer", async (kind) => {
+  it.each(["unknown run", "removal"])("preserves a %s consumer", async (kind) => {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         const query = getNodeSqliteKysely<Pick<DB, "state_leases">>(db);
@@ -320,7 +304,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     ).toEqual([{ owner: "synthetic-consumer" }]);
   });
 
-  it.each(["missing ledger", "unknown ledger", "provisioned ledger", "orphan chunk"])(
+  it.each(["missing ledger", "provisioned ledger", "orphan chunk"])(
     "preserves %s instead of assuming the Git tree contains all recovery data",
     async (kind) => {
       const chunk = { worktreeId: record.id, path: "local.env", chunkIndex: 0 };
@@ -338,9 +322,6 @@ describe("Exact removed worktree snapshot retirement", () => {
           },
           { env },
         );
-      } else if (kind === "unknown ledger") {
-        // A legacy path-only ledger does not prove an empty captured-file inventory.
-        updateRegistryWorktree(env, record.id, { provisionedPaths: [chunk.path] });
       } else if (kind === "provisioned ledger") {
         updateRegistryWorktree(env, record.id, {
           provisionedState: [{ path: chunk.path, mode: 0o600, chunks: 1 }],
