@@ -465,8 +465,14 @@ function buildSelectableDefaultModels(
       (value): value is string => typeof value === "string" && value.length > 0,
     ),
   );
+  // Rows without a working credential stay out of the global defaults. A row the
+  // provider accepts a credential for but does not license stays listed and
+  // disabled, so operators can see the model exists without being able to pick it.
   const selectable: ModelPickerEntry[] = (models ?? []).filter(
-    (model) => model.available !== false || selected.has(modelCatalogRef(model)),
+    (model) =>
+      model.available !== false ||
+      model.unavailableReason === "not-provisioned" ||
+      selected.has(modelCatalogRef(model)),
   );
   const seen = new Set(selectable.map(modelCatalogRef));
   // An unavailable catalog cannot establish that a saved model is unavailable.

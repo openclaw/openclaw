@@ -799,6 +799,14 @@ function buildModelProviderMocks(baseTime: number) {
     },
     models: [
       { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
+      // Published by the plugin but absent from this credential's live catalog.
+      {
+        id: "claude-mythos-5",
+        name: "Claude Mythos 5",
+        provider: "anthropic",
+        available: false,
+        unavailableReason: "not-provisioned",
+      },
       {
         id: "claude-fable-5",
         name: "Claude Fable 5",

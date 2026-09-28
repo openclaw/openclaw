@@ -2075,6 +2075,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
   background: var(--chat-composer-menu-selected);
 }
 
+/* Rows the Gateway reports unavailable without a sign-in path stay listed so
+   the model is discoverable, but read as inert and never take a click. */
+.chat-controls__inline-select-option:disabled {
+  opacity: 0.5;
+}
+
+.chat-controls__inline-select-option:disabled:hover {
+  background: transparent;
+}
+
 /* Model and effort are independent surfaces so either choice stays one focused
    interaction without hiding the other pill's effective state. */
 .chat-controls__model-menu,

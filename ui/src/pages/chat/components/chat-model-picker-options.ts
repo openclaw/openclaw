@@ -154,7 +154,9 @@ export function renderChatModelPickerOption(params: {
     ? t("modelSetup.candidates.signInNeeded")
     : params.entry.unavailableReason === "unsupported-runtime"
       ? t("chat.modelControls.runtimeUnavailable")
-      : "";
+      : params.entry.unavailableReason === "not-provisioned"
+        ? t("chat.modelControls.notProvisioned")
+        : "";
   const option = html`<button
     class="chat-controls__inline-select-option chat-controls__model-option ${
       selected ? "chat-controls__inline-select-option--selected" : ""

@@ -79,6 +79,7 @@ describe("chat-model-select-state", () => {
     { reason: "missing-auth", expected: "missing-auth" },
     { reason: "auth-failed", expected: "auth-failed" },
     { reason: "cooldown", expected: "cooldown" },
+    { reason: "not-provisioned", expected: "not-provisioned" },
     { reason: undefined, expected: undefined },
   ] as const)("preserves the recorded $reason availability reason", ({ reason, expected }) => {
     const catalog = [
@@ -100,6 +101,8 @@ describe("chat-model-select-state", () => {
     { available: false, reason: undefined, expected: undefined },
     { available: false, reason: "cooldown", expected: "cooldown" },
     { available: false, reason: "missing-auth", expected: "auth-failed" },
+    // A sibling route that still needs sign-in keeps the auth banner.
+    { available: false, reason: "not-provisioned", expected: "auth-failed" },
   ] as const)(
     "does not let an auth-failed alias override a $reason/$available route",
     ({ available, reason, expected }) => {

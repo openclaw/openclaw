@@ -30,6 +30,12 @@ The web picker shows route details on hover or keyboard focus. Telegram `/models
 shows route guidance before selection and labels models when their runtime is
 known. Model IDs and explicit runtime choices remain unchanged.
 
+Live discovery asks Anthropic's `/v1/models` which models the configured
+credential can call. Shipped models missing from that response stay listed so
+they remain discoverable, but they are greyed out as **Not available for the
+connected account** and cannot be selected with that credential. Another saved
+account with access keeps them selectable.
+
 Check the selected account as well as the runtime. An API key explicitly selected
 for Claude CLI still uses separate API billing. A Claude CLI selection does not
 silently switch to the direct API if the executable cannot run.

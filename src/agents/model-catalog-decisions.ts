@@ -156,17 +156,54 @@ function createModelsListEntryEvaluator(params: {
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
       // profile discovery tested; widening it would hide routes backed by another valid profile.
-      return params.providerOutcomes?.some(
-        (outcome) =>
-          outcome.status === "auth-rejected" &&
-          outcome.rejectionScope !== "catalog" &&
-          normalizeProviderId(outcome.provider) === provider &&
-          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
-      )
+      const testedOutcome = (outcome: ProviderCatalogOutcome) =>
+        normalizeProviderId(outcome.provider) === provider &&
+        (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId);
+      if (
+        params.providerOutcomes?.some(
+          (outcome) =>
+            outcome.status === "auth-rejected" &&
+            outcome.rejectionScope !== "catalog" &&
+            testedOutcome(outcome),
+        )
+      ) {
+        return {
+          ...resolved,
+          availability: false,
+          unavailableReason: "auth-failed",
+          unavailableUntil: undefined,
+        };
+      }
+      if (resolved.availability === false) {
+        return resolved;
+      }
+      // A successful live read that omitted this published row proves the tested
+      // credential cannot run it, even though the credential itself is accepted.
+      // The selected profile's own read wins; a provider-wide read speaks for a
+      // profile only when discovery recorded nothing for that profile.
+      const providerOutcomes =
+        params.providerOutcomes?.filter(
+          (outcome) => normalizeProviderId(outcome.provider) === provider,
+        ) ?? [];
+      const selectedProfileId = resolved.selectedProfileId;
+      const liveRead =
+        providerOutcomes.find(
+          (outcome) =>
+            outcome.status === "ready" &&
+            outcome.profileId !== undefined &&
+            outcome.profileId === selectedProfileId,
+        ) ??
+        (selectedProfileId === undefined ||
+        !providerOutcomes.some((outcome) => outcome.profileId === selectedProfileId)
+          ? providerOutcomes.find(
+              (outcome) => outcome.status === "ready" && outcome.profileId === undefined,
+            )
+          : undefined);
+      return liveRead?.unlistedModelIds?.includes(entry.id)
         ? {
             ...resolved,
             availability: false,
-            unavailableReason: "auth-failed",
+            unavailableReason: "not-provisioned",
             unavailableUntil: undefined,
           }
         : resolved;

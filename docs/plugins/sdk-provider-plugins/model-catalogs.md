@@ -59,6 +59,12 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+A hook that re-adds published rows the live response omitted reports their ids
+as `unlistedModelIds` on its `ready` outcome. The catalog owner keeps those
+rows listed but marks them `available: false` with `unavailableReason:
+"not-provisioned"` for the same credential, so pickers grey them out instead
+of offering a model the provider will reject. Another profile with access is
+unaffected. Only a `ready` outcome may carry this list.
 Provider-scoped refreshes preserve explicit outcomes reported under a registered
 alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same

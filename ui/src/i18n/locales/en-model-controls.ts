@@ -63,6 +63,7 @@ const enModelControls = {
       modelStarting: "Starting…",
       modelsUnavailable: "Models unavailable",
       runtimeUnavailable: "This harness is unavailable for this model.",
+      notProvisioned: "Not available for the connected account.",
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
       checkingProviderModels: "{providers}: checking models…",
       noModelsAvailable: "No models available",

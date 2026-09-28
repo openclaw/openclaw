@@ -293,6 +293,134 @@ describe("models.list provider catalog outcomes", () => {
 
   it.each([
     {
+      name: "the tested profile",
+      outcomes: [{ profileId: "anthropic:tested", unlistedModelIds: ["claude-mythos-5"] }],
+      preferredProfileId: "anthropic:tested",
+      expected: { availability: false, unavailableReason: "not-provisioned" },
+    },
+    {
+      name: "a provider-wide credential with no profile read",
+      outcomes: [{ unlistedModelIds: ["claude-mythos-5"] }],
+      preferredProfileId: "anthropic:tested",
+      expected: { availability: false, unavailableReason: "not-provisioned" },
+    },
+    {
+      name: "a different selected profile",
+      outcomes: [{ profileId: "anthropic:tested", unlistedModelIds: ["claude-mythos-5"] }],
+      preferredProfileId: "anthropic:other",
+      expected: { availability: true },
+    },
+    {
+      // The selected profile's own successful read lists the model, so a
+      // provider-wide read from another credential must not override it.
+      name: "a selected profile whose own read lists the model",
+      outcomes: [
+        { unlistedModelIds: ["claude-mythos-5"] },
+        { profileId: "anthropic:tested", unlistedModelIds: [] },
+      ],
+      preferredProfileId: "anthropic:tested",
+      expected: { availability: true },
+    },
+  ])(
+    "marks a published model the live catalog omitted as not provisioned for $name",
+    async ({ outcomes, preferredProfileId, expected }) => {
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: { "anthropic/*": {} },
+          },
+        },
+      } as OpenClawConfig;
+      const listed = {
+        id: "claude-opus-5",
+        name: "Claude Opus 5",
+        provider: "anthropic",
+        api: "anthropic-messages" as const,
+        baseUrl: "https://api.anthropic.com",
+      };
+      const unlisted = { ...listed, id: "claude-mythos-5", name: "Claude Mythos 5" };
+      const snapshot = {
+        entries: [listed, unlisted],
+        routeVariants: [listed, unlisted],
+        providerOutcomes: outcomes.map((outcome) => ({
+          provider: "anthropic",
+          status: "ready" as const,
+          ...outcome,
+        })),
+      };
+      const profile = { type: "api_key" as const, provider: "anthropic", key: "sk-ant-test" };
+      const projector = createGatewayAgentModelCatalogProjector({
+        cfg: config,
+        agentId: "main",
+        snapshot,
+        metadataSnapshot,
+        preferredProfileId,
+        preparedAuthStore: {
+          version: 1,
+          profiles: { "anthropic:tested": profile, "anthropic:other": profile },
+        },
+      });
+
+      await expect(projector.evaluateEntry(unlisted, [unlisted])).resolves.toMatchObject(expected);
+      // The listed sibling keeps the same credential and stays runnable.
+      await expect(projector.evaluateEntry(listed, [listed])).resolves.toMatchObject({
+        availability: true,
+      });
+    },
+  );
+
+  it("keeps an auth rejection ahead of an unlisted model id", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
+    } as OpenClawConfig;
+    const model = {
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      provider: "anthropic",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.anthropic.com",
+    };
+    const projector = createGatewayAgentModelCatalogProjector({
+      cfg: config,
+      agentId: "main",
+      snapshot: {
+        entries: [model],
+        routeVariants: [model],
+        providerOutcomes: [
+          {
+            provider: "anthropic",
+            profileId: "anthropic:rejected",
+            status: "auth-rejected" as const,
+          },
+          {
+            provider: "anthropic",
+            profileId: "anthropic:rejected",
+            status: "ready" as const,
+            unlistedModelIds: ["claude-mythos-5"],
+          },
+        ],
+      },
+      metadataSnapshot,
+      preferredProfileId: "anthropic:rejected",
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "anthropic:rejected": { type: "api_key", provider: "anthropic", key: "sk-ant-test" },
+        },
+      },
+    });
+
+    // The credential failure is the actionable state; it must not be rewritten
+    // into a not-provisioned notice that hides the sign-in recovery path.
+    await expect(projector.evaluateEntry(model, [model])).resolves.toMatchObject({
+      availability: false,
+      unavailableReason: "auth-failed",
+    });
+  });
+
+  it.each([
+    {
       name: "missing credentials",
       evaluation: { availability: undefined, unavailableReason: "missing-auth" },
       expected: { available: false, unavailableReason: "missing-auth" },

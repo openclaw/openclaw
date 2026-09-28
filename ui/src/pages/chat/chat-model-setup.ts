@@ -115,8 +115,14 @@ function chatModelUnavailableBanner(
       ),
     };
   }
-  const message = chatModelUnavailableMessage(
-    resolveChatModelUnavailableReason(model, provider, catalog),
-  );
-  return message ? createChatModelSetupBanner(onSetup, message) : undefined;
+  const reason = resolveChatModelUnavailableReason(model, provider, catalog);
+  const message = chatModelUnavailableMessage(reason);
+  if (!message) {
+    return undefined;
+  }
+  // No sign-in unlocks a model the connected account is not provisioned for, so
+  // the notice explains without offering Model Setup as the fix.
+  return reason === "not-provisioned"
+    ? { kind: "above-composer", text: message }
+    : createChatModelSetupBanner(onSetup, message);
 }

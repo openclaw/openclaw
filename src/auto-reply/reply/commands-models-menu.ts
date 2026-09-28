@@ -80,6 +80,10 @@ export function buildModelsMenu(data: {
             label = "Temporarily unavailable";
             recovery = "Try again later or choose another model.";
             break;
+          case "not-provisioned":
+            label = "Not available for this account";
+            recovery = "Choose another model, or connect an account that includes it.";
+            break;
           default:
             label = state.availability === false ? "Unavailable" : "Connection not confirmed";
             recovery =
