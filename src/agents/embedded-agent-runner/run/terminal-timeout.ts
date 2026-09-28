@@ -22,7 +22,7 @@ type EmbeddedRunTerminalPreparedFacts = {
   agentMeta: EmbeddedAgentMeta;
   finalAssistantVisibleText?: string | undefined;
   finalAssistantRawText?: string | undefined;
-  finalAssistantRawTextIsFallback?: boolean;
+  finalAssistantMessageRawText?: string | undefined;
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal: EmbeddedAgentRunResult["meta"]["failureSignal"];
   terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
@@ -94,8 +94,8 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       finalPromptText: input.attempt.finalPromptText,
       finalAssistantVisibleText: input.terminalPrepared.finalAssistantVisibleText,
       finalAssistantRawText: input.terminalPrepared.finalAssistantRawText,
-      ...(input.terminalPrepared.finalAssistantRawTextIsFallback
-        ? { finalAssistantRawTextIsFallback: true }
+      ...(input.terminalPrepared.finalAssistantMessageRawText !== undefined
+        ? { finalAssistantMessageRawText: input.terminalPrepared.finalAssistantMessageRawText }
         : {}),
       replayInvalid,
       livenessState,

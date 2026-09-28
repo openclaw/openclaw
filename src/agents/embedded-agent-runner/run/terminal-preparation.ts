@@ -70,7 +70,7 @@ export function prepareEmbeddedRunTerminal(input: {
   reportedModelRef: { provider: string; model: string };
   finalAssistantVisibleText: string | undefined;
   finalAssistantRawText: string | undefined;
-  finalAssistantRawTextIsFallback: boolean;
+  finalAssistantMessageRawText: string | undefined;
   payloads: ReturnType<typeof buildEmbeddedRunPayloads>;
   payloadsWithToolMedia: ReturnType<typeof mergeAttemptToolMediaPayloads>;
   timedOutDuringPrompt: boolean;
@@ -169,14 +169,14 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
-  // The model's actual last message carries no final text (empty, or it ended in
-  // a tool call), so any raw text above is earlier turn narration. Harnesses that
-  // project their final answer only through assistantTexts are not marked.
-  const lastModelMessage = terminalAssistant ?? attempt.currentAttemptAssistant;
-  const finalAssistantRawTextIsFallback =
-    finalAssistantRawText !== undefined &&
-    lastModelMessage !== undefined &&
-    resolveFinalMessageRawText(lastModelMessage) === undefined;
+  // Diagnostics record only the model's own latest message. The latest
+  // current-attempt message outranks the last completed one so a later partial
+  // answer is not hidden; a message that ended in a tool call has no final text.
+  // Harnesses that expose no message keep finalAssistantRawText.
+  const latestModelMessage = attempt.currentAttemptAssistant ?? terminalAssistant;
+  const finalAssistantMessageRawText = latestModelMessage
+    ? (resolveFinalMessageRawText(latestModelMessage) ?? "")
+    : undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {
     terminalReceipt: {
@@ -326,7 +326,7 @@ export function prepareEmbeddedRunTerminal(input: {
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,
-    finalAssistantRawTextIsFallback,
+    finalAssistantMessageRawText,
     payloads,
     payloadsWithToolMedia,
     timedOutDuringPrompt,

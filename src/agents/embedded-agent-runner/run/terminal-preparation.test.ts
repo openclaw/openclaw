@@ -259,7 +259,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     });
 
     expect(prepared.finalAssistantRawText).toBe("Checking now");
-    expect(prepared.finalAssistantRawTextIsFallback).toBe(true);
+    expect(prepared.finalAssistantMessageRawText).toBe("");
   });
 
   it("marks narration from a completed tool-call message when the next message never finished", async () => {
@@ -284,7 +284,36 @@ describe("prepareEmbeddedRunTerminal", () => {
       },
     });
 
-    expect(prepared.finalAssistantRawTextIsFallback).toBe(true);
+    expect(prepared.finalAssistantMessageRawText).toBe("");
+  });
+
+  it("prefers a later partial message over an earlier completed tool-call message", async () => {
+    const toolTurn = {
+      ...assistantMessage("toolUse"),
+      content: [
+        { type: "text" as const, text: "Checking now" },
+        { type: "toolCall" as const, id: "tool_1", name: "exec", arguments: {} },
+      ],
+    };
+    const partial = {
+      ...assistantMessage("aborted"),
+      content: [{ type: "text" as const, text: "Here is the partial answer" }],
+    };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now", "Here is the partial answer"],
+        lastAssistant: partial,
+        currentAttemptAssistant: partial,
+        currentAttemptCompletedAssistant: toolTurn,
+      }),
+      currentAttemptCompletedAssistant: toolTurn,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantMessageRawText).toBe("Here is the partial answer");
   });
 
   it("does not mark the model's own final text as a fallback", async () => {
@@ -307,7 +336,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     });
 
     expect(prepared.finalAssistantRawText).toBe("Done");
-    expect(prepared.finalAssistantRawTextIsFallback).toBe(false);
+    expect(prepared.finalAssistantMessageRawText).toBe("Done");
   });
 
   it.each(["error", "aborted"] as const)(

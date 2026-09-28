@@ -376,6 +376,31 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual(expected);
   });
 
+  it.each([
+    { name: "final text", finalText: "Done", expected: "Done" },
+    { name: "no final text", finalText: undefined, expected: "" },
+  ])(
+    "records only the final message when the stream ends without a result ($name)",
+    ({ finalText, expected }) => {
+      const parser = createParser();
+
+      parser.push(
+        joinJsonlFrames(
+          JSON.stringify({ type: "init", session_id: "session-no-result" }),
+          claudeMessageStart(),
+          claudeTextDelta("Checking now."),
+          claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+          claudeMessageStop(),
+          ...(finalText ? [claudeMessageStart(), claudeTextDelta(finalText)] : []),
+          "",
+        ),
+      );
+      parser.finish();
+
+      expect(parser.getOutput()?.rawFinalText).toBe(expected);
+    },
+  );
+
   it("records an empty final message after pre-tool narration", () => {
     const parser = createParser();
 

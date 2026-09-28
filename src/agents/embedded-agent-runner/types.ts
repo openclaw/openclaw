@@ -208,15 +208,10 @@ export type EmbeddedAgentRunMeta = {
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
   /**
-   * True when finalAssistantRawText was filled from earlier turn text because the
-   * model's actual last message had none (e.g. narration before a tool-only reply).
-   * Diagnostics never report that text as the model's final response.
-   */
-  finalAssistantRawTextIsFallback?: true;
-  /**
-   * Raw text of only the model's last message when finalAssistantRawText is
-   * cumulative (CLI results or pre-tool narration); "" when that message had no
-   * text. Diagnostics prefer it over finalAssistantRawText.
+   * Raw text of only the model's own latest message; "" when that message had
+   * no final text (empty, or it ended in a tool call). finalAssistantRawText can
+   * be cumulative (CLI) or runner-substituted earlier text, so diagnostics prefer
+   * this field. Unset when the runtime exposes no message (assistantTexts only).
    */
   finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;

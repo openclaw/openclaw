@@ -340,7 +340,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     // undelivered model answer. Automatic-delivery callers retain their fallback.
     ...(finalizationOutcome !== "answered" &&
     runParams.sourceReplyDeliveryMode === "message_tool_only"
-      ? { finalAssistantVisibleText: "", finalAssistantRawText: "" }
+      ? {
+          finalAssistantVisibleText: "",
+          finalAssistantRawText: "",
+          finalAssistantMessageRawText: "",
+        }
       : {}),
     attemptToolSummary: prepared.attemptToolSummary,
     failureSignal: prepared.failureSignal,

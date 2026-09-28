@@ -41,7 +41,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
   - On error: `openclaw.harness.phase`, `openclaw.errorCategory`, optional `openclaw.harness.cleanup_failed`
   - Span event `openclaw.agent.commentary` for completed preambles from supported harnesses, including the built-in runtime, Codex, and Claude CLI. Attributes include `openclaw.commentary.sequence`, `openclaw.commentary.text_length`, and `openclaw.commentary.content_truncated`. The existing `diagnostics.otel.captureContent` setting controls bounded, redacted output-message content.
-  - With `captureContent: true`: bounded, redacted `input.value` (turn prompt) on start and `output.value` (final assistant text) on completion
+  - With `captureContent: true`: bounded, redacted `input.value` on start and `output.value` (the runtime's final message text) on completion. For CLI backends (Claude Code, Gemini CLI), `input.value` is the exact prompt the CLI received, after history reseeding, plugin input text transforms, and prompt context; the Codex harness records the turn prompt OpenClaw handed it.
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox

@@ -20,6 +20,13 @@ export function transformCliResultText(
   };
 }
 
+/** Records the model's final message when it differs from the cumulative delivery text. */
+export function withCliRawFinalText(output: CliOutput, finalMessageText: string): CliOutput {
+  return finalMessageText === output.text.trim()
+    ? output
+    : { ...output, rawFinalText: finalMessageText };
+}
+
 /** Keep completed answers distinct while retaining cumulative transcript text. */
 export function appendCliResultText(previous: CliOutput | null, nextText: string) {
   const previousText = previous?.text.trim() ?? "";
