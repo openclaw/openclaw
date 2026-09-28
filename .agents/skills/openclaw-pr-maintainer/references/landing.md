@@ -345,6 +345,28 @@ recover only with the exact token and command the wrapper printed. Never remove
 locks by hand or start competing retries. After throttling, inspect quota before
 retrying native prepare/merge.
 
+An unaccepted prior-CI admin REST squash may be recovered on the same prepared
+head when its original capture contains the complete known GitHub response
+`Base branch was modified. Review and try the merge again.` with HTTP 405 and
+the matching `gh` diagnostic. Inspect that sent request and its retained outcome,
+then use the existing confirmations with current admin evidence:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
+  --admin-evidence <path> --confirmed-operator-admin
+```
+
+This records `recovery.providerRejection`, retains every qualified capture and
+the prior intent through the successor CAS, and reruns all current review,
+security, admin-authority, evidence, and head checks. The exact-head
+`github_pending` stamp stays pending. Capture changes during admission, unknown
+extra captures, symlinks, other 405 responses, timeouts, 5xx responses, and mixed
+or truncated output remain blocked. Accepted, queue, Crabbox, and replacement-head
+recovery are outside this exception. Another explicit recovery must use the new
+outcome OID and independently qualify its response; there is no automatic retry.
+If the PR has merged meanwhile, reconcile the retained outcome without sending
+another merge request.
+
 After two identical pre-dispatch failures without new evidence, stop invoking
 the same blocked route. Inspect the failure and select an already-authorized
 supported route with the exact reviewed head pinned, or report the concrete
