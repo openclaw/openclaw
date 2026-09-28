@@ -81,8 +81,12 @@ candidate supplies this repair even when an older updater launches Doctor.
 Git updaters with database rollback support snapshot the stopped installation's
 databases before activation Doctor. If Doctor fails, verified snapshots restore
 the pre-migration state before the previous source, runtime, configuration, and
-managed Gateway are restored. Independent writes or lost ownership still prevent
-destructive restoration and retain the recovery artifacts. This rollback support
+managed Gateway are restored. Doctor records its admitted and settled database
+generations against that backup, so its own migration does not prevent rollback.
+Later operator or runtime writes prevent destructive restoration: the updater
+preserves them, restarts and verifies the Gateway on the migrated installation,
+and reports the refusal with the next Doctor command. Lost ownership still
+prevents unauthorized effects and retains the recovery artifacts. This rollback support
 belongs to the installed updater; a new candidate cannot add it to an older
 updater already running.
 

@@ -591,8 +591,12 @@ export async function acquireGatewayLock(
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
     run: (operation) => {
+      if (resources) {
+        // Reenter held custody before policy reads inspect this scope's database handles.
+        return resources.run(operation);
+      }
       assertStateOwnerCurrent();
-      return resources ? resources.run(operation) : operation();
+      return operation();
     },
     releaseInTree,
     release: () =>

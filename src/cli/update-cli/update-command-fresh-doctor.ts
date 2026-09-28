@@ -224,8 +224,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             configInputHash: snapshot.hash,
             repair: true,
             databaseGenerations:
-              params.databaseBackup?.postMigrationGenerations ??
-              params.databaseBackup?.sourceGenerations,
+              params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
             ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"

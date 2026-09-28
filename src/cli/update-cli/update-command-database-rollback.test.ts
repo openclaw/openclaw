@@ -194,6 +194,7 @@ it.each([
       scenario === "intervening" ||
       scenario === "post-migration-write" ||
       scenario === "schema-neutral-write";
+    const preservesMigrated = outsideWrite && scenario !== "git-edited";
     const migratedVersions = scenario === "schema-neutral-write" ? [15, 21] : [18, 23];
     const initialFailure =
       scenario === "package" ||
@@ -290,7 +291,8 @@ it.each([
       const custody=await acquireCustody('sqlite-maintenance');
       try {
         const expected=input.databaseGenerations;
-        const unchanged=expected && isDeepStrictEqual(readUpdateDatabaseGenerations(Object.keys(expected)),expected);
+        const fromGenerations=expected && readUpdateDatabaseGenerations(Object.keys(expected));
+        const unchanged=expected && isDeepStrictEqual(fromGenerations,expected);
         let result;
         if (${!initialFailure} && !fs.existsSync(${JSON.stringify(initialDoctor)})) {
           fs.writeFileSync(${JSON.stringify(initialDoctor)},'completed without migration');
@@ -310,15 +312,15 @@ it.each([
           result=${JSON.stringify(scenario === "verification" ? { status: "ok" } : { status: "error", maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } })};
           process.exitCode=${scenario === "verification" ? 0 : 1};
         }
-        if(expected) result.databaseWrites={unchanged,generations:readUpdateDatabaseGenerations(Object.keys(expected))};
+        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:readUpdateDatabaseGenerations(Object.keys(expected))};
         fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,JSON.stringify(result));
       } finally {
         await custody.release();
       }
     } else {
       const {version}=manifest;
-      assert.equal(version,'1.0.0','candidate must never serve');
-      assert.deepEqual(files.map(file=>read(file).version),[15,21],'retained runtime refuses migrated schemas');
+      assert(version==='1.0.0'||${preservesMigrated},'only the compatible candidate may serve preserved writes');
+      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?[15,21]:${JSON.stringify(migratedVersions)},'runtime must match the retained state');
       const custody=await acquireCustody('gateway',Number(process.argv[3]));
       const server=http.createServer((request,response)=>{
         if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
@@ -648,15 +650,27 @@ it.each([
       onVerified?.(Date.now());
       return "ok";
     });
+    mocks.maybeRestartService.mockImplementation(async ({ recovery, onGatewayStartAttempted }) => {
+      expect(preservesMigrated).toBe(true);
+      expect(recovery).toMatchObject({ serviceRestartSafe: true, version: "2.0.0" });
+      onGatewayStartAttempted?.();
+      await startService();
+      expect(await readServing()).toMatchObject({ version: "2.0.0" });
+      return "healthy";
+    });
     verification.mockImplementation(async ({ result }) => {
-      if (!restores) {
+      if (!restores && !preservesMigrated) {
         result.verification = { serviceRunning: false, readyz: false, settled: false };
         return { ok: false, score: 0, summary: "Candidate activation failed after writing state" };
       }
-      expect(await readServing()).toEqual(servedBefore);
+      if (preservesMigrated) {
+        expect(await readServing()).toMatchObject({ version: "2.0.0" });
+      } else {
+        expect(await readServing()).toEqual(servedBefore);
+      }
       result.verification = {
         serviceRunning: true,
-        runningVersion: "1.0.0",
+        runningVersion: preservesMigrated ? "2.0.0" : "1.0.0",
         versionMatch: true,
         readyz: true,
         settled: true,
@@ -687,6 +701,13 @@ it.each([
         if (gitInstall) {
           assert(databaseBackup, "Git update must capture pre-migration databases");
           retainedSnapshotDirectory = databaseBackup.directory;
+        }
+        if (restores && initialFailure) {
+          expect(databaseBackup?.migration).toMatchObject({
+            name: "openclaw doctor",
+            backup: databaseBackup?.directory,
+            from: databaseBackup?.sourceGenerations,
+          });
         }
         if (scenario === "git-edited") {
           expect([readDatabase(shared).version, readDatabase(agent).version]).toEqual([18, 23]);
@@ -744,11 +765,10 @@ it.each([
               ? "Git checkout changed after activation"
               : scenario === "intervening"
                 ? "databases changed after snapshot capture"
-                : "databases changed after migration";
+                : "restoring the backup would discard later writes";
           expect(starts).toEqual(scenario === "intervening" ? ["1.0.0", "1.0.0"] : ["1.0.0"]);
           const rollback = execution.result.steps.find((step) => step.name === "database rollback");
           expect(rollback).toMatchObject({ exitCode: 1, cwd: retainedSnapshotDirectory });
-          expect(rollback?.stderrTail).toContain(reason);
           expect(rollback?.stderrTail).toContain("Current databases were preserved");
           expect(rollback?.stderrTail).toContain(
             `retained snapshots at ${retainedSnapshotDirectory}`,
@@ -786,11 +806,29 @@ it.each([
             expect(await git(packageRoot, "rev-parse", "HEAD")).not.toBe(beforeGitSha);
           }
           expect(restart).not.toHaveBeenCalled();
-          expect(observedStart).not.toHaveBeenCalled();
-          expect(service).toBeUndefined();
+          if (preservesMigrated) {
+            expect(observedStart).toHaveBeenCalledOnce();
+            expect(service?.exitCode).toBeNull();
+            expect(await readServing()).toMatchObject({ version: "2.0.0" });
+            expect(starts.at(-1)).toBe("2.0.0");
+          } else {
+            expect(observedStart).not.toHaveBeenCalled();
+            expect(service).toBeUndefined();
+          }
           const record = getUpdateRun(run.runId, { env });
           assert(record);
+          expect(rollback?.stderrTail).toContain(reason);
           expect(renderUpdateRunReport(record).lines.join("\n")).toContain(reason);
+          if (preservesMigrated) {
+            expect(record).toMatchObject({
+              status: "failed",
+              reason: "state-migrated-no-rollback",
+              verification: { serviceRunning: true, readyz: true, runningVersion: "2.0.0" },
+            });
+            expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
+              "running on the preserved migrated state",
+            );
+          }
           return;
         }
         if (scenario === "serving") {

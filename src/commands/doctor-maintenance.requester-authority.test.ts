@@ -1,19 +1,24 @@
 import fs from "node:fs/promises";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
 } from "../infra/update-requester-authority.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
@@ -58,12 +63,20 @@ it.each(["configured-owner", "profile"] as const)(
         setUserProfileRole(profile.id, "admin");
         const identity = { channelId: "telegram", senderId: "owner", accountId: "default" };
         linkUserChannelIdentity(profile.id, identity);
+        await closeOpenClawStateDatabaseAsync();
+        const files = [resolveOpenClawStateSqlitePath(state.env)];
+        const generation = readUpdateDatabaseGenerations(files);
+        vi.mocked(ensureCliPluginRegistryLoaded).mockImplementation(async () => {
+          await Promise.resolve();
+          readConfigMachineState("plugins.bundledDiscoveryMode", { env: state.env });
+        });
         const requester = await createManagedUpdateRequesterAuthority({
           channel: identity.channelId,
           senderId: identity.senderId,
           accountId: identity.accountId,
           authorizationSource: source === "profile" ? `profile:${profile.id}` : source,
         });
+        expect(readUpdateDatabaseGenerations(files)).toEqual(generation);
         const assertCurrent = () => {
           if (!requester.isCurrent()) {
             throw new UpdateRequesterRevokedError();
@@ -82,7 +95,17 @@ it.each(["configured-owner", "profile"] as const)(
           // The live owner grants storage access only inside its retained closure.
           expect(assertCurrent).toThrow("undergoing offline maintenance");
           await maintenance!.run(async () => {
-            openOpenClawStateDatabase();
+            const migration = await withLegacyMigrationStateLock({
+              stateDir: state.stateDir,
+              env: state.env,
+              label: "requester state",
+              releaseLabel: "Requester state",
+              run: async () => {
+                openOpenClawStateDatabase();
+                return { changes: [], warnings: [] };
+              },
+            });
+            expect(migration.warnings).toEqual([]);
             if (source === "configured-owner") {
               const before = await fs.readFile(state.configPath, "utf8");
               await captureUpdateDoctorConfigWrites(
