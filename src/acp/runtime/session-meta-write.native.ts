@@ -136,8 +136,8 @@ export async function upsertAcpSessionMetaNative(params: {
     { env: params.env, path: params.databasePath },
   );
   const publish = (
-    sessionKey: string,
-    entry: SessionEntry | undefined,
+    publishedSessionKey: string,
+    publishedEntry: SessionEntry | undefined,
     decision: AcpSessionMutationCommit["decision"],
   ) => {
     return runOpenClawStateWriteTransaction(
@@ -147,8 +147,8 @@ export async function upsertAcpSessionMetaNative(params: {
           database: database.db,
           agentId: storeEntry.agentId,
           storePath,
-          sessionKey,
-          entry,
+          sessionKey: publishedSessionKey,
+          entry: publishedEntry,
           expectedControlBinding: params.expectedControlBinding,
           env: params.env,
           now: updatedAt,
@@ -156,12 +156,15 @@ export async function upsertAcpSessionMetaNative(params: {
         applyAcpSessionMutation(database.db, {
           agentId: storeEntry.agentId,
           storageSessionKey,
-          sessionKey,
-          entry,
+          sessionKey: publishedSessionKey,
+          entry: publishedEntry,
           currentRowKey,
           decision,
         });
-        sessionChanges.emit({ agentId: storeEntry.agentId, sessionKey }, database.db);
+        sessionChanges.emit(
+          { agentId: storeEntry.agentId, sessionKey: publishedSessionKey },
+          database.db,
+        );
       },
       { env: params.env, path: params.databasePath },
     );

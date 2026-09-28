@@ -25,11 +25,12 @@ export async function resolveProviderPluginSetupOptions(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     })
-    .map(({ option }) => ({
-      value: option.value,
-      label: option.label,
-      ...(option.hint ? { hint: option.hint } : {}),
-    }));
+    .map(({ option }) =>
+      Object.assign(
+        { value: option.value, label: option.label },
+        option.hint ? { hint: option.hint } : {},
+      ),
+    );
 }
 
 export async function maybeHandleProviderPluginSelection(params: {

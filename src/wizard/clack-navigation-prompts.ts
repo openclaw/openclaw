@@ -213,6 +213,7 @@ export function autocompleteWithNavigationFooter<Value>(
               label,
             )}`;
         }
+        return "";
       };
 
       switch (this.state) {
