@@ -5,6 +5,14 @@ type CryptoLike = {
 
 let warnedWeakCrypto = false;
 
+function warnWeakCryptoOnce() {
+  if (warnedWeakCrypto) {
+    return;
+  }
+  warnedWeakCrypto = true;
+  console.warn("[uuid] crypto API missing; refusing insecure UUID generation");
+}
+
 export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto): string {
   if (cryptoLike && typeof cryptoLike.randomUUID === "function") {
     return cryptoLike.randomUUID();
@@ -19,9 +27,6 @@ export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto):
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
-  if (!warnedWeakCrypto) {
-    warnedWeakCrypto = true;
-    console.warn("[uuid] crypto API missing; refusing insecure UUID generation");
-  }
+  warnWeakCryptoOnce();
   throw new Error("Web Crypto is required for UUID generation");
 }
