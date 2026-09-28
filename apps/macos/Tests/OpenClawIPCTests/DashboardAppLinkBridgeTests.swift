@@ -4,22 +4,44 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
+/// One-shot wake-up for a main-actor test event. Cancellation resumes a pending
+/// wait, so the test's time limit still ends a wait whose event never arrives.
+@MainActor
+private final class DashboardEventSignal {
+    private var fired = false
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func fire() {
+        self.fired = true
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+
+    func wait() async throws {
+        guard !self.fired else { return }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { self.continuation = $0 }
+        } onCancel: {
+            Task { @MainActor in self.cancel() }
+        }
+    }
+
+    private func cancel() {
+        self.continuation?.resume(throwing: CancellationError())
+        self.continuation = nil
+    }
+}
+
 @MainActor
 private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     var urls: [String] = []
-    private var waiter: CheckedContinuation<Void, Never>?
+    let received = DashboardEventSignal()
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
         #expect(message.world === DashboardAppLinkMessageHandler.world)
         #expect(message.frameInfo.isMainFrame)
         if let url = message.body as? String { self.urls.append(url) }
-        self.waiter?.resume()
-        self.waiter = nil
-    }
-
-    func waitForMessage() async {
-        guard self.urls.isEmpty else { return }
-        await withCheckedContinuation { self.waiter = $0 }
+        self.received.fire()
     }
 }
 
@@ -29,29 +51,24 @@ private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
 /// shared main-actor load in the native suite cannot fail this wait.
 @MainActor
 private final class DashboardLoadCompletion {
+    private let finished = DashboardEventSignal()
     private var sawLoading = false
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var observation: NSKeyValueObservation?
 
-    func wait(for webView: WKWebView, _ start: () -> Void) async {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            self.observation = webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
-                MainActor.assumeIsolated { self?.update(isLoading: webView.isLoading) }
-            }
-            start()
+    func wait(for webView: WKWebView, _ start: () -> Void) async throws {
+        let observation = webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
+            MainActor.assumeIsolated { self?.update(isLoading: webView.isLoading) }
         }
-        self.observation = nil
+        defer { observation.invalidate() }
+        start()
+        try await self.finished.wait()
     }
 
     private func update(isLoading: Bool) {
-        guard !isLoading else {
+        if isLoading {
             self.sawLoading = true
-            return
+        } else if self.sawLoading {
+            self.finished.fire()
         }
-        guard self.sawLoading else { return }
-        self.continuation?.resume()
-        self.continuation = nil
     }
 }
 
@@ -80,7 +97,7 @@ struct DashboardAppLinkBridgeTests {
             recorder,
             contentWorld: DashboardAppLinkMessageHandler.world,
             name: DashboardAppLinkMessageHandler.name)
-        await DashboardLoadCompletion().wait(for: controller.webView) {
+        try await DashboardLoadCompletion().wait(for: controller.webView) {
             controller.show(url: server.url(), auth: auth)
         }
         #expect(controller.canDeliverNativeCommands)
@@ -110,7 +127,7 @@ struct DashboardAppLinkBridgeTests {
             isARepeat: false,
             keyCode: 36))
         controller.webView.keyDown(with: enter)
-        await recorder.waitForMessage()
+        try await recorder.received.wait()
         #expect(recorder.urls == ["openclaw://dashboard"])
     }
 }
