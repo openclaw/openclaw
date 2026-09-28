@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { Value } from "typebox/value";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { ComputerTakeControlParamsSchema } from "../../agents/tools/computer-tool-control.js";
 import { isComputerObservationAction } from "../../agents/tools/computer-tool-shared.js";
 import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js";
 import {
@@ -65,12 +67,17 @@ type WorkerComputerOwnerOptions = {
   store: Pick<WorkerEnvironmentStore, "get">;
   resolveGatewayContext: GatewayContextResolver;
   getNodeTransport: () => NodeWorkerSupervisorTransport | undefined;
-  desktopRegistry?: Pick<DesktopSessionRegistry, "hasController" | "onControlChanged">;
+  desktopRegistry?: Pick<
+    DesktopSessionRegistry,
+    "hasController" | "onControlChanged" | "takeControl"
+  >;
   warn: (message: string) => void;
 };
 
 /** Captures one environment's desktop under its placement or conversation attachment owner. */
 export function createEnvironmentComputerTransportOwner(options: WorkerComputerOwnerOptions) {
+  // Retries can rebuild bindings and attachment preparations within one admitted run.
+  const takeoversByRun = new WeakMap<AgentRunDelegatedAuthority, Set<string>>();
   return async (
     source: WorkerEnvironmentComputerAuthority,
   ): Promise<PreparedWorkerComputer | undefined> => {
@@ -198,6 +205,15 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
       if (request.nodeId !== node.nodeId) {
         throw new Error("Computer control is bound to this session's desktop");
       }
+      if (
+        request.command === "computer.act" &&
+        Value.Check(ComputerTakeControlParamsSchema, request.commandParams)
+      ) {
+        return {
+          operation: "take-control" as const,
+          executionId: request.commandParams.executionId,
+        };
+      }
       const close =
         request.command === "computer.act" && request.commandParams.action === "__close_execution";
       const input = parseNodeWorkerComputerInput(
@@ -222,7 +238,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
     };
 
     const send = async (
-      input: ReturnType<typeof parseRequest>,
+      input: Exclude<ReturnType<typeof parseRequest>, { operation: "take-control" }>,
       params: {
         timeoutMs?: number;
         signal?: AbortSignal;
@@ -276,10 +292,10 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
       bind(operationalRunInstance, workerSource) {
         const worker = source.turnClaim?.owner.kind === "worker";
         workerSource?.assertCurrent();
-        const authority = worker
-          ? workerSource?.authority
-          : getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+        const runAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+        const authority = worker ? workerSource?.authority : runAuthority;
         if (
+          !runAuthority ||
           !authority ||
           !validateAgentRunDelegatedAuthority(authority) ||
           authority.operationalRunInstance.instanceId !== operationalRunInstance.instanceId ||
@@ -305,6 +321,8 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         let bindingClosing: Promise<unknown> | undefined;
         const inFlight = new Set<Promise<unknown>>();
         const inputControllers = new Set<AbortController>();
+        const completedTakeovers = takeoversByRun.get(runAuthority) ?? new Set<string>();
+        takeoversByRun.set(runAuthority, completedTakeovers);
         let releaseControlListener: (() => void) | undefined;
         let inputNeedsObservation = false;
         let controlGeneration = 0;
@@ -323,7 +341,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         };
         assertCurrent();
         const execute = async (
-          input: Exclude<ReturnType<typeof parseRequest>, { operation: "close" }>,
+          input: Exclude<ReturnType<typeof parseRequest>, { operation: "close" | "take-control" }>,
           request: Pick<
             Parameters<ComputerToolTransport["invoke"]>[0],
             "timeoutMs" | "signal" | "idempotencyKey"
@@ -353,12 +371,12 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               )
             ) {
               throw new Error(
-                "Computer input paused while the operator has control; release control in the Desktop panel to resume",
+                "Computer input paused while the operator has control; use take_control when asked to resume, or release control in the Desktop panel",
               );
             }
             if (isInput && inputNeedsObservation) {
               throw new Error(
-                "COMPUTER_STALE_OBSERVATION: take a fresh screenshot after the operator releases control",
+                "COMPUTER_STALE_OBSERVATION: take a fresh screenshot after desktop control changes",
               );
             }
             controller.signal.throwIfAborted();
@@ -505,7 +523,9 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           async invoke(request, assertAuthorized) {
             const input = parseRequest(request);
             const logicalId =
-              input.operation === "close" ? input.executionId : input.params.executionId;
+              input.operation === "close" || input.operation === "take-control"
+                ? input.executionId
+                : input.params.executionId;
             if (execution && logicalId !== execution.logicalId) {
               throw new Error("Session computer execution owner changed");
             }
@@ -514,6 +534,61 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
             }
             assertCurrent();
             request.signal?.throwIfAborted();
+            assertAuthorized?.();
+            if (input.operation === "take-control") {
+              if (!environment.desktop || !options.desktopRegistry) {
+                throw new Error("Agent takeover is unavailable for this session desktop");
+              }
+              const currentNode = context.nodeRegistry.get(node.nodeId);
+              const declaredCommands = privateNode
+                ? [...COMPUTER_COMMANDS]
+                : (currentNode?.commands ?? []);
+              if (
+                !isNodeCommandAllowed({
+                  command: "computer.act",
+                  declaredCommands,
+                  allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+                    ...currentNode,
+                    approvedCommands: declaredCommands,
+                  }),
+                }).ok
+              ) {
+                throw new Error("Session computer command has no active policy or permission");
+              }
+              // Every takeover needs a replay identity before it can evict a human controller.
+              if (!request.idempotencyKey) {
+                throw new Error("Agent takeover requires an idempotency key");
+              }
+              const takeoverKey = JSON.stringify([
+                environment.environmentId,
+                environment.ownerEpoch,
+                request.idempotencyKey,
+              ]);
+              if (!completedTakeovers.has(takeoverKey)) {
+                // Even without a controller, retire observations started before takeover.
+                inputNeedsObservation = true;
+                controlGeneration += 1;
+                options.desktopRegistry.takeControl(
+                  environment.environmentId,
+                  environment.ownerEpoch,
+                );
+                completedTakeovers.add(takeoverKey);
+              }
+              assertCurrent();
+              assertAuthorized?.();
+              request.signal?.throwIfAborted();
+              if (
+                options.desktopRegistry.hasController(
+                  environment.environmentId,
+                  environment.ownerEpoch,
+                )
+              ) {
+                throw new Error(
+                  "The operator took control again; observe before requesting another takeover",
+                );
+              }
+              return { ok: true };
+            }
             // Remote execution IDs are correlation only. The Gateway alone mints
             // the native owner, so a copied UUID cannot join or close another binding.
             execution ??= { logicalId, physicalId: randomUUID() };

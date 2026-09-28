@@ -42,6 +42,7 @@ import {
 
 const { createTempDir } = createScriptTestHarness();
 const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const nodeRunnerFixture = `export { resolveNodeRunner } from ${JSON.stringify(new URL("../../src/cli/update-cli/node-runner.ts", import.meta.url).href)};\n`;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   let statError: unknown;
@@ -367,6 +368,9 @@ describe("runtime postbuild static assets", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
     await writeExportHtmlBuildFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
+    const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
+    await fs.mkdir(path.dirname(runner), { recursive: true });
+    await fs.writeFile(runner, nodeRunnerFixture);
     runRuntimePostBuild({
       cwd: rootDir,
       env: {
@@ -395,7 +399,7 @@ describe("runtime postbuild static assets", () => {
     const bridge = await import(
       pathToFileURL(path.join(rootDir, "dist", "shared-Y6bNiw2w.js")).href
     );
-    expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
+    expect(bridge.resolveNodeRunner()).toBe(process.execPath);
   });
 
   it("uses rootDir ahead of conflicting cwd and repoRoot for every phase", async () => {
@@ -1077,6 +1081,7 @@ describe("runtime postbuild static assets", () => {
 
   it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
+    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}');
     const distDir = path.join(rootDir, "dist");
     const ownerPath = path.join(distDir, "update-command-service-command.mjs");
     await fs.mkdir(distDir, { recursive: true });
@@ -1099,6 +1104,9 @@ describe("runtime postbuild static assets", () => {
           "const rootDir = process.argv[1];",
           'const owner = await import(pathToFileURL(path.join(rootDir, "dist/update-command-service-command.mjs")).href);',
           'await fs.rm(path.join(rootDir, "dist"), { recursive: true, force: true });',
+          'const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");',
+          "await fs.mkdir(path.dirname(runner), { recursive: true });",
+          `await fs.writeFile(runner, ${JSON.stringify(nodeRunnerFixture)});`,
           "writeLegacyCliExitCompatChunks({ rootDir });",
           "process.stdout.write(await owner.restart());",
         ].join("\n"),
@@ -1114,11 +1122,14 @@ describe("runtime postbuild static assets", () => {
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {
       const rootDir = createTempDir("openclaw-runtime-postbuild-");
+      const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
+      await fs.mkdir(path.dirname(runner), { recursive: true });
+      await fs.writeFile(runner, nodeRunnerFixture);
 
       writeLegacyCliExitCompatChunks({ rootDir });
 
       const bridge = await import(pathToFileURL(path.join(rootDir, "dist", chunk)).href);
-      expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
+      expect(bridge.resolveNodeRunner()).toBe(process.execPath);
     },
   );
 });

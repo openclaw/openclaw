@@ -13,11 +13,6 @@ private let clientDatabaseLogger = Logger(
     subsystem: "ai.openclawfoundation.app",
     category: "ClientDatabases")
 
-private struct GatewayRelayIdentityResponse: Decodable {
-    let deviceId: String
-    let publicKey: String
-}
-
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
     var status: OpenClawWatchAppStatus?
@@ -329,8 +324,8 @@ final class NodeAppModel {
         var approvals: [ExecApprovalPrompt]
         var pendingApprovalReadbacks: [PersistedExecApprovalReadback]?
         var approvalUncertainties: [PersistedExecApprovalUncertainty]?
-        var pendingApprovalPushes: [ExecApprovalNotificationPrompt]?
-        var pendingResolvedPushes: [ExecApprovalNotificationPrompt]?
+        var pendingApprovalPushes: [ApprovalNotificationPrompt]?
+        var pendingResolvedPushes: [ApprovalNotificationPrompt]?
         var pendingResolutions: [WatchExecApprovalResolveEvent]?
     }
 
@@ -606,8 +601,8 @@ final class NodeAppModel {
     @ObservationIgnored private var execApprovalUncertainties:
         [ExecApprovalInboxKey: ExecApprovalUncertaintyState] = [:]
     @ObservationIgnored private var pendingWatchExecApprovalResolutionFlushInFlight = false
-    var pendingWatchExecApprovalRecoveryPushes: [ExecApprovalNotificationPrompt] = []
-    var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
+    var pendingWatchExecApprovalRecoveryPushes: [ApprovalNotificationPrompt] = []
+    var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
     private var pendingWatchExecApprovalResolutions: [WatchExecApprovalResolveEvent] = []
     private var pendingForegroundActionDrainInFlight = false
     private var pendingForegroundActionDrainRequested = false
@@ -1820,12 +1815,12 @@ final class NodeAppModel {
             if self.talkMode.isEnabled != decoded.enabled {
                 self.setTalkEnabled(decoded.enabled)
             }
-        case ExecApprovalNotificationBridge.requestedKind, "plugin.approval.requested", "openclaw.approval.requested":
+        case "exec.approval.requested", "plugin.approval.requested", "openclaw.approval.requested":
             await self.handleRequestedApprovalGatewayEvent(
                 payload,
                 expectedOperatorRoute: expectedOperatorRoute,
                 shouldContinue: shouldContinue)
-        case ExecApprovalNotificationBridge.resolvedKind, "plugin.approval.resolved", "openclaw.approval.resolved":
+        case "exec.approval.resolved", "plugin.approval.resolved", "openclaw.approval.resolved":
             guard let approvalId = Self.execApprovalEventID(from: payload) else { return }
             let approvalKind: ApprovalKind = switch evt.event {
             case "plugin.approval.resolved": .plugin
@@ -1837,7 +1832,7 @@ final class NodeAppModel {
                 expectedOperatorRoute: expectedOperatorRoute,
                 shouldContinue: shouldContinue)
             else {
-                self.appendPendingExecApprovalResolvedPush(ExecApprovalNotificationPrompt(
+                self.appendPendingExecApprovalResolvedPush(ApprovalNotificationPrompt(
                     approvalId: approvalId,
                     gatewayDeviceId: nil,
                     kind: approvalKind))
@@ -1850,7 +1845,7 @@ final class NodeAppModel {
                 routeContext: context,
                 shouldContinue: shouldContinue)
             if !reconciled, shouldContinue() {
-                self.appendPendingExecApprovalResolvedPush(ExecApprovalNotificationPrompt(
+                self.appendPendingExecApprovalResolvedPush(ApprovalNotificationPrompt(
                     approvalId: approvalId,
                     gatewayDeviceId: nil,
                     kind: approvalKind))
@@ -1958,9 +1953,10 @@ final class NodeAppModel {
     }
 
     private func markExecApprovalResolutionWriteSettled(
-        _ attempt: ExecApprovalResolutionAttempt)
+        _ attempt: ExecApprovalResolutionAttempt?)
     {
-        guard var state = self.activeExecApprovalResolutionAttempts[attempt.key],
+        guard let attempt,
+              var state = self.activeExecApprovalResolutionAttempts[attempt.key],
               state.token == attempt.token
         else { return }
         state.writeInFlight = false
@@ -2099,8 +2095,8 @@ final class NodeAppModel {
     }
 
     private nonisolated static func execApprovalPushSortsBefore(
-        _ lhs: ExecApprovalNotificationPrompt,
-        _ rhs: ExecApprovalNotificationPrompt) -> Bool
+        _ lhs: ApprovalNotificationPrompt,
+        _ rhs: ApprovalNotificationPrompt) -> Bool
     {
         if lhs.kind != rhs.kind {
             return lhs.kind.rawValue < rhs.kind.rawValue
@@ -2116,7 +2112,7 @@ final class NodeAppModel {
     }
 
     private nonisolated static func execApprovalPushKey(
-        _ push: ExecApprovalNotificationPrompt) -> ExecApprovalPushKey?
+        _ push: ApprovalNotificationPrompt) -> ExecApprovalPushKey?
     {
         guard let approvalID = ExecApprovalIdentifier.key(push.approvalId) else { return nil }
         let gatewayDeviceID: GatewayStableIdentifier.Key?
@@ -5914,7 +5910,7 @@ extension NodeAppModel {
         return items.count != originalCount
     }
 
-    private func appendPendingWatchExecApprovalRecoveryPush(_ push: ExecApprovalNotificationPrompt) {
+    private func appendPendingWatchExecApprovalRecoveryPush(_ push: ApprovalNotificationPrompt) {
         guard Self.appendPendingApproval(
             push,
             to: &self.pendingWatchExecApprovalRecoveryPushes,
@@ -5927,7 +5923,7 @@ extension NodeAppModel {
         self.persistWatchExecApprovalBridgeState()
     }
 
-    func removePendingWatchExecApprovalRecoveryPush(_ push: ExecApprovalNotificationPrompt) {
+    func removePendingWatchExecApprovalRecoveryPush(_ push: ApprovalNotificationPrompt) {
         guard Self.removePendingApproval(
             push,
             from: &self.pendingWatchExecApprovalRecoveryPushes,
@@ -5939,7 +5935,7 @@ extension NodeAppModel {
         self.persistWatchExecApprovalBridgeState()
     }
 
-    private func appendPendingExecApprovalResolvedPush(_ push: ExecApprovalNotificationPrompt) {
+    private func appendPendingExecApprovalResolvedPush(_ push: ApprovalNotificationPrompt) {
         // A silent resolution push is not replayed by the gateway. Keep it until the
         // authenticated owner route returns so its matching notification cannot linger.
         guard Self.appendPendingApproval(
@@ -5952,7 +5948,7 @@ extension NodeAppModel {
         self.persistWatchExecApprovalBridgeState()
     }
 
-    func removePendingExecApprovalResolvedPush(_ push: ExecApprovalNotificationPrompt) {
+    func removePendingExecApprovalResolvedPush(_ push: ApprovalNotificationPrompt) {
         guard Self.removePendingApproval(
             push,
             from: &self.pendingExecApprovalResolvedPushes,
@@ -7073,14 +7069,14 @@ extension NodeAppModel {
         return allReadbacksWereAuthoritative
     }
 
-    private func pendingExecApprovalPushesForWatchRecovery() async -> [ExecApprovalNotificationPrompt] {
+    private func pendingExecApprovalPushesForWatchRecovery() async -> [ApprovalNotificationPrompt] {
         var pushes = self.pendingWatchExecApprovalRecoveryPushes
         var seen = Set(pushes.compactMap(Self.execApprovalPushKey))
 
         let delivered = await notificationCenter.deliveredNotifications()
         GatewayDiagnostics.log("watch exec approval: delivered notifications count=\(delivered.count)")
         for snapshot in delivered {
-            guard let push = ExecApprovalNotificationBridge.parseRequestedPush(userInfo: snapshot.userInfo),
+            guard let push = ApprovalNotificationBridge.parseRequestedPush(userInfo: snapshot.userInfo, kind: .exec),
                   let pushKey = Self.execApprovalPushKey(push),
                   seen.insert(pushKey).inserted
             else { continue }
@@ -7365,7 +7361,7 @@ extension NodeAppModel {
         }
     }
 
-    func handleExecApprovalRequestedRemotePush(_ push: ExecApprovalNotificationPrompt) async -> Bool {
+    func handleExecApprovalRequestedRemotePush(_ push: ApprovalNotificationPrompt) async -> Bool {
         guard let approvalID = ExecApprovalIdentifier.exact(push.approvalId) else { return false }
         let operatorRoute: GatewayNodeSessionRoute
         switch await self.validateExecApprovalPushRoute(push, sourceReason: "push_request") {
@@ -7474,7 +7470,7 @@ extension NodeAppModel {
         } else {
             false
         }
-        let recoveryPushes: [ExecApprovalNotificationPrompt] = if let recoveryPushGatewayDeviceID =
+        let recoveryPushes: [ApprovalNotificationPrompt] = if let recoveryPushGatewayDeviceID =
             GatewayStableIdentifier.key(recoveryPushGatewayDeviceID)
         {
             self.pendingWatchExecApprovalRecoveryPushes.filter { push in
@@ -7589,7 +7585,7 @@ extension NodeAppModel {
             shouldContinue: shouldContinue)
     }
 
-    func handleExecApprovalResolvedRemotePush(_ push: ExecApprovalNotificationPrompt) async -> Bool {
+    func handleExecApprovalResolvedRemotePush(_ push: ApprovalNotificationPrompt) async -> Bool {
         switch await self.validateExecApprovalPushRoute(push, sourceReason: "push_resolved") {
         case let .validated(context):
             let applied = await self.applyValidatedExecApprovalResolvedPush(push, context: context)
@@ -7619,7 +7615,7 @@ extension NodeAppModel {
 
     @discardableResult
     private func applyValidatedExecApprovalResolvedPush(
-        _ push: ExecApprovalNotificationPrompt,
+        _ push: ApprovalNotificationPrompt,
         context: GatewaySessionRouteContext) async -> Bool
     {
         let routeIsCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
@@ -7970,7 +7966,7 @@ extension NodeAppModel {
     private nonisolated static func decodePushRelayGatewayIdentity(
         _ response: Data) throws -> PushRelayGatewayIdentity
     {
-        let decoded = try JSONDecoder().decode(GatewayRelayIdentityResponse.self, from: response)
+        let decoded = try JSONDecoder().decode(PushRelayGatewayIdentity.self, from: response)
         let deviceId = GatewayStableIdentifier.exact(decoded.deviceId)
         let publicKey = decoded.publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let deviceId, !publicKey.isEmpty else {
@@ -8005,7 +8001,7 @@ extension NodeAppModel {
     }
 
     func presentExecApprovalNotificationPrompt(
-        _ prompt: ExecApprovalNotificationPrompt,
+        _ prompt: ApprovalNotificationPrompt,
         shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
     {
         guard shouldContinue(), let approvalId = ExecApprovalIdentifier.exact(prompt.approvalId) else { return }
@@ -8050,7 +8046,7 @@ extension NodeAppModel {
 
     private func presentExecApprovalPrompt(
         approvalId: String,
-        notificationPush: ExecApprovalNotificationPrompt?,
+        notificationPush: ApprovalNotificationPrompt?,
         expectedOperatorRoute: GatewayNodeSessionRoute?,
         attentionSource: ApprovalAttentionSource? = nil,
         shouldContinue: @MainActor @Sendable () -> Bool) async
@@ -8434,62 +8430,6 @@ extension NodeAppModel {
         let expiresAtMs: Int
         let presentation: ApprovalPresentation
         let resolvedAtMs: Int
-
-        init(_ value: AllowedApprovalSnapshot) {
-            self.init(
-                id: value.id,
-                urlPath: value.urlpath,
-                createdAtMs: value.createdatms,
-                expiresAtMs: value.expiresatms,
-                presentation: value.presentation,
-                resolvedAtMs: value.resolvedatms)
-        }
-
-        init(_ value: DeniedApprovalSnapshot) {
-            self.init(
-                id: value.id,
-                urlPath: value.urlpath,
-                createdAtMs: value.createdatms,
-                expiresAtMs: value.expiresatms,
-                presentation: value.presentation,
-                resolvedAtMs: value.resolvedatms)
-        }
-
-        init(_ value: ExpiredApprovalSnapshot) {
-            self.init(
-                id: value.id,
-                urlPath: value.urlpath,
-                createdAtMs: value.createdatms,
-                expiresAtMs: value.expiresatms,
-                presentation: value.presentation,
-                resolvedAtMs: value.resolvedatms)
-        }
-
-        init(_ value: CancelledApprovalSnapshot) {
-            self.init(
-                id: value.id,
-                urlPath: value.urlpath,
-                createdAtMs: value.createdatms,
-                expiresAtMs: value.expiresatms,
-                presentation: value.presentation,
-                resolvedAtMs: value.resolvedatms)
-        }
-
-        private init(
-            id: String,
-            urlPath: String,
-            createdAtMs: Int,
-            expiresAtMs: Int,
-            presentation: ApprovalPresentation,
-            resolvedAtMs: Int)
-        {
-            self.id = id
-            self.urlPath = urlPath
-            self.createdAtMs = createdAtMs
-            self.expiresAtMs = expiresAtMs
-            self.presentation = presentation
-            self.resolvedAtMs = resolvedAtMs
-        }
     }
 
     private static func makeExecApprovalTerminalResult(
@@ -8521,33 +8461,52 @@ extension NodeAppModel {
     {
         switch snapshot {
         case let .allowed(value):
-            let verdict: ExecApprovalTerminalVerdict
-            switch value.decision.rawValue {
-            case ApprovalDecision.allowOnce.rawValue:
-                verdict = .allowOnce
-            case ApprovalDecision.allowAlways.rawValue:
-                verdict = .allowAlways
-            default:
-                return nil
+            let verdict: ExecApprovalTerminalVerdict = switch value.decision {
+            case .allowOnce: .allowOnce
+            case .allowAlways: .allowAlways
             }
             return self.makeExecApprovalTerminalResult(
-                fields: ExecApprovalTerminalSnapshotFields(value),
+                fields: ExecApprovalTerminalSnapshotFields(
+                    id: value.id,
+                    urlPath: value.urlpath,
+                    createdAtMs: value.createdatms,
+                    expiresAtMs: value.expiresatms,
+                    presentation: value.presentation,
+                    resolvedAtMs: value.resolvedatms),
                 expectedApprovalID: expectedApprovalID,
                 verdict: verdict)
         case let .denied(value):
             guard value.decision == ApprovalDecision.deny.rawValue else { return nil }
             return self.makeExecApprovalTerminalResult(
-                fields: ExecApprovalTerminalSnapshotFields(value),
+                fields: ExecApprovalTerminalSnapshotFields(
+                    id: value.id,
+                    urlPath: value.urlpath,
+                    createdAtMs: value.createdatms,
+                    expiresAtMs: value.expiresatms,
+                    presentation: value.presentation,
+                    resolvedAtMs: value.resolvedatms),
                 expectedApprovalID: expectedApprovalID,
                 verdict: .deny)
         case let .expired(value):
             return self.makeExecApprovalTerminalResult(
-                fields: ExecApprovalTerminalSnapshotFields(value),
+                fields: ExecApprovalTerminalSnapshotFields(
+                    id: value.id,
+                    urlPath: value.urlpath,
+                    createdAtMs: value.createdatms,
+                    expiresAtMs: value.expiresatms,
+                    presentation: value.presentation,
+                    resolvedAtMs: value.resolvedatms),
                 expectedApprovalID: expectedApprovalID,
                 verdict: .expired)
         case let .cancelled(value):
             return self.makeExecApprovalTerminalResult(
-                fields: ExecApprovalTerminalSnapshotFields(value),
+                fields: ExecApprovalTerminalSnapshotFields(
+                    id: value.id,
+                    urlPath: value.urlpath,
+                    createdAtMs: value.createdatms,
+                    expiresAtMs: value.expiresatms,
+                    presentation: value.presentation,
+                    resolvedAtMs: value.resolvedatms),
                 expectedApprovalID: expectedApprovalID,
                 verdict: .cancelled)
         }
@@ -8660,23 +8619,8 @@ extension NodeAppModel {
             routeGeneration: routeGeneration)
     }
 
-    private func validatedExecApprovalPushRoute(
-        _ push: ExecApprovalNotificationPrompt,
-        sourceReason: String,
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async -> GatewayNodeSessionRoute?
-    {
-        guard case let .validated(context) = await validateExecApprovalPushRoute(
-            push,
-            sourceReason: sourceReason,
-            shouldContinue: shouldContinue)
-        else {
-            return nil
-        }
-        return context.route
-    }
-
     private func validateExecApprovalPushRoute(
-        _ push: ExecApprovalNotificationPrompt,
+        _ push: ApprovalNotificationPrompt,
         sourceReason: String,
         shouldContinue: @MainActor @Sendable () -> Bool = { true }) async -> ExecApprovalPushRouteValidation
     {
@@ -9050,15 +8994,11 @@ extension NodeAppModel {
                 session: self.operatorGateway,
                 shouldContinue: { true })
             else {
-                if let resolutionAttempt {
-                    self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-                }
+                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
                 return .uncertain(
                     message: "Decision status is unknown after the gateway operator route changed.")
             }
-            if let resolutionAttempt {
-                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-            }
+            self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
             guard let result = try? JSONDecoder().decode(ApprovalResolveResult.self, from: response),
                   let terminal = Self.makeExecApprovalTerminalResult(
                       from: result.approval,
@@ -9090,9 +9030,7 @@ extension NodeAppModel {
             if let requestError = error as? GatewayNodeSessionRequestError,
                case .routeChangedBeforeDispatch = requestError
             {
-                if let resolutionAttempt {
-                    self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-                }
+                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
                 return .failed(message: "The gateway operator route changed before the decision was sent.")
             }
             guard await self.isCurrentGatewaySessionRoute(
@@ -9100,15 +9038,11 @@ extension NodeAppModel {
                 session: self.operatorGateway,
                 shouldContinue: { true })
             else {
-                if let resolutionAttempt {
-                    self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-                }
+                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
                 return .uncertain(
                     message: "Decision status is unknown after the gateway operator route changed.")
             }
-            if let resolutionAttempt {
-                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-            }
+            self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
             let logMessage =
                 "Exec approval action response unknown id=\(approvalID) "
                     + "error=\(error.localizedDescription)"
@@ -9136,9 +9070,7 @@ extension NodeAppModel {
             approvalKind,
             decision,
             expectedGatewayStableID)
-        if let resolutionAttempt {
-            self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-        }
+        self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
         if self.testExecApprovalResolutionReconcilesUnknownAck {
             // Mirror the production unknown-ack path: the settled write's outcome is
             // classified by canonical readback while the attempt lease stays active.
@@ -9222,15 +9154,11 @@ extension NodeAppModel {
                 session: self.operatorGateway,
                 shouldContinue: { true })
             else {
-                if let resolutionAttempt {
-                    self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-                }
+                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
                 return .uncertain(
                     message: "Decision status is unknown after the gateway operator route changed.")
             }
-            if let resolutionAttempt {
-                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-            }
+            self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
             guard (try? JSONDecoder().decode(LegacyResolveResult.self, from: response))?.ok == true else {
                 return await self.reconcileUnknownExecApprovalResolution(
                     approvalId: approvalId,
@@ -9249,9 +9177,7 @@ extension NodeAppModel {
             if let requestError = error as? GatewayNodeSessionRequestError,
                case .routeChangedBeforeDispatch = requestError
             {
-                if let resolutionAttempt {
-                    self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-                }
+                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
                 return .failed(message: "The gateway operator route changed before the decision was sent.")
             }
             guard await self.isCurrentGatewaySessionRoute(
@@ -9259,15 +9185,11 @@ extension NodeAppModel {
                 session: self.operatorGateway,
                 shouldContinue: { true })
             else {
-                if let resolutionAttempt {
-                    self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-                }
+                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
                 return .uncertain(
                     message: "Decision status is unknown after the gateway operator route changed.")
             }
-            if let resolutionAttempt {
-                self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
-            }
+            self.markExecApprovalResolutionWriteSettled(resolutionAttempt)
             if Self.isApprovalAlreadyResolvedError(error) {
                 let terminal = ExecApprovalTerminalResult(
                     id: approvalId,
@@ -9465,9 +9387,9 @@ extension NodeAppModel {
                   ExecApprovalIdentifier.matches(push.approvalId, approvalId),
                   push.kind == approvalKind,
                   seen.insert(pushKey).inserted,
-                  await validatedExecApprovalPushRoute(
+                  case .validated = await self.validateExecApprovalPushRoute(
                       push,
-                      sourceReason: "notification_action") != nil
+                      sourceReason: "notification_action")
             else {
                 continue
             }
@@ -10250,7 +10172,7 @@ extension NodeAppModel {
         _ approvalId: String,
         gatewayDeviceId: String = "test-gateway-device")
     {
-        self.appendPendingWatchExecApprovalRecoveryPush(ExecApprovalNotificationPrompt(
+        self.appendPendingWatchExecApprovalRecoveryPush(ApprovalNotificationPrompt(
             approvalId: approvalId,
             gatewayDeviceId: gatewayDeviceId))
     }
@@ -10395,7 +10317,7 @@ extension NodeAppModel {
         }
     }
 
-    func _test_presentExecApprovalNotificationPrompt(_ push: ExecApprovalNotificationPrompt) async {
+    func _test_presentExecApprovalNotificationPrompt(_ push: ApprovalNotificationPrompt) async {
         await self.presentExecApprovalPrompt(
             approvalId: push.approvalId,
             notificationPush: push,

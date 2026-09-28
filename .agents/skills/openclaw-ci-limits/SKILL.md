@@ -430,10 +430,16 @@ These are intentionally guarded by the `ci-workflow-guards`,
 - Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
   within 300 predicted seconds without a pair-count limit; expanded serial compact
-  jobs use 210. The rebased 124-envelope inventory emits 50 extension rows and
-  125/119/130 PR Node rows on Blacksmith/hybrid/GitHub; push Node rows are
-  57/46/55 and compact PR rows are 77/71/82. These fit the landed 130/70/90
-  PR/push/compact caps without another increase. Runtime preparation stays separate. Each original envelope retains
+  jobs use 210. Envelopes with identical preparation mode, runner and dist
+  requirements share one build before their separate sequential processes;
+  packing charges that preparation once. Different preparation modes stay
+  separate. Each job retains the 20-file database-worker ceiling and 300-second
+  estimated budget; observed hosted durations must be reported separately.
+  The earlier 124-envelope inventory projected 50 extension rows and
+  125/119/130 PR Node rows on Blacksmith/hybrid/GitHub, with 57/46/55 push Node
+  rows and 77/71/82 compact PR rows. Those are historical inventory projections;
+  validate the current inventory against the unchanged 50/130/70/90
+  extension/PR/push/compact caps. Each original envelope retains
   its file/process bounds, native shard arguments and worker limits. The complete supplemental boundary list runs in one job
   with four concurrent checks and one full-root focused-rule scan.
 - Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
@@ -481,7 +487,16 @@ These are intentionally guarded by the `ci-workflow-guards`,
   remain intact.
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
-  parallelism stays one and each overlapping child keeps two Vitest workers.
+  parallelism stays one during outer overlap and each overlapping child keeps two Vitest workers.
+  A serial changed-extension envelope may overlap two source-only Telegram database-worker
+  singleton processes, retaining two workers per process, only with scheduler-owned caches,
+  at least two actual CPUs and 7.5 GiB effective memory (the smaller of physical memory and
+  a positive finite process constraint). Require self-hosted Linux, an explicit current-target
+  receipt (`FROZEN_TARGET=false`), and one unchanged Node invocation from the canonical
+  runtime selector; `bun-compatible` can still select Node. Other shapes, runtimes and
+  unknown/insufficient capacity retain one inner process. Use the actual inner-cap receipt
+  in timing identity; parallel envelopes never supply serial singleton or wrapper-overhead
+  prices. Keep conservative serial placement until qualified exact parallel measurements exist.
   Gateway methods use four workers in serial, non-frozen self-hosted jobs with
   at least eight actual CPUs and 28 GiB memory, with the existing two-worker
   fallback elsewhere. Keep its worker-specific timing identity and require

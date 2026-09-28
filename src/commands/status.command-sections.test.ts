@@ -293,6 +293,27 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it("warns when deep health says the retained Node executable is gone", () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const rows = buildStatusHealthRows({
+      health: {
+        durationMs: 42,
+        childRuntime: { execPath, available: false },
+      } as HealthSummary,
+      formatHealthChannelLines: () => ["Discord: OK"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
+    expect(rows[1]).toEqual({
+      Item: "Gateway runtime",
+      Status: "warn(WARN)",
+      Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    });
+  });
+
   it.each([
     { account: {}, status: "ok(OK)", detail: "healthy" },
     {

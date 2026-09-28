@@ -659,7 +659,7 @@ struct GatewayProcessManagerTests {
 
             var expectedCalls = [["status", "--json", "--no-probe"]]
             if shouldInstall {
-                expectedCalls.append(["install", "--force", "--port", String(port), "--runtime", "node"])
+                expectedCalls.append(["install", "--force", "--port", String(port)])
             }
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == expectedCalls)
             #expect(installed == shouldInstall)

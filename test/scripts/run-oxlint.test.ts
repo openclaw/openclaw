@@ -400,6 +400,60 @@ describe("run-oxlint", () => {
     }
   });
 
+  it.each([false, true])(
+    "retains the canonical budget after file selection (splitCore=%s)",
+    (splitCore) => {
+      const cwd = createTempDir("openclaw-oxlint-file-budget-");
+      for (const directory of ["agents", "b", "c", "d", "e", "gateway"]) {
+        mkdirSync(join(cwd, "src", directory), { recursive: true });
+      }
+      mkdirSync(join(cwd, "scripts"));
+      const files = ["src/agents/selected.ts", "src/gateway/selected.ts"];
+      for (const file of files) {
+        writeFileSync(join(cwd, file), "export {};\n");
+      }
+      writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+        "import { appendFileSync } from 'node:fs';",
+        "appendFileSync('budgets.jsonl', JSON.stringify({ bounded: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(process.argv.slice(2)), files: process.argv.slice(4) }) + '\\n');",
+      ]);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import os from 'node:os';
+           import { syncBuiltinESMExports } from 'node:module';
+           os.totalmem = () => 8 * 1024 ** 3;
+           os.availableParallelism = () => 4;
+           syncBuiltinESMExports();
+           const { main } = await import(${JSON.stringify(RUN_OXLINT_SHARDS_URL)});
+           await main(['--only=core', ...${JSON.stringify(splitCore ? ["--split-core"] : [])}, '--files-json', ${JSON.stringify(JSON.stringify(files))}]);`,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "true",
+            OPENCLAW_LOCAL_CHECK: "0",
+            OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
+            OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1",
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const budgets: Array<{ bounded: boolean; files: string[] }> = readFileSync(
+        join(cwd, "budgets.jsonl"),
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(budgets.map(({ bounded }) => bounded)).toEqual(splitCore ? [true, true] : [false]);
+      expect(budgets.flatMap((budget) => budget.files).toSorted()).toEqual(files);
+    },
+  );
+
   it("keeps split-core shard runs serial on constrained hosts", () => {
     expect(resolveSplitCoreConcurrency({ CI: "true" }, CONSTRAINED_HOST)).toBe(1);
   });

@@ -261,7 +261,7 @@ Optional stable Windows promotion starts after that outer activation, using the
 same sealed source tag, installer digests, and protected tooling. The ordinary
 unprepared publisher retains its own post-finalization Windows job; the two
 routes do not both dispatch. Missing Windows selection skips promotion, an
-incomplete selection fails visibly, and alpha/beta never dispatch it. Windows
+incomplete selection fails visibly, and beta never dispatches it. Windows
 failure does not undo npm or GitHub publication. Inspect the attempt-bound
 Windows dispatch artifact and linked child before an explicit manual retry;
 neither publisher waits for native completion.
@@ -270,8 +270,8 @@ This button covers core and plugin npm, ClawHub, the existing Docker/Windows
 contracts, and GitHub release visibility. It does **not** claim that independent
 macOS signing/feed promotion, Android completion, app-store submission, or
 website publication is ready. Those owners retain their existing release steps.
-Alpha, selected-plugin repairs, and historical releases without a readiness
-receipt continue to use their existing owner workflows. Extended-stable uses
+Selected-plugin repairs and historical releases without a readiness receipt
+continue to use their existing owner workflows. Extended-stable uses
 the shared direct publisher with its dedicated track inputs, not this button.
 
 ## Publish and verify

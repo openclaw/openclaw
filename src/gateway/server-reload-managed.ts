@@ -316,6 +316,7 @@ export function startManagedGatewayConfigReloader(
   let lastCommittedRuntimeConfig: OpenClawConfig | undefined;
   let committedRuntimeConfig = params.initialConfig;
   const configReloader = startGatewayConfigReloader({
+    scheduler: params.scheduler,
     onReloadEnabledChange: params.onReloadEnabledChange,
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,

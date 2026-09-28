@@ -53,6 +53,7 @@ export function runCiManifestFixture(options: {
   checkFamilyScope?: boolean;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
+  ciTypeBoundaryFailure?: boolean;
   changedCoreTestSupport?: boolean;
   repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
@@ -351,6 +352,16 @@ export function runCiManifestFixture(options: {
           return { mode: selected ? "changed" : "full", graphs: selected ?? TSGO_CI_GRAPHS };
         }
       `,
+      );
+      writeFileSync(
+        path.join(root, "scripts/check-tsgo-core-boundary.mts"),
+        `export async function checkCoreTsgoGraphBoundary() {
+          console.log("fixture: core compiler boundary checked");
+          if (${options.ciTypeBoundaryFailure === true}) {
+            throw new Error("fixture: core compiler graph includes a bundled extension");
+          }
+          return [];
+        }\n`,
       );
       for (const file of options.changedPaths ?? []) {
         const target = path.join(root, file);

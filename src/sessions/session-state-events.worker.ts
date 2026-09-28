@@ -1,3 +1,4 @@
+import { readAcpSessionControlInWorker } from "../acp/runtime/session-meta-source.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -10,24 +11,8 @@ import {
   isSessionStateUpstreamCurrentInDatabase,
   pruneSessionStateEventsInDatabase,
   recordSessionStateEventInDatabase,
-  type SessionStateEventInput,
-  type SessionStateEventRow,
-  type SessionStateNotice,
 } from "./session-state-events.kernel.js";
-import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
-
-export type SessionStateWorkerOperations = {
-  "sessionState.record": {
-    input: {
-      event: SessionStateEventInput;
-      now: number;
-      onlyIfWatched?: boolean;
-      expectedUpstream?: SessionUpstreamLink;
-    };
-    output: { row?: SessionStateEventRow; notices: SessionStateNotice[] };
-  };
-  "sessionState.prune": { input: { now: number }; output: void };
-};
+import type { SessionStateWorkerOperations } from "./session-state-events.worker-contract.js";
 
 export function executeSessionStateCommand(
   command: SqliteWorkerCommand<SessionStateWorkerOperations>,
@@ -40,7 +25,12 @@ export function executeSessionStateCommand(
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
     }, options);
   }
-  const { event, now, onlyIfWatched, expectedUpstream } = command.input;
+  const { event, now, onlyIfWatched, expectedUpstream, acpControl } = command.input;
+  const assertAcpControl = () => {
+    if (acpControl && !readAcpSessionControlInWorker(options.database, acpControl).row) {
+      throw new Error("ACP task owner could not be verified.");
+    }
+  };
   const current = (db: OpenClawStateDatabase["db"]) =>
     (!onlyIfWatched || hasSessionStateWatchersInDatabase(db, event.sessionKey)) &&
     (!expectedUpstream || isSessionStateUpstreamCurrentInDatabase(db, expectedUpstream));
@@ -50,11 +40,13 @@ export function executeSessionStateCommand(
   }
   return runOpenClawStateWriteTransaction(({ db }) => {
     requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    assertAcpControl();
     if (!current(db)) {
       return { notices: [] };
     }
     const recorded = recordSessionStateEventInDatabase(db, event, now);
     requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+    assertAcpControl();
     return recorded;
   }, options);
 }

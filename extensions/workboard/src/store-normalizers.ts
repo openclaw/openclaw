@@ -42,7 +42,11 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   MAX_ATTACHMENT_BYTES,
@@ -221,21 +225,6 @@ export function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
-  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
-  if (fallback) {
-    if (fallback.lastEventAt) {
-      preservedFields.lastEventAt = fallback.lastEventAt;
-    }
-    if (fallback.lastEventId) {
-      preservedFields.lastEventId = fallback.lastEventId;
-    }
-    if (fallback.lastEventSequence) {
-      preservedFields.lastEventSequence = fallback.lastEventSequence;
-    }
-    if (fallback.deliveredEventIds?.length) {
-      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
-    }
-  }
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -244,7 +233,12 @@ export function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...preservedFields,
+    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
+    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
+    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
+    ...(fallback?.deliveredEventIds?.length
+      ? { deliveredEventIds: fallback.deliveredEventIds }
+      : {}),
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };
@@ -506,17 +500,12 @@ function normalizeLaunchTimestamp(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeLaunchString(value: unknown, maxLength: number): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized && normalized.length <= maxLength ? normalized : undefined;
-}
-
 function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const requestedSessionKey = normalizeLaunchString(value.requestedSessionKey, 240);
-  const provisionalRunId = normalizeLaunchString(value.provisionalRunId, 160);
+  const requestedSessionKey = normalizeBoundedOptionalString(value.requestedSessionKey, 240);
+  const provisionalRunId = normalizeBoundedOptionalString(value.provisionalRunId, 160);
   const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
   if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
     return undefined;
@@ -527,8 +516,8 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   }
   if (value.phase === "accepted") {
     const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
-    const acceptedSessionKey = normalizeLaunchString(value.acceptedSessionKey, 240);
-    const acceptedRunId = normalizeLaunchString(value.acceptedRunId, 160);
+    const acceptedSessionKey = normalizeBoundedOptionalString(value.acceptedSessionKey, 240);
+    const acceptedRunId = normalizeBoundedOptionalString(value.acceptedRunId, 160);
     return acceptedAt === undefined || !acceptedSessionKey
       ? undefined
       : {
@@ -541,7 +530,7 @@ function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined 
   }
   if (value.phase === "failed") {
     const failedAt = normalizeLaunchTimestamp(value.failedAt);
-    const reason = normalizeLaunchString(value.reason, 800);
+    const reason = normalizeBoundedOptionalString(value.reason, 800);
     return failedAt === undefined || !reason
       ? undefined
       : { phase: "failed", ...identity, failedAt, reason };
@@ -1052,10 +1041,7 @@ export function normalizeMetadata(
     return trimMetadataToBudget(fallback, options);
   }
   const record = value;
-  const stale =
-    record.stale && typeof record.stale === "object" && !Array.isArray(record.stale)
-      ? (record.stale as Record<string, unknown>)
-      : null;
+  const stale = isRecord(record.stale) ? record.stale : null;
   // Archival is a transition owned by archive(), which appends the matching
   // `archived` event. Callers that cannot produce that event (create) must not
   // be able to declare it, or the card is excluded from dispatch from the
@@ -1204,15 +1190,11 @@ export function syncExecutionSessionKey(
   if (!execution) {
     return undefined;
   }
-  return removeUndefinedExecutionFields({
+  const next = {
     ...execution,
     sessionKey,
     updatedAt: Date.now(),
-  });
-}
-
-function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
-  const next = { ...execution };
+  };
   for (const key of ["engine", "model", "sessionKey", "runId"] as const) {
     if (next[key] === undefined) {
       delete next[key];

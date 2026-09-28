@@ -758,6 +758,9 @@ describe("runCommandBuffered", () => {
             // clock so missing post-termination release still reaches test cleanup.
             const closed = once(parent, "close", { signal: AbortSignal.timeout(1_000) });
             await vi.advanceTimersByTimeAsync(timeoutMs - 101);
+            await vi.advanceTimersToNextTimerAsync();
+            await vi.advanceTimersByTimeAsync(100);
+            await vi.advanceTimersToNextTimerAsync();
             await vi.advanceTimersByTimeAsync(100);
             // Output release runs in the next timers phase so buffered pipe I/O
             // gets a poll turn on both Node and Bun.
@@ -772,6 +775,9 @@ describe("runCommandBuffered", () => {
           if (exitCode === 0) {
             expect(existsSync(termPath)).toBe(false);
             await vi.advanceTimersByTimeAsync(50);
+            await vi.advanceTimersToNextTimerAsync();
+            await vi.advanceTimersByTimeAsync(100);
+            await vi.advanceTimersToNextTimerAsync();
           }
           for (let attempt = 0; attempt < 40 && !existsSync(termPath); attempt += 1) {
             await new Promise<void>((resolve) => {

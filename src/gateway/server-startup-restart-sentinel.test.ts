@@ -51,9 +51,14 @@ it("keeps delayed restart sentinel recovery admitted until wake work completes",
   await sidecar.stop();
 });
 
-it.each([false, true])(
-  "cancels delayed restart sentinel recovery when the gateway closes (awaiting admission=%s)",
-  async (awaitingAdmission) => {
+it.each([
+  { awaitingAdmission: false, owner: "sidecar" },
+  { awaitingAdmission: true, owner: "sidecar" },
+  { awaitingAdmission: false, owner: "scheduler" },
+  { awaitingAdmission: true, owner: "scheduler" },
+])(
+  "cancels delayed restart sentinel recovery when $owner closes (awaiting admission=$awaitingAdmission)",
+  async ({ awaitingAdmission, owner }) => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const suspension = awaitingAdmission ? tryBeginGatewaySuspendAdmission(() => {}) : null;
@@ -67,7 +72,7 @@ it.each([false, true])(
     });
     try {
       const pendingWake = awaitingAdmission ? clock.advanceBy(750) : undefined;
-      await sidecar.stop();
+      await (owner === "scheduler" ? scheduler.stop() : sidecar.stop());
       await pendingWake;
       await clock.advanceBy(750);
       expect(scheduleRestartSentinelWake).not.toHaveBeenCalled();
