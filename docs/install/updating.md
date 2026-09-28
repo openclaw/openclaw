@@ -199,11 +199,13 @@ from the Gateway's own installation, for example
 `<bun> <service-root>/openclaw.mjs update repair`, or use `openclaw update` to
 advance its installation in place.
 
-The installed updater runs first. Published 2026.9.6 still tries cross-root
-rebinding for a Bun service and refuses with `original-service-unverified`
-before stopping it; the Gateway keeps running. The service-root route applies
-only when the updater driving the update contains this fix. Installing a newer
-candidate cannot repair that first hop.
+The installed updater runs first. In a Linux split-root fixture, published
+2026.9.6 refused early with `ENOENT` when Bun was absent from PATH, leaving the
+Gateway and both installations unchanged. With the fork Bun on PATH, that
+published driver updated the Gateway installation in place and restarted it
+healthy while leaving the invoking CLI unchanged. The routing and explicit Bun
+selection described above apply only when the updater driving the update
+contains this fix. Installing a newer candidate cannot change that first hop.
 
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command

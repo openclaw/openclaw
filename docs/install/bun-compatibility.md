@@ -107,11 +107,13 @@ First installs and updater staging without a persistent Node require `OPENCLAW_P
 
 Published updaters through 2026.9.6 cannot update a Bun-only install. They do not set this marker, so the new package's preinstall stops staging (`global-install-failed`). If the caller sets the marker, their own bare `node` probe fails to start instead (`update-executor-settlement-failed`). Both refusals happen before the Gateway stops, and it keeps running. A fixed version must drive the update; installing a fixed candidate cannot change the updater already running.
 
-Published 2026.9.6 also tries cross-root rebinding when the CLI and an owned Bun
-Gateway use different installation roots. It refuses with
-`original-service-unverified` before stopping the Gateway, which keeps running.
-The in-place service-root route applies from the first updater containing the
-fix; a newer candidate cannot change the installed updater's first-hop behavior.
+The installed updater runs first. In a Linux split-root fixture, published
+2026.9.6 refused early with `ENOENT` when Bun was absent from PATH, leaving the
+Gateway and both installations unchanged. With the fork Bun on PATH, the same
+published driver updated the Gateway installation in place and restarted it
+healthy while leaving the invoking CLI unchanged. The routing and explicit
+Bun selection described above apply from the first updater containing the fix;
+a newer candidate cannot change the installed updater's first-hop behavior.
 
 Npm-sourced plugins still require npm and Node.
 
