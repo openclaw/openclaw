@@ -443,13 +443,10 @@ extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/accounts.ts	1
-extensions/googlechat/src/actions.ts	1
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
-extensions/googlechat/src/google-auth.runtime.ts	5
-extensions/googlechat/src/monitor-access.ts	1
+extensions/googlechat/src/google-auth.runtime.ts	4
 extensions/googlechat/src/monitor-event.ts	2
-extensions/googlechat/src/secret-contract.ts	3
 extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
@@ -795,7 +792,7 @@ extensions/qa-lab/src/bus-server.ts	3
 extensions/qa-lab/src/bus-state.ts	1
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
-extensions/qa-lab/src/cli.runtime.ts	9
+extensions/qa-lab/src/cli.runtime.ts	8
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/confidence-report.ts	2
 extensions/qa-lab/src/crabline-transport.ts	5
@@ -803,7 +800,7 @@ extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
 extensions/qa-lab/src/evidence-gallery.ts	2
-extensions/qa-lab/src/fixture-utils.ts	5
+extensions/qa-lab/src/fixture-utils.ts	4
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
 extensions/qa-lab/src/gateway-process-boundary.ts	1
 extensions/qa-lab/src/harness-parity.ts	1
@@ -845,7 +842,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
-extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	6
+extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	4
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
 extensions/qa-lab/src/mantis/run.runtime.ts	1
@@ -1079,7 +1076,7 @@ extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	3
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
-extensions/twitch/src/config.ts	10
+extensions/twitch/src/config.ts	6
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
@@ -1182,7 +1179,6 @@ extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
 extensions/zalouser/src/group-policy.ts	2
 extensions/zalouser/src/ingress.ts	2
-extensions/zalouser/src/monitor.ts	1
 extensions/zalouser/src/security-audit.ts	1
 extensions/zalouser/src/session-state.ts	2
 extensions/zalouser/src/setup-surface.ts	4
@@ -1190,10 +1186,9 @@ extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
-extensions/zalouser/src/zalo-js.ts	14
+extensions/zalouser/src/zalo-js.ts	11
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
-packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
@@ -1229,7 +1224,7 @@ packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	3
-packages/ai/src/providers/openai-tool-schema.ts	7
+packages/ai/src/providers/openai-tool-schema.ts	4
 packages/ai/src/providers/schema-keyword-strip.ts	2
 packages/ai/src/providers/simple-options.ts	1
 packages/ai/src/providers/tool-result-text.ts	2
@@ -1278,15 +1273,13 @@ packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/client-info.ts	4
-packages/gateway-protocol/src/connect-error-details.ts	9
-packages/gateway-protocol/src/gateway-error-details.ts	1
+packages/gateway-protocol/src/connect-error-details.ts	7
 packages/gateway-protocol/src/protocol-validator.ts	2
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
 packages/gateway-protocol/src/schema/protocol-schema-composer.ts	1
 packages/gateway-protocol/src/startup-unavailable.ts	3
-packages/gateway-protocol/src/system-agent-error-details.ts	2
 packages/llm-core/src/utils/diagnostics.ts	1
 packages/llm-core/src/utils/event-stream.ts	1
 packages/llm-core/src/validation.ts	1
@@ -1298,7 +1291,7 @@ packages/media-core/src/read-byte-stream-with-limit.ts	1
 packages/media-understanding-common/src/output-extract.ts	1
 packages/memory-host-sdk/src/host/batch-error-utils.ts	1
 packages/memory-host-sdk/src/host/batch-http.ts	2
-packages/memory-host-sdk/src/host/batch-output.ts	2
+packages/memory-host-sdk/src/host/batch-output.ts	1
 packages/memory-host-sdk/src/host/batch-upload.ts	1
 packages/memory-host-sdk/src/host/config-utils.ts	2
 packages/memory-host-sdk/src/host/memory-schema-fts.ts	2
@@ -1321,14 +1314,13 @@ packages/normalization-core/src/promise-like.ts	1
 packages/normalization-core/src/record-coerce.ts	1
 packages/normalization-core/src/stable-stringify.ts	1
 packages/normalization-core/src/string-coerce.ts	1
-packages/retry/src/index.ts	6
 packages/sdk/src/event-hub.ts	2
 packages/sdk/src/transport.ts	3
 packages/session-url-contract/src/parse.ts	1
 packages/terminal-core/src/note.ts	1
 packages/terminal-core/src/prompt-select-styled-params.ts	1
 packages/terminal-core/src/stream-writer.ts	1
-packages/tool-call-repair/src/stream-normalizer.ts	3
+packages/tool-call-repair/src/stream-normalizer.ts	1
 src/acp/client.ts	1
 src/acp/control-plane/manager.runtime-controls.ts	3
 src/acp/control-plane/manager.runtime-handle-cache.ts	1
@@ -2464,7 +2456,6 @@ src/hooks/policy.ts	1
 src/infra/advertised-lan-host.ts	1
 src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
-src/infra/agent-lifecycle-error.ts	1
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-runtime.ts	15
@@ -2535,7 +2526,6 @@ src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
-src/infra/outbound/channel-selection.ts	2
 src/infra/outbound/conversation-delivery.ts	1
 src/infra/outbound/deliver-channel.ts	4
 src/infra/outbound/deliver-payload.ts	1
@@ -2583,7 +2573,7 @@ src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	8
 src/infra/sqlite-snapshot.ts	2
-src/infra/sqlite-strict.ts	7
+src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	4
 src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
@@ -2613,7 +2603,7 @@ src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
 src/infra/state-migrations.workspace-setup.ts	1
-src/infra/system-presence.ts	2
+src/infra/system-presence.ts	1
 src/infra/system-run-approval-binding.ts	1
 src/infra/tailscale.ts	7
 src/infra/tmp-openclaw-dir.ts	3
@@ -3085,7 +3075,6 @@ src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	4
 src/worker/launch-descriptor.ts	5
 src/worker/node-workspace-protocol.ts	1
-src/worker/worker-command.runtime.ts	1
 src/worker/worker-connection-admission.ts	2
 src/worker/worker-connection-frames.ts	4
 src/worker/worker-process.ts	1

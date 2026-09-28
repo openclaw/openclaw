@@ -3,11 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
-import {
-  waitForSlackApprovalPrompt,
-  waitForSlackApprovalResolvedUpdate,
-  resolveApprovalDecision,
-} from "./slack-live.approvals.js";
+import { waitForSlackApprovalMessage, resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
   assertCodexApprovalOperationSucceeded,
   assertPendingCodexPluginApproval,
@@ -116,7 +112,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     params.run.appServerMethod === "item/commandExecution/requestApproval"
       ? "Codex app-server command approval"
       : "Codex app-server file approval";
-  const pending = await waitForSlackApprovalPrompt({
+  const observation = {
     approvalKind: params.run.approvalKind,
     channelId: params.channelId,
     client: params.context.sutReadClient,
@@ -128,6 +124,10 @@ async function runSlackCodexApprovalScenarioInner(params: {
     scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
+  };
+  const pending = await waitForSlackApprovalMessage({
+    ...observation,
+    state: "pending",
   });
   const approvalId = pending.approvalId;
   if (!approvalId) {
@@ -143,13 +143,16 @@ async function runSlackCodexApprovalScenarioInner(params: {
     sessionKey: params.codexRun.sessionKey,
     sutAccountId: params.sutAccountId,
   });
-  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
+  const checkpoint = {
     approvalId,
     approvalKind: params.run.approvalKind,
     channelId: params.channelId,
+    scenarioId: params.scenario.id,
+  };
+  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
+    ...checkpoint,
     message: pending.message,
     observedAt: pending.observedAt,
-    scenarioId: params.scenario.id,
     state: "pending",
   });
   await resolveApprovalDecision({
@@ -173,28 +176,16 @@ async function runSlackCodexApprovalScenarioInner(params: {
     run: params.run,
     sessionKey: params.codexRun.sessionKey,
   });
-  const resolved = await waitForSlackApprovalResolvedUpdate({
-    approvalKind: params.run.approvalKind,
-    channelId: params.channelId,
-    client: params.context.sutReadClient,
-    decision: params.run.decision,
+  const resolved = await waitForSlackApprovalMessage({
+    ...observation,
+    state: "resolved",
     messageTs: pending.message.ts,
-    observedMessages: params.observedMessages,
-    oldestTs,
-    scenarioId: params.scenario.id,
-    scenarioTitle: params.scenario.title,
-    sutIdentity: params.context.sutIdentity,
-    timeoutMs: params.scenario.timeoutMs,
-    extraTextMatches: ["codex", expectedTitle],
   });
   const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
-    approvalId,
-    approvalKind: params.run.approvalKind,
-    channelId: params.channelId,
+    ...checkpoint,
     decision: params.run.decision,
     message: resolved.message,
     observedAt: resolved.observedAt,
-    scenarioId: params.scenario.id,
     state: "resolved",
   });
   const responseObservedAt = new Date(resolved.observedAt);

@@ -87,6 +87,11 @@ describe("Windows CI partitions", () => {
 describe("test runtime prerequisites", () => {
   it.each([
     ["lifecycle file", ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"], "private-qa"],
+    [
+      "cold identity child",
+      ["extensions/qa-lab/src/agent-run-identity-repeated-turn-child.process.test.ts"],
+      "private-qa",
+    ],
     ["full local suite", [], "private-qa"],
     ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
     ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
@@ -2947,6 +2952,11 @@ describe("test selector native source facts", () => {
       "😀",
       "\ud83d",
       "\ude00",
+      // Failure links cross between dense ASCII rows and sparse non-ASCII edges.
+      "d😀foo",
+      "中 abc",
+      "😀xyz",
+      "é😀",
       "null\0",
       "aaa",
       "aaaa",

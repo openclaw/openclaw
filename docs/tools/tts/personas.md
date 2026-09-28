@@ -52,7 +52,7 @@ templates, seeds, and voice settings.
         fallbackPolicy: "preserve-persona",
         providers: {
           google: {
-            model: "gemini-3.1-flash-tts-preview",
+            model: "gemini-3.8-flash-tts",
             speakerVoice: "Algieba",
             promptTemplate: "audio-profile-v1",
           },

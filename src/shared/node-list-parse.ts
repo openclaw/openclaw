@@ -4,6 +4,10 @@ import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./no
 
 export const NODE_WORKER_CAPACITY_MAX = 1_024;
 
+export function availableWorkerSlots(capacity: NonNullable<NodeListNode["workerSlots"]>): number {
+  return capacity.available + (capacity.reclaimableIdle ?? 0);
+}
+
 export function parseWorkerSlotSummary(
   value: unknown,
 ): NonNullable<NodeListNode["workerSlots"]> | null {
@@ -11,9 +15,8 @@ export function parseWorkerSlotSummary(
     return null;
   }
   const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
+  const { total, available, reclaimableIdle } = value;
+  return keys.every((key) => key === "total" || key === "available" || key === "reclaimableIdle") &&
     keys.includes("total") &&
     keys.includes("available") &&
     typeof total === "number" &&
@@ -23,8 +26,13 @@ export function parseWorkerSlotSummary(
     total >= 1 &&
     total <= NODE_WORKER_CAPACITY_MAX &&
     available >= 0 &&
-    available <= total
-    ? { total, available }
+    available <= total &&
+    (reclaimableIdle === undefined ||
+      (typeof reclaimableIdle === "number" &&
+        Number.isSafeInteger(reclaimableIdle) &&
+        reclaimableIdle >= 0 &&
+        reclaimableIdle <= Math.min(2, total - available)))
+    ? { total, available, ...(reclaimableIdle === undefined ? {} : { reclaimableIdle }) }
     : null;
 }
 

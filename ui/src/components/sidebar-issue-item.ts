@@ -182,7 +182,9 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
     case "requesting":
       return t("connection.scopeUpgrade.requesting");
     case "pending":
-      return t("connection.scopeUpgrade.pending");
+      return t("connection.scopeUpgrade.pending", {
+        command: `openclaw devices approve ${state.requestId}`,
+      });
     case "rejected":
       return t(
         state.expired ? "connection.scopeUpgrade.expired" : "connection.scopeUpgrade.rejected",

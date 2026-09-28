@@ -119,8 +119,10 @@ import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
 import {
   expectRuntimeReleaseInventory,
+  isNumberedToolingGroup,
   listMatchedTestFiles,
   listTestFiles,
+  nonToolingPlacement,
 } from "./ci-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -391,29 +393,24 @@ function usesParallelPacking(job: CompactNodeTestShard | undefined) {
       ))
   );
 }
-function isNumberedToolingGroup(group: { shard_name: string }) {
-  return /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name);
-}
-function nonToolingPlacement(plan: CompactNodeTestShard[]) {
-  return plan
-    .flatMap((job) => {
-      const groups = job.groups
-        .filter((group) => !isNumberedToolingGroup(group))
-        .map((group) => group.shard_name)
-        .toSorted();
-      return groups.length === 0
-        ? []
-        : [
-            {
-              groups,
-              planConcurrency: job.planConcurrency,
-              pretestBuildMode: job.pretestBuildMode,
-              requiresDist: job.requiresDist,
-              runner: job.runner,
-            },
-          ];
-    })
-    .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
+function readCompleteMeasuredGroupSeconds(group: CompactNodeTestShard["groups"][number]): number {
+  const selector =
+    parseCompactSplitTimingKey(group.timing_key!)?.selectorKey ??
+    createCompactSplitTimingGeneration({
+      configs: group.configs,
+      env: group.env,
+      parentShardName: group.timing_key!,
+      stripes: [group.includePatterns!],
+    }).selectorKey;
+  return Math.max(
+    ...(["blacksmith", "github"] as const).map(
+      (runner) =>
+        testTimings.readCompleteSplitGenerationSeconds(
+          testTimings.readCompactGroupTimings(runner),
+          selector,
+        ) ?? 0,
+    ),
+  );
 }
 function isCombinedUnbuiltCliJob(job: CompactNodeTestShard) {
   return (
@@ -3703,24 +3700,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const explicitWorkers = group.env?.OPENCLAW_VITEST_MAX_WORKERS;
           if (explicitWorkers !== undefined) {
             expect(explicitWorkers, group.shard_name).toBe("2");
-            const selector =
-              parseCompactSplitTimingKey(group.timing_key!)?.selectorKey ??
-              createCompactSplitTimingGeneration({
-                configs: group.configs,
-                env: group.env,
-                parentShardName: group.timing_key!,
-                stripes: [group.includePatterns!],
-              }).selectorKey;
             expect(
-              Math.max(
-                ...(["blacksmith", "github"] as const).map(
-                  (runner) =>
-                    testTimings.readCompleteSplitGenerationSeconds(
-                      testTimings.readCompactGroupTimings(runner),
-                      selector,
-                    ) ?? 0,
-                ),
-              ),
+              readCompleteMeasuredGroupSeconds(group),
               `${group.shard_name}: measured two-worker generation`,
             ).toBeGreaterThan(0);
             twoWorkerCommands.add(group);
@@ -4376,7 +4357,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
         const methods = /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(sibling.shard_name);
         expect(sibling.env?.OPENCLAW_VITEST_MAX_WORKERS, sibling.shard_name).toBe(
-          isolated ? "8" : methods ? "4" : undefined,
+          isolated
+            ? "8"
+            : methods
+              ? "4"
+              : sibling.configs.includes("test/vitest/vitest.commands.config.ts") &&
+                  readCompleteMeasuredGroupSeconds(sibling) > 0
+                ? "2"
+                : undefined,
         );
         if (isolated || methods) {
           expect(sibling.minTotalMemoryBytes).toBe(28 * 1024 ** 3);

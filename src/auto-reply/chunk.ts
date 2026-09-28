@@ -4,7 +4,11 @@ import {
   skipWhitespaceGraphemes,
   trimEndWhitespaceGraphemes,
 } from "@openclaw/normalization-core/grapheme";
-import { findFenceSpanAt, parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
+import {
+  findFenceSpanAt,
+  parseFenceSpans,
+  type FenceSpan,
+} from "../../packages/markdown-core/src/fences.js";
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -378,7 +382,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
   const chunks: string[] = [];
   const spans = parseFenceSpans(text);
   let start = 0;
-  let reopenFence: ReturnType<typeof findFenceSpanAt> | undefined;
+  let reopenFence: FenceSpan | undefined;
 
   while (start < text.length) {
     const reopenLine = reopenFence ? resolveFenceReopenLine(reopenFence, normalizedLimit) : "";
@@ -475,10 +479,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
   return chunks;
 }
 
-function resolveFenceReopenLine(
-  fence: NonNullable<ReturnType<typeof findFenceSpanAt>>,
-  limit: number,
-): string {
+function resolveFenceReopenLine(fence: FenceSpan, limit: number): string {
   const markerLine = `${fence.indent}${fence.marker}`;
   // Reserve the closing marker, two newlines, and one body character.
   if (fence.openLine.length + markerLine.length + 3 <= limit) {
