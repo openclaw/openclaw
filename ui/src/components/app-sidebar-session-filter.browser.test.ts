@@ -253,7 +253,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
   });
 
   it("presents a bottom sheet with choice pages on phones", async () => {
-    const { sidebar, page } = await mountFilters(390);
+    const { provider, sidebar, page } = await mountFilters(390);
+    // The real mobile drawer is focusable. Unfocusable sheet content must not
+    // send focus back to that ancestor and dismiss the panel before click.
+    provider.tabIndex = -1;
     const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
     await trigger.click();
     const panel = sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!;
@@ -265,6 +268,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(sheet.left).toBe(0);
     expect(sheet.width).toBe(innerWidth);
     expect(sheet.bottom).toBeCloseTo(innerHeight, 0);
+    await page.getByRole("heading", { name: "Filters", exact: true }).click();
+    const automation = page.getByRole("switch", { name: "Show automation sessions", exact: true });
+    await automation.click();
+    await expect.element(automation).toHaveAttribute("aria-checked", "true");
     // A choice opens as a page covering the sheet, with Back and a title.
     await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
     const choices = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Group by"]')!;
@@ -284,8 +291,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect
       .element(page.getByRole("button", { name: "Group by: Project", exact: true }))
       .toBeVisible();
-    // Tapping the backdrop dismisses the sheet, like the issues sheet.
-    sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
+    // Tapping exposed backdrop space dismisses the sheet, like the issues sheet.
+    await page.getByRole("button", { name: "Close", exact: true }).click({
+      position: { x: 10, y: 10 },
+    });
     await expect.poll(() => sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
     await expect.element(trigger).toHaveFocus();
   });
@@ -302,6 +311,13 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(backdrop.tabIndex).toBe(-1);
     await userEvent.tab({ shift: true });
     await expect.element(sources).toHaveFocus();
+    await userEvent.tab();
+    await expect.element(owners).toHaveFocus();
+    // After touching noninteractive content, Tab must stay inside the sheet.
+    await page.getByRole("heading", { name: "Filters", exact: true }).click();
+    await userEvent.tab({ shift: true });
+    await expect.element(sources).toHaveFocus();
+    await page.getByRole("heading", { name: "Filters", exact: true }).click();
     await userEvent.tab();
     await expect.element(owners).toHaveFocus();
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();

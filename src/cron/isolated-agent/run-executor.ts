@@ -815,19 +815,18 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     let hasFreshDescendants = false;
     let hasActiveDescendants = false;
     if (shouldRetryInterimAck) {
-      const { countActiveDescendantRuns, listDescendantRunsForRequester } =
-        await cronSubagentRegistryRuntimeLoader.load();
-      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
-        const descendantStartedAt =
-          typeof entry.execution.startedAt === "number"
-            ? entry.execution.startedAt
-            : entry.createdAt;
-        return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-      });
-      hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
+      const { readDescendantExecutionState } = await cronSubagentRegistryRuntimeLoader.load();
+      const descendants = await readDescendantExecutionState(params.runSessionKey, runStartedAt);
+      hasFreshDescendants = descendants.hasFreshDescendants;
+      hasActiveDescendants = descendants.hasActiveDescendants;
     }
 
-    if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {
+    if (
+      shouldRetryInterimAck &&
+      !params.isAborted() &&
+      !hasFreshDescendants &&
+      !hasActiveDescendants
+    ) {
       // Retry a bare acknowledgement only when no descendant subagent was
       // spawned; otherwise delivery waits for the subagent follow-up path.
       const continuationPrompt = [

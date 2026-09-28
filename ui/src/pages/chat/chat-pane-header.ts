@@ -507,9 +507,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             onPublicShareChange: (enabled: boolean) =>
               void this.setSessionPublicShare(row, enabled),
             onCopyPublicLink: () => void this.copySessionPublicLink(row),
-            ownerViewing,
-            personActivity,
-            showOwner: showOwnerChip,
             onOpen: () => void this.loadSessionSharing(row),
             onVisibilityChange: (visibility: SessionVisibility) =>
               void this.setSessionVisibility(row, visibility),

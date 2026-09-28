@@ -18,8 +18,6 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -246,7 +244,6 @@ class ShellScreenLogicTest {
 
     assertEquals(listOf("Approvals", "Channels", "Nodes & Devices", "Providers"), rows.map { it.title })
     val providersRow = rows.single { it.title == "Providers" }
-    assertEquals(Tab.Settings, providersRow.tab)
     assertEquals(SettingsRoute.ProvidersModels, providersRow.settingsRoute)
   }
 
@@ -427,8 +424,8 @@ class ShellScreenLogicTest {
       SettingsRoute.Approvals,
       overviewHeaderRoute(
         listOf(
-          HomeAttentionRow("Approvals", "2 pending", Icons.Default.Settings, Tab.Settings, SettingsRoute.Approvals),
-          HomeAttentionRow("Nodes & Devices", "Review node access", Icons.Default.Settings, Tab.Settings, SettingsRoute.NodesDevices),
+          HomeAttentionRow("Approvals", "2 pending", SettingsRoute.Approvals),
+          HomeAttentionRow("Nodes & Devices", "Review node access", SettingsRoute.NodesDevices),
         ),
       ),
     )
