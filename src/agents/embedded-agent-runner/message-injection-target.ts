@@ -98,6 +98,7 @@ export function captureDirectEmbeddedMessageInjectionTarget(
     runId,
     sourceTurnId: toolAuthority.sourceTurnId,
     [replyMessageInjectionTargetOwner]: {
+      acceptParticipant: (overlay) => toolAuthority.personalToolParticipants?.accept(overlay),
       projectToolAuthorityFingerprint: (overlay) => {
         try {
           // Direct command delivery has no reply-dispatch trace output surface.

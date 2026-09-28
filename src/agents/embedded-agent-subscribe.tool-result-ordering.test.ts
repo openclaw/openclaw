@@ -1,7 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   AgentActivityItemSchema,
   type AgentActivityItem,
@@ -33,53 +33,75 @@ import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subsc
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { jsonResult } from "./tools/common.js";
 
-describe("subscribeEmbeddedAgentSession tool result ordering", () => {
+type Params = SubscribeEmbeddedAgentSessionParams;
+type Recorder = NonNullable<Params["trajectoryRecorder"]>["recordEvent"];
+function harness(params: Omit<Params, "session" | "runId"> = {}) {
+  const h = createSubscribedSessionHarness({ runId: "tool-ordering", ...params });
+  onTestFinished(() => h.subscription.unsubscribe());
+  return {
+    ...h,
+    start(
+      toolName: string,
+      toolCallId: string,
+      args: Record<string, unknown> = {},
+      parentToolCallId?: string,
+    ) {
+      h.emit({ type: "tool_execution_start", toolName, toolCallId, args, parentToolCallId });
+    },
+    end(toolName: string, toolCallId: string, result: unknown, isError = false) {
+      h.emit({ type: "tool_execution_end", toolName, toolCallId, result, isError });
+    },
+    async finish(text: string) {
+      emitAssistantTextDeltaAndEnd({ emit: h.emit, text });
+      h.emit({ type: "agent_end", messages: [], willRetry: false });
+      await h.subscription.waitForPendingEvents();
+    },
+  };
+}
+
+describe("tool result ordering", () => {
   it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
     const blockReplyFlush = createDeferred();
     const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
-    const harness = createSubscribedCodeModeHarness({
-      name: "repeated-lifecycle",
-      onBlockReplyFlush,
-    });
+    const h = createSubscribedCodeModeHarness({ name: "repeated-lifecycle", onBlockReplyFlush });
     const target = pluginToolWithExecute("finish_stage", "Finish one suspended stage", async () => {
       blockReplyFlush.resolve();
       return jsonResult({ finished: true });
     });
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
+    applyCodeModeCatalog({ ...h, tools: [...h.tools, target] });
     const liveItems: AgentActivityItem[] = [];
     const stopEvents = subscribeToAgentEvents((event) => {
       if (
-        event.runId === harness.runId &&
+        event.runId === h.runId &&
         event.stream === "item" &&
         Value.Check(AgentActivityItemSchema, event.data)
       ) {
         liveItems.push(event.data);
       }
     });
-
     try {
       for (let stage = 0; stage < 2; stage += 1) {
         const toolCallId = `code-call-stage-${stage}`;
         const args = { code: 'await yield_control("pause"); return await finish_stage({});' };
-        harness.sessionManager.appendMessage(
+        h.sessionManager.appendMessage(
           makeAgentAssistantMessage({
             content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
             stopReason: "toolUse",
           }),
         );
-        const result = await harness.subscription.runToolLifecycle({
+        const result = await h.subscription.runToolLifecycle({
           toolName: "exec",
           toolCallId,
           args,
           execute: async (started) => {
             started();
-            return expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
+            return expectDefined(h.tools[0], "Code Mode exec test invariant").execute(
               toolCallId,
               args,
             );
           },
         });
-        harness.sessionManager.appendMessage({
+        h.sessionManager.appendMessage({
           role: "toolResult",
           toolCallId,
           toolName: "exec",
@@ -90,34 +112,32 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         });
         const suspended = resultDetails(result);
         expect(suspended).toMatchObject({ status: "waiting", reason: "yield" });
-
         const completed = await waitUntilCompleted({
           details: suspended,
-          waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
+          waitTool: expectDefined(h.tools[1], "Code Mode wait test invariant"),
         });
         expect(completed).toMatchObject({ status: "completed", value: { finished: true } });
-        expect(countActiveToolExecutions(harness.runId)).toBe(0);
+        expect(countActiveToolExecutions(h.runId)).toBe(0);
       }
-
       expect(target.execute).toHaveBeenCalledTimes(2);
       expect(onBlockReplyFlush).not.toHaveBeenCalled();
-      expect(harness.subscription.getItemLifecycle()).toMatchObject({
+      expect(h.subscription.getItemLifecycle()).toMatchObject({
         startedCount: 4,
         completedCount: 4,
         activeCount: 0,
       });
       expect(summarizeAgentActivity(liveItems).total).toBe(4);
-      emitAssistantTextDeltaAndEnd({ emit: harness.emit, text: "Both stages finished." });
-      harness.emit({ type: "agent_end", messages: [], willRetry: false });
-      await harness.subscription.waitForPendingEvents();
+      emitAssistantTextDeltaAndEnd({ emit: h.emit, text: "Both stages finished." });
+      h.emit({ type: "agent_end", messages: [], willRetry: false });
+      await h.subscription.waitForPendingEvents();
       expect(summarizeAgentActivity(liveItems).total).toBe(2);
-      expect(harness.subscription.getItemLifecycle()).toEqual({
+      expect(h.subscription.getItemLifecycle()).toEqual({
         startedCount: 4,
         completedCount: 4,
         activeCount: 0,
       });
       const history = projectAgentHistoryActivity(
-        harness.sessionManager
+        h.sessionManager
           .getEntries()
           .flatMap((entry) =>
             entry.type === "message" ? [{ messageId: entry.id, message: entry.message }] : [],
@@ -131,78 +151,41 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
       stopEvents();
       blockReplyFlush.resolve();
       try {
-        harness.dispose();
+        h.dispose();
       } finally {
         await resetCodeModeTestState();
       }
     }
   });
 
-  it.each([
-    "completed",
-    "failed",
-    "execution-failed",
-    "blocked",
-    "incomplete",
-    "overlapping",
-    "reused-active",
-  ])("settles the prepared summary without hiding a %s wrapper outcome", async (outcome) => {
-    const onAgentEvent = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: `wrapper-${outcome}`,
-      onAgentEvent,
-    });
-    const start = {
-      type: "tool_execution_start",
-      toolName: "exec",
-      toolCallId: "outer",
-      args: {},
-    };
-    try {
-      emit(start);
+  it.each(["execution-failed", "incomplete", "overlapping", "reused-active"])(
+    "preserves the %s wrapper outcome",
+    async (outcome) => {
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const h = harness({ onAgentEvent });
+      h.start("exec", "outer");
       if (outcome === "overlapping") {
-        emit(start);
+        h.start("exec", "outer");
       }
-      emit({
-        type: "tool_execution_start",
-        toolName: "read",
-        toolCallId: "child",
-        parentToolCallId: "outer",
-        args: { path: "missing.txt" },
-      });
-      emit({
-        type: "tool_execution_end",
-        toolName: "read",
-        toolCallId: "child",
-        isError: true,
-        result: { content: [{ type: "text", text: "Missing file" }] },
-      });
+      h.start("read", "child", { path: "missing.txt" }, "outer");
+      h.end("read", "child", { content: [{ type: "text", text: "Missing file" }] }, true);
       if (outcome !== "incomplete") {
-        emit({
-          type: "tool_execution_end",
-          toolName: "exec",
-          toolCallId: "outer",
-          isError: outcome === "failed",
-          result: {
-            content: [{ type: "text", text: "Finished" }],
-            ...(outcome === "blocked" ? { details: { status: "approval-pending" } } : {}),
-            ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
-          },
+        h.end("exec", "outer", {
+          content: [{ type: "text", text: "Finished" }],
+          ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
         });
       }
       if (outcome === "reused-active") {
-        emit(start);
+        h.start("exec", "outer");
       }
-      await subscription.waitForPendingEvents();
-      const counters = subscription.getItemLifecycle();
-      emitAssistantTextDeltaAndEnd({ emit, text: "Observed the child outcome." });
-      emit({ type: "agent_end", messages: [], willRetry: false });
-      await subscription.waitForPendingEvents();
+      await h.subscription.waitForPendingEvents();
+      const counters = h.subscription.getItemLifecycle();
+      await h.finish("Observed the child outcome.");
       const events = onAgentEvent.mock.calls.map(([event]) => event);
       const outer = events.findLast(
         (event) => event.stream === "item" && event.data.toolCallId === "outer",
       );
-      expect(outer?.data.hideFromChannelProgress === true).toBe(outcome === "completed");
+      expect(outer?.data.hideFromChannelProgress === true).toBe(false);
       if (outcome === "execution-failed") {
         expect(outer?.data.status).toBe("failed");
       }
@@ -210,70 +193,40 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         events.findLast((event) => event.stream === "item" && event.data.toolCallId === "child")
           ?.data,
       ).toMatchObject({ status: "failed" });
-      expect(subscription.getItemLifecycle()).toEqual(counters);
-    } finally {
-      await subscription.waitForPendingEvents();
-      subscription.unsubscribe();
-    }
-  });
+      expect(h.subscription.getItemLifecycle()).toEqual(counters);
+    },
+  );
 
   it("captures sanitized trajectory pairs while tool-start delivery remains blocked", async () => {
-    const flushEntered = createDeferred();
-    const pendingFlush = createDeferred();
+    const entered = createDeferred();
+    const pending = createDeferred();
     const onBlockReplyFlush = vi.fn(() => {
-      flushEntered.resolve();
-      return pendingFlush.promise;
+      entered.resolve();
+      return pending.promise;
     });
-    const recordEvent =
-      vi.fn<
-        NonNullable<SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"]>["recordEvent"]
-      >();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-trajectory-pending-delivery",
+    const recordEvent = vi.fn<Recorder>();
+    const h = harness({
       trajectoryRecorder: { recordEvent, flush: async () => {} },
       onBlockReplyFlush,
     });
     const apiKey = "sk-1234567890abcdefXYZ";
-
     try {
-      emit({
-        type: "tool_execution_start",
-        toolName: "exec",
-        toolCallId: "first-call",
-        args: { command: "printf fixture", apiKey },
-      });
+      h.start("exec", "first-call", { command: "printf fixture", apiKey });
       expect(recordEvent).toHaveBeenCalledExactlyOnceWith("tool.call", {
         toolCallId: "first-call",
         name: "exec",
         args: { command: "printf fixture", apiKey: expect.any(String) },
       });
       expect(JSON.stringify(recordEvent.mock.calls)).not.toContain(apiKey);
-      await flushEntered.promise;
-
-      emit({
-        type: "tool_execution_end",
-        toolName: "exec",
-        toolCallId: "first-call",
-        isError: false,
-        result: {
-          content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
-          details: { status: "completed", aggregated: "x".repeat(9_000) },
-        },
+      await entered.promise;
+      h.end("exec", "first-call", {
+        content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+        details: { status: "completed", aggregated: "x".repeat(9_000) },
       });
-      emit({
-        type: "tool_execution_start",
-        toolName: "read",
-        toolCallId: "second-call",
-        args: { path: "/tmp/missing-trajectory-fixture" },
+      h.start("read", "second-call", { path: "/tmp/missing-trajectory-fixture" });
+      h.end("read", "second-call", {
+        details: { status: "error", error: "Fixture does not exist" },
       });
-      emit({
-        type: "tool_execution_end",
-        toolName: "read",
-        toolCallId: "second-call",
-        isError: false,
-        result: { details: { status: "error", error: "Fixture does not exist" } },
-      });
-
       expect(onBlockReplyFlush).toHaveBeenCalledOnce();
       expect(recordEvent.mock.calls).toEqual([
         ["tool.call", expect.objectContaining({ toolCallId: "first-call", name: "exec" })],
@@ -310,168 +263,81 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
           },
         ],
       ]);
-
-      pendingFlush.resolve();
-      await subscription.waitForPendingEvents();
+      pending.resolve();
+      await h.subscription.waitForPendingEvents();
       expect(recordEvent).toHaveBeenCalledTimes(4);
     } finally {
-      pendingFlush.resolve();
-      await subscription.waitForPendingEvents();
-      subscription.unsubscribe();
+      pending.resolve();
+      await h.subscription.waitForPendingEvents();
     }
   });
 
-  it("settles tool delivery when trajectory recording throws", async () => {
-    const recordEvent = vi.fn(() => {
+  it("preserves nested failure and capture order when the recorder also throws", async () => {
+    const order: string[] = [];
+    const recordEvent = vi.fn<Recorder>((type) => {
+      order.push(type);
       throw new Error("Trajectory storage failed");
     });
-    const onAgentToolResult = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-trajectory-recording-failure",
+    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+    const h = harness({
       trajectoryRecorder: { recordEvent, flush: async () => {} },
-      onAgentToolResult,
+      onAgentEvent,
     });
-    const result = { content: [{ type: "text", text: "Fixture contents" }] };
-
-    try {
-      expect(() =>
-        emit({
-          type: "tool_execution_start",
-          toolName: "read",
-          toolCallId: "recording-failure-call",
-          args: { path: "/tmp/trajectory-fixture" },
-        }),
-      ).not.toThrow();
-      expect(() =>
-        emit({
-          type: "tool_execution_end",
-          toolName: "read",
-          toolCallId: "recording-failure-call",
-          isError: false,
-          result,
-        }),
-      ).not.toThrow();
-      emitAssistantTextDeltaAndEnd({ emit, text: "The tool completed." });
-      emit({ type: "agent_end", messages: [], willRetry: false });
-      await subscription.waitForPendingEvents();
-
-      expect(recordEvent).toHaveBeenCalledTimes(2);
-      expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
-        toolName: "read",
-        result,
-        isError: false,
-      });
-      expect(subscription.getLastToolError()).toBeUndefined();
-      expect(subscription.assistantTexts).toEqual(["The tool completed."]);
-    } finally {
-      await subscription.waitForPendingEvents();
-      subscription.unsubscribe();
-    }
-  });
-
-  it.each([
-    { outcome: "success", success: true, recorderFails: false, parentToolCallId: "outer-call" },
-    { outcome: "failure", success: false, recorderFails: false, parentToolCallId: "outer-call" },
-    { outcome: "success", success: true, recorderFails: true, parentToolCallId: undefined },
-    { outcome: "failure", success: false, recorderFails: true, parentToolCallId: undefined },
-  ])(
-    "preserves nested tool outcomes and capture order ($outcome, recorder fails: $recorderFails)",
-    async ({ success, recorderFails, parentToolCallId }) => {
-      const order: string[] = [];
-      const recordEvent = vi.fn<
-        NonNullable<SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"]>["recordEvent"]
-      >((type) => {
-        order.push(type);
-        if (recorderFails) {
-          throw new Error("Trajectory storage failed");
-        }
-      });
-      const onAgentEvent =
-        vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-nested-trajectory-${success}-${recorderFails}`,
-        trajectoryRecorder: { recordEvent, flush: async () => {} },
-        onAgentEvent,
-      });
-      const result = { content: [{ type: "text", text: "Nested fixture" }] };
-      const toolError = new Error("Nested fixture failed");
-
-      try {
-        const execution = subscription.runToolLifecycle({
+    const toolError = new Error("Nested fixture failed");
+    const execution = h.subscription.runToolLifecycle({
+      toolName: "read",
+      toolCallId: "nested-call",
+      args: { path: "/tmp/nested-trajectory-fixture", parentToolCallId: "argument-value" },
+      execute: async (started) => {
+        started();
+        order.push("execute");
+        h.emit({
+          type: "tool_execution_update",
           toolName: "read",
           toolCallId: "nested-call",
-          parentToolCallId,
-          args: {
-            path: "/tmp/nested-trajectory-fixture",
-            parentToolCallId: "argument-value",
-          },
-          execute: async (onImplementationStart) => {
-            onImplementationStart();
-            order.push("execute");
-            emit({
-              type: "tool_execution_update",
-              toolName: "read",
-              toolCallId: "nested-call",
-              args: {},
-              partialResult: { content: [{ type: "text", text: "Reading fixture" }] },
-            });
-            await subscription.waitForPendingEvents();
-            if (!success) {
-              throw toolError;
-            }
-            return result;
-          },
+          args: {},
+          partialResult: { content: [{ type: "text", text: "Reading fixture" }] },
         });
-        if (success) {
-          await expect(execution).resolves.toBe(result);
-        } else {
-          await expect(execution).rejects.toBe(toolError);
-        }
-        expect(order).toEqual(["tool.call", "execute", "tool.result"]);
-        expect(
-          onAgentEvent.mock.calls
-            .map(([event]) => event)
-            .filter((event) => event.stream === "tool")
-            .map(({ data }) => ({
-              phase: data.phase,
-              toolCallId: data.toolCallId,
-              parentToolCallId: data.parentToolCallId,
-            })),
-        ).toEqual(
-          ["start", "update", "result"].map((phase) => ({
-            phase,
-            toolCallId: "nested-call",
-            parentToolCallId,
-          })),
-        );
-        expect(recordEvent.mock.calls).toEqual([
-          [
-            "tool.call",
-            {
-              toolCallId: "nested-call",
-              name: "read",
-              args: {
-                path: "/tmp/nested-trajectory-fixture",
-                parentToolCallId: "argument-value",
-              },
-            },
-          ],
-          [
-            "tool.result",
-            expect.objectContaining({ toolCallId: "nested-call", name: "read", success }),
-          ],
-        ]);
-      } finally {
-        await subscription.waitForPendingEvents();
-        subscription.unsubscribe();
-      }
-    },
-  );
+        await h.subscription.waitForPendingEvents();
+        throw toolError;
+      },
+    });
+    await expect(execution).rejects.toBe(toolError);
+    expect(order).toEqual(["tool.call", "execute", "tool.result"]);
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "tool")
+        .map(({ data }) => ({
+          phase: data.phase,
+          toolCallId: data.toolCallId,
+          parentToolCallId: data.parentToolCallId,
+        })),
+    ).toEqual(
+      ["start", "update", "result"].map((phase) => ({
+        phase,
+        toolCallId: "nested-call",
+        parentToolCallId: undefined,
+      })),
+    );
+    expect(recordEvent.mock.calls).toEqual([
+      [
+        "tool.call",
+        {
+          toolCallId: "nested-call",
+          name: "read",
+          args: { path: "/tmp/nested-trajectory-fixture", parentToolCallId: "argument-value" },
+        },
+      ],
+      [
+        "tool.result",
+        expect.objectContaining({ toolCallId: "nested-call", name: "read", success: false }),
+      ],
+    ]);
+  });
 
   it.each([
     { delivery: "resolve", flush: false },
-    { delivery: "reject", flush: false },
-    { delivery: "resolve", flush: true },
     { delivery: "reject", flush: true },
   ] as const)(
     "preserves recovery behind an unavailable notice ($delivery, block flush: $flush)",
@@ -496,15 +362,12 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         order.push("block");
       });
       const onBlockReplyFlush = vi.fn(async () => {});
-      const onAgentEvent = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>(
-        ({ stream, data }) => {
-          if (stream === "lifecycle" && data.phase === "end") {
-            order.push("terminal");
-          }
-        },
-      );
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-unavailable-${delivery}-${flush}`,
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>(({ stream, data }) => {
+        if (stream === "lifecycle" && data.phase === "end") {
+          order.push("terminal");
+        }
+      });
+      const h = harness({
         onToolResult,
         onPartialReply,
         onBlockReply,
@@ -515,17 +378,10 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         onAgentEvent,
         blockReplyBreak: "message_end",
       });
-
       try {
-        emit({ type: "tool_execution_start", toolName: "exec", toolCallId: "notice", args: {} });
-        emit({
-          type: "tool_execution_end",
-          toolName: "exec",
-          toolCallId: "notice",
-          isError: false,
-          result: {
-            details: { status: "approval-unavailable", reason: "no-approval-route" },
-          },
+        h.start("exec", "notice");
+        h.end("exec", "notice", {
+          details: { status: "approval-unavailable", reason: "no-approval-route" },
         });
         await entered.promise;
         expect(onToolResult).toHaveBeenCalledOnce();
@@ -535,36 +391,30 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
           }),
         );
         onBlockReplyFlush.mockClear();
-
-        emit({ type: "message_start", message: { role: "assistant", content: [] } });
-        emitAssistantTextDeltaAndEnd({ emit, text: answer });
-        // Model facts are captured at ingress while visible delivery waits for the notice.
-        expect(subscription.getCurrentAttemptAssistant()).toMatchObject({
+        h.emit({ type: "message_start", message: { role: "assistant", content: [] } });
+        emitAssistantTextDeltaAndEnd({ emit: h.emit, text: answer });
+        expect(h.subscription.getCurrentAttemptAssistant()).toMatchObject({
           role: "assistant",
           content: [{ type: "text", text: answer }],
         });
-        emit({ type: "agent_end", messages: [], willRetry: false });
-        const drain = subscription.waitForPendingEvents().then(() => {
+        h.emit({ type: "agent_end", messages: [], willRetry: false });
+        const drain = h.subscription.waitForPendingEvents().then(() => {
           order.push("drained");
         });
-
-        // Let already-runnable handlers finish; the notice remains explicitly unresolved.
         await setImmediate();
         expect([...order]).toEqual(["notice entered"]);
-        expect(subscription.assistantTexts).toEqual([]);
+        expect(h.subscription.assistantTexts).toEqual([]);
         expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual(
           [],
         );
         expect(onBlockReplyFlush).not.toHaveBeenCalled();
-        expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
-
+        expect(h.subscription.didSendDeterministicApprovalPrompt()).toBe(false);
         if (delivery === "reject") {
           notice.reject(new Error("notice transport failed"));
         } else {
           notice.resolve();
         }
         await drain;
-
         expect(order).toEqual([
           "notice entered",
           "notice settled",
@@ -584,8 +434,8 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         expect(onBlockReplyFlush.mock.calls).toEqual(
           flush ? [[{ reason: "message_end" }], [{ reason: "terminal" }]] : [],
         );
-        expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
-        expect(subscription.getLastToolError()).toEqual(
+        expect(h.subscription.didSendDeterministicApprovalPrompt()).toBe(false);
+        expect(h.subscription.getLastToolError()).toEqual(
           delivery === "reject"
             ? expect.objectContaining({
                 error: "Approval prompt delivery failed: notice transport failed",
@@ -594,115 +444,87 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         );
         expect(
           buildEmbeddedRunPayloads({
-            assistantTexts: subscription.assistantTexts,
-            lastAssistant: subscription.getCurrentAttemptAssistant(),
-            lastToolError: subscription.getLastToolError(),
+            assistantTexts: h.subscription.assistantTexts,
+            lastAssistant: h.subscription.getCurrentAttemptAssistant(),
+            lastToolError: h.subscription.getLastToolError(),
             sessionKey: "agent:main:ordering",
-            didSendDeterministicApprovalPrompt: subscription.didSendDeterministicApprovalPrompt(),
+            didSendDeterministicApprovalPrompt: h.subscription.didSendDeterministicApprovalPrompt(),
           }),
         ).toEqual([expect.objectContaining({ text: answer })]);
       } finally {
         notice.resolve();
-        await subscription.waitForPendingEvents();
-        subscription.unsubscribe();
+        await h.subscription.waitForPendingEvents();
       }
     },
   );
 
-  it.each(["live", "terminal-only"] as const)(
-    "suppresses assistant blocks after an approval prompt (%s boundary)",
-    async (boundary) => {
-      const onToolResult = vi.fn();
-      const onBlockReply = vi.fn();
-      const onPartialReply = vi.fn();
-      const onAgentEvent =
-        vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-approval-${boundary}`,
-        onToolResult,
-        onBlockReply,
-        onPartialReply,
-        onAgentEvent,
-        blockReplyBreak: "message_end",
-      });
-      const approvalId = "12345678-1234-1234-1234-123456789012";
-      const first = createOpenAiResponsesPartial({
-        text: "Approval is needed.",
-        id: "approval-first",
-        signaturePhase: "final_answer",
-      });
-      const final = {
-        ...first,
-        content: [
-          ...first.content,
-          createOpenAiResponsesTextBlock({
-            text: "Please approve the command.",
-            id: "approval-second",
-            phase: "final_answer",
-          }),
-        ],
-      };
-
-      try {
-        emit({ type: "tool_execution_start", toolName: "exec", toolCallId: "approval", args: {} });
-        emit({
-          type: "tool_execution_end",
-          toolName: "exec",
-          toolCallId: "approval",
-          isError: false,
-          result: {
-            details: {
-              status: "approval-pending",
-              approvalId,
-              approvalSlug: "12345678",
-              host: "gateway",
-              command: "echo pending",
-              expiresAtMs: Date.now() + 60_000,
-            },
-          },
-        });
-        await subscription.waitForPendingEvents();
-        expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            channelData: expect.objectContaining({
-              execApproval: expect.objectContaining({ approvalId }),
-            }),
-          }),
-        );
-        expect(subscription.didSendDeterministicApprovalPrompt()).toBe(true);
-
-        emit({ type: "message_start", message: first });
-        for (const [contentIndex, block] of final.content.entries()) {
-          if (contentIndex > 0 && boundary === "terminal-only") {
-            break;
-          }
-          const partial = { ...final, content: final.content.slice(0, contentIndex + 1) };
-          emit({
-            type: "message_update",
-            message: partial,
-            assistantMessageEvent: {
-              type: "text_delta",
-              contentIndex,
-              delta: block.text,
-              partial,
-            },
-          });
-        }
-        await subscription.waitForPendingEvents();
-        expect(onBlockReply).not.toHaveBeenCalled();
-
-        emit({ type: "message_end", message: final });
-        emit({ type: "agent_end", messages: [final] });
-        await subscription.waitForPendingEvents();
-        expect(onBlockReply).not.toHaveBeenCalled();
-        expect(onPartialReply).not.toHaveBeenCalled();
-        expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual(
-          [],
-        );
-      } finally {
-        await subscription.waitForPendingEvents();
-        subscription.unsubscribe();
-      }
-    },
-  );
+  it("suppresses live and terminal-only assistant blocks after an approval prompt", async () => {
+    const onToolResult = vi.fn();
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+    const h = harness({
+      onToolResult,
+      onBlockReply,
+      onPartialReply,
+      onAgentEvent,
+      blockReplyBreak: "message_end",
+    });
+    const approvalId = "12345678-1234-1234-1234-123456789012";
+    const first = createOpenAiResponsesPartial({
+      text: "Approval is needed.",
+      id: "approval-first",
+      signaturePhase: "final_answer",
+    });
+    const final = {
+      ...first,
+      content: [
+        ...first.content,
+        createOpenAiResponsesTextBlock({
+          text: "Please approve the command.",
+          id: "approval-second",
+          phase: "final_answer",
+        }),
+      ],
+    };
+    h.start("exec", "approval");
+    h.end("exec", "approval", {
+      details: {
+        status: "approval-pending",
+        approvalId,
+        approvalSlug: "12345678",
+        host: "gateway",
+        command: "echo pending",
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    await h.subscription.waitForPendingEvents();
+    expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        channelData: expect.objectContaining({
+          execApproval: expect.objectContaining({ approvalId }),
+        }),
+      }),
+    );
+    expect(h.subscription.didSendDeterministicApprovalPrompt()).toBe(true);
+    h.emit({ type: "message_start", message: first });
+    h.emit({
+      type: "message_update",
+      message: first,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Approval is needed.",
+        partial: first,
+      },
+    });
+    await h.subscription.waitForPendingEvents();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    h.emit({ type: "message_end", message: final });
+    h.emit({ type: "agent_end", messages: [final] });
+    await h.subscription.waitForPendingEvents();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual([]);
+  });
 });

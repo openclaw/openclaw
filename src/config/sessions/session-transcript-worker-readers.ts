@@ -64,6 +64,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
     ),
+    readArchivePresence: reader(
+      "session-archive-presence",
+      "archive presence",
+      (input) => ({ kind: "session-archive-presence", ...input }),
+      (value) => value.registered,
+    ),
     findTranscriptEvent: reader(
       "transcript-match",
       "a transcript match",

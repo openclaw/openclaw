@@ -708,7 +708,6 @@ struct OnboardingView: View {
     @State var showRemoteChoices = false
     @State var showBrowserGateway = false
     @State var showConnectionEditor = false
-    @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?
     @State var remoteProbeTemporaryRestoreMode: AppState.ConnectionMode?

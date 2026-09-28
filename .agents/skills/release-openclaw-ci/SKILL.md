@@ -253,7 +253,7 @@ until their dependent enforcement changes land.
   All selected tests gate npm/ClawHub. Native app
   CI, performance, and published-package Telegram are deferred to confidence.
   Beta `all` without soak also defers Package Acceptance Telegram, including
-  beta-profile checks of `main` or alpha. Record deferred checks as not run,
+  beta-profile checks of `main`. Record deferred checks as not run,
   never passed. Stable/full, soak, and focused groups retain their coverage;
   selected children still require terminal evidence. An absent coverage policy
   retains historical full behavior.
@@ -376,8 +376,8 @@ tooling ref. `pnpm release:candidate`
 invokes this check with its downloaded manifests; do not redownload them or
 replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
-`WARN`. Alpha uses its matching Tideclaw branch; extended-stable retains its
-separate owner workflows and is not admitted by this preflight.
+`WARN`. Extended-stable retains its separate owner workflows and is not
+admitted by this preflight. Alpha releases are retired.
 
 Check the report before retrying a failed publication: preserve the verified
 `openclaw_npm_resume_run_id` for already-published core bytes, inspect matching
@@ -482,8 +482,7 @@ use `release_gate=true`.)
 The release branch may advance after the Code SHA is frozen. The helper accepts
 that frozen SHA only while it remains an ancestor of the canonical release
 branch and its package version is either the branch's final version or a
-matching beta prerelease. Alpha remains on the Tideclaw path with a matching
-alpha branch and exact alpha tag. Extended-stable branches and all tags require
+matching beta prerelease. Extended-stable branches and all tags require
 an exact package-version match.
 Always pass the previously recorded full Tooling SHA for release-branch runs.
 Never replace it with a fresh `main` lookup. The Tooling SHA must declare the
@@ -531,9 +530,9 @@ execute their original receipt logic; a local controller upgrade does not
 retrofit that logic, and final verification still owns the recovery result.
 
 The SHA-pinned helper infers `beta` for matching beta release candidates and
-exact alpha tags, and `stable` for stable/correction versions, then passes the
+`stable` for stable/correction versions, then passes the
 Validation SHA + Tooling SHA run identity. Canonical beta `all` without soak
-uses `npm-beta-v1`; `main`, alpha, and non-beta targets do not qualify for that
+uses `npm-beta-v1`; `main` and non-beta targets do not qualify for that
 policy. Run deferred native, performance, Telegram, broad live QA, and E2E as
 postpublish confidence with the exact published package and
 `run_release_soak=true` or explicit groups. Stable and full profiles force the
@@ -647,8 +646,11 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
-The helper verifies both SHAs, creates the transport ref with the equivalent of
-the following GitHub refs operation, and dispatches from that branch:
+The helper verifies both SHAs and proves GitHub serves the exact Validation SHA
+by bare-SHA fetch in a fresh temporary repository, including in dry runs, before
+retaining a request or mutating remote state. It creates one immutable workflow
+transport ref with the equivalent of the following GitHub refs operation, and
+dispatches from that branch:
 
 ```bash
 gh api --method POST repos/openclaw/openclaw/git/refs \
@@ -733,7 +735,7 @@ node scripts/release-ci-summary.mjs <full-release-run-id> --watch
 Do not start this watcher when the SHA-pinned helper is still the foreground
 owner. The helper reads the exact Release Decision artifact itself. On
 `blocked_diagnostics_running`, it exits nonzero immediately, keeps the temporary
-refs, and leaves Diagnostic Drain collecting the remaining terminal evidence.
+workflow ref, and leaves Diagnostic Drain collecting the remaining terminal evidence.
 The watcher behaves the same way for separately dispatched parents: it reports
 the Release Decision blocker once and exits while the drain continues.
 

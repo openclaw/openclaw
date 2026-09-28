@@ -38,8 +38,8 @@ import {
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
@@ -564,9 +564,9 @@ describe("prepared worker dispatch", () => {
         "source",
       ]);
       const baseCommit = await requireWorkspaceResultGit(stagingRoot, ["rev-parse", "HEAD"]);
-      const base = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit });
+      const base = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
       await fs.writeFile(path.join(stagingRoot, "session.txt"), "accepted session change\n");
-      const current = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit });
+      const current = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
       const repositoryStore = getSessionRepositoryWorkspaceStore();
       expect(repositoryStore.path).toBe(support.testState.stateDb.path);
       const created = repositoryStore.create({

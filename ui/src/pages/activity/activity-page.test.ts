@@ -476,7 +476,7 @@ describe("ActivityPage gateway lifecycle", () => {
       expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(4);
       expect(current().request).toHaveBeenCalledWith(
         "sessions.messages.subscribe",
-        { key: "unknown", agentId: "research" },
+        { key: "unknown", agentId: "research", subscriptionId: expect.any(String) },
         expect.anything(),
       );
     },
@@ -503,13 +503,16 @@ describe("ActivityPage gateway lifecycle", () => {
       current()
         .request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe")
         .map(([, params]) => params);
-    expect(unsubscribedKeys()).not.toContainEqual({ key: "main" });
+    expect(unsubscribedKeys()).not.toContainEqual(expect.objectContaining({ key: "main" }));
     await sessions.unsubscribeMessages(remainingOwner);
     await sessions.unsubscribeMessages(otherOwner);
 
     expect(page.entries).toEqual([]);
     expect(unsubscribedKeys()).toEqual(
-      expect.arrayContaining([{ key: "main" }, { key: "agent:other:work" }]),
+      expect.arrayContaining([
+        { key: "main", subscriptionId: expect.any(String) },
+        { key: "agent:other:work", subscriptionId: expect.any(String) },
+      ]),
     );
     current().request.mockImplementation(async (method, params) =>
       activityResponse(method, params),

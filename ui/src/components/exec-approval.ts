@@ -7,7 +7,7 @@ import { t } from "../i18n/index.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
-} from "../lib/keyboard-shortcut-catalog.ts";
+} from "../lib/keyboard-shortcut-contract.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,

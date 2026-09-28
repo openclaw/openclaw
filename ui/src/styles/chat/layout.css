@@ -2708,8 +2708,19 @@ openclaw-chat-ci-details {
 }
 
 @media (max-width: 640px) {
-  .chat-pr__identity {
+  .chat-pr__identity,
+  .chat-pr__link--static .chat-pr__repo {
     display: none;
+  }
+
+  .chat-pr__link--static .chat-pr__identity {
+    display: flex;
+  }
+
+  .chat-pr__link--static .chat-pr__branch {
+    flex: 1;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
   }
 }
 
@@ -2937,7 +2948,9 @@ openclaw-chat-ci-details {
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .context-usage__popover {
-    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
+    width: calc(
+      100vw - var(--safe-area-left) - var(--safe-area-right) - 2 * var(--shell-popup-inline-gutter)
+    );
   }
 }
 

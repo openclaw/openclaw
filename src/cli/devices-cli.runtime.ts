@@ -441,18 +441,11 @@ function hasExactRoleMatch(original: PendingDevice, replacement: PendingDevice):
 }
 
 function hasCompatibleClientMetadata(original: PendingDevice, replacement: PendingDevice): boolean {
-  const originalClientId = normalizeOptionalString(original.clientId);
-  const replacementClientId = normalizeOptionalString(replacement.clientId);
-  if (originalClientId && replacementClientId && originalClientId !== replacementClientId) {
-    return false;
-  }
-  const originalClientMode = normalizeOptionalString(original.clientMode);
-  const replacementClientMode = normalizeOptionalString(replacement.clientMode);
-  return !(
-    originalClientMode &&
-    replacementClientMode &&
-    originalClientMode !== replacementClientMode
-  );
+  return (["clientId", "clientMode"] as const).every((key) => {
+    const before = normalizeOptionalString(original[key]);
+    const after = normalizeOptionalString(replacement[key]);
+    return !before || !after || before === after;
+  });
 }
 
 function resolveOriginalReplacementScopes(
@@ -503,14 +496,10 @@ function findSameDeviceReplacementRequest(params: {
   if (!replacement) {
     return null;
   }
-  const originalDeviceId = normalizeOptionalString(params.originalRequest.deviceId);
-  const replacementDeviceId = normalizeOptionalString(replacement.deviceId);
-  if (!originalDeviceId || originalDeviceId !== replacementDeviceId) {
-    return null;
-  }
-  const originalPublicKey = normalizeOptionalString(params.originalRequest.publicKey);
-  const replacementPublicKey = normalizeOptionalString(replacement.publicKey);
-  if (!originalPublicKey || !replacementPublicKey || originalPublicKey !== replacementPublicKey) {
+  if (
+    !stringsMatch(params.originalRequest.deviceId, replacement.deviceId) ||
+    !stringsMatch(params.originalRequest.publicKey, replacement.publicKey)
+  ) {
     return null;
   }
   if (!hasExactRoleMatch(params.originalRequest, replacement)) {
@@ -634,11 +623,9 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
 }
 
 function formatPendingDeviceIdentity(request: PendingDevice): string {
-  const displayName = normalizeOptionalString(request.displayName);
-  if (displayName) {
-    return sanitizeForLog(displayName);
-  }
-  return sanitizeForLog(normalizeOptionalString(request.deviceId) ?? "");
+  return sanitizeForLog(
+    normalizeOptionalString(request.displayName) ?? normalizeOptionalString(request.deviceId) ?? "",
+  );
 }
 
 function formatAccessSummary(access: DevicePairingAccessSummary | null): string {

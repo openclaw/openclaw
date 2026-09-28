@@ -2,6 +2,7 @@
 // section navigation lives in the takeover sidebar (settings-sidebar.ts).
 import { html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import "../styles/settings.css";
 
 export function renderSettingsWorkspace(
@@ -19,6 +20,7 @@ export function renderSettingsWorkspace(
   return html`
     <section
       class=${className}
+      ${shellLayoutTraits({ settingsWorkspace: true })}
       id=${ifDefined(options.id)}
       role=${ifDefined(options.role)}
       aria-label=${ifDefined(options.ariaLabel)}

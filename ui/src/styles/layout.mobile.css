@@ -72,7 +72,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-.shell--mobile-nav:has(> .shell-connection-status) {
+.shell--mobile-nav.shell--connection-status {
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
   grid-template-areas:
     "topbar"
@@ -83,18 +83,19 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
-  top: max(8px, var(--safe-area-top, 0px));
-  bottom: max(8px, var(--safe-area-bottom, 0px));
-  left: 0;
+  top: calc(8px + var(--safe-area-top));
+  height: calc(var(--shell-content-height) - 16px);
+  left: var(--safe-area-left);
   z-index: 70;
   width: min(86vw, 320px);
+  max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right));
   min-width: 0;
   min-height: 0;
   border-inline-end: none;
   overflow: hidden;
   overscroll-behavior: contain;
   border-radius: 0 22px 22px 0;
-  box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+  box-shadow: var(--shadow-xl);
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
@@ -350,7 +351,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .shell--mobile-nav .shell-nav,
   .shell--mobile-nav.shell--nav-collapsed .shell-nav {
     width: min(86vw, 320px);
-    box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+    box-shadow: var(--shadow-xl);
   }
 
   .shell--mobile-nav .sidebar-shell {
@@ -449,7 +450,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .agent-chat__input {
-    margin: 0 8px calc(10px + var(--safe-area-bottom));
+    margin: 0 8px 10px;
   }
 
   .agent-chat__input-btn,
@@ -471,12 +472,12 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-height: 380px;
   }
 
-  .content:has(openclaw-logs-page) {
+  main.content:where(.content--logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  main.content:where(.content--logs-page) > openclaw-router-outlet,
   .content openclaw-logs-page,
   .content .settings-workspace--fill-height,
   .content .settings-workspace--fill-height > .settings-workspace__body,

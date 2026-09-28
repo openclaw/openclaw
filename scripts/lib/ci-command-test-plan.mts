@@ -255,7 +255,7 @@ function resolveCommandShardName(file: string): string {
 
 let commandFilesByOwner: Map<string, string[]> | undefined;
 
-function getCommandFilesByOwner(): Map<string, string[]> {
+export function getCommandFilesByOwner(): Map<string, string[]> {
   if (commandFilesByOwner) {
     return commandFilesByOwner;
   }

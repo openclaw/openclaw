@@ -7,7 +7,6 @@ html.openclaw-native-embed .shell--embed {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "content";
-  padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
 }
 
 .shell--embed.shell--chat openclaw-chat-page[data-native-conversation] {

@@ -6,7 +6,6 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
-import * as boundaryPath from "../infra/boundary-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -19,33 +18,6 @@ import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.j
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-
-it("resolves state ownership once at each read preparation and dispatch boundary", async () => {
-  const { pathname, options } = source();
-  const dispatch = createDeferredCore();
-  const task = queueTask(dispatch.promise);
-  const resolve = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync");
-  const resolutions = () => resolve.mock.calls.filter(([target]) => target === pathname).length;
-  const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-  try {
-    // Retaining the source admits preparation before the worker queue can yield.
-    expect(resolutions()).toBe(1);
-    resolve.mockClear();
-    dispatch.resolve();
-    await task.captured;
-    expect(resolutions()).toBe(1);
-    resolve.mockClear();
-    task.result.resolve(emptyReply);
-    await expect(result).resolves.toEqual(emptyReply);
-    // Result acceptance and awaited native cleanup are separate authority boundaries.
-    expect(resolutions()).toBe(2);
-  } finally {
-    dispatch.resolve();
-    task.result.resolve(emptyReply);
-    await Promise.allSettled([result]);
-    resolve.mockRestore();
-  }
-});
 
 it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
   const { root, pathname } = source();

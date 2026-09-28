@@ -10,6 +10,7 @@ import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-hel
 import type {
   PolicyAuthProfileEvidence,
   PolicyDataHandlingEvidence,
+  PolicyEvidenceBuilder,
   PolicySecretEvidence,
   SecretRefDefaults,
   SecretRefEvidence,
@@ -29,13 +30,7 @@ export function scanPolicyAuthProfiles(
   return Object.entries(profiles)
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
-      const entry: {
-        id: string;
-        source: string;
-        validMetadata: boolean;
-        provider?: string;
-        mode?: string;
-      } = {
+      const entry: PolicyEvidenceBuilder<PolicyAuthProfileEvidence> = {
         id,
         source: `oc://openclaw.config/auth/profiles/${ocPathSegment(id)}`,
         validMetadata: isValidAuthProfileMetadata(value),
@@ -255,12 +250,7 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
   const secrets = asNonArrayRecord(cfg.secrets);
   const providers = asNonArrayRecord(secrets.providers);
   return Object.entries(providers).map(([id, value]) => {
-    const entry: {
-      id: string;
-      kind: "provider";
-      source: string;
-      providerSource?: string;
-    } = {
+    const entry: PolicyEvidenceBuilder<PolicySecretEvidence> = {
       id,
       kind: "provider",
       source: `oc://openclaw.config/secrets/providers/${ocPathSegment(id)}`,

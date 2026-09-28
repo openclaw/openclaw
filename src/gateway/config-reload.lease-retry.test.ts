@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import * as configAudit from "../config/io.audit.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
@@ -6,6 +7,10 @@ import {
   OpenClawStateLeaseAcquisitionError,
   OpenClawStateLeaseError,
 } from "../state/openclaw-state-lease-error.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   closeTestConfigReloaders,
   createReloaderHarness,
@@ -34,6 +39,63 @@ function busyError(reason: "lifecycle-busy" | "sqlite-busy" = "lifecycle-busy") 
     reason,
   });
 }
+
+it("coalesces config writes after a delayed Gateway scheduler wake", async () => {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const write = makeZeroDebounceHookWrite("delayed-wake");
+  const harness = createReloaderHarness(async () => write.snapshot, { scheduler });
+  try {
+    await harness.reloader.ready;
+    harness.emitWrite(write);
+    harness.emitWrite({ ...write, revision: 2 });
+    await clock.advanceBy(60_000);
+    expect(harness.onHotReload).toHaveBeenCalledOnce();
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    await clock.advanceBy(60_000);
+    expect(harness.onHotReload).toHaveBeenCalledOnce();
+  } finally {
+    await harness.reloader.stop();
+    await scheduler.stop();
+  }
+});
+
+it("joins an admitted reload when its Gateway scheduler stops", async () => {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const started = createDeferred();
+  const release = createDeferred();
+  const write = makeZeroDebounceHookWrite("scheduler-close");
+  const harness = createReloaderHarness(async () => write.snapshot, {
+    scheduler,
+    onHotReload: async () => {
+      started.resolve();
+      await release.promise;
+      return "applied";
+    },
+  });
+  await harness.reloader.ready;
+  harness.emitWrite(write);
+  const waking = clock.advanceBy(0);
+  let closing: Promise<void> | undefined;
+  try {
+    await started.promise;
+    let closed = false;
+    closing = scheduler.stop().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    release.resolve();
+    await closing;
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    await Promise.all([waking, closing]);
+    await harness.reloader.stop();
+    await scheduler.stop();
+  }
+});
 
 it.each([
   { source: "file", reason: "lifecycle-busy" },

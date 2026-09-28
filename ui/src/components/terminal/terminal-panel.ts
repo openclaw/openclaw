@@ -1,9 +1,3 @@
-// Dockable operator terminal panel for the Control UI shell.
-//
-// Renders a VS Code-style shell dock (bottom by default, right, or main) with session
-// tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
-// session. The browser runtime is dynamically imported on first open so it
-// never weighs down the initial Control UI bundle.
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
@@ -144,9 +138,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
         .find((tab) => tab.id === this.terminalSessions.activeId)
         ?.controller.fit(),
   });
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
-  private readonly onDocumentPointerDown = (event: PointerEvent) =>
-    this.handleDocumentPointerDown(event);
   private themeObserver: MutationObserver | null = null;
 
   private get sessionBottomOnly(): boolean {
@@ -160,12 +151,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     // Suppress before the restored open state boots a session nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
     if (!this.fullscreen && !this.embedded && !this.sessionBottomOnly) {
-      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     }
     if (!this.fullscreen && !this.embedded) {
-      window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onToggleRequest);
+      window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.handleToggleRequest);
     }
-    document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     if (typeof MutationObserver !== "undefined") {
       this.themeObserver = new MutationObserver(() =>
         updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode),
@@ -182,9 +173,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onToggleRequest);
-    document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
+    window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.handleToggleRequest);
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     this.themeObserver?.disconnect();
     this.themeObserver = null;
     this.terminalSessions.disconnectHost();
@@ -193,14 +184,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   override updated(changed: Map<string, unknown>): void {
     if ((changed.has("embedded") || changed.has("sessionKey")) && !this.fullscreen) {
       if (this.embedded || this.sessionBottomOnly) {
-        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       } else {
-        window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       }
       if (this.embedded) {
-        window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onToggleRequest);
+        window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.handleToggleRequest);
       } else {
-        window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onToggleRequest);
+        window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.handleToggleRequest);
       }
     }
     if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
@@ -305,7 +296,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     `;
   }
 
-  /** Opens the panel if closed, closes it if open. */
   toggle(): void {
     if (!this.available) {
       return;
@@ -318,7 +308,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     }
   }
 
-  handleToggleRequest(event: Event): void {
+  readonly handleToggleRequest = (event: Event): void => {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as TerminalPanelToggleDetail)
@@ -347,7 +337,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       return;
     }
     this.toggle();
-  }
+  };
 
   closeTerminalPanel(): void {
     this.closeSessionPicker(false);
@@ -401,7 +391,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     }
   }
 
-  private handleDocumentPointerDown(event: PointerEvent): void {
+  private readonly handleDocumentPointerDown = (event: PointerEvent): void => {
     if (!this.sessionPickerOpen) {
       return;
     }
@@ -412,7 +402,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     if (!(trigger && path.includes(trigger)) && !(menu && path.includes(menu))) {
       this.closeSessionPicker(false);
     }
-  }
+  };
 
   private handleSessionPickerFocusOut(event: FocusEvent): void {
     const isInside = (target: EventTarget | null) =>

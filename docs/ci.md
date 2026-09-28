@@ -12,6 +12,11 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
+
+Broad PRs retain their compact selected-owner Node plan when time-based splitting
+would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
@@ -30,11 +35,11 @@ fail-fast. Main and manual runs retain complete matrices. See
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible canonical groups can exceed that target; setup, builds, and queues are separate from test time. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
+Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible canonical groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
-iOS release qualification uses [larger hosted capacity](/ci/runners) for its stock simulator and isolated Gateway. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
@@ -43,9 +48,11 @@ file, so large PRs do not lose test-planning inputs to Actions output or environ
 size limits. Frozen targets that predate this transport retain their bounded JSON
 output contract. Missing or invalid inputs still reject current PR Node planning.
 
-The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
+The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 32-class for dispatched proof and defaults to a four-hour outer job budget. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+
+Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -53,7 +60,7 @@ Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proo
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
-Android phone tests use up to two isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns third-party lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
+Android phone tests use up to two isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows keep third-party phone lint with its unit tests so they reuse compilation and build metadata. Wear owns Wear tests and lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
 
 macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
 
@@ -164,6 +171,20 @@ To reserve capacity outside ordinary PR/main pools:
 1. Create an org runner group with Linux runners labelled `ubuntu-latest`/`ubuntu-24.04`, plus the Windows/macOS labels used by validation.
 2. Grant `openclaw/openclaw` access to the group.
 3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
+
+Linux runners for jobs that set `semantic-checks: true` also require:
+
+- systemd as PID 1 and an active `systemd-logind` service.
+- Noninteractive sudo access to check logind, enable linger for the runner user,
+  and start that user's systemd manager.
+- cgroup v2 with memory and swap accounting, delegated to the user manager.
+
+These requirements apply to custom release groups as well as ordinary runners.
+The shared setup action starts the user manager and verifies a real 64 MiB scope
+with swap disabled and group OOM termination before checks run. Unsupported
+runners fail setup; provision these capabilities before assigning the validation
+labels, or unset the release-group override to restore ordinary routing. Setup
+qualifies the backend; it does not itself limit later lint or compiler commands.
 
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the

@@ -12,6 +12,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
+import { captureRequesterFollowupAuthority } from "../subagents/requester-cron-authority.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -25,6 +26,8 @@ class FollowupAccessChangedError extends Error {}
 /** Prepare current facts through their worker owner; no stored identity becomes authority. */
 export async function prepareSessionsSendFollowup(params: {
   runId: string;
+  requesterTurnRunId?: string;
+  withRequesterAuthority?: <T>(run: () => T) => T;
   requesterAgentId: string;
   requesterSessionKey: string;
   targetAgentId: string;
@@ -51,8 +54,11 @@ export async function prepareSessionsSendFollowup(params: {
   const signal = AbortSignal.any([captured.signal, revoked.signal]);
   let stopAccessWatch: (() => void) | undefined;
   let released = false;
-  const release = () => {
-    if (released) {
+  let observationReleased = false;
+  let authorityReleased = true;
+  let requesterAuthority: ReturnType<typeof captureRequesterFollowupAuthority>;
+  const releaseResources = () => {
+    if (released || !observationReleased || !authorityReleased) {
       return;
     }
     released = true;
@@ -61,6 +67,14 @@ export async function prepareSessionsSendFollowup(params: {
       read.release();
     }
     captured.release();
+  };
+  const release = () => {
+    if (observationReleased) {
+      return;
+    }
+    observationReleased = true;
+    requesterAuthority?.release();
+    releaseResources();
   };
   try {
     assertInvocation?.();
@@ -153,10 +167,39 @@ export async function prepareSessionsSendFollowup(params: {
         }
       }
     });
+    const requesterSessionId = facts[0]!.readCurrent(getRuntimeConfig()).target.entry.sessionId;
+    if (params.requesterTurnRunId && params.withRequesterAuthority) {
+      const requesterTurnRunId = params.requesterTurnRunId;
+      requesterAuthority = params.withRequesterAuthority(() =>
+        captureRequesterFollowupAuthority({
+          requesterTurnRunId,
+          requesterAgentId: params.requesterAgentId,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterSessionId,
+          sourceSessionKey: params.targetSessionKey,
+          release: () => {
+            authorityReleased = true;
+            releaseResources();
+          },
+          isCurrent: () => {
+            try {
+              assertCurrent();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        }),
+      );
+      // The observer and the admitted parent share the prepared custody. Either
+      // can finish first; release its readers only after both owners are done.
+      authorityReleased = requesterAuthority === undefined;
+    }
     return {
       runId: params.runId,
       requesterSessionKey: params.requesterSessionKey,
-      requesterSessionId: facts[0]!.readCurrent(getRuntimeConfig()).target.entry.sessionId,
+      requesterSessionId,
+      requesterAuthority,
       requesterAgentId: params.requesterAgentId,
       targetSessionKey: params.targetSessionKey,
       targetAgentId: params.targetAgentId,

@@ -14,11 +14,9 @@
    bubble only, not the virtual row positioning or measured layout dimensions. */
 @keyframes chat-message-enter {
   from {
-    opacity: 0;
     transform: translateY(8px);
   }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }
@@ -1355,7 +1353,7 @@ img.chat-avatar {
   padding: 12px;
   min-width: 200px;
   max-width: calc(100vw - 48px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--overlay-shadow);
   /* Above the still-connected .chat-reply-context-menu (9999). */
   z-index: 10000;
   animation: scale-in 0.15s ease-out;

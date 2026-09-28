@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
 
@@ -33,6 +34,7 @@ export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateRe
   return html`
     <section
       class="content-header content-header--stacked content-header--settings content-header--page hub-page-header plugins-hub-header"
+      ${shellLayoutTraits({ hubHeader: true })}
     >
       <div class="hub-page-header__title">
         <h1 class="page-title">${titleForRoute(copy.route)}</h1>

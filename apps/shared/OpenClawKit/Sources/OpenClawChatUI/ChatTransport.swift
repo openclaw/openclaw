@@ -940,6 +940,7 @@ public protocol OpenClawChatTransport: Sendable {
     func loadSourceContext() async -> OpenClawChatSourceContext?
     func loadSourceFavicon(host: String) async -> Data?
 
+    func releaseActiveSessionSubscription() async
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
     func compactSession(sessionKey: String) async throws
@@ -1188,6 +1189,7 @@ extension OpenClawChatTransport {
     }
 
     public func setActiveSessionKey(_: String) async throws {}
+    public func releaseActiveSessionSubscription() async {}
 
     public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> OpenClawChatRunObservation {
         .unavailable
