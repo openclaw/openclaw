@@ -5,6 +5,7 @@ import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gatew
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-context-types.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "../cli/update-cli/update-command-service-plan.js";
 import { assertManagedGatewayArtifactPublication } from "../cli/update-cli/update-command-service-revalidation.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as nativeExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -12,6 +13,8 @@ import * as inventory from "./inspect.js";
 import * as launchdExec from "./launchd-exec.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
+import { readCorrespondingLaunchAgentCommand } from "./launchd-runtime.js";
+import { readManagedGatewayBindingState } from "./managed-gateway-bindings.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 
 // Native command observations are controlled; discovery, plist decoding,
@@ -19,6 +22,11 @@ import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
+  { loaded: "system", target: "system", edited: false, refused: true },
+  { loaded: "system", target: "local", edited: false, refused: false },
+  { loaded: "system", target: "system", edited: false, refused: false, observation: "stopped" },
+  { loaded: "system", target: "system", edited: false, refused: false, observation: "mismatch" },
+  { loaded: "system", target: "system", edited: false, refused: true, observation: "uncertain" },
   { loaded: "local", target: "local", edited: false, refused: true },
   { loaded: "local", target: "global", edited: false, refused: false },
   { loaded: "global", target: "local", edited: false, refused: false },
@@ -48,7 +56,7 @@ it.each([
   { loaded: "local", target: "local", edited: false, refused: false, selected: "explicit Program" },
   { loaded: "global", target: "global", edited: false, refused: true, customLabel: true },
 ] as const)(
-  "uses the loaded LaunchAgent definition: loaded=$loaded target=$target edited=$edited selected=$selected custom=$customLabel",
+  "uses the loaded launchd definition: loaded=$loaded target=$target edited=$edited selected=$selected custom=$customLabel observation=$observation",
   async (scenario) =>
     withTestDir({ prefix: "launchd-loaded-install-" }, async (directory) => {
       mockProcessPlatform("darwin");
@@ -65,7 +73,13 @@ it.each([
           plist: path.join(directory, "global", "Library", "LaunchAgents", `${label}.plist`),
         },
       };
-      for (const location of Object.values(locations)) {
+      const systemPlist = `/Library/LaunchDaemons/${label}.plist`;
+      const systemFixturePlist = path.join(directory, "system.plist");
+      const allLocations = {
+        ...locations,
+        system: { root: path.join(directory, "system-install"), plist: systemPlist },
+      };
+      for (const location of Object.values(allLocations)) {
         await fs.mkdir(path.join(location.root, "dist"), { recursive: true });
         await fs.writeFile(
           path.join(location.root, "package.json"),
@@ -75,7 +89,9 @@ it.each([
           path.join(location.root, "dist", "entry.js"),
           "// synthetic serving artifact\n",
         );
-        await fs.mkdir(path.dirname(location.plist), { recursive: true });
+        if (location.plist !== systemPlist) {
+          await fs.mkdir(path.dirname(location.plist), { recursive: true });
+        }
       }
       const argv = (root: string) => [
         process.execPath,
@@ -104,7 +120,7 @@ it.each([
           : selectedScenario === "explicit Program"
             ? [path.join(directory, "argv-zero", "node"), ...argv(root).slice(1)]
             : argv(root);
-      for (const [kind, location] of Object.entries(locations)) {
+      for (const [kind, location] of Object.entries(allLocations)) {
         if (wrapped) {
           await fs.mkdir(path.join(location.root, "service-env"), { recursive: true });
           await fs.writeFile(
@@ -133,8 +149,15 @@ it.each([
             `<key>Program</key><string>${executable}</string>\n<key>ProgramArguments</key>`,
           );
         }
-        await fs.writeFile(location.plist, plist);
+        await fs.writeFile(
+          location.plist === systemPlist ? systemFixturePlist : location.plist,
+          plist,
+        );
       }
+      const readFile = fs.readFile;
+      vi.spyOn(fs, "readFile").mockImplementation((file, options) =>
+        readFile(file === systemPlist ? systemFixturePlist : file, options),
+      );
       vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue({
         services: [
           {
@@ -151,6 +174,13 @@ it.each([
             scope: "system",
             marker: "openclaw",
           },
+          {
+            platform: "darwin",
+            label,
+            detail: `plist: ${systemPlist}`,
+            scope: "system",
+            marker: "openclaw",
+          },
         ],
         errors: [],
       });
@@ -161,14 +191,17 @@ it.each([
         }
         return decodeLaunchAgentPlistFixture(options.input, args[1]);
       });
-      const domain = `gui/${process.getuid?.() ?? 501}`;
-      const loaded = locations[scenario.loaded];
+      const guiDomain = `gui/${process.getuid?.() ?? 501}`;
+      const domain = scenario.loaded === "system" ? "system" : guiDomain;
+      const loaded = allLocations[scenario.loaded];
+      const observation = "observation" in scenario ? scenario.observation : undefined;
+      const cleanupError = new CommandProcessCleanupError();
       const print = [
         `${domain}/${label} = {`,
-        `\tpath = ${loaded.plist}`,
-        "\ttype = LaunchAgent",
-        "\tstate = running",
-        `\tpid = ${process.pid}`,
+        `\tpath = ${observation === "mismatch" ? locations.local.plist : loaded.plist}`,
+        `\ttype = ${scenario.loaded === "system" ? "LaunchDaemon" : "LaunchAgent"}`,
+        `\tstate = ${observation === "stopped" ? "exited" : "running"}`,
+        ...(observation === "stopped" ? [] : [`\tpid = ${process.pid}`]),
         `\tprogram = ${selectedScenario === "explicit Program" ? process.execPath : rawArgv(loaded.root)[0]}`,
         "\targuments = {",
         ...rawArgv(loaded.root).map(
@@ -198,7 +231,10 @@ it.each([
       ].join("\n");
       const native = vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {
         expect(args[0]).toBe("print");
-        expect([`${domain}/${label}`, `system/${label}`]).toContain(args[1]);
+        expect([`${guiDomain}/${label}`, `system/${label}`]).toContain(args[1]);
+        if (args[1] === `${domain}/${label}` && observation === "uncertain") {
+          throw cleanupError;
+        }
         return args[1] === `${domain}/${label}`
           ? { code: 0, stdout: print, stderr: "", termination: "exit" }
           : { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
@@ -231,7 +267,7 @@ it.each([
         }
       }
       const admission = assertManagedGatewayArtifactPublication({
-        roots: [locations[scenario.target].root],
+        roots: [allLocations[scenario.target].root],
         env: { HOME: home },
         timeoutMs: 30_000,
         updateInstallKind: "package",
@@ -239,9 +275,16 @@ it.each([
         selected,
         assertCurrent: () => {},
       });
+      if (observation === "uncertain") {
+        await expect(admission).rejects.toBe(cleanupError);
+        await expect(
+          resolveLiveManagedGatewayDistFence(loaded.root, { env: { HOME: home } }),
+        ).rejects.toBe(cleanupError);
+        return;
+      }
       if (scenario.refused) {
         await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-        if (customLabel) {
+        if (customLabel || scenario.loaded === "system") {
           await expect(admission).rejects.toMatchObject({
             message: expect.stringContaining(loaded.plist),
           });
@@ -252,17 +295,41 @@ it.each([
       } else {
         await expect(admission).resolves.toBeUndefined();
       }
-      if (scenario.loaded === "global" && !selectedScenario) {
-        const fence = await resolveLiveManagedGatewayDistFence(locations[scenario.target].root, {
+      if ((scenario.loaded === "global" || scenario.loaded === "system") && !selectedScenario) {
+        const fence = await resolveLiveManagedGatewayDistFence(allLocations[scenario.target].root, {
           env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
         });
         expect(fence.refuse).toBe(scenario.refused);
-        if (customLabel && fence.refuse) {
+        if ((customLabel || scenario.loaded === "system") && fence.refuse) {
           expect(fence.message).toContain(loaded.plist);
           expect(fence.message).toContain(`${domain}/${label}`);
           expect(fence.message).not.toContain("`openclaw gateway stop`");
           expect(fence.message).not.toContain("`openclaw gateway start`");
         }
+      }
+      if (scenario.loaded === "system" && scenario.refused) {
+        const state = await readManagedGatewayBindingState({
+          profile: "shared-proof",
+          env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
+          launchAgentPlistPath: systemPlist,
+        });
+        expect(state.launchAgent?.target).toBe(`system/${label}`);
+        expect(state.launchAgent).toBeDefined();
+        await expect(
+          readCorrespondingLaunchAgentCommand(
+            { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
+            state.launchAgent!,
+            5_000,
+          ),
+        ).resolves.toBeNull();
+        expect(
+          inventory.renderGatewayServiceCleanupHints([
+            { platform: "darwin", label, detail: `plist: ${systemPlist}`, scope: "system" },
+          ]),
+        ).toContain(`sudo launchctl bootout system/${label}`);
+      }
+      if (scenario.loaded === "system") {
+        expect(native).toHaveBeenCalledWith(["print", `system/${label}`], expect.any(Number));
       }
       expect(native).toHaveBeenCalled();
     }),

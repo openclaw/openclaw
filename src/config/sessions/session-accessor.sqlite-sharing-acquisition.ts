@@ -93,3 +93,25 @@ export function recordAcquiringSessionMember(
   acquisition.sessionId = member.sessionId;
   acquisition.membership.set(member.identityId, member.present);
 }
+
+/** Apply a committed field postimage only to its original session generation. */
+export function updateSessionSharingField(
+  facts: CommittedSessionSharingFacts,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+): CommittedSessionSharingFacts {
+  if (facts.entry?.sessionId !== change.sessionId) {
+    return facts;
+  }
+  if (change.kind === "owner") {
+    return (facts.entry.lifecycleRevision ?? null) === change.lifecycleRevision
+      ? { ...facts, entry: { ...facts.entry, owner: change.owner } }
+      : facts;
+  }
+  const membership = new Set(facts.membership);
+  if (change.present) {
+    membership.add(change.identityId);
+  } else {
+    membership.delete(change.identityId);
+  }
+  return { ...facts, membership };
+}

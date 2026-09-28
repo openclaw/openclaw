@@ -73,6 +73,50 @@ The browser plugin starts its helper processes with the Bun executable that runs
 - **Chrome MCP:** [existing-session profiles](/tools/browser/existing-session) start the packaged Chrome DevTools MCP server on Bun for `--autoConnect`, `browserUrl`, and `wsEndpoint` attaches. Actions, snapshots, screenshots, coordinate clicks, waits across cross-site navigations, and cleanup of the server process tree behave as on Node. A custom `mcpCommand` runs as configured.
 - **Chrome extension:** on macOS and Linux, the native messaging host and the relay daemon it starts use the runtime that ran `openclaw browser extension install`.
 
+## Bun-only installs
+
+Pin the Gateway service to your Bun executable so updates and Doctor retain it. Without Node, the `openclaw` launcher cannot start, so run the package entry point with Bun:
+
+```sh
+<bun> <package-root>/openclaw.mjs gateway install --runtime bun --runtime-path <bun> --force
+```
+
+Update, repair, and Doctor maintenance children use the running Bun executable.
+Bun package-manager probes and installs use an explicit executable: the verified
+service Bun when updating its root, otherwise `process.execPath` when the updater
+runs under Bun, then bare `bun` from PATH as the final fallback. This preserves
+the selected Bun even when PATH has no Bun or contains a different build.
+
+When an owned managed Bun Gateway serves a different package root from the CLI,
+`openclaw update` advances the Gateway installation in place and leaves the
+invoking CLI installation unchanged. The updater validates that service's actual
+Bun for Bun 1.4+ and WAL-safe `node:sqlite`, without comparing its emulated Node
+version to `engines.node`. If the updater runs on Node, that Node must also meet
+the target package's Node and SQLite requirements because finalization uses it.
+The existing service install/restart path retains the recorded Bun pin. Node split-root routing is unchanged, and a path under
+`~/.openclaw` alone does not establish Bun global-install ownership.
+
+Doctor and `openclaw update repair` from another installation leave this Bun
+Gateway at its own root. Explicit repair reports the installation drift and
+refuses maintenance before stopping the service. Use
+`<bun> <service-root>/openclaw.mjs update repair` or
+`<bun> <service-root>/openclaw.mjs doctor --fix` for repair from the service's
+installation.
+
+First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4+. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
+
+Published updaters through 2026.9.6 cannot update a Bun-only install. They do not set this marker, so the new package's preinstall stops staging (`global-install-failed`). If the caller sets the marker, their own bare `node` probe fails to start instead (`update-executor-settlement-failed`). Both refusals happen before the Gateway stops, and it keeps running. A fixed version must drive the update; installing a fixed candidate cannot change the updater already running.
+
+The installed updater runs first. In a Linux split-root fixture, published
+2026.9.6 refused early with `ENOENT` when Bun was absent from PATH, leaving the
+Gateway and both installations unchanged. With the fork Bun on PATH, the same
+published driver updated the Gateway installation in place and restarted it
+healthy while leaving the invoking CLI unchanged. The routing and explicit
+Bun selection described above apply from the first updater containing the fix;
+a newer candidate cannot change the installed updater's first-hop behavior.
+
+Npm-sourced plugins still require npm and Node.
+
 ## Known limitations
 
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
@@ -92,6 +136,8 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                               |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Updates owned split-root Bun Gateway installations in place, retains their runtime pins, and uses explicit Bun executables for package-manager probes and installs.                                  |
+| Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                           |
 | Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`; preparing an update still needs npm. #160154                                                   |
 | Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                               |
 | Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                       |

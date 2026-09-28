@@ -23,6 +23,7 @@ afterEach(() => {
 function fixture(
   options: {
     timeoutSeconds?: number;
+    typingIntervalSeconds?: number;
     resolveAdapter?: () => Promise<ChannelHeartbeatAdapter | undefined>;
   } = {},
 ) {
@@ -32,7 +33,14 @@ function fixture(
   const clearTyping = vi.fn(async () => {});
   const onError = vi.fn();
   const manager = createRecoveryTypingManager({
-    getConfig: () => ({ agents: { defaults: { timeoutSeconds: options.timeoutSeconds ?? 120 } } }),
+    getConfig: () => ({
+      agents: {
+        defaults: {
+          timeoutSeconds: options.timeoutSeconds ?? 120,
+          typingIntervalSeconds: options.typingIntervalSeconds,
+        },
+      },
+    }),
     isAvailable: () => available,
     resolveAdapter:
       options.resolveAdapter ?? (async () => ({ sendTypingGuarded: sendTyping, clearTyping })),
@@ -62,26 +70,34 @@ function fixture(
   };
 }
 describe("recovery typing", () => {
-  it("keeps only typing active beyond one minute and stops at command settlement", async () => {
-    const f = fixture();
-    const firstTyping = createDeferredCore();
-    f.sendTyping.mockImplementationOnce(async () => {
-      firstTyping.resolve();
-    });
-    const stop = f.manager.start(f.params);
-    await firstTyping.promise;
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(65_000);
-    expect(f.sendTyping.mock.calls.length).toBeGreaterThan(20);
-    expect(f.sendTyping).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "123", accountId: "work", threadId: 99 }),
-    );
-    const count = f.sendTyping.mock.calls.length;
-    stop();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.sendTyping).toHaveBeenCalledTimes(count);
-    expect(f.clearTyping).toHaveBeenCalledOnce();
-  });
+  it.each([
+    { cadence: "default", typingIntervalSeconds: undefined, intervalMs: 6_000, expectedSends: 11 },
+    { cadence: "configured", typingIntervalSeconds: 10, intervalMs: 10_000, expectedSends: 7 },
+  ])(
+    "honors $cadence cadence beyond one minute and stops at settlement",
+    async ({ typingIntervalSeconds, intervalMs, expectedSends }) => {
+      const f = fixture({ typingIntervalSeconds });
+      const firstTyping = createDeferredCore();
+      f.sendTyping.mockImplementationOnce(async () => {
+        firstTyping.resolve();
+      });
+      const stop = f.manager.start(f.params);
+      await firstTyping.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(intervalMs - 1);
+      expect(f.sendTyping).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(65_001 - intervalMs);
+      expect(f.sendTyping).toHaveBeenCalledTimes(expectedSends);
+      expect(f.sendTyping).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "123", accountId: "work", threadId: 99 }),
+      );
+      const count = f.sendTyping.mock.calls.length;
+      stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.sendTyping).toHaveBeenCalledTimes(count);
+      expect(f.clearTyping).toHaveBeenCalledOnce();
+    },
+  );
   it.each(["retired", "gateway unavailable", "closed"])("stops when %s", async (state) => {
     const f = fixture();
     f.manager.start(f.params);

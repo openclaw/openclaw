@@ -59,6 +59,10 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+An explicit `ready` outcome may include `modelOrder: string[]` to rank its
+already discovered models in the picker. This does not add models or grant
+access; absent models are ignored, and outcomes without `modelOrder` retain
+the manifest order.
 Provider-scoped refreshes preserve explicit outcomes reported under a registered
 alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same

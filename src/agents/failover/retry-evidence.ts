@@ -61,6 +61,11 @@ const RETRY_AFTER_UNIT_MS = new Map<string, number>([
 ]);
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
 
+/** HTTP statuses the provider SDK transport permits retrying. */
+export function isRetryableProviderHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
 /** Extract guarded HTTP status evidence for retry and diagnostic consumers. */
 export function extractFailoverHttpStatus(
   message: string | undefined,

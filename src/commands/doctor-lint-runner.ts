@@ -47,6 +47,7 @@ import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
+import { pluginSourceCaptureStateDir } from "../plugins/plugin-source-capture-context.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
@@ -585,7 +586,11 @@ async function withReadOnlyPluginStateSnapshot<T>(
         value: await withDisposableOpenClawStateReads(privateDatabasePath, () =>
           withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
             runStarted = true;
-            return await run(privateEnv);
+            // Nested inspections keep cache-owned native bytes outside every disposable snapshot.
+            return await pluginSourceCaptureStateDir.run(
+              pluginSourceCaptureStateDir.getStore() ?? resolveStateDir(sourceEnv),
+              () => run(privateEnv),
+            );
           }),
         ),
       };

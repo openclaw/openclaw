@@ -90,6 +90,7 @@ export function registerNativeAdmissionTests({
   const consumerCases: Array<{
     name: string;
     shared: boolean;
+    linkedDist?: boolean;
     running: boolean;
     late: boolean;
     refused: boolean;
@@ -100,6 +101,14 @@ export function registerNativeAdmissionTests({
     { name: "live shared root", shared: true, running: true, late: false, refused: true },
     { name: "stopped shared root", shared: true, running: false, late: false, refused: false },
     { name: "live disjoint root", shared: false, running: true, late: false, refused: false },
+    {
+      name: "disjoint package with shared resolved entrypoint",
+      shared: false,
+      linkedDist: true,
+      running: true,
+      late: false,
+      refused: true,
+    },
     {
       name: "sibling starts during staging",
       shared: true,
@@ -171,6 +180,10 @@ export function registerNativeAdmissionTests({
             }),
           );
           await fs.writeFile(path.join(location, "dist", "entry.js"), "original runtime");
+        }
+        if (scenario.linkedDist) {
+          await fs.rm(path.join(otherRoot, "dist"), { recursive: true });
+          await fs.symlink(path.join(root, "dist"), path.join(otherRoot, "dist"), "junction");
         }
         const artifact = path.join(root, "dist", "entry.js");
         const control = path.join(dir, "leases");

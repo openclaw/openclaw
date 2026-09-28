@@ -206,6 +206,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
     "src/shared/pid-alive.ts",
+    "src/infra/errno.ts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
     "src/infra/format-time/duration-units.ts",

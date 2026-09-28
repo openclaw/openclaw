@@ -12,6 +12,7 @@ import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import type { RespawnSupervisor } from "./supervisor-markers.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import type { HandoffChild } from "./update-managed-service-handoff-control.js";
 import type { ActiveManagedServiceUpdateHandoff } from "./update-managed-service-handoff-types.js";
 
 /** Package ownership permits installation, not control of an operator's system unit. */
@@ -22,7 +23,9 @@ export async function admitSystemdUpdate(
 ): Promise<string | undefined> {
   const installed =
     installation === undefined ? await findSystemdGatewayInstallation(env) : installation;
-  if (installed?.kind !== "system") {
+  // The same unit in both scopes still has a system owner; lifecycle discovery
+  // remains user-first, but update admission must not discard that restriction.
+  if (installed?.kind !== "system" && installed?.kind !== "dueling") {
     return undefined;
   }
   const unit = installed.system.unitName;
@@ -44,6 +47,36 @@ export async function admitSystemdUpdate(
     );
   }
   return `System-scope Gateway service ${unit} requires an operator restart. Package updates do not stop or restart this service. After the update, run: ${restartCommand}`;
+}
+
+export const SYSTEM_SERVICE_UPDATE_SETTLED_MARKER = "system-update-settled\n";
+
+/** Helper exit alone cannot prove that its detached updater has stopped. */
+export function observeManagedServiceUpdateHandoffClose(
+  owner: ActiveManagedServiceUpdateHandoff,
+  child: HandoffChild,
+): Promise<void> {
+  let buffered = "";
+  let cleanupSettled = false;
+  const onData = (chunk: Buffer | string) => {
+    buffered = (buffered + chunk.toString()).slice(-1024);
+    let newline;
+    while ((newline = buffered.indexOf("\n")) >= 0) {
+      const line = buffered.slice(0, newline + 1);
+      buffered = buffered.slice(newline + 1);
+      if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
+        cleanupSettled = true;
+      }
+    }
+  };
+  child.stdout.on("data", onData);
+  return new Promise((resolve) => {
+    child.once("close", () => {
+      child.stdout.off("data", onData);
+      owner.settled = cleanupSettled && child.exitCode !== null && child.signalCode === null;
+      resolve();
+    });
+  });
 }
 
 /** A detached helper still shares the system unit's cgroup until it settles. */

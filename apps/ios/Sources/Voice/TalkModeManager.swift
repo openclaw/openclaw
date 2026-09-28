@@ -12,15 +12,11 @@ private final class StreamFailureBox: @unchecked Sendable {
     private var valueInternal: Error?
 
     func set(_ error: Error) {
-        self.lock.lock()
-        self.valueInternal = error
-        self.lock.unlock()
+        self.lock.withLock { self.valueInternal = error }
     }
 
     var value: Error? {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.valueInternal
+        self.lock.withLock { self.valueInternal }
     }
 }
 
@@ -3500,15 +3496,14 @@ final class TalkModeManager: NSObject {
                 self.setStatus(String(localized: "Speaking…"), phase: .speaking)
                 self.isSpeaking = true
                 self.lastSpokenText = segment
-                guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration) else { return }
-                let context = self.incrementalSpeechContext
+                guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration),
+                      let context = self.incrementalSpeechContext
+                else { return }
                 let prefetchedAudio = await self.consumeIncrementalPrefetchedAudioIfAvailable(
                     for: segment,
                     context: context)
                 guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
-                if let context {
-                    self.startIncrementalPrefetchMonitor(context: context)
-                }
+                self.startIncrementalPrefetchMonitor(context: context)
                 await self.speakIncrementalSegment(
                     segment,
                     context: context,
@@ -3617,12 +3612,8 @@ final class TalkModeManager: NSObject {
 
     private func consumeIncrementalPrefetchedAudioIfAvailable(
         for segment: String,
-        context: IncrementalSpeechContext?) async -> IncrementalPrefetchedAudio?
+        context: IncrementalSpeechContext) async -> IncrementalPrefetchedAudio?
     {
-        guard let context else {
-            self.cancelIncrementalPrefetch()
-            return nil
-        }
         guard let prefetch = incrementalSpeechPrefetch else {
             return nil
         }
@@ -3834,23 +3825,10 @@ final class TalkModeManager: NSObject {
 
     private func speakIncrementalSegment(
         _ text: String,
-        context preferredContext: IncrementalSpeechContext? = nil,
-        prefetchedAudio: IncrementalPrefetchedAudio? = nil,
+        context: IncrementalSpeechContext,
+        prefetchedAudio: IncrementalPrefetchedAudio?,
         speechGeneration: Int) async
     {
-        let context: IncrementalSpeechContext
-        if let preferredContext {
-            context = preferredContext
-        } else {
-            guard await self.updateIncrementalContextIfNeeded(speechGeneration: speechGeneration) else { return }
-            guard let resolvedContext = incrementalSpeechContext else {
-                try? await TalkSystemSpeechSynthesizer.shared.speak(
-                    text: text,
-                    language: self.incrementalSpeechLanguages.systemVoice)
-                return
-            }
-            context = resolvedContext
-        }
         guard self.isCurrentSpeechGeneration(speechGeneration) else { return }
 
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else {

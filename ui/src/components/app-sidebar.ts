@@ -651,11 +651,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ${renderAppSidebarFooterBar(this)}
           </div>
         </div>
-        ${this.sidebarMenus.renderCustomizeMenu()} ${this.sidebarMenus.renderMoreMenu()}
-        ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderIdentityMenu()}
-        ${this.sidebarMenus.renderSessionMenu()} ${this.sidebarMenus.catalogMenu.render()}
-        ${this.sidebarMenus.renderSessionGroupMenu()} ${this.sidebarMenus.renderSessionSortMenu()}
-        ${this.sidebarMenus.renderCatalogViewMenu()}
+        ${this.sidebarMenus.render()}
       </aside>
     `;
   }

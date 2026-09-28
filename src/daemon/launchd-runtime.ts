@@ -92,13 +92,19 @@ export function parseLaunchctlJob(output: string, serviceTarget: string) {
   };
 }
 
-/** Observe a GUI job's loaded command and runtime together, without granting lifecycle authority. */
+/** Observe the discovered job's loaded command and runtime without granting lifecycle authority. */
 export async function readLoadedLaunchAgentState(
   env: GatewayServiceEnv,
   options: { plistPath?: string; timeoutMs?: number } = {},
 ): Promise<LoadedLaunchAgentState> {
   const label = resolveLaunchAgentLabel(env);
-  const target = `${resolveLaunchAgentGuiDomain()}/${label}`;
+  const expectedPath = options.plistPath ?? resolveLaunchAgentPlistPath(env);
+  // Global LaunchAgents also have system file scope, but still run in the GUI domain.
+  const domain =
+    path.dirname(expectedPath) === "/Library/LaunchDaemons"
+      ? "system"
+      : resolveLaunchAgentGuiDomain();
+  const target = `${domain}/${label}`;
   const result = await execLaunchctl(["print", target], options.timeoutMs ?? 5_000);
   const empty: GatewayServiceState = {
     installed: false,
@@ -116,7 +122,6 @@ export async function readLoadedLaunchAgentState(
   }
   const job = parseLaunchctlJob(result.stdout, target);
   const sourcePath = job.fields.get("path");
-  const expectedPath = options.plistPath ?? resolveLaunchAgentPlistPath(env);
   if (!sourcePath || !path.isAbsolute(sourcePath)) {
     throw new Error("Loaded LaunchAgent definition path is unavailable.");
   }
