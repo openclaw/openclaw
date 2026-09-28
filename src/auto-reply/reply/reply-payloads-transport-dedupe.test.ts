@@ -75,4 +75,55 @@ describe("reply dedupe uses the plugin's delivery destination", () => {
       ).toHaveLength(count);
     },
   );
+
+  it.each([
+    { sent: "Deployment finished.", reply: "Deployment finished.", delivered: false },
+    { sent: "Deployment finished", reply: "Deployment finished!!!", delivered: false },
+    {
+      sent: "Deployment finished.",
+      reply: "Deployment finished. Actually it failed.",
+      delivered: true,
+    },
+    {
+      sent: "Deployment finished.",
+      reply: "Deployment finished. 2 hosts restarted.",
+      delivered: true,
+    },
+    {
+      sent: "Checking the deploy logs now.",
+      reply: "Checking the deploy logs now. All good!",
+      delivered: true,
+    },
+  ])(
+    "reply $reply after a same-route send of $sent: delivered=$delivered",
+    async ({ sent, reply, delivered }) => {
+      const payloads = [{ text: reply }];
+      const targets = [{ tool: "message", provider: "test-flat", to: "room", text: sent }];
+      const expected = delivered ? [reply] : [];
+      const result = await buildReplyPayloads({
+        config: {},
+        payloads,
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        replyToMode: "off",
+        replyToChannel: "test-flat",
+        messageProvider: "test-flat",
+        originatingTo: "room",
+        messagingToolSentTargets: targets,
+      });
+      expect(result.replyPayloads.map((payload) => payload.text)).toEqual(expected);
+      expect(
+        resolveFollowupDeliveryPayloads({
+          cfg: {},
+          payloads,
+          messageProvider: "test-flat",
+          originatingTo: "room",
+          originatingReplyToMode: "off",
+          sentTargets: targets,
+        }).map((payload) => payload.text),
+      ).toEqual(expected);
+    },
+  );
 });
