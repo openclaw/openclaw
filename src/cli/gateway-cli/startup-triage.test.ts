@@ -12,7 +12,7 @@ it("leaves startup failure handling intact when an update removed the recovery m
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   await expect(
     triageGatewayStartupFailure(runtime, new Error("configured plugin crashed during startup")),
-  ).resolves.toBeUndefined();
+  ).resolves.toBe(false);
   expect(runtime.error).toHaveBeenCalledWith(
     expect.stringContaining("Automatic triage could not load:"),
   );

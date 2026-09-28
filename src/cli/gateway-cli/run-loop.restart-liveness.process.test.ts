@@ -26,6 +26,7 @@ const childScript = `
   import { fileLogTransport } from ${JSON.stringify(fileLogTransportUrl)};
   const faultPath = process.argv[1];
   const closeFailure = process.argv[2];
+  const repairPath = process.argv[3];
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
@@ -33,6 +34,14 @@ const childScript = `
       ownsProcessLifecycle: true,
       onRestartStartupFailure: async () => {
         process.stdout.write("waiting:" + starts + "\\n");
+        // A repair marker models automatic triage dispatching a real fixer:
+        // clearing the fault and returning true authorizes one in-process retry.
+        if (repairPath && fs.existsSync(repairPath)) {
+          fs.rmSync(repairPath);
+          if (fs.existsSync(faultPath)) fs.unlinkSync(faultPath);
+          return true;
+        }
+        return false;
       },
       start: async () => {
         const attempt = ++starts;
@@ -98,11 +107,15 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function startFixture(initialFailure = false, closeFailure = "") {
+function startFixture(initialFailure = false, closeFailure = "", withRepairMarker = false) {
   const directory = tempDirs.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
   const faultPath = path.join(directory, "startup-fault");
+  const repairPath = path.join(directory, "startup-repair");
+  if (withRepairMarker) {
+    fs.writeFileSync(repairPath, "fixer-dispatched");
+  }
   const logFile = path.join(directory, "gateway.jsonl");
   const stateDir = path.join(directory, "state");
   fs.writeFileSync(
@@ -123,6 +136,7 @@ function startFixture(initialFailure = false, closeFailure = "") {
       childScript,
       faultPath,
       closeFailure,
+      repairPath,
     ],
     {
       env: {
@@ -150,7 +164,16 @@ function startFixture(initialFailure = false, closeFailure = "") {
   child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
   const waitForOutput = (text: string) =>
     vi.waitFor(() => expect(output).toContain(text), { timeout: 45_000, interval: 25 });
-  return { child, closed, faultPath, logFile, stateDir, waitForOutput, output: () => output };
+  return {
+    child,
+    closed,
+    faultPath,
+    repairPath,
+    logFile,
+    stateDir,
+    waitForOutput,
+    output: () => output,
+  };
 }
 
 async function expectFailedRestartWaiting(
@@ -277,6 +300,25 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       fs.unlinkSync(fixture.faultPath);
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       await fixture.waitForOutput("ready:4");
+      expect(fixture.child.kill("SIGTERM")).toBe(true);
+      expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+    },
+    60_000,
+  );
+
+  posixIt(
+    "recovers in the same process after an automatic startup repair without another signal",
+    async () => {
+      const fixture = startFixture(false, "", true);
+      await fixture.waitForOutput("ready:1");
+      fs.writeFileSync(fixture.faultPath, "refuse");
+      // The startup-failure hook models triage dispatching a fixer: it clears
+      // the fault and returns true, authorizing one self-initiated retry.
+      expect(fixture.child.kill("SIGUSR2")).toBe(true);
+      await fixture.waitForOutput("waiting:2");
+      await fixture.waitForOutput("start:3");
+      await fixture.waitForOutput("ready:3");
+      expect(fixture.output()).not.toContain("waiting:3");
       expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
     },

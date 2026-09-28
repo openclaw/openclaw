@@ -22,13 +22,18 @@ import { redactSupportString } from "../logging/diagnostic-support-redaction.js"
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { renderTriagePrompt, type TriageFailureContext } from "./triage-prompt.js";
 
-/** Failure owners retain their exit/result; triage only supplies a bounded repair attempt. */
+/**
+ * Failure owners retain their exit/result; triage only supplies a bounded repair
+ * attempt. Resolves true only when a fixer was actually dispatched (older callers
+ * may resolve void, which lifecycle owners treat as "no repair attempted"), which
+ * lets lifecycle owners (e.g. the Gateway loop) attempt one recovery afterward.
+ */
 export async function triageAfterFailure(
   runtime: RuntimeEnv,
   failure: TriageFailureContext,
   signal?: AbortSignal,
   updateResultPath?: string,
-): Promise<void> {
+): Promise<boolean | void> {
   // Exec stamps its descendants. Codex also stamps shells even when its env policy
   // drops inherited variables; neither context should recursively launch a fixing agent.
   if (
@@ -37,7 +42,7 @@ export async function triageAfterFailure(
     isGatewayExternallySupervised() ||
     signal?.aborted
   ) {
-    return;
+    return false;
   }
   const bridge = createEmbeddedStateSignalBridge();
   const cancellation = signal ? AbortSignal.any([signal, bridge.signal]) : bridge.signal;
@@ -72,6 +77,7 @@ export async function triageAfterFailure(
     );
   };
   let managedStartup = false;
+  let repairDispatched = false;
   try {
     await withConsoleLogsRoutedToStderr(async () => {
       const resolvedRoot =
@@ -102,11 +108,12 @@ export async function triageAfterFailure(
           failure.kind === "update" &&
           (await queueManagedUpdateTriage(boundedFailure, commandArgv, cancellation))
         ) {
+          repairDispatched = true;
           runtime.error(
             "Automatic triage queued after managed update settlement; inspect the handoff log for its result.",
           );
         } else {
-          await continueTriageInFreshProcess({
+          repairDispatched = await continueTriageInFreshProcess({
             root,
             commandArgv,
             failure: boundedFailure,
@@ -142,6 +149,7 @@ export async function triageAfterFailure(
             throw new Error("automatic triage admission cancelled or lost");
           }
         }
+        repairDispatched = result.status === "started";
         runtime.error(
           `Automatic triage ${result.status === "started" ? "admitted" : "already owned"}; diagnostics: ${result.logPath}`,
         );
@@ -208,4 +216,5 @@ export async function triageAfterFailure(
   runtime.error(
     "Original failure retained; inspect the triage verification evidence before retrying.",
   );
+  return repairDispatched;
 }

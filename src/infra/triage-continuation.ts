@@ -181,7 +181,7 @@ export async function continueTriageInFreshProcess(params: {
   failure: TriageFailureContext;
   signal: AbortSignal;
   output: (text: string) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   params.signal.throwIfAborted();
   const root = realpathSync(params.root);
   const failure = failureSchema.parse(params.failure);
@@ -195,10 +195,12 @@ export async function continueTriageInFreshProcess(params: {
     lifetime: { kind: "foreground", boot: store.bootIdentity() },
   });
   if (acquired.kind === "busy") {
+    // Another live process owns this installation's repair; this dispatch
+    // attempted nothing, so the caller must not claim automatic recovery.
     params.output(
       "Automatic triage already owned for this installation; wait for its cleanup or inspect the saved diagnostics and run openclaw triage manually.\n",
     );
-    return;
+    return false;
   }
   let lease = acquired.lease;
   let child: ReturnType<typeof spawn> | undefined;
@@ -404,6 +406,8 @@ export async function continueTriageInFreshProcess(params: {
       child.disconnect();
     }
   }
+  // An admitted fixer child exited 0: automatic repair was dispatched and ran.
+  return true;
 }
 
 export async function acceptTriageContinuation(): Promise<

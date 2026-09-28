@@ -1106,6 +1106,125 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("retries startup in process after an automatic repair without another signal", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const startupError = new Error("rejected config after restart");
+      const repaired = createDeferredCore();
+      const start = vi
+        .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
+        .mockResolvedValueOnce(createGatewayServer(createCloseMock()))
+        .mockImplementationOnce(async () =>
+          createGatewayServer(createCloseMock(), Promise.reject(startupError)),
+        )
+        .mockImplementationOnce(async () => {
+          repaired.resolve();
+          return createGatewayServer(createCloseMock());
+        });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const onRestartStartupFailure = vi.fn(async (error: unknown) => {
+        expect(error).toBe(startupError);
+        return true;
+      });
+      const loop = runGatewayLoop({ start, runtime, onRestartStartupFailure });
+      const loopRejected = vi.fn<(error: unknown) => void>();
+      const loopSettled = loop.catch(loopRejected);
+      let stop: (() => void) | undefined;
+      try {
+        await waitForLoopCondition(() => start.mock.calls.length === 1, "expected initial startup");
+        await waitForLoopTurn();
+        captureSignal("SIGUSR2")();
+        stop = captureSignal("SIGINT");
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 3,
+          "expected the automatic repair retry to start without another signal",
+        );
+        await repaired.promise;
+        expect(onRestartStartupFailure).toHaveBeenCalledOnce();
+        expect(gatewayLog.warn).toHaveBeenCalledWith(
+          expect.stringContaining("retrying in-process gateway startup once"),
+        );
+        expect(loopRejected).not.toHaveBeenCalled();
+        stop();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        repaired.resolve();
+        if (loopRejected.mock.calls.length === 0 && runtime.exit.mock.calls.length === 0 && stop) {
+          stop();
+          await exited;
+        }
+        if (loopRejected.mock.calls.length > 0) {
+          await loopSettled;
+        }
+      }
+    });
+  });
+
+  it("retries the automatic repair once, then parks with visible operator guidance", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const startupError = new Error("rejected config after restart");
+      const recovered = createDeferredCore();
+      const start = vi
+        .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
+        .mockResolvedValueOnce(createGatewayServer(createCloseMock()))
+        .mockImplementationOnce(async () =>
+          createGatewayServer(createCloseMock(), Promise.reject(startupError)),
+        )
+        .mockRejectedValueOnce(new Error("repair did not fix startup"))
+        .mockImplementationOnce(async () => {
+          recovered.resolve();
+          return createGatewayServer(createCloseMock());
+        });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      // Automatic triage dispatches a fixer at most once per boot; the retry's
+      // failure must not authorize a second self-restart.
+      const onRestartStartupFailure = vi
+        .fn<(error: unknown, signal: AbortSignal) => Promise<boolean>>()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false);
+      const loop = runGatewayLoop({ start, runtime, onRestartStartupFailure });
+      const loopRejected = vi.fn<(error: unknown) => void>();
+      const loopSettled = loop.catch(loopRejected);
+      let stop: (() => void) | undefined;
+      try {
+        await waitForLoopCondition(() => start.mock.calls.length === 1, "expected initial startup");
+        await waitForLoopTurn();
+        captureSignal("SIGUSR2")();
+        stop = captureSignal("SIGTERM");
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 3,
+          "expected the single automatic repair retry",
+        );
+        await waitForLoopCondition(
+          () =>
+            gatewayLog.error.mock.calls.some(([message]) =>
+              String(message).startsWith("gateway startup is still failing after automatic"),
+            ),
+          "expected visible guidance after the failed repair retry",
+        );
+        expect(onRestartStartupFailure).toHaveBeenCalledTimes(2);
+        expect(start).toHaveBeenCalledTimes(3);
+        expect(loopRejected).not.toHaveBeenCalled();
+        // The parked loop still accepts operator restarts.
+        captureSignal("SIGUSR2")();
+        await recovered.promise;
+        expect(start).toHaveBeenCalledTimes(4);
+        stop();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        recovered.resolve();
+        if (loopRejected.mock.calls.length === 0 && runtime.exit.mock.calls.length === 0 && stop) {
+          stop();
+          await exited;
+        }
+        if (loopRejected.mock.calls.length > 0) {
+          await loopSettled;
+        }
+      }
+    });
+  });
+
   registerGatewayStartupFailureTests();
 
   it("exits 0 on SIGTERM after graceful close", async () => {

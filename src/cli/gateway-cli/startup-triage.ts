@@ -2,11 +2,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 
+/** Resolves true only when a repair fixer was actually dispatched. */
 export async function triageGatewayStartupFailure(
   runtime: RuntimeEnv,
   error: unknown,
   signal?: AbortSignal,
-) {
+): Promise<boolean> {
   let triage: typeof import("../../commands/triage-failure.js");
   try {
     triage = await import("../../commands/triage-failure.js");
@@ -15,16 +16,18 @@ export async function triageGatewayStartupFailure(
     runtime.error(
       `Automatic triage could not load: ${formatErrorMessage(importError)}. Run ${formatCliCommand("openclaw triage")} manually.`,
     );
-    return;
+    return false;
   }
-  await triage.triageAfterFailure(
-    runtime,
-    {
-      kind: "gateway-startup",
-      phase: "startup",
-      error: formatErrorMessage(error),
-      gateway: "verify-running",
-    },
-    signal,
+  return (
+    (await triage.triageAfterFailure(
+      runtime,
+      {
+        kind: "gateway-startup",
+        phase: "startup",
+        error: formatErrorMessage(error),
+        gateway: "verify-running",
+      },
+      signal,
+    )) === true
   );
 }

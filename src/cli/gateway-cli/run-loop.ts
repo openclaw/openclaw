@@ -84,7 +84,12 @@ export async function runGatewayLoop(params: {
   healthHost?: string;
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
-  onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
+  /**
+   * Called after a restart iteration's startup failed and cleanup succeeded.
+   * Resolve `true` only when an automatic repair was actually dispatched, which
+   * authorizes the loop to retry startup once before waiting for an operator.
+   */
+  onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<boolean | void>;
 }) {
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
@@ -143,7 +148,11 @@ export async function runGatewayLoop(params: {
   let restartDrainingMarked = false;
   const observeSignal = loopLogs.createGatewaySignalObserver(gatewayLog);
   let startupFailedWithoutServerHandle = false;
-  let failureWork: { controller: AbortController; settled: Promise<void> } | undefined;
+  let failureWork: { controller: AbortController; settled: Promise<boolean | void> } | undefined;
+  // True once an automatic-repair restart has been dispatched since the last
+  // successful boot; bounds self-recovery to one retry so a persistent failure
+  // can never spin restarts forever.
+  let startupRepairRetryDispatched = false;
   const processInstanceId = randomUUID();
   const getManagedUpdateOwner = () =>
     (pendingStartupRequest ?? activeRestartRequest)?.restartIntent?.successorOwner;
@@ -1265,6 +1274,7 @@ export async function runGatewayLoop(params: {
       });
       hostLifecycle = iterationHost;
       let startupFailedBeforeServerHandle = false;
+      let startupRepairAttempted = false;
       const isRestartIteration = !isFirstIteration;
       isFirstIteration = false;
       try {
@@ -1300,6 +1310,7 @@ export async function runGatewayLoop(params: {
         iterationStartupOperations.close();
         server = startedServer;
         startupFailedWithoutServerHandle = false;
+        startupRepairRetryDispatched = false;
         await new Promise<void>((resolve, reject) => {
           restartResolver = () => {
             restartResolver = null;
@@ -1375,13 +1386,45 @@ export async function runGatewayLoop(params: {
             settled: Promise.resolve().then(() => onRestartStartupFailure(err, controller.signal)),
           };
           try {
-            await failureWork.settled;
+            startupRepairAttempted = (await failureWork.settled) === true;
           } finally {
             failureWork = undefined;
           }
         }
       }
       if (startupFailedBeforeServerHandle) {
+        if (
+          !shuttingDown &&
+          startupRepairAttempted &&
+          !startupRepairRetryDispatched &&
+          !pendingStartupRequest &&
+          !activeRestartRequest
+        ) {
+          // The failure hook dispatched an automatic repair (e.g. startup triage
+          // removed a refused setting). Retry startup once in this process — the
+          // parked loop would otherwise stay unserved until an external signal.
+          gatewayLog.warn(
+            "automatic startup repair dispatched; retrying in-process gateway startup once",
+          );
+          startupRepairRetryDispatched = true;
+          // Drop the previous iteration's resolver so request() queues instead
+          // of resolving the already-settled wait promise.
+          restartResolver = null;
+          request("restart", "SIGUSR2", "gateway.restart_after_startup_failure_repair");
+        } else if (
+          !shuttingDown &&
+          startupRepairRetryDispatched &&
+          !pendingStartupRequest &&
+          !activeRestartRequest
+        ) {
+          // Automatic recovery was already tried and the gateway is still not
+          // serving: surface the operator path instead of waiting silently.
+          gatewayLog.error(
+            "gateway startup is still failing after automatic recovery; fix the issue " +
+              "(openclaw doctor / openclaw triage) and restart with `openclaw daemon restart` " +
+              "or SIGUSR2 — this process stays alive and accepts restarts.",
+          );
+        }
         await new Promise<void>((resolve) => {
           restartResolver = () => {
             restartResolver = null;
