@@ -55,8 +55,13 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
       event.preventDefault();
       event.stopPropagation();
       this.onClose(true);
-    } else if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout()) {
-      keepSheetFocus(event.currentTarget as HTMLElement, event);
+    } else if (
+      event.key === "Tab" &&
+      !event.defaultPrevented &&
+      isMobileNavLayout() &&
+      event.currentTarget instanceof HTMLElement
+    ) {
+      keepSheetFocus(event.currentTarget, event);
     }
   };
 
