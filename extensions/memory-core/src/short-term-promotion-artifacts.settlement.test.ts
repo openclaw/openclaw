@@ -150,7 +150,7 @@ it.each([
           if (scenario.mutation === "delete") {
             await beforeMutation(options.namespace);
           }
-          await store.delete(key);
+          return await store.delete(key);
         },
       };
     });

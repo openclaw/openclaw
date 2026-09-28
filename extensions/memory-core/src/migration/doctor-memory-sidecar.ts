@@ -532,14 +532,16 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
-    const groups = Map.groupBy(
-      await collectLegacyMemorySidecarSources({
-        config: params.config,
-        env: params.env,
-        stateDir: params.stateDir,
-      }),
-      (source) => source.legacyPath,
-    );
+    const groups = new Map<string, LegacyMemorySidecarSource[]>();
+    for (const source of await collectLegacyMemorySidecarSources({
+      config: params.config,
+      env: params.env,
+      stateDir: params.stateDir,
+    })) {
+      const group = groups.get(source.legacyPath) ?? [];
+      group.push(source);
+      groups.set(source.legacyPath, group);
+    }
     for (const sources of groups.values()) {
       let archiveReady = true;
       for (const source of sources) {

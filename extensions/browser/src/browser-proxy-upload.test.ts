@@ -417,7 +417,9 @@ describe("browser proxy upload transport", () => {
       const settled = Promise.allSettled(pending);
       await thirdQueued;
       // Drain ready promise continuations without advancing time or polling the filesystem.
-      await new Promise<void>((resolve) => process.nextTick(resolve));
+      await new Promise<void>((resolve) => {
+        process.nextTick(resolve);
+      });
       if (thirdAdmissionStarted) {
         await thirdAdmissionRead.promise;
       }
