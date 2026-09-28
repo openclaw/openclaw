@@ -3,6 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { SECURITY_FIELD_LABELS } from "./schema.labels.security.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -25,11 +26,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "env.shellEnv.enabled": "Shell Environment Import Enabled",
   "env.shellEnv.timeoutMs": "Shell Environment Import Timeout (ms)",
   "env.vars": "Environment Variable Overrides",
-  secrets: "Secrets",
-  "secrets.egressProxy": "Secret Egress Proxy",
-  "secrets.egressProxy.enabled": "Secret Egress Proxy Enabled",
-  "secrets.egressProxy.allowedHosts": "Secret Egress Proxy Allowed Hosts",
-  "secrets.egressProxy.bypassHosts": "Secret Egress Proxy Bypass Hosts",
+  ...SECURITY_FIELD_LABELS,
   wizard: "Setup Preferences",
   "wizard.accessMode": "Setup Discovery Access",
   "wizard.appRecommendations": "Setup App Recommendations",
