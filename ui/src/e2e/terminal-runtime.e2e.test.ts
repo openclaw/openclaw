@@ -281,7 +281,7 @@ suite.define(() => {
     });
   });
 });
-type RuntimeWindow = Window & {
+type RuntimeWindow = typeof window & {
   openclawTerminalRuntimeModule: Promise<
     typeof import("../components/terminal/terminal-runtime.ts")
   >;
