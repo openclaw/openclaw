@@ -13,7 +13,6 @@ import {
 import {
   recoverPendingWorkspaceResults,
   cleanupPendingWorkspaceResultOrphans,
-  type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
@@ -23,6 +22,7 @@ import {
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
 } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 

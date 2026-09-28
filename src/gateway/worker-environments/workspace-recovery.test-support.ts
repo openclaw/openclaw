@@ -1,9 +1,9 @@
-import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import type {
   WithPreparedWorkerWorkspaceRecovery,
   WorkerPlacementReclaimBarriers,
 } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerWorkspaceConflictReport,
   WorkspaceResultConflictLookup,

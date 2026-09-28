@@ -3,17 +3,12 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import {
   isCurrentActiveWorkerEnvironment,
   workerDisappearanceError,
-  type PlacementFailureActions,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
-  type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import type {
-  WithPreparedWorkerWorkspaceRecovery,
-  PreparedWorkerWorkspaceRecovery,
-} from "./placement-reclaim-contract.js";
-import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
+import { placementTurnOwner } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
 import {
@@ -30,7 +25,6 @@ import {
 import { boundedWorkerError } from "./worker-error.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   finalizeWorkspaceResultConflicts,
@@ -47,33 +41,6 @@ import {
   restoreStagedWorkerWorkspaceResultFromCleanup,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
-
-export type PlacementRecoveryDeps = {
-  placements: WorkerDispatchPlacementStore;
-  environments: Pick<
-    WorkerDispatchEnvironmentService,
-    | "get"
-    | "destroy"
-    | "startTunnel"
-    | "stopTunnel"
-    | "reconcileEnvironment"
-    | "reconcileOnce"
-    | "supportsProviderExecutionMode"
-  >;
-  failure: Omit<PlacementFailureActions, "cancelProvisioning">;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspace: (params: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
-  withPreparedRecovery: WithPreparedWorkerWorkspaceRecovery;
-  recoverPlacementMoves?: (
-    projection: WorkerSessionPlacementProjection,
-    environmentId?: string,
-  ) => Promise<Set<string>>;
-  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  prepareGatewayMove?: (
-    params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
-  ) => Promise<void>;
-};
 
 const log = createSubsystemLogger("gateway/worker-placement");
 

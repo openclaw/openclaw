@@ -3,7 +3,6 @@ import {
   isUnavailableEnvironment,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import {
   forceAbandonWorkerEnvironment,
   reportWorkerAbandonmentCleanupError,
@@ -14,6 +13,7 @@ import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   isForceAbandonedWorkerPlacement,
 } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementMoveRequest,
