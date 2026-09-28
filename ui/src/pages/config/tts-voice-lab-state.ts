@@ -84,17 +84,30 @@ export function isGoogleVoiceStoreUncertain(error: unknown): boolean {
   );
 }
 
-export function storedVoiceMatchingName(
-  voices: readonly StoredSpeechVoice[],
-  name: string,
+export function storedVoiceIds(voices: readonly StoredSpeechVoice[]): Set<string> {
+  return new Set(voices.filter(isStoredSpeechVoice).map((voice) => voice.id));
+}
+
+export function storedVoiceCreatedSince(
+  beforeIds: ReadonlySet<string>,
+  after: readonly StoredSpeechVoice[],
+  name?: string,
 ): StoredSpeechVoice | undefined {
-  const expected = name.trim();
-  if (!expected) {
+  const created = after.filter((voice) => isStoredSpeechVoice(voice) && !beforeIds.has(voice.id));
+  if (created.length === 0) {
     return undefined;
   }
-  return voices.find(
-    (voice) => isStoredSpeechVoice(voice) && (voice.name ?? "").trim() === expected,
-  );
+  const expected = name?.trim();
+  if (expected) {
+    const named = created.find((voice) => (voice.name ?? "").trim() === expected);
+    if (named) {
+      return named;
+    }
+    if (created.length > 1) {
+      return undefined;
+    }
+  }
+  return created.length === 1 ? created[0] : undefined;
 }
 
 export function shouldAcceptMicStart(input: {

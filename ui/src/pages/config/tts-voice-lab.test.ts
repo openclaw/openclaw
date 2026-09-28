@@ -4,7 +4,7 @@ import {
   isGoogleVoiceStoreInternal,
   isGoogleVoiceStoreUncertain,
   isStoredSpeechVoice,
-  storedVoiceMatchingName,
+  storedVoiceCreatedSince,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
   voiceLabCanSubmit,
@@ -88,14 +88,26 @@ describe("TTS voice lab", () => {
         storeUncertain: true,
       }),
     ).toBe("storeUncertain");
+    const before = new Set(["voice_abc"]);
     expect(
-      storedVoiceMatchingName(
+      storedVoiceCreatedSince(
+        before,
         [
           { id: "Kore", category: "prebuilt" },
           { id: "voice_abc", name: "Bobby", category: "replicated" },
         ],
         "Bobby",
+      ),
+    ).toBeUndefined();
+    expect(
+      storedVoiceCreatedSince(
+        before,
+        [
+          { id: "voice_abc", name: "Bobby", category: "replicated" },
+          { id: "voice_new", name: "Bobby", category: "replicated" },
+        ],
+        "Bobby",
       )?.id,
-    ).toBe("voice_abc");
+    ).toBe("voice_new");
   });
 });
