@@ -98,11 +98,16 @@ is_running() {
 }
 
 stop_gateway() {
-  local pid=""
+  local pid="" stop_policy_status=0
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
     local stop_timeout_ms attempts=0
-    stop_timeout_ms="$(node "$manager_script" stop-timeout-ms)" || return "$?"
+    stop_timeout_ms="$(node "$manager_script" stop-timeout-ms)" || {
+      stop_policy_status=$?
+      # No service budget is admitted: signal the existing fatal-cleanup owner
+      # and join using only the settlement allowance, not a substitute timeout.
+      stop_timeout_ms=0
+    }
     kill "$pid" >/dev/null 2>&1 || true
     # Leave the supervisor its loaded stop budget plus 5s to observe group exit.
     while is_running; do
@@ -119,6 +124,7 @@ stop_gateway() {
     fi
   fi
   node "$manager_script" check-stopped || return "$?"
+  [ "$stop_policy_status" -eq 0 ] || return "$stop_policy_status"
   rm -f "$pid_file" "$supervisor_script"
 }
 

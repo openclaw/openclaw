@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,27 @@ function fixture() {
       encoding: "utf8",
     });
   return { home, env, unit, systemctl, manager };
+}
+
+function waitForFixtureState(directory: string, settled: () => boolean) {
+  return new Promise<void>((resolve, reject) => {
+    const inspect = () => {
+      try {
+        if (!settled()) return;
+      } catch {
+        return;
+      }
+      watcher.close();
+      clearTimeout(deadline);
+      resolve();
+    };
+    const watcher = watch(directory, inspect);
+    const deadline = setTimeout(() => {
+      watcher.close();
+      reject(new Error("fixture state did not settle"));
+    }, 5_000);
+    inspect();
+  });
 }
 
 describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () => {
@@ -317,6 +338,117 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       const stopped = f.systemctl("stop", "openclaw-gateway.service");
       expect(stopped.status).toBe(1);
       expect(stopped.stderr).toContain("stop policy read failed");
+    },
+  );
+
+  it.each([false, true])(
+    "joins the installed outer stop after removed-unit reload=%s",
+    async (removed) => {
+      const f = fixture();
+      const bin = join(f.home, "bin");
+      const ready = join(f.home, "ready");
+      const program = join(f.home, "child.mjs");
+      const runtimeFile = join(bin, "systemctl-shim-gateway.log.runtime.json");
+      const runtime = () => JSON.parse(readFileSync(runtimeFile, "utf8"));
+      writeFileSync(
+        program,
+        'import fs from "node:fs"; process.on("SIGTERM", () => ' +
+          (removed ? "{}" : "process.exit(0)") +
+          "); fs.writeFileSync(" +
+          JSON.stringify(ready) +
+          ", String(process.pid)); setInterval(() => {}, 1000);",
+      );
+      writeFileSync(
+        f.unit,
+        [
+          "[Service]",
+          "ExecStart=" + JSON.stringify(process.execPath) + " " + JSON.stringify(program),
+          "TimeoutStopSec=330",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const started = f.systemctl("start", "openclaw-gateway.service");
+        expect(started.status, started.stderr).toBe(0);
+        await waitForFixtureState(
+          f.home,
+          () => existsSync(ready) && readFileSync(ready, "utf8").length > 0,
+        );
+        const pid = Number(readFileSync(ready, "utf8"));
+        if (removed) {
+          rmSync(f.unit);
+          expect(f.systemctl("daemon-reload").status).toBe(0);
+          expect(existsSync(f.unit + ".loaded-unit")).toBe(false);
+        }
+        const stopped = f.systemctl("stop", "openclaw-gateway.service");
+        expect(stopped.status, stopped.stderr).toBe(removed ? 1 : 0);
+        expect(runtime()).toMatchObject({
+          pid: 0,
+          groupPid: 0,
+          supervisorPid: 0,
+          stopFailed: removed,
+        });
+        expect(() => process.kill(-pid, 0)).toThrow();
+        if (removed) expect(stopped.stderr).toContain("stop policy read failed");
+      } finally {
+        if (existsSync(runtimeFile)) {
+          const owned = runtime();
+          // Failed proof must still retire only this fixture's published processes.
+          if (owned.supervisorPid) {
+            try {
+              process.kill(owned.supervisorPid, "SIGTERM");
+            } catch {}
+          }
+          if (owned.groupPid) {
+            try {
+              process.kill(-owned.groupPid, "SIGKILL");
+            } catch {}
+          }
+          await waitForFixtureState(bin, () => {
+            const observed = runtime();
+            return observed.pid === 0 && observed.supervisorPid === 0 && observed.groupPid === 0;
+          });
+        }
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "keeps outer policy lookup failure nonzero with supervisor active=%s",
+    (active) => {
+      const f = fixture();
+      const stop = readFileSync(owner, "utf8").match(/stop_gateway\(\) \{[\s\S]*?\n\}/)?.[0];
+      expect(stop).toBeDefined();
+      const pid = join(f.home, "pid");
+      const supervisor = join(f.home, "supervisor");
+      const signals = join(f.home, "signals");
+      writeFileSync(pid, "424242\n");
+      writeFileSync(supervisor, "owned");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            stop,
+            "pid_file=$1; supervisor_script=$2; signal_log=$3; manager_script=fixture-manager",
+            'ticks=0; kill() { printf "%s\\n" "$*" >> "$signal_log"; }; sleep() { ticks=$((ticks+1)); }',
+            'node() { [ "$2" != stop-timeout-ms ] || return 17; [ "$2" = check-stopped ]; }',
+            active ? "is_running() { return 0; }" : "is_running() { return 1; }",
+            'status=0; stop_gateway || status=$?; printf "%s %s\\n" "$status" "$ticks"',
+          ].join("\n"),
+          "fixture",
+          pid,
+          supervisor,
+          signals,
+        ],
+        { env: f.env, encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(active ? "1 50" : "17 0");
+      expect(readFileSync(signals, "utf8").trim().split("\n")).toEqual(["-0 424242", "424242"]);
+      expect(existsSync(pid)).toBe(true);
+      expect(existsSync(supervisor)).toBe(true);
     },
   );
 });
