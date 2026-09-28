@@ -2601,7 +2601,6 @@ type CanonicalTargetInventory = {
   configsByFile: Map<string, Set<string>>;
   configs: Set<string>;
   completeConfigs: Set<string>;
-  releaseOnlyConfigs: Set<string>;
 };
 const canonicalTargetInventories = new Map<
   (typeof canonicalNodeTestOwners)[number] | undefined,
@@ -2624,18 +2623,11 @@ function resolveCanonicalTargetInventory(requestedConfig?: string) {
   const configsByFile = new Map<string, Set<string>>();
   const configs = new Set<string>();
   const incompleteConfigs = new Set<string>();
-  const releaseOnlyConfigs = new Set<string>();
   for (const shard of createNodeTestShardsForOwners(owner ? [owner] : canonicalNodeTestOwners, {
     includeReleaseOnlyPluginShards: true,
     includeReleaseOnlyToolingShards: true,
     includeProofTests: false,
   })) {
-    if (RELEASE_ONLY_PLUGIN_SHARDS.has(shard.shardName)) {
-      for (const config of shard.configs) {
-        releaseOnlyConfigs.add(config);
-      }
-      continue;
-    }
     const envelope = shard.includePatterns ?? listWholeConfigFiles(shard.shardName);
     const included = envelope ? new Set(envelope) : undefined;
     for (const config of shard.configs) {
@@ -2660,7 +2652,6 @@ function resolveCanonicalTargetInventory(requestedConfig?: string) {
     configsByFile,
     configs,
     completeConfigs: new Set([...configs].filter((config) => !incompleteConfigs.has(config))),
-    releaseOnlyConfigs,
   };
   canonicalTargetInventories.set(owner, inventory);
   return inventory;
@@ -2697,7 +2688,6 @@ export function resolveCanonicalNodeTestConfig(
     return owners.values().next().value;
   }
   if (
-    inventory.releaseOnlyConfigs.has(config) ||
     EXCLUDED_PROJECT_CONFIGS.has(config) ||
     canonicalNodeTestOwners.some(
       (owner) => EXCLUDED_FULL_SUITE_SHARDS.has(owner.config) && owner.projects.includes(config),
@@ -4115,7 +4105,13 @@ export function createSelectedNodeTestShardBundles(
   const tooling = new Set([...selected].filter((target) => configs.get(target) === TOOLING_CONFIG));
   const shards = createNodeTestShardsForOwners(
     fullSuiteVitestShards,
-    { ...options, includeReleaseOnlyPluginShards: false, includeProofTests: false },
+    {
+      ...options,
+      // Exact selection opts into its existing owner, not the unrelated plugin sweep.
+      changedPaths: [...selected],
+      includeReleaseOnlyPluginShards: false,
+      includeProofTests: false,
+    },
     tooling.size === selected.size,
   );
   const owners = new Set<NodeTestShard>();
