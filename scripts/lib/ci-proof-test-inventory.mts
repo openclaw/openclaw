@@ -488,8 +488,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/discord/src/network-config.test.ts",
   "extensions/discord/src/question-finalization.test.ts",
   "extensions/discord/src/send.components.test.ts",
-  "extensions/discord/src/send.guild.test.ts",
-  "extensions/discord/src/send.typing.test.ts",
   "extensions/discord/src/voice/audio-worker-pacing.integration.test.ts",
   "extensions/discord/src/voice/audio-worker.import.test.ts",
   "extensions/discord/src/voice/audio.lifecycle.test.ts",
