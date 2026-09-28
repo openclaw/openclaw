@@ -30,6 +30,7 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelFullCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -389,6 +390,41 @@ describe("catalog publication session rows", () => {
       }
     },
   );
+
+  it("stops publishing a scoped provider's auth after an observed logout refresh", async () => {
+    const profile: AuthProfileCredential = {
+      type: "oauth",
+      provider: "custom",
+      access: "synthetic-access-before",
+      refresh: "synthetic-refresh-before",
+      expires: 1_900_000_000_000,
+      accountId: "synthetic-account",
+      email: "synthetic@example.test",
+    };
+    const { currentOwner } = await setup(true, profile);
+    const owner = await currentOwner();
+    expect(
+      getPreparedModelFullCatalogAuth(owner.readFullModelCatalog()!)?.authStore.profiles[
+        "custom:synthetic"
+      ],
+    ).toEqual(profile);
+    // The worker re-read each scoped provider's credential source and found the
+    // provider gone: the scoped merge must drop the retained entry instead of
+    // republishing the logged-out credential as still available.
+    const loggedOut = catalog();
+    setPreparedModelFullCatalogAuth(loggedOut, {
+      providerAuthLabels: new Map(),
+      authStore: { version: 1, profiles: {} },
+      authModes: {},
+      credentials: {},
+    });
+    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => loggedOut);
+    await owner.loadFullModelCatalog!({ providerIds: ["custom"], refresh: true });
+    const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog()!);
+    expect(published?.authStore.profiles["custom:synthetic"]).toBeUndefined();
+    expect(published?.credentials?.custom).toBeUndefined();
+    expect(published?.authModes.custom).toBeUndefined();
+  });
 
   it("publishes settled attempt status without rebuilding unchanged resident rows", async () => {
     const { rows, list, refresh, initial, readCatalog } = await setup();

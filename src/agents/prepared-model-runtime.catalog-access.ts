@@ -330,8 +330,14 @@ export function createFullModelCatalogAccess(
       const retainedAuth =
         getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth;
       const auth = providerIds
-        ? replacePreparedModelCatalogAuth(retainedAuth, discoveredAuth, (provider) =>
-            scope.has(normalizeProvider(provider)),
+        ? replacePreparedModelCatalogAuth(
+            retainedAuth,
+            discoveredAuth,
+            (provider) => scope.has(normalizeProvider(provider)),
+            // A scoped catalog refresh re-reads each scoped provider's credential
+            // source in the worker, so a scoped omission is an observed removal,
+            // not a passive pass-over.
+            { observeScopedRemovals: true },
           )
         : discoveredAuth;
       const { legacyRows, ...publication } = prepareModelCatalogPublication(

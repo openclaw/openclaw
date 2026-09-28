@@ -21,8 +21,10 @@ export function replacePreparedModelCatalogAuth(
   // A partial refresh is authoritative only for the providers it actually
   // re-discovered; a scoped-but-absent entry keeps the prior value so a
   // passive read cannot blank out still-valid auth (e.g. cli backends).
-  // An explicit auth refresh observes each scoped provider's credential source,
-  // so there a scoped omission is a removal and prior entries must not survive it.
+  // A refresh that observes each scoped provider's credential source (an
+  // explicit auth refresh, or a scoped catalog refresh whose worker re-reads
+  // the source) turns a scoped omission into a removal: prior entries must
+  // not survive it, or a logged-out provider stays published as available.
   const keepsPriorEntry = (provider: string) =>
     includesProvider(provider)
       ? options.observeScopedRemovals !== true && !rediscoveredProviders.has(provider)
@@ -88,7 +90,13 @@ export function replacePreparedModelCatalogAuth(
             .filter(
               ([provider]) =>
                 !includesProvider(provider) ||
-                (options.observeScopedRemovals !== true && !next.providerAuthLabels?.has(provider)),
+                // An observed next label replaces the prior one below. When the
+                // refresh omits a scoped label, only a provider whose auth was
+                // observed removed loses the prior label; a rediscovered
+                // provider keeps it so an unobserved label omission cannot
+                // churn the publication.
+                (!next.providerAuthLabels?.has(provider) &&
+                  (options.observeScopedRemovals !== true || rediscoveredProviders.has(provider))),
             )
             .concat([...next.providerAuthLabels].filter(take)),
         )
