@@ -4,6 +4,7 @@ import {
   isGoogleVoiceStoreInternal,
   isStoredSpeechVoice,
   shouldAcceptMicStart,
+  shouldClearCreateErrorOnClose,
   voiceLabCanSubmit,
   voiceLabSubmitBlock,
 } from "./tts-voice-lab-state.ts";
@@ -38,6 +39,11 @@ describe("TTS voice lab", () => {
         connected: false,
       }),
     ).toBe("disconnected");
+  });
+
+  it("keeps an in-flight store guarded after the dialog closes", () => {
+    expect(shouldClearCreateErrorOnClose(true)).toBe(false);
+    expect(shouldClearCreateErrorOnClose(false)).toBe(true);
   });
 
   it("drops a pending microphone start after the dialog closes", () => {

@@ -20,6 +20,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import {
   TtsClipRecorder,
+  TtsClipRecorderCancelledError,
   TTS_CLIP_MAX_DURATION_MS,
   type TtsRecordedClip,
 } from "./tts-clip-recorder.ts";
@@ -28,6 +29,7 @@ import {
   isGoogleVoiceStoreInternal,
   isStoredSpeechVoice,
   shouldAcceptMicStart,
+  shouldClearCreateErrorOnClose,
   voiceLabSubmitBlock,
   type StoredSpeechVoice,
 } from "./tts-voice-lab-state.ts";
@@ -130,8 +132,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     void this.stopRecording();
     this.pending = null;
     this.dialogOpen = false;
-    this.creating = false;
-    this.createError = null;
+    if (shouldClearCreateErrorOnClose(this.creating)) {
+      this.createError = null;
+    }
   };
 
   private startRecording(slot: ClipSlot) {
@@ -188,6 +191,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       }, 200);
     } catch (error) {
       this.pending = null;
+      if (error instanceof TtsClipRecorderCancelledError) {
+        return;
+      }
       if (
         shouldAcceptMicStart({
           session,

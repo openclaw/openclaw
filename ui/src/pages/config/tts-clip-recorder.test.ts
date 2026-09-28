@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RealtimeTalkSelectedMicrophoneError } from "../chat/talk/input.ts";
-import { TtsClipRecorder } from "./tts-clip-recorder.ts";
+import { TtsClipRecorder, TtsClipRecorderCancelledError } from "./tts-clip-recorder.ts";
 
 describe("TTS clip recorder", () => {
   afterEach(() => {
@@ -18,5 +18,41 @@ describe("TTS clip recorder", () => {
     );
     expect(open).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith("mic-1");
+  });
+
+  it("does not publish a context resumed after dispose", async () => {
+    let resume!: () => void;
+    const close = vi.fn(async () => {});
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        state = "suspended";
+        sampleRate = 24_000;
+        resume() {
+          return new Promise<void>((resolve) => {
+            resume = resolve;
+          });
+        }
+        close() {
+          return close();
+        }
+      },
+    );
+    const { RealtimeTalkInputController } = await import("../chat/talk/input.ts");
+    const stopTrack = vi.fn();
+    vi.spyOn(RealtimeTalkInputController.prototype, "open").mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    } as unknown as MediaStream);
+    const recorder = new TtsClipRecorder();
+    const started = recorder.start({ deviceId: "mic-1" });
+    await vi.waitFor(() => {
+      expect(typeof resume).toBe("function");
+    });
+    recorder.dispose();
+    resume();
+    await expect(started).rejects.toBeInstanceOf(TtsClipRecorderCancelledError);
+    expect(recorder.recording).toBe(false);
+    expect(stopTrack).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
   });
 });

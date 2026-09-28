@@ -78,3 +78,7 @@ export function shouldAcceptMicStart(input: {
 }): boolean {
   return input.dialogOpen && input.session === input.currentSession;
 }
+
+export function shouldClearCreateErrorOnClose(creating: boolean): boolean {
+  return !creating;
+}

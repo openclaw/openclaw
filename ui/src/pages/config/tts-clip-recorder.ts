@@ -12,6 +12,13 @@ export type TtsRecordedClip = {
   sampleRate: number;
 };
 
+export class TtsClipRecorderCancelledError extends Error {
+  constructor() {
+    super("Voice clip recording was cancelled");
+    this.name = "TtsClipRecorderCancelledError";
+  }
+}
+
 export class TtsClipRecorder {
   private input: RealtimeTalkInputController | null = null;
   private context: AudioContext | null = null;
@@ -19,6 +26,7 @@ export class TtsClipRecorder {
   private chunks: Float32Array[] = [];
   private startedAtMs = 0;
   private onLevel: ((level: number) => void) | undefined;
+  private startGeneration = 0;
 
   get recording(): boolean {
     return this.context !== null;
@@ -38,15 +46,28 @@ export class TtsClipRecorder {
     } = {},
   ): Promise<void> {
     this.dispose();
+    const generation = this.startGeneration + 1;
+    this.startGeneration = generation;
     this.onLevel = options.onLevel;
     const input = new RealtimeTalkInputController(() => undefined);
-    this.input = input;
     const media = await input.open(options.deviceId);
+    if (generation !== this.startGeneration) {
+      media.getTracks().forEach((track) => track.stop());
+      input.stop();
+      throw new TtsClipRecorderCancelledError();
+    }
     const context = new AudioContext({ sampleRate: TTS_CLIP_TARGET_SAMPLE_RATE_HZ });
-    this.context = context;
     if (context.state === "suspended") {
       await context.resume();
     }
+    if (generation !== this.startGeneration) {
+      media.getTracks().forEach((track) => track.stop());
+      input.stop();
+      void context.close();
+      throw new TtsClipRecorderCancelledError();
+    }
+    this.input = input;
+    this.context = context;
     this.chunks = [];
     this.pump = new RealtimeTalkPcmInputPump();
     this.pump.start(media, context, (samples) => {
@@ -84,6 +105,7 @@ export class TtsClipRecorder {
   }
 
   dispose(): void {
+    this.startGeneration += 1;
     this.teardownGraph();
   }
 
