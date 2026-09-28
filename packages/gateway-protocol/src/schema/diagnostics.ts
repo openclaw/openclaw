@@ -16,3 +16,11 @@ const DiagnosticsHeapProfileParamsSchema = Type.Object(
 );
 export type DiagnosticsHeapProfileParams = Static<typeof DiagnosticsHeapProfileParamsSchema>;
 export const validateDiagnosticsHeapProfileParams = lazyCompile(DiagnosticsHeapProfileParamsSchema);
+
+const DiagnosticsHeapSnapshotParamsSchema = Type.Object(
+  { reason: Type.Optional(Type.String({ maxLength: 256 })) },
+  { additionalProperties: false },
+);
+export const validateDiagnosticsHeapSnapshotParams = lazyCompile(
+  DiagnosticsHeapSnapshotParamsSchema,
+);

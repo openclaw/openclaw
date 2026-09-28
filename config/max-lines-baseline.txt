@@ -251,7 +251,6 @@ src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
-src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/persisted.ts
@@ -263,7 +262,6 @@ src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
-src/agents/bash-tools.exec.approval-id.test.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-runner.reliability.test.ts

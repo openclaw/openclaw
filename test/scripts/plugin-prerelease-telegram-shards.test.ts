@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  globSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,6 +147,61 @@ describe("plugin prerelease Telegram extension shards", () => {
     ).toEqual(["telegram"]);
   });
 
+  it("supplements manifest-only and root tests for an older package-only planner", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-prerelease-source-owner-"));
+    const write = (file: string, content: string) => {
+      const target = join(root, file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, content);
+    };
+    try {
+      symlinkSync(path.resolve("node_modules"), join(root, "node_modules"), "junction");
+      write(
+        "scripts/lib/extension-test-plan.mjs",
+        `
+import {globSync} from 'node:fs';
+export const DEFAULT_EXTENSION_TEST_SHARD_COUNT=1;
+export function createExtensionTestShards({extensionIds=['packaged']}={}) {
+  return extensionIds.filter(id=>id==='packaged').map(id=>({
+    checkName:'packaged',extensionIds:[id],index:0,
+    planGroups:[{config:'test/vitest/extensions.mjs',roots:['extensions/'+id]}],
+  }));
+}
+export const listExtensionTestFilesForRoots=roots=>roots.flatMap(root=>globSync(root+'/**/*.test.ts'));
+export const resolveExtensionTestConfig=()=> 'test/vitest/extensions.mjs';
+export const splitExtensionTestJobTargets=(_config,files)=>[files];
+`,
+      );
+      write(
+        "scripts/lib/bundled-plugin-source-utils.mjs",
+        `
+export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPath:'extensions/source-only/openclaw.plugin.json'}];
+`,
+      );
+      write(
+        "test/vitest/extensions.mjs",
+        "export default {test:{include:['extensions/**/*.test.ts']}};\n",
+      );
+      const sourceTest = "extensions/source-only/index.test.ts";
+      const rootTest = "extensions/root.test.ts";
+      for (const file of [sourceTest, rootTest, "extensions/packaged/index.test.ts"]) {
+        write(file, "");
+      }
+      const matrix = runPluginPrereleaseManifest(root, true);
+      expect(
+        matrix.include
+          .filter((row) => row.task === "extensions-batch")
+          .map((row) => row.extensions_csv),
+      ).toEqual(["packaged"]);
+      const targets = matrix.include
+        .filter((row) => row.task === "extension-file-shard")
+        .flatMap((row) => row.includePatterns);
+      expect(targets.toSorted()).toEqual([rootTest, sourceTest].toSorted());
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("keeps Telegram out of balanced batches and covers every extension exactly once", () => {
     const allShards = createExtensionTestShards({
       cwd: process.cwd(),
@@ -184,7 +248,9 @@ describe("plugin prerelease Telegram extension shards", () => {
     const suite = workflow.jobs["plugin-prerelease-suite"];
     const matrix = runPluginPrereleaseManifest();
     const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
-    const telegramRows = matrix.include.filter((row) => row.task === "extension-file-shard");
+    const telegramRows = matrix.include.filter(
+      (row) => row.task === "extension-file-shard" && row.extensions_csv === "telegram",
+    );
     const allTelegramTestFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const runnableTelegramTestFiles = [
       ...listTelegramRunnableTestFiles(),

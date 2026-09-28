@@ -97,6 +97,7 @@ struct MacGatewayChatTransportMappingTests {
 
     private func withSessionTransport(
         connectInitially: Bool = true,
+        capabilities: [String] = ["session-unread-ack-contract"],
         _ run: @MainActor (MacGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
@@ -123,6 +124,7 @@ struct MacGatewayChatTransportMappingTests {
                         name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
                 case "sessions.rewind": #"{"editorText":"rewound draft"}"#
                 case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
+                case "chat.send": #"{"runId":"native-send","status":"ok"}"#
                 default: #"{"ok":true}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -135,7 +137,7 @@ struct MacGatewayChatTransportMappingTests {
                         "agents.list", "agent.identity.get", "sessions.patch", "sessions.delete", "sessions.rewind",
                         "sessions.fork",
                     ],
-                    capabilities: ["session-unread-ack-contract"]))
+                    capabilities: capabilities))
             })
         })
         let gateway = GatewayConnection(
@@ -151,6 +153,52 @@ struct MacGatewayChatTransportMappingTests {
         } catch {
             await gateway.shutdown()
             throw error
+        }
+    }
+
+    @Test func `all native conversation send paths retain the web ownership fence`() async throws {
+        try await self.withSessionTransport(capabilities: [GatewayServerCapability.chatSendRoutingContract.rawValue]) {
+            base, recorder in
+            let transport = MacGatewayChatTransport(connection: base.connection, outboxGatewayID: "fixture")
+            let sessionKey = "agent:main:main"
+            let ownership = transport.connection.chatSendOwnership
+            let scope = await transport.connection.conversationOwnershipScope(sessionKey: sessionKey, agentID: nil)
+            let webOwner = UUID()
+            guard case let .available(lease) = await transport.acquireOutboxRouteLease() else {
+                Issue.record("Expected an outbox route lease")
+                return
+            }
+            let sends: [@Sendable () async throws -> OpenClawChatSendResponse] = [
+                {
+                    try await transport.sendMessage(
+                        sessionKey: sessionKey, message: "direct", thinking: "off",
+                        idempotencyKey: "direct", attachments: [])
+                },
+                {
+                    try await transport.sendMessage(
+                        sessionKey: sessionKey, agentID: nil,
+                        expectedSessionRoutingContract: lease.sessionRoutingContract,
+                        message: "targeted", thinking: "off", idempotencyKey: "targeted", attachments: [])
+                },
+                {
+                    try await lease.sendMessage(
+                        sessionKey: sessionKey, message: "outbox", thinking: "off",
+                        idempotencyKey: "outbox", attachments: [])
+                },
+            ]
+            for send in sends {
+                try #require(ownership.beginWeb(scope, owner: webOwner))
+                await #expect(throws: OpenClawChatSendOwnershipError.self) { try await send() }
+                ownership.endWeb(scope, owner: webOwner)
+                #expect(try await send().status == "ok")
+                // Completion releases the native claim so a subsequent renderer handoff can proceed.
+                #expect(ownership.beginWeb(scope, owner: webOwner))
+                ownership.endWeb(scope, owner: webOwner)
+            }
+            let requests = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(requests.filter { $0["method"] as? String == "chat.send" }.count == 3)
         }
     }
 

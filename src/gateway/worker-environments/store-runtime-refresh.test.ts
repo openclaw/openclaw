@@ -322,7 +322,7 @@ describe("worker environment runtime refresh", () => {
     },
   );
 
-  it("preserves a recovery-only claim and its pending workspace result", async () => {
+  it("hands off the pending result while preserving its recovery-only claim", async () => {
     const { environment, placements, placement, input } = await seedRefresh("attached");
     const claim = await placements.claimTurn({
       ...REQUEST,
@@ -343,28 +343,23 @@ describe("worker environment runtime refresh", () => {
       ownerEpoch: environment.ownerEpoch,
     };
     const liveGate = createWorkerSessionPlacementGate(placements);
-    await expect(
-      store.refreshBootstrapReceipt({
-        ...input,
-        assertCurrent: () => {
-          liveGate.assertWorkerRuntimeRefresh(binding);
-        },
-      }),
-    ).rejects.toThrow("current turn");
+    await expect(liveGate.prepareWorkerRuntimeRefresh(binding)).rejects.toThrow("current turn");
     const recoveryGate = createWorkerSessionPlacementGate(placements, {
       rejectExistingWorkerClaims: true,
     });
-    await store.refreshBootstrapReceipt({
-      ...input,
-      assertCurrent: () => {
-        recoveryGate.assertWorkerRuntimeRefresh(binding);
-      },
-    });
+    const refresh = await recoveryGate.prepareWorkerRuntimeRefresh(binding);
+    try {
+      await store.refreshBootstrapReceipt({ ...input, assertCurrent: refresh.assertCurrent });
+    } finally {
+      refresh.release();
+    }
     expect(placements.get(placement!.sessionId)).toEqual({
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual(pending);
+    expect(placements.listPendingWorkspaceResults()).toEqual([
+      { ...pending[0], recoveryRequestedAtMs: nowMs },
+    ]);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     expect(recoveryGate.validateWorkerTurn(claim)).toBe(false);
     expect(store.getCredential(environment.environmentId)).toBeUndefined();

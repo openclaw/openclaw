@@ -9,6 +9,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -611,7 +612,11 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
           <p class="settings-page__intro">${t("meetingCapture.sttHint")}</p>
         </div>
       `)}
-      <details class="settings-page" ?open=${this.advancedExpanded}>
+      <details
+        class="settings-page"
+        ?open=${this.advancedExpanded}
+        ${shellLayoutTraits({ settingsPage: true })}
+      >
         <summary class="settings-section__heading">${t("meetingCapture.advancedSettings")}</summary>
         ${this.editor}
       </details>`;

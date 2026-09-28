@@ -8,7 +8,7 @@ vi.mock("./model-picker.runtime.js", () => ({
   modelPickerRuntime: { resolvePluginProviders: () => [] },
 }));
 
-import { promptDefaultModel } from "./model-picker.js";
+import { promptDefaultModel } from "../flows/model-picker.js";
 
 const cases: Array<{ name: string; model?: AgentModelConfig; expected: string }> = [
   {

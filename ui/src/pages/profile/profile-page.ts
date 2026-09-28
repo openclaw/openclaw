@@ -19,6 +19,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
@@ -504,7 +505,7 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private renderContent() {
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <h1 class="page-title">${titleForRoute("profile")}</h1>
           <div class="page-subtitle">

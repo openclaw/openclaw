@@ -220,7 +220,10 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     );
     throw error;
   }
-  defaultRuntime.exit(0);
+  // A supplied executor belongs to the caller, which must settle it before exit.
+  if (!params.opts.run?.executorFence) {
+    defaultRuntime.exit(0);
+  }
 }
 
 async function resumePostCoreUpdateInternal(

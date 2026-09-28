@@ -177,8 +177,9 @@ function prepareDispatchRepository(root: string, options: DispatchRepositoryOpti
 
 function createDispatchFixture(
   options: {
-    createRefFailure?: "target" | "workflow";
-    deleteRefFailures?: Array<"target" | "workflow">;
+    bareShaFetchFailure?: boolean;
+    createRefFailure?: boolean;
+    deleteRefFailure?: boolean;
     dispatchFailure?: boolean;
     acceptedDispatchFailure?: boolean;
     dispatchReturnsRunUrl?: boolean;
@@ -271,8 +272,8 @@ fs.mkdtempSync = (prefix, ...args) => {
   const requests = join(process.cwd(), ".artifacts", "full-release-validation");
   const requestPath = process.env.MOCK_REQUEST_FILE || join(requests, fs.readdirSync(requests).find((name) => name.endsWith(".json")));
   const intent = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-  if (intent.phase !== "prepared" || intent.refs.target !== "intended" || intent.refs.workflow !== "intended") {
-    throw new Error("payload preparation requires durable prepared intent before either ref");
+  if (intent.phase !== "prepared" || intent.refs.workflow !== "intended") {
+    throw new Error("payload preparation requires durable prepared intent before the workflow ref");
   }
   if (${JSON.stringify(options.payloadPreparationFailure ?? "")} === "directory") {
     throw new Error("injected payload directory failure");
@@ -402,6 +403,13 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+if (args.includes("https://github.com/openclaw/openclaw.git")) {
+  if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
+    console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));
+    process.exit(1);
+  }
+  process.exit(0);
+}
 const result = spawnSync("git", args, {
   env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
   stdio: "inherit",
@@ -479,9 +487,8 @@ if (args[0] === "api" && method === "GET" && !hasNoCache) {
 if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   const ref = fields.get("ref") || "";
   const sha = fields.get("sha") || "";
-  const kind = ref.includes("/validation/") ? "target" : "workflow";
-  if (kind === ${JSON.stringify(options.createRefFailure ?? "")}) {
-    console.error("configured " + kind + " ref creation failure");
+  if (${JSON.stringify(options.createRefFailure ?? false)}) {
+    console.error("configured workflow ref creation failure");
     process.exit(19);
   }
   const object = spawnSync(
@@ -503,9 +510,8 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   process.exit(result.status ?? 1);
 } else if (args[0] === "api" && method === "DELETE" && endpoint.includes("/git/refs/")) {
   const ref = "refs/" + endpoint.slice(endpoint.indexOf("/git/refs/") + "/git/refs/".length);
-  const kind = ref.includes("/validation/") ? "target" : "workflow";
-  if (${JSON.stringify(options.deleteRefFailures ?? [])}.includes(kind)) {
-    console.error("configured " + kind + " ref deletion failure");
+  if (${JSON.stringify(options.deleteRefFailure ?? false)}) {
+    console.error("configured workflow ref deletion failure");
     process.exit(20);
   }
   const result = spawnSync("git", ["--git-dir", process.env.MOCK_ORIGIN, "update-ref", "-d", ref], {
@@ -1597,7 +1603,7 @@ describe("full-release-validation-at-sha", () => {
           phase: "prepared",
           error: "none",
           run: null,
-          refs: { target: "intended", workflow: "intended" },
+          refs: { workflow: "intended" },
         });
         const events = fixture.readPayloadEvents();
         expect(events.map((event) => event.stage)).toEqual(
@@ -1636,7 +1642,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it.each([
-    { name: "success", options: {}, status: 0, phase: "observed", error: "none", deleted: 2 },
+    { name: "success", options: {}, status: 0, phase: "observed", error: "none", deleted: 1 },
     {
       name: "HTTP rejection",
       options: { dispatchHttpStatus: 422 },
@@ -1659,7 +1665,7 @@ describe("full-release-validation-at-sha", () => {
       status: 0,
       phase: "observed",
       error: "transport",
-      deleted: 2,
+      deleted: 1,
     },
   ])(
     "preserves $name despite payload cleanup failure",
@@ -1690,7 +1696,7 @@ describe("full-release-validation-at-sha", () => {
           ])
             .split("\n")
             .filter(Boolean),
-        ).toHaveLength(2 - deleted);
+        ).toHaveLength(1 - deleted);
         const stages = fixture.readPayloadEvents().map((event) => event.stage);
         expect(stages.slice(0, 4)).toEqual(["created", "write", "post", "cleanup"]);
         if (phase === "rejected") {
@@ -1834,6 +1840,43 @@ describe("full-release-validation-at-sha", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("conflict with the retained request");
       expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe(calls);
+      expect(readFileSync(fixture.gitCallsPath, "utf8")).toBe(gitCalls);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("rejects obsolete retained target-ref fields before Git or remote access", () => {
+    const fixture = createDispatchFixture();
+    try {
+      expect(fixture.run(["--workflow-sha", fixture.workflowSha]).status).toBe(0);
+      const path = fixture.requestPath();
+      const record = JSON.parse(readFileSync(path, "utf8"));
+      const ghCalls = readFileSync(fixture.ghCallsPath, "utf8");
+      const gitCalls = readFileSync(fixture.gitCallsPath, "utf8");
+      for (const fields of ["request", "refs", "both"]) {
+        const legacy = {
+          ...record,
+          request: {
+            ...record.request,
+            ...(fields !== "refs"
+              ? { targetRef: `validation/target-${fixture.targetSha.slice(0, 12)}-123` }
+              : {}),
+          },
+          refs: { ...record.refs, ...(fields !== "request" ? { target: "created" } : {}) },
+        };
+        const bytes = `${JSON.stringify(legacy)}\n`;
+        writeFileSync(path, bytes);
+        const result = fixture.run(["--reconcile-request", path], true);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          fields === "refs"
+            ? "Invalid retained dispatch outcome"
+            : "Invalid retained dispatch request identity",
+        );
+        expect(readFileSync(path, "utf8")).toBe(bytes);
+      }
+      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe(ghCalls);
       expect(readFileSync(fixture.gitCallsPath, "utf8")).toBe(gitCalls);
     } finally {
       fixture.cleanup();
@@ -2083,7 +2126,7 @@ describe("full-release-validation-at-sha", () => {
           "refs/heads/release-ci",
           "refs/heads/validation",
         ]).split("\n"),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       fixture.cleanup();
     }
@@ -2245,6 +2288,24 @@ describe("full-release-validation-at-sha", () => {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha, "--dry-run"]);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("(dry run; not written)");
+      expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
+      expect(result.stdout).not.toContain("validation/target-");
+      const fetch = fixture
+        .readCalls(fixture.gitCallsPath)
+        .find((args) => args.includes("https://github.com/openclaw/openclaw.git"));
+      expect(fetch).toEqual([
+        "-C",
+        expect.any(String),
+        "fetch",
+        "--no-tags",
+        "--depth=1",
+        "--filter=blob:none",
+        "https://github.com/openclaw/openclaw.git",
+        fixture.targetSha,
+      ]);
+      expect(fetch![1]).not.toBe(fixture.checkout);
+      expect(existsSync(fetch![1]!)).toBe(false);
+      expect(runGit(fixture.checkout, ["rev-parse", "--is-shallow-repository"])).toBe("false");
       expect(fixture.readPayloadEvents()).toEqual([]);
       expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
       expect(fixture.readCalls(fixture.gitCallsPath).some((args) => args[0] === "push")).toBe(
@@ -2514,7 +2575,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it.each([false, true])(
-    "dispatches the frozen SHA and context, then cleans transport refs (correction=%s)",
+    "dispatches the frozen SHA and context, then cleans the workflow ref (correction=%s)",
     (correction) => {
       const fixture = createDispatchFixture();
       try {
@@ -2552,17 +2613,6 @@ describe("full-release-validation-at-sha", () => {
             ghApiMethod(args) === "POST" &&
             ghApiEndpoint(args).endsWith("/git/refs"),
         );
-        const targetCreate = createCalls.find((args) =>
-          ghField(args, "ref").startsWith("refs/heads/validation/target-"),
-        );
-        expect(ghField(targetCreate ?? [], "ref")).toMatch(
-          new RegExp(
-            `^refs/heads/validation/target-${fixture.targetSha.slice(0, 12)}-[0-9]+$`,
-            "u",
-          ),
-        );
-        expect(ghField(targetCreate ?? [], "sha")).toBe(fixture.targetSha);
-        const targetBranch = ghField(targetCreate ?? [], "ref").slice("refs/heads/".length);
         const workflowCreate = createCalls.find((args) =>
           ghField(args, "ref").startsWith("refs/heads/release-ci/"),
         );
@@ -2572,18 +2622,6 @@ describe("full-release-validation-at-sha", () => {
         );
         expect(ghField(workflowCreate ?? [], "sha")).toBe(fixture.workflowSha);
         expect(createCalls).toEqual([
-          [
-            "api",
-            "--method",
-            "POST",
-            "repos/openclaw/openclaw/git/refs",
-            "-f",
-            `ref=refs/heads/${targetBranch}`,
-            "-f",
-            `sha=${fixture.targetSha}`,
-            "--hostname",
-            "github.com",
-          ],
           [
             "api",
             "--method",
@@ -2646,14 +2684,6 @@ describe("full-release-validation-at-sha", () => {
             "--method",
             "DELETE",
             `repos/openclaw/openclaw/git/refs/heads/${workflowBranch}`,
-            "--hostname",
-            "github.com",
-          ],
-          [
-            "api",
-            "--method",
-            "DELETE",
-            `repos/openclaw/openclaw/git/refs/heads/${targetBranch}`,
             "--hostname",
             "github.com",
           ],
@@ -2732,21 +2762,21 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it.each([
-    { failure: "target" as const, created: 0 },
-    { failure: "workflow" as const, created: 1 },
-  ])("retains refs when $failure ref creation has an ambiguous failure", ({ failure, created }) => {
-    const fixture = createDispatchFixture({ createRefFailure: failure });
+  it("retains uncertain workflow ref state when creation has an ambiguous failure", () => {
+    const fixture = createDispatchFixture({ createRefFailure: true });
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`configured ${failure} ref creation failure`);
+      expect(result.stderr).toContain("configured workflow ref creation failure");
+      expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8")).refs).toEqual({
+        workflow: "uncertain",
+      });
       const calls = fixture.readCalls(fixture.ghCallsPath);
       const createCalls = calls.filter((args) => args[0] === "api" && ghApiMethod(args) === "POST");
       const deleteCalls = calls.filter(
         (args) => args[0] === "api" && ghApiMethod(args) === "DELETE",
       );
-      expect(createCalls).toHaveLength(created + 1);
+      expect(createCalls).toHaveLength(1);
       expect(deleteCalls).toHaveLength(0);
       expect(calls.some(isWorkflowDispatch)).toBe(false);
       expect(fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push")).toEqual(
@@ -2761,46 +2791,49 @@ describe("full-release-validation-at-sha", () => {
         ])
           .split("\n")
           .filter(Boolean),
-      ).toHaveLength(created);
+      ).toHaveLength(0);
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("uploads a local-only candidate before creating its temporary ref", () => {
-    const fixture = createDispatchFixture({
-      includeTargetRef: false,
-      targetAlreadyRemote: false,
-    });
-    try {
-      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
-      expect(result.status, result.stderr).toBe(0);
-      const ghCalls = fixture.readCalls(fixture.ghCallsPath);
-      const targetCreate = ghCalls.find(
-        (args) =>
-          args[0] === "api" &&
-          ghApiMethod(args) === "POST" &&
-          ghField(args, "ref").startsWith("refs/heads/validation/target-"),
-      );
-      expect(targetCreate).toBeDefined();
-      const targetRef = ghField(targetCreate ?? [], "ref");
-      const pushes = fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push");
-      expect(pushes).toEqual([["push", "origin", `${fixture.targetSha}:${targetRef}`]]);
-      expect(runGit(fixture.origin, ["cat-file", "-e", `${fixture.targetSha}^{commit}`])).toBe("");
-      expect(
-        runGit(fixture.origin, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/heads/release-ci",
-          "refs/heads/validation",
-        ]),
-      ).toBe("");
-    } finally {
-      fixture.cleanup();
-    }
-  });
+  it.each([false, true])(
+    "rejects a failed bare-SHA preflight before retaining or mutating (dryRun=%s)",
+    (dryRun) => {
+      const fixture = createDispatchFixture({
+        includeTargetRef: false,
+        targetAlreadyRemote: false,
+        bareShaFetchFailure: true,
+      });
+      try {
+        const result = fixture.run([
+          "--workflow-sha",
+          fixture.workflowSha,
+          ...(dryRun ? ["--dry-run"] : []),
+        ]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          `GitHub refused to serve Validation SHA ${fixture.targetSha} by bare SHA; child checkouts fetch it the same way, so dispatch would fail.`,
+        );
+        expect(result.stderr).toContain("upload-pack: not our ref");
+        expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
+        const gitCalls = fixture.readCalls(fixture.gitCallsPath);
+        expect(gitCalls.filter((args) => args[0] === "push")).toEqual([]);
+        const fetch = gitCalls.find((args) =>
+          args.includes("https://github.com/openclaw/openclaw.git"),
+        );
+        expect(fetch).toBeDefined();
+        expect(existsSync(fetch![1]!)).toBe(false);
+        expect(existsSync(join(fixture.checkout, ".artifacts", "full-release-validation"))).toBe(
+          false,
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
-  it("retains both refs after workflow dispatch is attempted", () => {
+  it("retains the workflow ref after dispatch is attempted", () => {
     const fixture = createDispatchFixture({ dispatchFailure: true });
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
@@ -2810,6 +2843,7 @@ describe("full-release-validation-at-sha", () => {
         phase: "attempted",
         error: "unclassified",
         run: null,
+        refs: { workflow: "created" },
       });
       const calls = fixture.readCalls(fixture.ghCallsPath);
       expect(calls.filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE")).toEqual(
@@ -2822,26 +2856,24 @@ describe("full-release-validation-at-sha", () => {
           "refs/heads/release-ci",
           "refs/heads/validation",
         ]).split("\n"),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("attempts both ref deletions and reports every cleanup failure", () => {
-    const fixture = createDispatchFixture({ deleteRefFailures: ["workflow", "target"] });
+  it("reports a workflow ref cleanup failure", () => {
+    const fixture = createDispatchFixture({ deleteRefFailure: true });
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Failed to delete temporary refs");
+      expect(result.stderr).toContain("Failed to delete temporary ref");
       expect(result.stderr).toContain("configured workflow ref deletion failure");
-      expect(result.stderr).toContain("configured target ref deletion failure");
       const deleteCalls = fixture
         .readCalls(fixture.ghCallsPath)
         .filter((args) => args[0] === "api" && ghApiMethod(args) === "DELETE");
-      expect(deleteCalls).toHaveLength(2);
+      expect(deleteCalls).toHaveLength(1);
       expect(ghApiEndpoint(deleteCalls[0] ?? [])).toContain("/git/refs/heads/release-ci/");
-      expect(ghApiEndpoint(deleteCalls[1] ?? [])).toContain("/git/refs/heads/validation/target-");
     } finally {
       fixture.cleanup();
     }
@@ -2929,7 +2961,7 @@ describe("full-release-validation-at-sha", () => {
           "refs/heads/release-ci",
           "refs/heads/validation",
         ]).split("\n"),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       fixture.cleanup();
     }
@@ -3102,7 +3134,7 @@ describe("full-release-validation-at-sha", () => {
           "refs/heads/release-ci",
           "refs/heads/validation",
         ]).split("\n"),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       fixture.cleanup();
     }
@@ -3204,7 +3236,7 @@ describe("full-release-validation-at-sha", () => {
     },
   );
 
-  it("rejects pinned old-schema tooling before either remote ref is pushed", () => {
+  it("rejects pinned old-schema tooling before the workflow ref is pushed", () => {
     const fixture = createDispatchFixture({
       workflowSource:
         'name: Full Release Validation\nenv:\n  RELEASE_ISOLATION_TOOLING_CONTRACT: "2"\non:\n  workflow_dispatch:\n',
@@ -3223,7 +3255,7 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("rejects pinned pre-contract tooling before either remote ref is pushed", () => {
+  it("rejects pinned pre-contract tooling before the workflow ref is pushed", () => {
     const fixture = createDispatchFixture();
     try {
       const result = fixture.run(["--workflow-sha", fixture.oldWorkflowSha]);
@@ -3263,7 +3295,7 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("keeps both temporary refs with --keep-branch", () => {
+  it("keeps the workflow ref with --keep-branch", () => {
     const fixture = createDispatchFixture();
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha, "--keep-branch"]);
@@ -3281,13 +3313,7 @@ describe("full-release-validation-at-sha", () => {
         "refs/heads/release-ci",
         "refs/heads/validation",
       ]).split("\n");
-      expect(remoteRefs).toHaveLength(2);
-      expect(remoteRefs).toEqual(
-        expect.arrayContaining([
-          expect.stringMatching(/^refs\/heads\/release-ci\//u),
-          expect.stringMatching(/^refs\/heads\/validation\/target-/u),
-        ]),
-      );
+      expect(remoteRefs).toEqual([expect.stringMatching(/^refs\/heads\/release-ci\//u)]);
     } finally {
       fixture.cleanup();
     }

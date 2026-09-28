@@ -459,6 +459,158 @@ describe("oxlint config", () => {
     expect(JSON.parse(fixed.stdout).diagnostics).toEqual([]);
   });
 
+  it("discovers the script test shard without changing typed diagnostics or ancestor fallback", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-script-project-"));
+    for (const file of [
+      ".oxlintrc.json",
+      "tsconfig.json",
+      "test/tsconfig.json",
+      "test/tsconfig/tsconfig.test.json",
+      "test/tsconfig/tsconfig.test.root.json",
+      "test/tsconfig/tsconfig.test.root.scripts.json",
+    ]) {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(file, target);
+    }
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const augmenters = [
+      "test/vitest/vitest.ui-e2e.setup.ts",
+      "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
+      "test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts",
+      "test/vitest/vitest.ui-e2e.global-setup.ts",
+      "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts",
+    ];
+    const declarations = [
+      "test/contracts.d.ts",
+      "test/contracts.d.mts",
+      "test/contracts.d.cts",
+      "src/contracts.d.ts",
+      "packages/contracts.d.ts",
+      "ui/contracts.d.ts",
+    ];
+    const write = (file: string, source: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
+    };
+    // Distinct ambient contracts make every inherited root observable to the
+    // installed type-aware linter, including source files that augment Vitest.
+    for (const [index, file] of augmenters.entries()) {
+      write(
+        file,
+        'import "vitest"; declare module "vitest" { interface ProvidedContext { contract' +
+          index +
+          ": () => Promise<void>; } }",
+      );
+    }
+    for (const [index, file] of declarations.entries()) {
+      write(file, "export {}; declare global { function ambient" + index + "(): Promise<void>; }");
+    }
+    const typedSource = [
+      'import { inject } from "vitest";',
+      ...augmenters.map((_file, index) => 'inject("contract' + index + '")();'),
+      ...declarations.map((_file, index) => "ambient" + index + "();"),
+    ].join("\n");
+    const configured = [
+      "test/scripts/run-example.test.ts",
+      "test/scripts/ordinary-helper.ts",
+      "test/scripts/ci-example.test.ts",
+      "test/scripts/check-example.test.ts",
+    ];
+    const fallback = ["test/scripts/plain.mts", "test/fixtures/excluded.ts"];
+    for (const file of configured) {
+      write(file, typedSource);
+    }
+    for (const file of fallback) {
+      write(file, "Promise.resolve();\n");
+    }
+    const selected = [...configured, ...fallback];
+    const lint = () =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/oxlint/bin/oxlint"),
+          "--type-aware",
+          "--format=json",
+          "--threads=1",
+          ...selected,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            OXC_LOG: "debug",
+            GOMAXPROCS: "2",
+            OXLINT_TSGOLINT_PATH: path.resolve(
+              "node_modules/.bin",
+              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+            ),
+          },
+        },
+      );
+    const baseline = lint();
+    fs.copyFileSync("test/scripts/tsconfig.json", path.join(root, "test/scripts/tsconfig.json"));
+    const partitioned = lint();
+    const reports = [baseline, partitioned].map((result) => {
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      return JSON.parse(result.stdout) as {
+        number_of_files: number;
+        diagnostics: Array<{ filename: string; code: string }>;
+      };
+    });
+    expect(reports[0]!.number_of_files).toBe(selected.length);
+    expect(reports[1]!.number_of_files).toBe(selected.length);
+    expect(reports[0]!.diagnostics.map((item) => JSON.stringify(item)).toSorted()).toEqual(
+      reports[1]!.diagnostics.map((item) => JSON.stringify(item)).toSorted(),
+    );
+    for (const file of configured) {
+      expect(
+        reports[1]!.diagnostics
+          .filter((item) => item.filename.replaceAll("\\", "/") === file)
+          .map((item) => item.code),
+      ).toEqual(
+        Array.from(
+          { length: augmenters.length + declarations.length },
+          () => "typescript(no-floating-promises)",
+        ),
+      );
+    }
+    const assignment = (result: ReturnType<typeof lint>, file: string) =>
+      result.stderr
+        .replaceAll("\\", "/")
+        .split("\n")
+        .find((line) =>
+          line.includes(
+            "Got tsconfig for file " + path.join(root, file).replaceAll("\\", "/") + ":",
+          ),
+        )
+        ?.split(": ")
+        .at(-1);
+    for (const file of configured) {
+      expect(assignment(baseline, file)).toBe(
+        path.join(root, "test/tsconfig.json").replaceAll("\\", "/"),
+      );
+      expect(assignment(partitioned, file)).toBe(
+        path
+          .join(
+            root,
+            file.includes("/ci-") || file.includes("/check-")
+              ? "test/tsconfig.json"
+              : "test/scripts/tsconfig.json",
+          )
+          .replaceAll("\\", "/"),
+      );
+    }
+    for (const file of fallback) {
+      expect(assignment(baseline, file)).toBeDefined();
+      expect(assignment(partitioned, file)).toBe(assignment(baseline, file));
+    }
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 

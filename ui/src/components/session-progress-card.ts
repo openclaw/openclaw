@@ -365,10 +365,7 @@ export function renderSessionProgressCard(
     ? (`sessionProgressCard.activity.${TERMINAL_RUN_OUTCOMES[sessionStatus!]!}` as const)
     : "sessionProgressCard.activity.updated";
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
-  const dismissible = Boolean(
-    onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
-  );
-  const dismiss = dismissible
+  const dismiss = onDismiss
     ? html`<button
         class="rail-header__action session-progress-card__dismiss"
         type="button"
@@ -455,12 +452,11 @@ export function renderSessionProgressCard(
             >${t("sessionProgressCard.composerTitle")}</span
           >
           <span class="session-progress-card__heading-actions"
-            ><span>${lastActivity}${counts ? html` · ${shortCount}` : nothing}</span
-            >${dismiss}</span
+            ><span>${lastActivity}${counts ? html` · ${shortCount}` : nothing}</span></span
           >
         </span>
         <span class="session-progress-card__summary-controls">
-          ${renderRefresh(card, refreshAction)}
+          ${renderRefresh(card, refreshAction)} ${dismiss}
           <span
             class="session-progress-card__summary-chevron session-progress-card__chevron"
             aria-hidden="true"

@@ -8,7 +8,7 @@ const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
 
 /**
  * An accessible draggable divider for resizable split views.
- * Dispatches 'resize' events with the current ratio and 'resize-end' after the interaction.
+ * Dispatches 'resize-start' for pointer drags, 'resize' with the ratio, and 'resize-end'.
  */
 class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) splitRatio = 0.6;
@@ -149,6 +149,7 @@ class ResizableDivider extends OpenClawLitElement {
     this.addEventListener("lostpointercapture", this.finishDragging);
 
     e.preventDefault();
+    this.dispatchEvent(new CustomEvent("resize-start", { bubbles: true, composed: true }));
   };
 
   private handlePointerMove = (e: PointerEvent) => {

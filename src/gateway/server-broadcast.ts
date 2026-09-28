@@ -326,7 +326,9 @@ export function createGatewayBroadcaster(params: {
         !params.clients.has(c) ||
         (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
-        c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+        c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
+        (opts?.excludeClientCapability &&
+          hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
         continue;
       }

@@ -191,7 +191,7 @@ export function createGatewayAuxHandlers(
     },
     { cacheRejections: true },
   );
-  const questionManager = new QuestionManager(() =>
+  const questionManager = new QuestionManager(params.scheduler, () =>
     params.log.warn?.("Question terminal publication failed; answer state retained."),
   );
   const loadQuestionHandlers = createLazyPromise(
@@ -200,7 +200,7 @@ export function createGatewayAuxHandlers(
         import("./server-methods/question.js"),
         loadSecretStoreWriteService(),
       ]);
-      return createQuestionHandlers(questionManager, storeWriteService);
+      return createQuestionHandlers(questionManager, storeWriteService, params.scheduler);
     },
     { cacheRejections: true },
   );

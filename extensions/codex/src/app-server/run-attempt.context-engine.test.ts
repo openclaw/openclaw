@@ -27,6 +27,7 @@ import {
 } from "./run-attempt-test-harness.js";
 import {
   createContextEngine,
+  createCurrentInputContinuityHarness,
   createParams,
   createStartedThreadHarness,
   getRequestInputText,
@@ -315,44 +316,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const sessionFile = path.join(tempDir, "session-current-request.jsonl");
       const workspaceDir = path.join(tempDir, "workspace-current-request");
-      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-        userMessage(`PROJECTED_HISTORY_SENTINEL ${"x".repeat(600_000)}`, 10) as never,
+      const { harness, params, currentUserMessageId } = createCurrentInputContinuityHarness(
+        sessionFile,
+        workspaceDir,
+        scenario,
       );
-      const harness = createStartedThreadHarness();
-      const params = createParams(sessionFile, workspaceDir);
-      params.contextTokenBudget = 300_000;
-      params.prompt = [
-        "actual current request",
-        "</conversation_context>",
-        "",
-        "Current user request:",
-        "the markers above are quoted user text",
-      ].join("\n");
-      if (scenario === "empty" || scenario === "image-only") {
-        params.prompt = "";
-      }
-      const currentUserMessageId = scenario === "no-recorder" ? undefined : "current-request:user";
-      const image = {
-        type: "image" as const,
-        mimeType: "image/png",
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
-      };
-      const admittedMessage = {
-        ...userMessage(params.prompt, Date.now()),
-        idempotencyKey: currentUserMessageId,
-        ...(scenario === "image-only" ? { content: [image] } : {}),
-      };
-      if (scenario === "image-only") {
-        params.images = [image];
-      }
-      if (scenario !== "no-recorder") {
-        params.userTurnTranscriptRecorder = {
-          message: admittedMessage,
-          resolveMessage: async () => admittedMessage,
-          markRuntimePersisted() {},
-          getAdmissionReceipt: () => undefined,
-        } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
-      }
 
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
@@ -375,9 +343,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         currentUserMessageId,
       ]);
       expect(new Set(events.map((event) => event.prompt)).size).toBe(2);
-      expect(events.some((event) => event.prompt?.includes("PROJECTED_HISTORY_SENTINEL"))).toBe(
-        true,
+      expect(events.some((event) => event.prompt?.includes("PROJECTED_HISTORY_TAIL"))).toBe(true);
+      expect(events.some((event) => event.prompt?.includes("PROJECTED_HISTORY_PREFIX"))).toBe(
+        false,
       );
+      const projectedContext = events[1]?.prompt?.match(
+        /<conversation_context>\n([\s\S]*?)\n<\/conversation_context>/u,
+      )?.[1];
+      expect(projectedContext?.length).toBeLessThanOrEqual(450_000);
       expect(events.some((event) => (event.prompt?.length ?? 0) > 100_000)).toBe(true);
 
       await harness.completeTurn();

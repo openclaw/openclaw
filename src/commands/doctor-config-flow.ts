@@ -1,5 +1,4 @@
 import { homedir } from "node:os";
-/** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
@@ -70,12 +69,6 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
   }
 }
 
-/**
- * Loads config, runs doctor migrations/repairs, and returns the config write plan.
- *
- * This is the config-side orchestration boundary for doctor; it keeps preview notes, repair
- * mutations, gateway auth refreshes, and final write confirmation in one ordered flow.
- */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
@@ -582,16 +575,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   } else {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
-    const collectPreviewNotes = async () =>
-      await collectDoctorPreviewNotes({
+    const previewNotes = await runWithCurrentPluginMetadata(state.candidate, () =>
+      collectDoctorPreviewNotes({
         cfg: state.candidate,
         activationSourceConfig: pluginActivationSourceConfig,
         doctorFixCommand,
         env: process.env,
         allowExec: params.options.allowExec === true,
         blockedCodexProviderPlan,
-      });
-    const previewNotes = await runWithCurrentPluginMetadata(state.candidate, collectPreviewNotes);
+      }),
+    );
     emitDoctorNotes({
       note,
       infoNotes: previewNotes.infoNotes,

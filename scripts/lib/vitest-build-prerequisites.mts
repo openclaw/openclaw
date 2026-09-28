@@ -35,6 +35,12 @@ const runtimeConsumers = [
     dir: "src",
   },
   {
+    file: "src/tui/tui-session-identity-pty.e2e.test.ts",
+    configs: ["test/vitest/vitest.tui-pty.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
     file: "src/gateway/server-methods/agent.visitor-access.test.ts",
     configs: [
       "test/vitest/vitest.gateway-methods-isolated.config.ts",

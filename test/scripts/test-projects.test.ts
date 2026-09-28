@@ -5,10 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
-import {
-  isErasedTypeScriptModuleSource,
-  readTestSelectorSourceFacts,
-} from "../../scripts/lib/test-selector-source-facts.mts";
+import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestPretestBuildMode,
@@ -130,6 +127,9 @@ describe("test runtime prerequisites", () => {
     ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
     ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
     ["ordinary process unit", ["src/process/exec.windows.test.ts"], undefined],
+    ["TUI native provider policy", ["src/tui/tui-session-identity-pty.e2e.test.ts"], "runtime"],
+    ["TUI PTY config", ["test/vitest/vitest.tui-pty.config.ts"], "runtime"],
+    ["ordinary TUI PTY test", ["src/tui/tui-text-wrap-pty.e2e.test.ts"], undefined],
     [
       "candidate Gateway canary",
       ["src/infra/update-candidate-canary.integration.test.ts"],
@@ -338,6 +338,8 @@ describe("test runtime prerequisites", () => {
     ["extensions", ["deepinfra/**", "google-meet/**", "file-transfer/**"], undefined],
     ["tooling", ["test/**"], undefined],
     ["plugins", ["plugin-module-generation.sdk.test.ts"], undefined],
+    ["tui-pty", ["tui/tui-session-identity-pty.e2e.test.ts"], undefined],
+    ["tui-pty", ["tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
     ["runtime-config", ["config/config-startup-corpus.test.ts"], "runtime"],
     ...stateStartupCorpusTestFiles.map(
       (file) => ["runtime-config", [file.slice("src/".length)], "runtime"] as const,
@@ -981,6 +983,16 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets([".crabbox.yaml"], ["test/scripts/package-acceptance-workflow.test.ts"]);
   });
 
+  it.each(["", ".tooling", ".scripts", ".e2e", ".other"])(
+    "routes root type graph%s to its coverage and routing tests",
+    (suffix) => {
+      expectChangedTargets(
+        [`test/tsconfig/tsconfig.test.root${suffix}.json`],
+        ["test/scripts/tsgo-core-test-shards.test.ts", "test/scripts/changed-lanes.test.ts"],
+      );
+    },
+  );
+
   it("keeps scripts tsconfig edits on oxlint config tests", () => {
     expectChangedTargets(["scripts/tsconfig.json"], ["test/scripts/oxlint-config.test.ts"]);
   });
@@ -1298,7 +1310,10 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: ["test/scripts/setup-node-env-bun.test.ts"],
+      exactTargets: [
+        "test/scripts/setup-node-env-bun.test.ts",
+        "test/scripts/setup-node-env-semantic-memory.test.ts",
+      ],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
@@ -1695,7 +1710,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes explicit source files through precise owner tests before broad globs", () => {
     expectSingleVitestRunPlan(buildVitestRunPlans(["src/gateway/server-startup-early.ts"]), {
-      config: "test/vitest/vitest.gateway.config.ts",
+      config: "test/vitest/vitest.gateway-server.config.ts",
       includePatterns: ["src/gateway/server-startup-early.test.ts"],
     });
     expectSingleVitestRunPlan(buildVitestRunPlans(["src/commands/onboarding-plugin-install.ts"]), {
@@ -1961,6 +1976,42 @@ describe("scripts/test-projects changed-target routing", () => {
           "src/combined.consumer.test.ts",
           "src/right.consumer.test.ts",
         ]);
+      },
+    );
+  });
+
+  it("bounds direct importer queries to one edge and retains edited tests", () => {
+    withTinyGitRepo(
+      {
+        "src/value.ts": "export const value = 1;\n",
+        "src/direct.test.ts": 'import "./value.js";\n',
+        "src/bridge.ts": 'export * from "./value.js";\n',
+        "src/indirect.test.ts": 'import "./bridge.js";\n',
+        "src/shared.test.ts": "export const fixture = 1;\n",
+        "src/shared-consumer.test.ts": 'import "./shared.test.js";\n',
+      },
+      (cwd) => {
+        for (const changed of ["src/value.ts", ["src/value.ts"]]) {
+          expect(resolveAffectedTestsFromImportGraph(changed, cwd, { direct: true })).toEqual([
+            "src/direct.test.ts",
+          ]);
+        }
+        expect(
+          resolveAffectedTestsFromImportGraph(["src/shared.test.ts"], cwd, { direct: true }),
+        ).toEqual(["src/shared-consumer.test.ts", "src/shared.test.ts"]);
+        expect(
+          hasImportGraphImpactOnTargets(["src/value.ts"], ["src/direct.test.ts"], cwd, {
+            direct: true,
+          }),
+        ).toBe(true);
+        expect(
+          hasImportGraphImpactOnTargets(["src/value.ts"], ["src/indirect.test.ts"], cwd, {
+            direct: true,
+          }),
+        ).toBe(false);
+        expect(hasImportGraphImpactOnTargets(["src/value.ts"], ["src/indirect.test.ts"], cwd)).toBe(
+          true,
+        );
       },
     );
   });
@@ -2572,6 +2623,72 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     );
   });
+
+  it.each<{
+    args: string[];
+    owner: string;
+    watchMode: boolean;
+    env?: NodeJS.ProcessEnv;
+    inheritedProjectShards?: string;
+  }>([
+    { args: ["src/gateway/server.health.test.ts"], owner: "gateway-server", watchMode: false },
+    {
+      args: ["--watch", "src/gateway/server.health.test.ts"],
+      owner: "gateway",
+      watchMode: true,
+    },
+    {
+      args: ["src/gateway/server.health.test.ts", "src/gateway/call.test.ts"],
+      owner: "gateway",
+      watchMode: false,
+    },
+    {
+      args: ["--watch", "src/gateway/server.health.test.ts", "src/gateway/call.test.ts"],
+      owner: "gateway",
+      watchMode: true,
+    },
+    {
+      args: ["src/gateway/server.health.test.ts"],
+      owner: "gateway",
+      watchMode: false,
+      env: { OPENCLAW_GATEWAY_PROJECT_SHARDS: "0" },
+    },
+    {
+      args: ["src/gateway/server.health.test.ts"],
+      owner: "gateway",
+      watchMode: false,
+      inheritedProjectShards: "0",
+    },
+    {
+      args: ["src/gateway/server.health.test.ts"],
+      owner: "gateway-server",
+      watchMode: false,
+      env: { OPENCLAW_GATEWAY_PROJECT_SHARDS: "1" },
+      inheritedProjectShards: "0",
+    },
+    {
+      args: ["test/vitest/vitest.gateway-server.config.ts"],
+      owner: "gateway-server",
+      watchMode: false,
+      env: { OPENCLAW_GATEWAY_PROJECT_SHARDS: "0" },
+    },
+  ])(
+    "keeps exact Gateway server files on their $owner owner for $args",
+    ({ args, owner, watchMode, env, inheritedProjectShards }) => {
+      withEnv({ OPENCLAW_GATEWAY_PROJECT_SHARDS: inheritedProjectShards }, () => {
+        expectSingleVitestRunPlan(
+          buildVitestRunPlans(args, process.cwd(), () => [], { env }),
+          {
+            config: `test/vitest/vitest.${owner}.config.ts`,
+            includePatterns: args.some((arg) => arg.endsWith(".config.ts"))
+              ? null
+              : args.filter((arg) => arg !== "--watch"),
+            watchMode,
+          },
+        );
+      });
+    },
+  );
 
   it.each([
     "test/plugins/bundled-provider-auth-literal-parity.test.ts",
@@ -4216,6 +4333,366 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("adds transitive owner tests and keeps direct cross-area readers without broad fallback", () => {
+    withTinyGitRepo(
+      {
+        "package.json": "{}",
+        "src/feature/value.ts": "export const value = 1;\n",
+        "src/feature/value.test.ts": "export const owner = true;\n",
+        "src/feature/consumer.test.ts": 'import "./value.js";\n',
+        "src/feature/bridge.ts": 'export * from "./value.js";\n',
+        "src/feature/indirect.test.ts": 'import "./bridge.js";\n',
+        "src/feature/unrelated.test.ts": "export const unrelated = true;\n",
+        "src/other/reader.test.ts": 'import "../feature/value.js";\n',
+        "src/other/indirect.test.ts": 'import "../feature/bridge.js";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["package.json", "src/feature/value.ts"], {
+            cwd,
+            broad: true,
+            boundedOwners: true,
+            resolveAliases: true,
+            runtimeOnly: true,
+            combineSiblingWithImportGraph: true,
+          }),
+        ).toEqual({
+          mode: "targets",
+          ownerTargets: ["src/feature/value.test.ts"],
+          ownerAreas: ["scripts", "src/scripts", "test/scripts", "src/feature"],
+          targets: [
+            "src/feature/value.test.ts",
+            "src/feature/consumer.test.ts",
+            "src/feature/indirect.test.ts",
+            "src/other/reader.test.ts",
+          ],
+        });
+      },
+    );
+  });
+
+  it.each(["package.json", "test/vitest/vitest.shared.config.ts"])(
+    "bounds the %s hub to tooling while retaining its direct runtime readers",
+    (hub) => {
+      const hubImport = path.posix.relative("src", hub);
+      withTinyGitRepo(
+        {
+          [hub]: hub === "package.json" ? "{}" : "export {};\n",
+          "src/hub-bridge.ts": `import ${JSON.stringify(hubImport)};\n`,
+          "src/runtime/direct.test.ts": `import ${JSON.stringify(path.posix.relative("src/runtime", hub))};\n`,
+          "src/runtime/indirect.test.ts": 'import "../hub-bridge.js";\n',
+          "test/scripts/hub-consumer.test.ts": 'import "../../src/hub-bridge.js";\n',
+        },
+        (cwd) => {
+          expect(
+            resolveChangedTestTargetPlan([hub], { cwd, boundedOwners: true, broad: true }),
+          ).toEqual({
+            mode: "targets",
+            ownerTargets: [],
+            ownerAreas: ["scripts", "src/scripts", "test/scripts"],
+            targets: ["src/runtime/direct.test.ts", "test/scripts/hub-consumer.test.ts"],
+          });
+        },
+      );
+    },
+  );
+
+  it("retains a changed test and its importers without activating its protected owner area", () => {
+    const changed = "src/feature/value.test.ts";
+    const standalone = "src/other/standalone.test.ts";
+    withTinyGitRepo(
+      {
+        [changed]: "export const fixture = true;\n",
+        [standalone]: "export {};\n",
+        "src/feature/bridge.ts": 'export * from "./value.test.js";\n',
+        "src/feature/indirect.test.ts": 'import "./bridge.js";\n',
+        "src/other/reader.test.ts": 'import "../feature/value.test.js";\n',
+        "src/other/indirect.test.ts": 'import "../feature/bridge.js";\n',
+        "src/feature/type-only.test.ts": 'import type { fixture } from "./value.test.js";\n',
+      },
+      (cwd) => {
+        for (const paths of [[standalone, changed], [changed]]) {
+          for (const runtimeOnly of [undefined, true]) {
+            expect(
+              resolveChangedTestTargetPlan(paths, {
+                cwd,
+                boundedOwners: true,
+                ...(runtimeOnly === true ? { runtimeOnly } : {}),
+              }),
+            ).toEqual({
+              mode: "targets",
+              ownerTargets: paths,
+              ownerAreas: [],
+              targets: [
+                ...(paths.includes(standalone) ? [standalone] : []),
+                changed,
+                "src/feature/indirect.test.ts",
+                ...(runtimeOnly ? [] : ["src/feature/type-only.test.ts"]),
+                "src/other/reader.test.ts",
+              ],
+            });
+          }
+        }
+      },
+    );
+  });
+
+  it("keeps deleted test files as graph seeds for surviving runtime consumers", () => {
+    const deleted = "src/feature/shared.test.ts";
+    withTinyGitRepo(
+      {
+        "src/feature/direct.test.ts": 'import "./shared.test.js";\n',
+        "src/feature/bridge.ts": 'export * from "./shared.test.js";\n',
+        "src/feature/indirect.test.ts": 'import "./bridge.js";\n',
+        "src/other/direct.test.ts": 'import "../feature/shared.test.js";\n',
+        "src/other/type-only.test.ts":
+          'import type { Fixture } from "../feature/shared.test.js";\n',
+      },
+      (cwd) => {
+        const options = { cwd, resolveAliases: true, runtimeOnly: true };
+        expect(
+          resolveChangedTestTargetPlan([deleted], { ...options, boundedOwners: true }),
+        ).toEqual({
+          mode: "targets",
+          ownerTargets: [deleted],
+          ownerAreas: [],
+          targets: [
+            deleted,
+            "src/feature/direct.test.ts",
+            "src/feature/indirect.test.ts",
+            "src/other/direct.test.ts",
+          ],
+        });
+        expect(resolveChangedTestTargetPlan([deleted], options)).toEqual({
+          mode: "targets",
+          targets: [],
+        });
+      },
+    );
+  });
+
+  it("keeps the opaque retention child owner beside additional fixture consumers", () => {
+    const helper = "src/plugins/runtime.retention.test-support.ts";
+    const owner = "src/plugins/runtime.retention.test.ts";
+    const direct = "src/other/direct.test.ts";
+    const indirect = "src/plugins/shared-consumer.test.ts";
+    withTinyGitRepo(
+      {
+        [helper]: "export const fixture = 1;\n",
+        [owner]: "export {};\n",
+        [direct]: 'import "../plugins/runtime.retention.test-support.js";\n',
+        "src/plugins/bridge.ts": 'export * from "./runtime.retention.test-support.js";\n',
+        [indirect]: 'import "./bridge.js";\n',
+        "src/plugins/unrelated.test.ts": "export {};\n",
+      },
+      (cwd) => {
+        const plan = resolveChangedTestTargetPlan([helper], { cwd, boundedOwners: true });
+        expect(plan.ownerTargets).toEqual([owner]);
+        expect(plan.targets.toSorted()).toEqual([owner, direct, indirect].toSorted());
+        expect(plan.ownerAreas).toEqual(["src/plugins"]);
+      },
+    );
+  });
+
+  it("retains mapped helper owners beside direct importers in bounded changed mode", () => {
+    withTinyGitRepo(
+      {
+        "test/helpers/normalize-text.ts": "export const normalize = String;\n",
+        "src/direct.test.ts": 'import "../test/helpers/normalize-text.js";\n',
+        "src/bridge.ts": 'export * from "../test/helpers/normalize-text.js";\n',
+        "src/indirect.test.ts": 'import "./bridge.js";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"], {
+            cwd,
+            boundedOwners: true,
+          }),
+        ).toEqual({
+          mode: "targets",
+          ownerTargets: [
+            "src/auto-reply/reply/commands-status.test.ts",
+            "src/auto-reply/status.test.ts",
+            "src/tui/components/chat-log.test.ts",
+          ],
+          ownerAreas: ["src/auto-reply", "src/tui"],
+          targets: [
+            "src/auto-reply/reply/commands-status.test.ts",
+            "src/auto-reply/status.test.ts",
+            "src/tui/components/chat-log.test.ts",
+            "src/direct.test.ts",
+          ],
+        });
+      },
+    );
+  });
+
+  it.each([
+    { root: "extensions/example/src", area: "extensions/example" },
+    { root: "packages/example/src", area: "packages/example" },
+    { root: "ui/src/components", area: "ui" },
+  ])("keeps transitive consumers inside the $area owner", ({ root, area }) => {
+    const value = `${root}/value.ts`;
+    const owner = `${root}/value.test.ts`;
+    const indirect = `${root}/indirect.test.ts`;
+    const outside = "src/other/indirect.test.ts";
+    withTinyGitRepo(
+      {
+        [value]: "export const value = 1;\n",
+        [owner]: "export {};\n",
+        [`${root}/bridge.ts`]: 'export * from "./value.js";\n',
+        [indirect]: 'import "./bridge.js";\n',
+        [outside]: `import ${JSON.stringify(path.posix.relative(path.posix.dirname(outside), `${root}/bridge.js`))};\n`,
+      },
+      (cwd) => {
+        expect(resolveChangedTestTargetPlan([value], { cwd, boundedOwners: true })).toEqual({
+          mode: "targets",
+          ownerTargets: [owner],
+          ownerAreas: [area],
+          targets: [owner, indirect],
+        });
+      },
+    );
+  });
+
+  it("keeps script owner consumers across the existing tooling directories", () => {
+    withTinyGitRepo(
+      {
+        "scripts/sample.mts": "export const value = 1;\n",
+        "test/scripts/sample.test.ts": "export {};\n",
+        "scripts/bridge.mts": 'export * from "./sample.mjs";\n',
+        "src/scripts/consumer.test.ts": 'import "../../scripts/bridge.mjs";\n',
+        "src/other/consumer.test.ts": 'import "../../scripts/bridge.mjs";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(["scripts/sample.mts"], { cwd, boundedOwners: true }),
+        ).toEqual({
+          mode: "targets",
+          ownerTargets: ["test/scripts/sample.test.ts"],
+          ownerAreas: ["scripts", "src/scripts", "test/scripts"],
+          targets: ["test/scripts/sample.test.ts", "src/scripts/consumer.test.ts"],
+        });
+      },
+    );
+  });
+
+  it("expands raw manifest owners and unmatched UI source to their bounded areas", () => {
+    withTinyGitRepo(
+      {
+        "extensions/example/openclaw.plugin.json": "{}",
+        "extensions/example/owner.test.ts": "export const owner = true;\n",
+        "src/manifest-consumer.test.ts": 'import "../extensions/example/openclaw.plugin.json";\n',
+        "ui/src/components/value.ts": "export const value = true;\n",
+        "ui/src/components/owner.test.ts": "export const owner = true;\n",
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(
+            ["extensions/example/openclaw.plugin.json", "ui/src/components/value.ts"],
+            { cwd, boundedOwners: true },
+          ),
+        ).toEqual({
+          mode: "targets",
+          ownerTargets: [
+            "extensions/example",
+            "src/config/docs-config-examples.test.ts",
+            "ui/src/components",
+          ],
+          ownerAreas: ["extensions/example", "src/config", "ui", "ui/src/components"],
+          targets: [
+            "extensions/example",
+            "src/config/docs-config-examples.test.ts",
+            "src/manifest-consumer.test.ts",
+            "ui/src/components",
+          ],
+        });
+      },
+    );
+  });
+
+  it("bounds conventional owner closure and keeps unresolved root deletion consumers", () => {
+    withTinyGitRepo(
+      {
+        "src/widgets/unknown.ts": "export const unknown = true;\n",
+        "src/widgets/owner.test.ts": "export const owner = true;\n",
+        "src/widgets/bridge.ts": 'import "./unknown.js";\n',
+        "src/widgets/indirect.test.ts": 'import "./bridge.js";\n',
+        "src/root.ts": "export const root = true;\n",
+        "src/consumer.test.ts": 'import "./removed.js";\n',
+        "src/deleted-bridge.ts": 'import "./removed.js";\n',
+        "src/other/deleted-indirect.test.ts": 'import "../deleted-bridge.js";\n',
+        "src/other/reader.test.ts": 'import "../widgets/unknown.js";\n',
+        "src/other/bridge.ts": 'import "../widgets/unknown.js";\n',
+        "src/other/indirect.test.ts": 'import "./bridge.js";\n',
+      },
+      (cwd) => {
+        expect(
+          resolveChangedTestTargetPlan(
+            ["src/widgets/unknown.ts", "src/root.ts", "src/removed.ts"],
+            { cwd, boundedOwners: true },
+          ),
+        ).toEqual({
+          mode: "targets",
+          ownerTargets: ["src/widgets"],
+          ownerAreas: ["src/widgets"],
+          targets: [
+            "src/widgets",
+            "src/other/reader.test.ts",
+            "src/widgets/indirect.test.ts",
+            "src/consumer.test.ts",
+            "src/other/deleted-indirect.test.ts",
+          ],
+        });
+      },
+    );
+  });
+
+  it("keeps all changed manifests and deleted alias targets in one bounded plan", () => {
+    const changed = [
+      "packages/first/package.json",
+      "packages/first/src/removed.ts",
+      "packages/second/package.json",
+      "packages/second/src/removed.ts",
+    ];
+    withTinyGitRepo(
+      {
+        "packages/first/package.json": JSON.stringify({
+          name: "@fixture/first",
+          exports: "./src/removed.ts",
+        }),
+        "packages/second/package.json": JSON.stringify({
+          name: "@fixture/second",
+          exports: "./src/removed.ts",
+        }),
+        "src/readers/first.test.ts":
+          'import "@fixture/first"; import "../../packages/first/package.json";\n',
+        "src/readers/second.test.ts":
+          'import "@fixture/second"; import "../../packages/second/package.json";\n',
+        "src/readers/type-only.test.ts": 'import type { Value } from "@fixture/second";\n',
+      },
+      (cwd) => {
+        for (const paths of [changed, changed.toReversed()]) {
+          expect(
+            resolveChangedTestTargetPlan(paths, {
+              cwd,
+              boundedOwners: true,
+              resolveAliases: true,
+              runtimeOnly: true,
+            }).targets.toSorted(),
+          ).toEqual([
+            "packages/first",
+            "packages/first/src",
+            "packages/second",
+            "packages/second/src",
+            "src/readers/first.test.ts",
+            "src/readers/second.test.ts",
+          ]);
+        }
+      },
+    );
+  });
+
   describe("Kova schema selection", () => {
     const wrapper = "src/config/zod-schema.agent-defaults.ts";
     const base = "src/config/zod-schema.agent-defaults-base.ts";
@@ -4989,7 +5466,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/gateway/gateway.test.ts", "e2e"],
     ["src/gateway/server.startup-matrix-migration.integration.test.ts", "e2e"],
-    ["src/gateway/sessions-history-http.test.ts", "gateway"],
+    ["src/gateway/sessions-history-http.test.ts", "gateway-server"],
   ])("routes gateway integration fixture %s to the %s lane", (target, lane) => {
     const plans = buildVitestRunPlans([target], process.cwd());
 
@@ -5089,7 +5566,6 @@ describe("test selector native source facts", () => {
   });
 
   it("separates executable imports from source fixtures and erased type declarations", () => {
-    expect(isErasedTypeScriptModuleSource("export type Callback = <T>(value: T) => T;")).toBe(true);
     const regexContexts = {
       arrow: `const pattern = () => /['"]/;`,
       asyncArrow: `const pattern = async () => /['"]/;`,
@@ -5126,6 +5602,9 @@ describe("test selector native source facts", () => {
     );
     syntaxFiles["ambiguous-template.ts"] =
       `${regexContexts.labeledBlock} await import(\`./template-consumer.js\`);`;
+    syntaxFiles["generic-callback.ts"] = "export type Callback = <T>(value: T) => T;";
+    syntaxFiles["generic-callback-import.ts"] =
+      'export type Callback = <T>(value: T) => import("./callback-type.js").Value;';
     withTinyFileTree(
       {
         ...syntaxFiles,
@@ -5182,6 +5661,16 @@ describe("test selector native source facts", () => {
           "./interface-type.js",
         ]);
         const importsByFile = new Map(syntaxFacts.map(({ file, imports }) => [file, imports]));
+        expect(syntaxFacts.find(({ file }) => file === "generic-callback.ts")).toMatchObject({
+          imports: [],
+          typeOnlyImports: [],
+        });
+        expect(syntaxFacts.find(({ file }) => file === "generic-callback-import.ts")).toMatchObject(
+          {
+            imports: ["./callback-type.js"],
+            typeOnlyImports: ["./callback-type.js"],
+          },
+        );
         expect(importsByFile.get("ambiguous-template.ts")).toEqual(["./template-consumer.js"]);
         for (const [name, source] of Object.entries(regexContexts)) {
           expect(importsByFile.get(`${name}.ts`), source).toEqual(["./consumer.js"]);

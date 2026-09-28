@@ -168,22 +168,14 @@ export function createMattermostConnectOnce(
         let authTimer: ReturnType<typeof setTimeout> | undefined;
 
         const clearTimers = () => {
-          if (healthCheckTimer !== undefined) {
-            clearTimeout(healthCheckTimer);
-            healthCheckTimer = undefined;
-          }
-          if (authTimer !== undefined) {
-            clearTimeout(authTimer);
-            authTimer = undefined;
-          }
-          if (protocolPingTimer !== undefined) {
-            clearTimeout(protocolPingTimer);
-            protocolPingTimer = undefined;
-          }
-          if (protocolPongTimer !== undefined) {
-            clearTimeout(protocolPongTimer);
-            protocolPongTimer = undefined;
-          }
+          clearTimeout(healthCheckTimer);
+          healthCheckTimer = undefined;
+          clearTimeout(authTimer);
+          authTimer = undefined;
+          clearTimeout(protocolPingTimer);
+          protocolPingTimer = undefined;
+          clearTimeout(protocolPongTimer);
+          protocolPongTimer = undefined;
         };
 
         const stopHealthChecks = () => {
@@ -196,9 +188,7 @@ export function createMattermostConnectOnce(
           if (!protocolKeepaliveEnabled || settled) {
             return;
           }
-          if (protocolPongTimer !== undefined) {
-            clearTimeout(protocolPongTimer);
-          }
+          clearTimeout(protocolPongTimer);
           protocolPongTimer = setTimeout(() => {
             protocolPongTimer = undefined;
             if (!protocolKeepaliveEnabled || settled) {
@@ -348,10 +338,8 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("pong", () => {
-          if (protocolPongTimer !== undefined) {
-            clearTimeout(protocolPongTimer);
-            protocolPongTimer = undefined;
-          }
+          clearTimeout(protocolPongTimer);
+          protocolPongTimer = undefined;
           scheduleProtocolPing();
         });
 
@@ -374,10 +362,8 @@ export function createMattermostConnectOnce(
 
           if (payload.status === "OK" && payload.seq_reply === authenticationSeq) {
             authenticated = true;
-            if (authTimer !== undefined) {
-              clearTimeout(authTimer);
-              authTimer = undefined;
-            }
+            clearTimeout(authTimer);
+            authTimer = undefined;
             opts.statusSink?.(channelReadyPatch());
             return;
           }
@@ -424,7 +410,7 @@ export function createMattermostConnectOnce(
             })
             .catch(() => {});
           stopHealthChecks();
-          const message = reasonToString(reason);
+          const message = reason.toString("utf8");
           opts.statusSink?.({
             connected: false,
             lifecycle: "recovering",
@@ -475,14 +461,4 @@ export function createMattermostConnectOnce(
       opts.abortSignal?.removeEventListener("abort", onAbort);
     }
   };
-}
-
-function reasonToString(reason: Buffer | string | undefined): string {
-  if (!reason) {
-    return "";
-  }
-  if (typeof reason === "string") {
-    return reason;
-  }
-  return reason.length > 0 ? reason.toString("utf8") : "";
 }

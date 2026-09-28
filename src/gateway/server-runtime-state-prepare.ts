@@ -422,6 +422,7 @@ export async function prepareGatewayKernelState(params: {
     () => import("./server-channels.js"),
   );
   const channelManager = createChannelManager({
+    scheduler,
     getRuntimeConfig,
     channelLogs,
     channelRuntimeEnvs,

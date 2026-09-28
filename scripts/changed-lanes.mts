@@ -230,7 +230,9 @@ export function detectChangedLanes(
     if (
       facts.isRootTestSource ||
       changedPath === "test/tsconfig.json" ||
-      changedPath === "test/tsconfig/tsconfig.test.root.json"
+      /^test\/tsconfig\/tsconfig\.test\.root(?:\.(?:tooling|scripts|e2e|other))?\.json$/u.test(
+        changedPath,
+      )
     ) {
       lanes.testRoot = true;
     }
