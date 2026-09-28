@@ -574,17 +574,40 @@ describe("video-generation runtime", () => {
 
     const result = await runGenerateVideo({
       cfg: videoConfig({
-        primary: "qwen/wan2.6-t2v",
-        fallbacks: ["qwen/wan2.6-i2v"],
+        primary: "qwen/wan2.6-i2v",
+        fallbacks: ["qwen/wan2.6-r2v"],
       }),
       prompt: "animate the reference",
-      inputImages: [{ url: "https://example.com/reference.png" }],
+      inputVideos: [{ url: "https://example.com/reference.mp4" }],
     });
 
-    expect(seenModels).toEqual(["wan2.6-i2v"]);
-    expect(result.model).toBe("wan2.6-i2v");
+    expect(seenModels).toEqual(["wan2.6-r2v"]);
+    expect(result.model).toBe("wan2.6-r2v");
     expect(result.attempts).toHaveLength(1);
-    expect(requireAttempt(result, 0).error).toMatch(/does not support image-to-video generation/u);
+    expect(requireAttempt(result, 0).error).toMatch(/does not support video-to-video generation/u);
+  });
+
+  it("admits a local image on the default Wan model with I2V controls", async () => {
+    const requests = useCapturingProvider(wanProvider);
+    const result = await runGenerateVideo({
+      cfg: videoConfig({ primary: "qwen/wan2.6-t2v" }),
+      prompt: "animate the reference",
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      resolution: "720P",
+      aspectRatio: "16:9",
+      durationSeconds: 5,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      model: "wan2.6-t2v",
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      resolution: "720P",
+      durationSeconds: 5,
+    });
+    expect(requests[0]?.aspectRatio).toBeUndefined();
+    expect(result.ignoredOverrides).toContainEqual({ key: "aspectRatio", value: "16:9" });
+    expect(result.attempts).toEqual([]);
   });
 
   it("applies model-specific R2V reference limits during fallback-aware selection", async () => {

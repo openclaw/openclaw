@@ -215,6 +215,18 @@ mainline_drift_requires_sync() (
   return 1
 )
 
+verify_merge_candidate_tree() {
+  local main="$1" head="$2" tree main_tree
+  tree=$(pr_git merge-tree --write-tree "$main" "$head") || {
+    merge_outcome_stop "cannot establish prepared-head merge tree (conflict or unavailable objects)"; return 1;
+  }
+  main_tree=$(pr_git rev-parse "$main^{tree}") || return 1
+  if [ "$tree" = "$main_tree" ]; then
+    echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
+    return 1
+  fi
+}
+
 merge_verify() {
   if [ "$#" -ne 2 ]; then
     echo "merge_verify requires a PR number and verification options." >&2
@@ -816,9 +828,9 @@ merge_run() {
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
     fi
-    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" --argjson priorCi "$MERGE_USE_PRIOR_CI_ADMIN" '
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
       def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
-        if $admin or $priorCi then . else del(.main) end;
+        if $admin then . else del(.main) end;
       (if .transport != $previous.transport then
          (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
        else facts == ($previous | facts) end) and
@@ -833,6 +845,11 @@ merge_run() {
       merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" "$pinned_observation"
       merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
       return 1
+    fi
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ]; then
+      verify_prior_ci_main_advance \
+        "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
+        "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
     fi
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
       break
@@ -912,16 +929,10 @@ merge_run() {
     merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
     return 1
   fi
-  local observed_main candidate_tree
+  local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
   if [ "$merge_method" = squash ] && [ "$route" != queue ]; then
-    candidate_tree=$(pr_git merge-tree --write-tree "$observed_main" "$PREP_HEAD_SHA") || {
-      merge_outcome_stop "cannot establish prepared-head merge tree (conflict or unavailable objects)"; return 1;
-    }
-    if [ "$candidate_tree" = "$(pr_git rev-parse "$observed_main^{tree}")" ]; then
-      echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
-      return 1
-    fi
+    verify_merge_candidate_tree "$observed_main" "$PREP_HEAD_SHA" || return 1
   fi
   if [ -n "$recovery_oid" ]; then
     recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
@@ -992,8 +1003,11 @@ merge_run() {
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    # Materialize forward main before the last live authority verification.
     merge_outcome_stable "$pr" || return 1
+    verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    # A later main may reuse local objects, never start another lazy/explicit fetch.
+    GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
       "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
