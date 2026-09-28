@@ -58,7 +58,7 @@ const ESCALATION_REASONS = new Set([
 const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 
 export function isComputerActAction(action: ComputerToolAction): boolean {
-  return INPUT_ACTIONS.has(action);
+  return action !== "take_control" && INPUT_ACTIONS.has(action);
 }
 
 export function computerActionNeedsFrame(

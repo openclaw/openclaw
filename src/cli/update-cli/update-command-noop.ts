@@ -16,11 +16,11 @@ import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import type { RefuseUpdate } from "./update-command-result.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
   resolvePackageRuntimePreflight,
-  type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,

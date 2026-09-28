@@ -70,19 +70,11 @@ enum MacNodeClaudeSessionCatalog {
                 "archived": false,
             ]
             value["name"] = self.name ?? NSNull()
-            if let cwd {
-                value["cwd"] = cwd
-            }
-            if let createdAt {
-                value["createdAt"] = createdAt
-            }
-            if let updatedAt {
-                value["updatedAt"] = updatedAt
-                value["recencyAt"] = updatedAt
-            }
-            if let gitBranch {
-                value["gitBranch"] = gitBranch
-            }
+            value["cwd"] = self.cwd
+            value["createdAt"] = self.createdAt
+            value["updatedAt"] = self.updatedAt
+            value["recencyAt"] = self.updatedAt
+            value["gitBranch"] = self.gitBranch
             return value
         }
     }
@@ -234,15 +226,11 @@ enum MacNodeClaudeSessionCatalog {
         private var observer: (@Sendable (String) -> Void)?
 
         func set(_ observer: (@Sendable (String) -> Void)?) {
-            self.lock.lock()
-            self.observer = observer
-            self.lock.unlock()
+            self.lock.withLock { self.observer = observer }
         }
 
         func notify(rootPath: String) {
-            self.lock.lock()
-            let observer = self.observer
-            self.lock.unlock()
+            let observer = self.lock.withLock { self.observer }
             observer?(rootPath)
         }
     }

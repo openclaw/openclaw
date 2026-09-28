@@ -138,8 +138,8 @@ export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: strin
 export function createPriorCiCandidateFactory(
   fixture: ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"],
 ) {
-  function candidate() {
-    const f = fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
+  function candidate(existing?: ReturnType<typeof fixture>) {
+    const f = existing ?? fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
     const state = f.state();
     const path = join(f.root, "admin.json");
     state.priorCi.enabled = true;
@@ -187,8 +187,8 @@ export function createPriorCiCandidateFactory(
     return { ...f, path, evidence };
   }
 
-  function preExistingCandidate(workflow?: string) {
-    const f = candidate();
+  function preExistingCandidate(workflow?: string, existing?: ReturnType<typeof fixture>) {
+    const f = candidate(existing);
     let main = f.base;
     if (workflow) {
       main = f.commit(ciWorkflowTree(f, f.base, workflow), [f.base]);

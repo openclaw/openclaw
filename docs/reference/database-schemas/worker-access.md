@@ -27,6 +27,15 @@ or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread
 `readWithCanonicalSessionAdmission` validates session reads on the executing
 thread; invoke it inside the worker's admitted reader.
 
+Reply initialization and audited admission validators can reserve their exact
+session keys in the shared store queue. Unrelated sessions proceed while a holder
+awaits another queue; overlapping keys retain FIFO order. Creation hooks, parent
+forks, legacy-main retirement, and unscoped validators retain store-wide exclusion.
+Placement and migration barriers join earlier accepted work and block later
+writers. The separate canonical SQLite writer still owns transaction admission,
+current-authority checks, and commit settlement. Schemas, durability, and update
+behavior are unchanged.
+
 The dedicated shared-state read transport reuses successful process-owner and
 compatibility-projection verification for less than one second. Canonical
 owner-path resolutions have the same maximum age. An expired read synchronously

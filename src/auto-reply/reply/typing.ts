@@ -12,7 +12,7 @@ const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
 const DEFAULT_TYPING_TTL_MS = 2 * 60_000;
 const MAX_TYPING_INTERVAL_MS = Math.floor(MAX_TIMER_TIMEOUT_MS / 2);
 
-function resolveTypingIntervalMs(seconds: number | undefined): number {
+export function resolveTypingIntervalMs(seconds: number | undefined): number {
   if (Number.isFinite(seconds) && (seconds ?? 0) <= 0) {
     return 0;
   }
