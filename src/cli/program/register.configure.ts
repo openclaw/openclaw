@@ -17,12 +17,17 @@ export function registerConfigureCommand(program: Command): void {
       collectOption,
       [] as string[],
     )
+    .option("--agent <id>", "Agent that owns the guided setup")
     .action(async (opts) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { configureCommandFromSectionsArg } =
           await import("../../commands/configure.commands.js");
-        await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+        await configureCommandFromSectionsArg(
+          opts.section,
+          defaultRuntime,
+          opts.agent !== undefined ? { agentId: String(opts.agent) } : {},
+        );
       });
     });
 }

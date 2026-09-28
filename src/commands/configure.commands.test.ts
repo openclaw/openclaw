@@ -110,6 +110,21 @@ describe("configureCommandFromSectionsArg", () => {
     },
   );
 
+  it.each([undefined, ["channels"]])(
+    "preserves explicit owner presence for sections %j",
+    async (sections) => {
+      const runtime = makeRuntime();
+      for (const agentId of ["ops", ""]) {
+        runConfigureWizardMock.mockClear();
+        await configureCommandFromSectionsArg(sections, runtime, { interactive: true, agentId });
+        expect(runConfigureWizardMock).toHaveBeenCalledExactlyOnceWith(
+          { command: "configure", ...(sections ? { sections } : {}), agentId },
+          runtime,
+        );
+      }
+    },
+  );
+
   it("rejects a lone invalid section before unrestricted wizard dispatch", async () => {
     const runtime = makeRuntime();
 
@@ -119,7 +134,7 @@ describe("configureCommandFromSectionsArg", () => {
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.error.mock.calls[0]?.[0]).toBe(
-      "Invalid --section: bogus. Expected one of: workspace, model, web, gateway, daemon, channels, plugins, skills, health. Run openclaw configure without --section to use the full wizard.",
+      `Invalid --section: bogus. Expected one of: workspace, model, web, gateway, daemon, channels, plugins, skills, health. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
     );
     expect(runConfigureWizardMock).not.toHaveBeenCalled();
   });

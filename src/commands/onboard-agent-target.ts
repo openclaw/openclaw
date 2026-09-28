@@ -29,6 +29,8 @@ export type OnboardingAgentTarget = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  /** An explicit setup selector keeps defaults on this agent, including legacy rosters. */
+  defaultsScope?: "agent";
 };
 
 export function resolveOnboardingAgentTarget(
@@ -119,9 +121,12 @@ export function applyOnboardingWorkspace(
   workspace: string,
 ): OpenClawConfig {
   const entry = resolveMutableAgentEntry(config, target.agentId);
-  // Explicit fleets own workspace at the selected entry even when it inherited
-  // the global default; legacy owners stay global until they author an override.
-  if (entry?.workspace !== undefined || (config.agents?.ownership === "explicit" && entry)) {
+  // Explicit setup targets own an entry even on legacy rosters; ambient legacy
+  // setup keeps its existing shared-default behavior.
+  if (
+    entry?.workspace !== undefined ||
+    (entry && (config.agents?.ownership === "explicit" || target.defaultsScope === "agent"))
+  ) {
     return replaceOnboardingAgentEntry(config, config, target, { ...entry, workspace });
   }
   return {
@@ -139,7 +144,11 @@ export function applyOnboardingPrimaryModel(
   model: string,
 ): OpenClawConfig {
   const entry = resolveMutableAgentEntry(config, target.agentId);
-  if (entry?.model === undefined && config.agents?.ownership !== "explicit") {
+  if (
+    entry?.model === undefined &&
+    config.agents?.ownership !== "explicit" &&
+    target.defaultsScope !== "agent"
+  ) {
     return applyPrimaryModel(config, model);
   }
 
@@ -169,7 +178,11 @@ export function applyOnboardingUtilityModel(
 ): OpenClawConfig {
   const utilityModel = normalizeAgentModelRefForConfig(model);
   const entry = resolveMutableAgentEntry(config, target.agentId);
-  if (entry?.utilityModel === undefined && config.agents?.ownership !== "explicit") {
+  if (
+    entry?.utilityModel === undefined &&
+    config.agents?.ownership !== "explicit" &&
+    target.defaultsScope !== "agent"
+  ) {
     return {
       ...config,
       agents: { ...config.agents, defaults: { ...config.agents?.defaults, utilityModel } },

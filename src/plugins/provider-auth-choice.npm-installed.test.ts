@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import type http from "node:http";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { promptAuthConfig } from "../commands/configure.gateway-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { maybeHandleProviderPluginSelection } from "../flows/model-picker-provider-setup.js";
+import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { useIsolatedStateGuard } from "../test-utils/state-path-guard.js";
 import type { WizardSelectParams } from "../wizard/prompts.js";
 import { installPluginFromArchive, installPluginFromNpmSpec } from "./install.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
@@ -17,7 +23,6 @@ import {
 } from "./loader.test-fixtures.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { buildPluginRegistrySnapshotReport } from "./status-snapshot.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { registryPackages, startStaticRegistry } from "./test-helpers/npm-registry-fixtures.js";
 
@@ -37,20 +42,35 @@ vi.mock("../commands/model-picker.js", async (importOriginal) => ({
   promptModelAllowlist: modelPicker,
 }));
 
-const tempDirs: string[] = [];
-const servers: http.Server[] = [];
-afterEach(async () => {
-  for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+// Keep the real SQLite lifecycle coordinators under the isolated worker home.
+aroundEach(async (runTest) => {
+  const testHome = process.env.OPENCLAW_TEST_HOME;
+  if (!testHome) {
+    throw new Error("Provider auth tests require an isolated test home.");
   }
-  install.mockReset();
-  modelPicker.mockReset();
-  resetPluginLoaderTestStateForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTrackedTempDirs(tempDirs);
+  await withStateDatabaseCoordinatorRuntimeDirectory(testHome, runTest);
 });
+
+useIsolatedStateGuard();
+const servers: http.Server[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    try {
+      for (const server of servers.splice(0)) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      install.mockReset();
+      modelPicker.mockReset();
+      resetPluginLoaderTestStateForTest();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    }
+  }),
+);
 
 it.each([
   { pluginId: "moonshot", source: "npm" },
@@ -61,7 +81,7 @@ it.each([
   "continues $pluginId auth from the $source inventory without reinstalling",
   { timeout: 120_000 },
   async ({ pluginId, source }) => {
-    const root = fs.realpathSync(makeTrackedTempDir("provider-npm-installed", tempDirs));
+    const root = tempDirs.make("provider-npm-installed-", process.env.OPENCLAW_TEST_HOME);
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -93,7 +113,9 @@ it.each([
               wizard: choice.method === "api-key-cn" ? { groupLabel: "Moonshot" } : { choiceId: choice.choiceId },
               async run(ctx) {
                 await ctx.prompter.text({ message: choice.choiceId });
-                return { profiles: [], defaultModel: choice.provider + "/fixture-model" };
+                return { profiles: [{ profileId: choice.provider + ":fixture", credential: {
+                  type: "api_key", provider: choice.provider, key: "synthetic-test-only"
+                } }], defaultModel: choice.provider + "/fixture-model" };
               }
             }))
           });
@@ -215,7 +237,153 @@ it.each([
         expect(modelPicker).toHaveBeenCalledWith(
           expect.objectContaining({ preferredProvider: pluginId }),
         );
+        if (pluginId === "moonshot" && source === "npm") {
+          const opsDir = path.join(stateDir, "agents", "ops", "agent");
+          const siblingDir = path.join(stateDir, "agents", "sibling", "agent");
+          const scopedConfig: OpenClawConfig = {
+            ...config,
+            agents: {
+              ownership: "explicit",
+              entries: {
+                ops: { agentDir: opsDir, workspace: workspaceDir },
+                sibling: { agentDir: siblingDir, workspace: path.join(root, "sibling-workspace") },
+              },
+            },
+          };
+          const scopedPrompter = createWizardPrompter();
+          const selected = await maybeHandleProviderPluginSelection({
+            selection: "provider-plugin:moonshot:api-key",
+            cfg: scopedConfig,
+            agentDir: opsDir,
+            workspaceDir,
+            runtime: createNonExitingRuntime(),
+            prompter: scopedPrompter,
+          });
+          expect(selected?.model).toBe("moonshot/fixture-model");
+          expect(scopedPrompter.text).toHaveBeenCalledExactlyOnceWith({
+            message: "moonshot-api-key",
+          });
+          closeOpenClawAgentDatabasesForTest();
+          closeOpenClawStateDatabaseForTest();
+          expect(loadPersistedAuthProfileStore(opsDir)?.profiles).toEqual({
+            "moonshot:fixture": {
+              type: "api_key",
+              provider: "moonshot",
+              key: "synthetic-test-only",
+            },
+          });
+          expect(loadPersistedAuthProfileStore(siblingDir)?.profiles ?? {}).toEqual({});
+        }
       },
     );
   },
 );
+
+it("discovers configure auth from only the selected agent workspace", async () => {
+  const root = tempDirs.make("configure-workspace-provider-", process.env.OPENCLAW_TEST_HOME);
+  const stateDir = path.join(root, "state");
+  const workspaceDir = path.join(root, "ops-workspace");
+  const siblingWorkspace = path.join(root, "sibling-workspace");
+  const agentDir = path.join(stateDir, "agents", "ops", "agent");
+  const siblingDir = path.join(stateDir, "agents", "sibling", "agent");
+  const pluginId = "workspace-provider";
+  const choiceId = "workspace-provider-api-key";
+  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", pluginId);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.mkdirSync(siblingWorkspace, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({ name: pluginId, version: "1.0.0", openclaw: { extensions: ["./index.cjs"] } }),
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      configSchema: { type: "object", properties: {}, additionalProperties: false },
+      providers: [pluginId],
+      providerAuthChoices: [
+        {
+          provider: pluginId,
+          method: "api-key",
+          choiceId,
+          choiceLabel: "Workspace provider key",
+          groupId: pluginId,
+          groupLabel: "Workspace provider",
+        },
+      ],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = { id: "workspace-provider", register(api) {
+      api.registerProvider({ id: "workspace-provider", label: "Workspace provider", auth: [{
+        id: "api-key", label: "Workspace provider key", kind: "api_key",
+        wizard: { choiceId: "workspace-provider-api-key" },
+        async run(ctx) {
+          await ctx.prompter.text({ message: JSON.stringify({
+            agentDir: ctx.agentDir, workspaceDir: ctx.workspaceDir
+          }) });
+          return { profiles: [{ profileId: "workspace-provider:fixture", credential: {
+            type: "api_key", provider: "workspace-provider", key: "synthetic-test-only"
+          } }] };
+        }
+      }] });
+    } };`,
+  );
+  await withEnvAsync(
+    {
+      HOME: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    },
+    async () => {
+      const config: OpenClawConfig = {
+        gateway: { mode: "local" },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "sibling" } },
+          entries: {
+            ops: { agentDir, workspace: workspaceDir },
+            sibling: { agentDir: siblingDir, workspace: siblingWorkspace },
+          },
+        },
+        plugins: { entries: { [pluginId]: { enabled: true } } },
+      };
+      const prompter = createWizardPrompter({
+        select: async <T>({ options }: WizardSelectParams<T>) => {
+          const selected =
+            options.find((option) => option.value === choiceId) ??
+            options.find((option) => option.value === pluginId) ??
+            options.find((option) => option.value === "__more");
+          if (!selected) {
+            throw new Error("Selected workspace provider is missing from configure auth choices");
+          }
+          return selected.value;
+        },
+      });
+      modelPicker.mockResolvedValue({ models: undefined });
+      await promptAuthConfig(config, createNonExitingRuntime(), prompter, {
+        agentId: "ops",
+        agentDir,
+        workspaceDir,
+      });
+      expect(prompter.text).toHaveBeenCalledExactlyOnceWith({
+        message: JSON.stringify({ agentDir, workspaceDir }),
+      });
+      expect(install).not.toHaveBeenCalled();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({
+        "workspace-provider:fixture": {
+          type: "api_key",
+          provider: "workspace-provider",
+          key: "synthetic-test-only",
+        },
+      });
+      expect(loadPersistedAuthProfileStore(siblingDir)?.profiles ?? {}).toEqual({});
+    },
+  );
+});

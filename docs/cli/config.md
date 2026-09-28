@@ -49,6 +49,11 @@ continues to imply immutable config, even if `OPENCLAW_CONFIG_READONLY` is unset
   Repeatable guided-setup section filter when you run `openclaw config` without a subcommand.
 </ParamField>
 
+<ParamField path="--agent <id>" type="string">
+  Agent that owns guided setup when you run `openclaw config` without a subcommand.
+  Same behavior as [`openclaw configure --agent`](/cli/configure).
+</ParamField>
+
 Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`.
 
 ## Examples
@@ -56,6 +61,7 @@ Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `
 ```bash
 openclaw config file
 openclaw config file --json
+openclaw config --agent ops --section model
 openclaw config --section model
 openclaw config --section gateway --section daemon
 openclaw config schema
