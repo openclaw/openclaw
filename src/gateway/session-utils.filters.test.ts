@@ -14,6 +14,7 @@ import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import { prepareSessionRowSelection } from "./session-utils-list.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
@@ -33,6 +34,78 @@ const storePath = "/tmp/openclaw-session-inventory-filters";
 function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
 }
+
+it("reuses involvement facts until session replacement or profile publication", () => {
+  const identityProjection = sessionIdentity.createSessionIdentityProjection();
+  const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };
+  const profiles = rowContext.userProfileIdentityById;
+  const key = "agent:main:involved";
+  const state = { profiles: { "profile-merged-ada": { hidden: false, updatedAt: 1 } } };
+  const readInvolvement = vi.fn(() => state);
+  const original = entry();
+  Object.defineProperty(original, "profileInvolvement", { get: readInvolvement, enumerable: true });
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    storePath,
+    store: { [key]: original },
+    rowContext,
+  });
+  onTestFinished(() => projection.dispose());
+  const select = (id = "profile-ada") =>
+    runSynchronousWork(
+      filterSessionEntries({
+        ...prepareSessionRowSelection(projection, {}),
+        involvingActorId: id,
+      }),
+    ).entries.map(([sessionKey]) => sessionKey);
+  expect(select()).toEqual([key]);
+  readInvolvement.mockClear();
+  for (let i = 0; i < 3; i++) {
+    expect(select()).toEqual([key]);
+    expect(select("profile-bob")).toEqual([]);
+  }
+  expect(readInvolvement).not.toHaveBeenCalled();
+
+  // Profile publications can move an alias without replacing session metadata.
+  profiles.set("profile-merged-ada", undefined);
+  identityProjection.invalidate();
+  expect(select()).toEqual([]);
+  expect(select("profile-merged-ada")).toEqual([key]);
+  projection.setEntry(key, {
+    ...entry(),
+    profileInvolvement: {
+      key: "inventory-session",
+      profiles: {
+        "profile-merged-ada": { hidden: true, updatedAt: 2 },
+      },
+    },
+  });
+  expect(select("profile-merged-ada")).toEqual([]);
+});
+
+it("expires cached child owners without a session or registry publication", () => {
+  const now = Date.UTC(2026, 8, 27);
+  const key = "agent:main:subagent:child";
+  const parent = "agent:main:dashboard:parent";
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    storePath,
+    store: {
+      [key]: entry({ updatedAt: now, spawnedBy: parent }),
+    },
+  });
+  onTestFinished(() => projection.dispose());
+  const select = (clock: number) =>
+    runSynchronousWork(
+      filterSessionEntries({
+        ...prepareSessionRowSelection(projection, { spawnedBy: parent }, { now: clock }),
+      }),
+    ).entries.map(([sessionKey]) => sessionKey);
+  expect(select(now)).toEqual([key]);
+  expect(select(now + 3_600_000)).toEqual([key]);
+  expect(select(now + 3_600_001)).toEqual([]);
+  expect(select(now)).toEqual([key]);
+});
 
 it("accepts the metadata query contract and rejects mistyped selectors", () => {
   expect(

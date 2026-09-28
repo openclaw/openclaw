@@ -61,12 +61,12 @@ import {
 } from "./node-worker-supervisor-recovery.js";
 import { stopOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
 import {
-  createNodeWorkerTurnCancellation,
+  createNodeWorkerTurnControl,
   settleNodeWorkerTurn,
   startNodeWorkerTurn,
   waitForNodeWorkerRetirement,
 } from "./node-worker-turn-lifecycle.js";
-import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import { NodeWorkerTurnStore, type NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const FORCE_STOP_WAIT_MS = 4_000;
@@ -77,7 +77,7 @@ class NodeWorkerSupervisor {
   private readonly starting = new Map<string, Promise<NodeWorkerLaunchReceipt>>();
   private readonly recoveries = new Map<string, NodeWorkerRecovery>();
   private readonly recoverRunning: ReturnType<typeof createNodeWorkerLaunchRecovery>;
-  private readonly cancellation: ReturnType<typeof createNodeWorkerTurnCancellation>;
+  private readonly turnControl: ReturnType<typeof createNodeWorkerTurnControl>;
   private readonly bundleRoot: string;
   private readonly journal: NodeWorkerJournalWorker;
   private readonly store: NodeWorkerLaunchStore;
@@ -124,7 +124,7 @@ class NodeWorkerSupervisor {
       recoveries: this.recoveries,
       isRecoveryActive: () => !this.closed,
     });
-    this.cancellation = createNodeWorkerTurnCancellation({
+    this.turnControl = createNodeWorkerTurnControl({
       admissions: this.admissions,
       active: this.active,
       turns: this.turns,
@@ -132,7 +132,7 @@ class NodeWorkerSupervisor {
       stopTimeoutMs: NODE_WORKER_STOP_GRACE_MS + FORCE_STOP_WAIT_MS,
       isClosed: () => this.closeCompleted,
       initialize: () => this.initialize(),
-      status: (launchId) => this.status(launchId),
+      readStatus: (launchId) => this.readStatus(launchId),
       cancelOwner: (identity) => this.cancelOwner(identity),
       stopChild: (active, state) => this.stopChild(active, state),
     });
@@ -304,7 +304,7 @@ class NodeWorkerSupervisor {
         claim: claimInput,
         signal,
         store: this.turns,
-        cancel: (expected) => this.cancellation.cancelTurn(expected),
+        cancel: (expected) => this.turnControl.cancelTurn(expected),
         stopChild: (active, state) => this.stopChild(active, state),
         isCurrent: () => this.active.get(owner.launchId) === owner && !this.closed,
       });
@@ -337,7 +337,7 @@ class NodeWorkerSupervisor {
     }
     let cancellation: Promise<NodeWorkerLaunchReceipt | undefined> | undefined;
     const cancelClaimed = () => {
-      cancellation ??= Promise.resolve().then(() => this.cancellation.cancelTurn(claimInput));
+      cancellation ??= Promise.resolve().then(() => this.turnControl.cancelTurn(claimInput));
       void cancellation.catch(() => undefined);
     };
     signal?.addEventListener("abort", cancelClaimed, { once: true });
@@ -381,7 +381,11 @@ class NodeWorkerSupervisor {
     }
   }
 
-  async status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined> {
+  status(launchId: string, options?: { waitMs: number; signal?: AbortSignal }) {
+    return this.turnControl.status(launchId, options);
+  }
+
+  private async readStatus(launchId: string): Promise<NodeWorkerTurnReceipt | undefined> {
     if (this.closeCompleted) {
       return this.turns.get(launchId);
     }
@@ -483,7 +487,7 @@ class NodeWorkerSupervisor {
   }
 
   cancel(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined> {
-    return this.cancellation.cancel(expected);
+    return this.turnControl.cancel(expected);
   }
 
   async stopEnvironment(expected: NodeWorkerEnvironmentStopInput): Promise<void> {

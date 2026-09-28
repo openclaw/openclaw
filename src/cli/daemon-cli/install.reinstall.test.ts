@@ -27,17 +27,61 @@ const {
 describe("runDaemonInstall reinstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it.each([undefined, "node"] as const)(
-    "keeps the recorded Node on force reinstall unless runtime selection is explicit (%s)",
-    async (runtime) => {
-      const recordedNode = "/opt/homebrew/opt/node@24/bin/node";
+  it.each([
+    { recorded: "node", runtime: undefined, probe: "supported" },
+    { recorded: "node", runtime: "node", probe: "supported" },
+    { recorded: "bun", runtime: undefined, probe: "supported" },
+    { recorded: "bun", runtime: "node", probe: "supported" },
+    { recorded: "bun", runtime: "bun", probe: "supported" },
+    { recorded: "bun", runtime: undefined, probe: "unsupported" },
+    { recorded: "bun", runtime: undefined, probe: "ENOENT" },
+    { recorded: "bun", runtime: undefined, probe: "EACCES" },
+  ] as const)(
+    "reinstalls recorded $recorded ($probe) with runtime=$runtime without creating a pin",
+    async ({ recorded, runtime, probe }) => {
+      const recordedPath = `/opt/recorded/bin/${recorded}`;
+      runExecMock.mockImplementation(async (file: string) => {
+        if (file === recordedPath && (probe === "ENOENT" || probe === "EACCES")) {
+          throw Object.assign(new Error(probe), { code: probe });
+        }
+        return file === recordedPath && recorded === "bun"
+          ? {
+              stdout: JSON.stringify({
+                bunVersion: probe === "unsupported" ? "1.3.0" : "1.4.2",
+                sqliteVersion: "3.53.4",
+                sqliteProbe: {
+                  available: true,
+                  version: "3.53.4",
+                  text: true,
+                  blob: true,
+                  json: true,
+                },
+              }),
+              stderr: "",
+            }
+          : nodeProbeOutput("26.8.1");
+      });
       service.readCommand.mockResolvedValue({
-        programArguments: [recordedNode, "/opt/openclaw/dist/index.js", "gateway"],
+        programArguments: [recordedPath, "/opt/openclaw/dist/index.js", "gateway"],
       });
       await runDaemonInstall({ json: true, force: true, runtime });
       expect(actionState.failed).toEqual([]);
-      expect(readFirstInstallPlanArg().runtimePath).toBe(runtime ? undefined : recordedNode);
+      const retained = runtime === undefined && probe === "supported";
+      expect(readFirstInstallPlanArg()).toMatchObject({
+        runtime: runtime ?? (retained ? recorded : "node"),
+        runtimePath: retained ? recordedPath : undefined,
+        pinnedRuntimePath: undefined,
+      });
       expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
+      const [action] = installDaemonServiceAndEmitMock.mock.calls[0] as [
+        { install: () => Promise<void> },
+      ];
+      await action.install();
+      expect(service.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected: { revision: "empty", stored: false }, pin: undefined },
+        }),
+      );
     },
   );
 

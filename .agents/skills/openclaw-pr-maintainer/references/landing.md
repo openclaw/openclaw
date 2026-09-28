@@ -174,6 +174,14 @@ It dispatches the protected REST merge with the exact head pinned and retains
 the prior run, inspected delta, scoped evidence, and operator in the existing
 merge outcome. Accepted or uncertain outcomes still require reconciliation.
 
+If GraphQL cannot determine mergeability, this explicit mode can switch to a
+complete REST observation and retain that reader for the attempt. It preserves
+known GraphQL facts and reads the repository, PR head, main, rules, and required
+checks together; a blocked CI projection remains blocked. The existing admin
+verifier rechecks live authority, enforced reviews, security, and exact CI evidence
+after the final REST reread. Missing or changed evidence still refuses before
+intent. This adds no implicit admin route or mutation retry.
+
 #### Explicitly approved pre-existing failures
 
 When the operator specifically authorizes ignoring independently attributed
