@@ -975,13 +975,13 @@ suite.define(() => {
         page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")),
       ]);
       expect(response.status()).toBe(404);
-      expect(await response.finished()).toBeNull();
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
       const userGroup = page.locator(".chat-group.user", {
         hasText: "Please keep my fallback avatar readable.",
       });
       const slot = userGroup.locator(".chat-avatar-slot");
+      await expect(slot).toHaveAttribute("data-avatar-state", "failed");
       const image = slot.locator("img.chat-avatar.user");
       const initials = slot.locator(".chat-avatar--sender-initials");
       expect(avatarRequests).toHaveLength(1);
