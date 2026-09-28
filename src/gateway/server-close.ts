@@ -238,7 +238,6 @@ export type GatewayCloseParams = {
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
   heartbeatRunner: HeartbeatRunner;
-  nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
@@ -500,10 +499,6 @@ async function closeGatewayResources(
       warnings,
     );
     await shutdownStep("cron-maintenance", () => params.stopCronMaintenance?.(), warnings);
-    for (const timer of params.nodePresenceTimers.values()) {
-      clearInterval(timer);
-    }
-    params.nodePresenceTimers.clear();
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
     }
