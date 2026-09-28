@@ -626,6 +626,13 @@ see [Rollback](/install/updating#rollback).
 If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
 
+If an update fails before activation, recovery observes the existing Gateway once
+without waiting for startup or restarting it. Native service and listener checks
+share the update's existing observation allowance; their elapsed time does not
+consume the separate short health-request timeout. An explicit shorter probe
+allowance and the overall deadline still apply. This correction takes effect
+when the installed updater includes it, not in an older updater already running.
+
 ### Restart handoff
 
 Service-manager commands and helper acknowledgements share the activation or

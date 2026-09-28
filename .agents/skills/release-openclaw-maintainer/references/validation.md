@@ -104,8 +104,8 @@ Control UI, plugin, cross-OS, QA parity, runtime-pair/restart, and tool coverage
 remain selected and blocking; package/install/update proofs remain
 enforced. Beta `all` without soak
 also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
-Package Telegram deferral applies to beta-profile main/alpha too, but those do
-not qualify for `npm-beta-v1`.
+Package Telegram deferral applies to beta-profile `main` too, but it does not
+qualify for `npm-beta-v1`.
 
 Selected native-app CI and Windows Node tests block validation on failure.
 Native platform publication remains independent and follows its own gates.

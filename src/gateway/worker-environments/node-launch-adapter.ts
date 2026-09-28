@@ -493,6 +493,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         if (!stableRequest.isDispatchAuthorized()) {
           throw new Error("node worker launch authority closed");
         }
+        const launchMayAlreadyExist = mayHaveLaunched;
         try {
           const receipt = await invoke({
             deviceId: stableRequest.deviceId,
@@ -561,6 +562,19 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             delayMs = pollIntervalMs;
           }
         } catch (error) {
+          // Supervisors answer INVALID_REQUEST before retaining any admission, turn, or child
+          // for a launch ID they have not seen. Launch IDs are minted per turn plan, so only an
+          // earlier dispatch in this call could have registered it; cancelling would otherwise
+          // poll a null receipt until its deadline.
+          if (
+            !pollStatus &&
+            !launchMayAlreadyExist &&
+            error instanceof NodeWorkerLaunchTransportError &&
+            error.code === "INVALID_REQUEST"
+          ) {
+            mayHaveLaunched = false;
+            throw error;
+          }
           if (
             deadline.signal.aborted ||
             (!dispatchReady && availabilityDeadline.signal.aborted) ||
