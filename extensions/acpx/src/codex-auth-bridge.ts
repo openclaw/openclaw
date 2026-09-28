@@ -420,16 +420,16 @@ if (stderrLogPath) {
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
 
 function resolveNpmCliPath() {
-  const candidate = path.resolve(
-    path.dirname(process.execPath),
-    "..",
-    "lib",
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
-  return existsSync(candidate) ? candidate : undefined;
+  // Node installs npm either under a prefix's lib/ (nvm-style layouts) or as a
+  // sibling node_modules next to the node binary (Windows installer layouts).
+  // Missing both leaves only the npx shim, which cannot be spawned without a
+  // shell on Windows, so check the sibling layout too.
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    path.resolve(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    path.resolve(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 const npmCliPath = resolveNpmCliPath();
