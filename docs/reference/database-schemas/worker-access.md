@@ -90,6 +90,12 @@ asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, physical database identity, transaction/commit grants,
 and settlement of accepted write-capable work.
 
+Outbound media staging and recovery create and release their retention rows through
+the delivery queue's shared-state worker. Callers await creation before publishing
+spool files and await release during cleanup, so a concurrent writer waiting for
+host admission cannot block media sends on the Gateway thread. The existing custody
+rows, atomic enqueue, expiry, and update behavior are unchanged.
+
 Published agent and shared-state database timers dispatch periodic WAL checkpoints
 and bounded page reclamation through those same writers. The existing timer keeps
 its cadence and page budget, releases writer custody between units, and installs
