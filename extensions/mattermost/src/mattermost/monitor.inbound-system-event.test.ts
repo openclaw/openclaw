@@ -29,6 +29,7 @@ import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
+import { registerMattermostPreviewPolicyTests } from "./monitor.preview-policy.test-support.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 class FakeWebSocket {
@@ -1890,89 +1891,13 @@ describe("mattermost inbound user posts", () => {
     expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
-  it("keeps core block streaming enabled when preview streaming is off", async () => {
-    const offConfig: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          ...testConfig.channels?.mattermost,
-          streaming: { mode: "off", block: { enabled: true } },
-        },
-      },
-    };
-    mockState.runtimeCore = createRuntimeCore(offConfig);
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
-
-    const { monitor } = await openMonitor(socket, abortController, offConfig);
-
-    await emitMattermostChannelPost(socket, {
-      id: "post-streaming-off",
-      message: "stream this in blocks",
-    });
-    socket.emitClose(1000);
-    await monitor;
-
-    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
-    expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
-    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-    expect(replyOptions?.disableBlockStreaming).toBe(false);
-    expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
-    expect(replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
-  });
-
-  it("preserves provider previews for observer-only hooks", async () => {
-    mockState.getGlobalHookRunner.mockReturnValue({
-      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
-    });
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
-
-    const { monitor } = await openMonitor(socket, abortController);
-
-    await emitMattermostChannelPost(socket, {
-      id: "post-observer-hook-preview",
-      message: "show a preview",
-    });
-    socket.emitClose(1000);
-    await monitor;
-
-    expect(mockState.createMattermostDraftStream).toHaveBeenCalledTimes(1);
-    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-    expect(replyOptions?.disableBlockStreaming).toBe(true);
-    expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
-    expect(replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-  });
-
-  it.each([
-    { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
-    { label: "message_sending", hooks: ["message_sending"] },
-  ])("suppresses provider previews when $label is registered", async ({ hooks }) => {
-    const registeredHooks = new Set(hooks);
-    mockState.getGlobalHookRunner.mockReturnValue({
-      hasHooks: vi.fn((hookName: string) => registeredHooks.has(hookName)),
-    });
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
-
-    const { monitor } = await openMonitor(socket, abortController);
-
-    await emitMattermostChannelPost(socket, {
-      id: `post-${hooks.join("-")}-preview`,
-      message: "do not expose this preview",
-    });
-    socket.emitClose(1000);
-    await monitor;
-
-    expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
-    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
-    expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
-    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBeUndefined();
-    expect(replyOptions?.onObservedReplyDelivery).toBeUndefined();
-    expect(replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+  registerMattermostPreviewPolicyTests({
+    FakeWebSocket,
+    testConfig,
+    createRuntimeCore,
+    openMonitor,
+    emitMattermostChannelPost,
+    mockState,
   });
 
   registerMattermostBlockProgressTests({
