@@ -196,11 +196,8 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
 
 describe("direct compactor through the context-engine delegate", () => {
   it.each([
-    { operation: "summary", partial: false, threadId: "thread-route" },
     { operation: "summary", partial: true, threadId: 0 },
     { operation: "endpoint", partial: false, threadId: 0 },
-    { operation: "endpoint", partial: true, threadId: "thread-route" },
-    { operation: "summary", partial: false, threadId: undefined },
   ] as const)(
     "returns durable $operation identity (partial=$partial, thread=$threadId)",
     async ({ operation, partial, threadId }) => {

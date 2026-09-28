@@ -373,7 +373,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.sandbox-info.test.ts",
   "src/agents/embedded-agent-runner/compact.queued-successor.test.ts",
   "src/agents/embedded-agent-runner/compact.queued-resources.test.ts",
-  "src/agents/embedded-agent-runner/compact.terminal-metadata.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
