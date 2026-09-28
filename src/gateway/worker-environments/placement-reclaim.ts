@@ -3,16 +3,14 @@ import {
   isExactAttachedEnvironment,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import {
-  type PlacementRecoveryDeps,
-  resolvePriorWorkspaceResultConflict,
-} from "./placement-dispatch-pending-results.js";
+import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerPlacementReclaimBarriers,
   WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,

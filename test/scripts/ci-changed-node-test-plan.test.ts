@@ -588,7 +588,9 @@ describe("CI changed Node test plan", () => {
 
   it("reuses a complete consumer graph until the tracked inventory changes", () => {
     const cwd = argvTempDirs.make("changed-cached-consumers-");
+    const unshared = Array.from({ length: 40 }, (_, index) => `src/leaf-${index}.test.ts`);
     const files = {
+      ...Object.fromEntries(unshared.map((file) => [file, "export {};\n"])),
       "tsconfig.json": JSON.stringify({
         compilerOptions: { paths: { "@fixture/shared": ["./src/shared.ts"] } },
       }),
@@ -612,6 +614,8 @@ describe("CI changed Node test plan", () => {
     git("init", "--quiet");
     git("add", ".");
     const options = { tooling: true, resolveAliases: true, runtimeOnly: true, forceFull: true };
+    // A wide prefilter miss must not cache unrelated files as having no imports.
+    expect(hasImportGraphConsumers(unshared, cwd, options)).toBe(false);
     expect(resolveAffectedTestsFromImportGraph(["src/shared.ts"], cwd, options)).toEqual([
       "src/consumer.test.ts",
     ]);
@@ -923,6 +927,43 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it.each(["blacksmith", "github", "hybrid"])(
+    "retains exact plugin selections in their canonical process owner without enabling the unrelated sweep (%s)",
+    (runnerBackend) => {
+      const pluginConfig = "test/vitest/vitest.plugins.config.ts";
+      const targets = [
+        "src/plugins/activation-planner.test.ts",
+        "src/plugins/manifest-registry.test.ts",
+        "src/infra/retry.test.ts",
+      ];
+      const selected = createSelectedNodeTestShardBundles(targets, { runnerBackend });
+      expect(selected).not.toBeNull();
+      const groups = selected?.flatMap((row) => row.groups) ?? [];
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        targets.toSorted(),
+      );
+      const pluginGroups = groups.filter((group) => group.configs.includes(pluginConfig));
+      expect(pluginGroups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        targets.slice(0, 2).toSorted(),
+      );
+      for (const group of pluginGroups) {
+        expect(group.requiresDist).toBe(false);
+      }
+
+      const unrelated = createNodeTestShardBundles({
+        runnerBackend,
+        compactMode: "pull-request",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+      });
+      expect(
+        unrelated
+          .flatMap((row) => row.groups ?? [row])
+          .some((group) => group.configs.includes(pluginConfig)),
+      ).toBe(false);
+    },
+  );
+
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
       "test/scripts/ci-node-test-plan.test.ts",
@@ -1009,6 +1050,117 @@ describe("CI changed Node test plan", () => {
       groups.mockRestore();
       timing.mockRestore();
       selected.mockRestore();
+    }
+  });
+
+  it("packs broad changed targets by execution policy without losing coverage", () => {
+    const runtimeTargets = Array.from(
+      { length: 4 },
+      (_, i) => `src/infra/row-cap-runtime-${i}.test.ts`,
+    );
+    const e2eTargets = Array.from({ length: 4 }, (_, i) => `src/infra/row-cap-${i}.e2e.test.ts`);
+    const serialTargets = Array.from(
+      { length: 4 },
+      (_, i) => `extensions/memory-core/row-cap-${i}.test.ts`,
+    );
+    const selectedTestTargets = [
+      ...Array.from({ length: 1_000 }, (_, i) => `src/infra/row-cap-${i}.test.ts`),
+      ...runtimeTargets,
+      ...e2eTargets,
+      ...serialTargets,
+      serialTargets[0]!,
+    ];
+    const seconds = Object.fromEntries(selectedTestTargets.map((target) => [target, 20]));
+    const plans = vi.spyOn(testProjects, "buildVitestRunPlans").mockImplementation((targets) => [
+      {
+        config: targets.some((target) => e2eTargets.includes(target))
+          ? "test/vitest/vitest.e2e.config.ts"
+          : "test/vitest/vitest.unit.config.ts",
+        includePatterns: null,
+        forwardedArgs: [...targets],
+        watchMode: false,
+      },
+    ]);
+    const buildMode = vi
+      .spyOn(buildPrerequisites, "resolveVitestPretestBuildMode")
+      .mockImplementation((selections) =>
+        selections.some((selection) =>
+          selection.includePatterns?.some((target) => runtimeTargets.includes(target)),
+        )
+          ? "runtime"
+          : undefined,
+      );
+    const e2eTimings = vi.spyOn(testTimings, "readRepoE2eFileTimings").mockReturnValue(seconds);
+    const toolingTimings = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
+    try {
+      const options = { selectedTestTargets };
+      const original = expectDefined(
+        createChangedNodeTestShardsWithSmoke(selectedTestTargets, options),
+        "broad changed-target plan",
+      );
+      expect(original.filter((shard) => !shard.requiresDist).length).toBeGreaterThan(130);
+      const packed = expectDefined(
+        createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+          ...options,
+          compactNodeJobCap: 130,
+        }),
+        "packed changed-target plan",
+      );
+      expect(packed.filter((shard) => !shard.requiresDist)).toHaveLength(130);
+      expect(selectedFiles(packed).toSorted()).toEqual(selectedTestTargets.toSorted());
+      expect(packed.filter((shard) => !shard.targets)).toEqual(
+        original.filter((shard) => !shard.targets),
+      );
+      const targetRows = packed.filter((shard) => shard.targets);
+      // These three small policy partitions each need just one of the 129 target rows.
+      expect(targetRows.filter((shard) => shard.pretestBuildMode)).toHaveLength(2);
+      expect(targetRows.filter((shard) => shard.planConcurrency === 1)).toHaveLength(1);
+      for (const [index, shard] of targetRows.entries()) {
+        expect(shard).toMatchObject({
+          checkName: `checks-node-changed-${index + 1}`,
+          shardName: `changed-${index + 1}`,
+          predictedSeconds: shard.targets!.length * 20,
+        });
+        for (const target of shard.targets!) {
+          expect(shard.pretestBuildMode).toBe(
+            e2eTargets.includes(target)
+              ? "private-qa"
+              : runtimeTargets.includes(target)
+                ? "runtime"
+                : undefined,
+          );
+          expect(shard.planConcurrency).toBe(serialTargets.includes(target) ? 1 : undefined);
+        }
+      }
+      const ordinarySeconds = targetRows
+        .filter((shard) => !shard.pretestBuildMode && !shard.planConcurrency)
+        .map((shard) => shard.predictedSeconds!);
+      expect(Math.max(...ordinarySeconds) - Math.min(...ordinarySeconds)).toBeLessThanOrEqual(20);
+      expect(() =>
+        createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+          ...options,
+          compactNodeJobCap: 3,
+        }),
+      ).toThrow("4 execution policies exceed the changed-target row budget of 2");
+      // The boundary row already consumes this cap; leave rejection to the workflow.
+      expect(
+        createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+          ...options,
+          compactNodeJobCap: 1,
+        }),
+      ).toEqual(original);
+      const small = selectedTestTargets.slice(0, 2);
+      expect(
+        createChangedNodeTestShardsWithSmoke(small, {
+          selectedTestTargets: small,
+          compactNodeJobCap: 130,
+        }),
+      ).toEqual(createChangedNodeTestShardsWithSmoke(small, { selectedTestTargets: small }));
+    } finally {
+      plans.mockRestore();
+      buildMode.mockRestore();
+      e2eTimings.mockRestore();
+      toolingTimings.mockRestore();
     }
   });
 
@@ -1223,8 +1375,9 @@ describe("CI changed Node test plan", () => {
           expect(selectedJob?.runner).toBe(ownerJob?.runner);
           expect(selectedJob?.planConcurrency).toBe(ownerJob?.planConcurrency);
           expect(selectedJob?.pretestBuildMode).toBe(ownerJob?.pretestBuildMode);
+          // Repacked jobs combine owners and honor their own timing observations;
+          // an individual original owner's forecast is not their cost ceiling.
           expect(selectedJob?.predictedSeconds).toBeGreaterThan(0);
-          expect(selectedJob?.predictedSeconds).toBeLessThan(ownerJob!.predictedSeconds!);
           expect(selectedJob?.predictedSeconds).toBeLessThanOrEqual(300);
           expect(selectedJob?.timeoutMinutes).toBe(ownerJob?.timeoutMinutes);
         }

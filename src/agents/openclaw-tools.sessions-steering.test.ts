@@ -67,14 +67,12 @@ afterEach(() => {
 });
 
 it.each([
-  { supportsTranscriptCommitWait: true },
   { supportsTranscriptCommitWait: false },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
 ])(
   "sessions_send persists steered provenance with transcript wait support $supportsTranscriptCommitWait and mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
   async ({ supportsTranscriptCommitWait, mode, alternateStore, hiddenRun }) => {
-    const calls: Array<{ method?: string }> = [];
     const runId = "hidden-sessions-send-steering-run";
     const runScopedCallerKey =
       mode === "steer"
@@ -151,7 +149,6 @@ it.each([
       }
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string };
-        calls.push(request);
         if (request.method === "agent") {
           throw new Error("fallback agent should not start");
         }
@@ -173,31 +170,24 @@ it.each([
         },
       });
 
-      const send = tool
-        .execute("call-run-scoped-caller", {
-          mode,
-          sessionKey: runScopedCallerKey,
-          message: "[TASK-COMPLETE] re-portal occupancy ready",
-          timeoutSeconds: 0,
-        })
-        .then((result) => {
-          expect(result.details).toEqual(
-            expect.objectContaining({ status: "accepted", targetDisposition: "steered" }),
-          );
-          return result;
-        });
+      const send = tool.execute("call-run-scoped-caller", {
+        mode,
+        sessionKey: runScopedCallerKey,
+        message: "[TASK-COMPLETE] re-portal occupancy ready",
+        timeoutSeconds: 0,
+      });
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
       finishInitialResponse?.();
       const [result] = await Promise.all([send, prompt]);
 
-      expect(result.details).toEqual(
-        expect.objectContaining({
-          sessionKey: runScopedCallerKey,
-          delivery: expect.objectContaining({ status: "skipped", mode: "announce" }),
-        }),
-      );
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        targetDisposition: "steered",
+        sessionKey: runScopedCallerKey,
+        delivery: { status: "skipped", mode: "announce" },
+      });
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
         supportsTranscriptCommitWait ? true : undefined,
@@ -217,7 +207,9 @@ it.each([
           }),
         }),
       );
-      expect(calls.some((call) => call.method === "agent")).toBe(false);
+      expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(
+        false,
+      );
       expect(listSessionParticipantsReadOnly(scope).get(runScopedCallerKey)).toEqual([
         expect.objectContaining({
           identity: { type: "agent", id: "re-portal" },

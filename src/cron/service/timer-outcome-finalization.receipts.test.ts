@@ -13,13 +13,11 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "../store/run-receipt-store.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { reserveQueuedCronRun } from "./run-admission.js";
 import { createCronRunHandle } from "./run-history.js";
@@ -33,15 +31,15 @@ const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receip
 
 function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
     agentId: job.agentId ?? "main",
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
-      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId ?? "main",
     }),

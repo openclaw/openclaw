@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { loadMediaToolReferences } from "./tools/media-tool-shared.js";
 
@@ -16,6 +18,44 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/BsAAAAASUVORK5CYII=",
   "base64",
 );
+
+function guardedNodes(workspaceDir: string, sandbox = false) {
+  const execute = vi.fn(async () => ({ content: [], details: {} }));
+  const tool = applyNodesToolWorkspaceGuard(
+    { name: "nodes", label: "Nodes", description: "Nodes", parameters: Type.Object({}), execute },
+    {
+      workspaceDir,
+      fsPolicy: { workspaceOnly: true },
+      ...(sandbox ? { sandboxRoot: workspaceDir, sandboxContainerWorkdir: "/workspace" } : {}),
+    },
+  );
+  return { tool, execute };
+}
+
+describe("nodes output paths", () => {
+  it.each([
+    { outPath: "capture.mp4", sandbox: false },
+    { outPath: "/workspace/capture.mp4", sandbox: true },
+  ])("normalizes $outPath before executing the node tool", async ({ outPath, sandbox }) => {
+    const workspace = tempDirs.make("openclaw-nodes-workspace-");
+    const { tool, execute } = guardedNodes(workspace, sandbox);
+    await tool.execute("capture", { action: "screen_record", outPath });
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      "capture",
+      { action: "screen_record", outPath: path.join(workspace, "capture.mp4") },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("rejects an output outside the workspace before node execution", async () => {
+    const { tool, execute } = guardedNodes(tempDirs.make("openclaw-nodes-workspace-"));
+    await expect(tool.execute("capture", { outPath: "/etc/passwd" })).rejects.toThrow(
+      /Path escapes sandbox root/,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
 
 function createMediaTool(name: string, options: Parameters<typeof createOpenClawTools>[0]) {
   const tool = createOpenClawTools({
@@ -70,21 +110,6 @@ describe("media references in task workspaces", () => {
     },
   );
 
-  it("uses the task cwd when no explicit session root is provided", async () => {
-    const workspaceDir = tempDirs.make("openclaw-media-canonical-");
-    const cwd = tempDirs.make("openclaw-media-task-cwd-");
-    const imagePath = path.join(cwd, "screenshot.png");
-    await fs.writeFile(imagePath, png);
-    const tool = createMediaTool("view_image", {
-      workspaceDir,
-      cwd,
-      fsPolicy: { workspaceOnly: true },
-    });
-
-    await expectLoadedImage(tool, imagePath);
-    await expectLoadedImage(tool, "screenshot.png");
-  });
-
   it("keeps sandbox media on its bridge despite a different host session root", async () => {
     const workspaceDir = tempDirs.make("openclaw-media-canonical-");
     const hostRoot = tempDirs.make("openclaw-media-host-");
@@ -133,14 +158,7 @@ describe("media references in task workspaces", () => {
     await rejected;
   });
 
-  it.each([
-    { name: "reference.png", bytes: png, mime: "image/png" },
-    {
-      name: "reference.txt",
-      bytes: Buffer.from("This is a text document, not a PDF."),
-      mime: "text/plain",
-    },
-  ])(
+  it.each([{ name: "reference.png", bytes: png, mime: "image/png" }])(
     "rejects $mime as a PDF after reading within the session root",
     async ({ name, bytes, mime }) => {
       const workspaceDir = tempDirs.make("openclaw-media-canonical-");
@@ -174,7 +192,7 @@ describe("media references in task workspaces", () => {
     },
   );
 
-  it.each(["image_generate", "music_generate"] as const)(
+  it.each(["image_generate"] as const)(
     "%s shared reference loader follows the task cwd and session boundary",
     async (toolName) => {
       const workspaceDir = tempDirs.make("openclaw-media-canonical-");

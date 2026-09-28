@@ -24,7 +24,14 @@ export function createPriorCiFixtureState(head: string) {
           run_id: number;
           head_sha: string;
           check_run_url?: string;
-          steps?: Array<{ number: number; name: string; status: string; conclusion: string }>;
+          steps?: Array<{
+            number: number;
+            name: string;
+            status: string;
+            conclusion: string;
+            started_at?: string;
+            completed_at?: string;
+          }>;
         }>
       | undefined,
     event: "workflow_dispatch",
@@ -146,7 +153,7 @@ export function createPriorCiCandidateFactory(
     f.save(state);
     writeFileSync(
       join(f.worktree, ".local/gates.env"),
-      `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+      `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
     );
     const delta = f.git([
       "diff",
@@ -189,7 +196,7 @@ export function createPriorCiCandidateFactory(
       f.prepare(f.head, main);
       writeFileSync(
         join(f.worktree, ".local/gates.env"),
-        `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
       );
     }
     const state = f.state();

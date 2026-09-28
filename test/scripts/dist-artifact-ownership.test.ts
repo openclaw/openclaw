@@ -215,6 +215,8 @@ async function runWithProcesses(
           cwd: root,
           env: {
             ...process.env,
+            // Synthetic artifact writers do not inspect the host's installed Gateway.
+            OPENCLAW_ALLOW_LIVE_DIST_BUILD: "1",
             ...(resourceOwner
               ? { TMPDIR: resourceOwner.root, TMP: resourceOwner.root, TEMP: resourceOwner.root }
               : {}),

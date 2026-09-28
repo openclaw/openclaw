@@ -224,7 +224,31 @@ enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits mat
 ownership; membership and cancellation cause remain explicitly inspected operator
 attestations supported by the named artifacts, not facts inferred from prefixes.
 Either mechanism refuses cancelled jobs with failed steps or missing step evidence;
-those cannot be hidden as collateral cancellation.
+those cannot be hidden as collateral cancellation. The successful monitor route
+has one narrowly qualified historical exception: the Discord attachment uploader
+ran after cancellation skipped its entire built-artifact producer. This does not
+apply to matrix-only cancellation, test/cleanup failures, upload transport errors,
+or a producer that ran and failed or was cancelled.
+
+For that exact shape, add one `cancellation.secondaryFailures` entry with
+`kind: "missing-artifact-after-skipped-producer"`, numeric `jobId`, failed upload
+`step`, skipped `producerStep`, `log` (an existing artifact name), `reason`, and
+`evidence` names including that log. Keep this job in the exhaustive cancelled
+`jobIds`; do not add it to `failures` or either `causedBy` root list.
+
+The log must be the complete retained `gh run view --job --log` output with job,
+step, and timestamp columns, including multiline continuations and final cleanup.
+Its existing artifact SHA-256 is rechecked. The verifier binds the unique live
+build/producer/upload step names and numbers, successful monitor, cancelled build,
+skipped producer, and upload timing. It requires the tested workflow to equal the
+baseline, the reviewed historical producer body digest, and exact pinned uploader,
+selection, paths, and missing-file error policy. The log must identify the tested
+checkout/workflow and show only build cancellation followed by the absence of
+both declared JSON/log outputs. Other error annotations or failed steps block.
+The producer digest recognizes this inspected skipped-output contract; it grants
+no authority and does not evaluate arbitrary shell code. Source/log provenance
+and causal interpretation remain inspected attestations. This retains the
+secondary failure explicitly without turning cancellation into passing coverage.
 
 The tool verifies live run/attempt/PR/head identities, complete job accounting,
 the current effective GitHub Actions gate check-run, and source/artifact hashes.
@@ -320,6 +344,28 @@ A failed operation can retain a lock. Verify no owned child tools remain, then
 recover only with the exact token and command the wrapper printed. Never remove
 locks by hand or start competing retries. After throttling, inspect quota before
 retrying native prepare/merge.
+
+An unaccepted prior-CI admin REST squash may be recovered on the same prepared
+head when its original capture contains the complete known GitHub response
+`Base branch was modified. Review and try the merge again.` with HTTP 405 and
+the matching `gh` diagnostic. Inspect that sent request and its retained outcome,
+then use the existing confirmations with current admin evidence:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
+  --admin-evidence <path> --confirmed-operator-admin
+```
+
+This records `recovery.providerRejection`, retains every qualified capture and
+the prior intent through the successor CAS, and reruns all current review,
+security, admin-authority, evidence, and head checks. The exact-head
+`github_pending` stamp stays pending. Capture changes during admission, unknown
+extra captures, symlinks, other 405 responses, timeouts, 5xx responses, and mixed
+or truncated output remain blocked. Accepted, queue, Crabbox, and replacement-head
+recovery are outside this exception. Another explicit recovery must use the new
+outcome OID and independently qualify its response; there is no automatic retry.
+If the PR has merged meanwhile, reconcile the retained outcome without sending
+another merge request.
 
 After two identical pre-dispatch failures without new evidence, stop invoking
 the same blocked route. Inspect the failure and select an already-authorized

@@ -1,6 +1,7 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -14,6 +15,7 @@ import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import { hasSessionControlAuthority } from "../agents/tools/sessions-control-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -51,6 +53,7 @@ type CachedScopedTools = {
 type McpLoopbackScopeParams = {
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
+  sessionControlAuthority?: AdmittedRunOperatorAuthority;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
@@ -215,6 +218,7 @@ function resolveMcpLoopbackTools(
     agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
+    sessionControlAuthority: params.sessionControlAuthority,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
@@ -312,6 +316,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       delegationCapability:
         context.delegationCapability === "report_only" ? "report_only" : undefined,
     },
+    sessionControlsAllowed: hasSessionControlAuthority(params.sessionControlAuthority),
     authProfileStoreAgentDir: params.authProfileStoreAgentDir,
     yieldContextCacheKey: params.yieldContextCacheKey,
     nodeExecAvailability: params.nodeExecAvailability?.cacheKey,

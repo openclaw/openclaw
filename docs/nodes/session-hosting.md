@@ -116,6 +116,12 @@ the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
 
+Installed node hosts package the POSIX launch helpers separately to reduce
+per-turn startup work. Update and restart the node host to receive this
+improvement. The worker still waits for its durable launch receipt before
+starting a turn, and cleanup continues to hold its worker slot until the
+process tree is gone.
+
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
 turns additionally require captured exec-policy support and valid exact worker
