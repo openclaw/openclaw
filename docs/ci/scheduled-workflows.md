@@ -13,10 +13,24 @@ GitHub's scheduled event selects the canonical main revision; manual dispatch
 inputs cannot claim scheduled-run policy. The schedule selects the complete
 `main` tier, including Android, without filtering to the last commit. Node,
 native platforms, docs, QA Smoke, browser process proofs, and the published-updater
-survivor all run against that revision. Node tests use the compact main inventory.
+survivor all run against that revision. Node tests use the complete compact
+inventory, including tooling and PR-exempt files, within its 77-row main-tier cap.
+
+The existing Plugin Prerelease workflow owns the complete extension runtime
+inventory separately, at minute 37 each hour. Scheduled runs pin the scheduled
+canonical `main` SHA and select only their extension matrix and required summary.
+Manifest-only bundled plugins and tests directly under `extensions/` use its
+existing file-shard execution path;
+package-backed plugins retain their existing batch owners.
+The existing twelve-job concurrency limit stays unchanged. One non-canceling
+hourly slot lets active proof finish while GitHub coalesces pending tips; manual
+and release runs retain independent concurrency groups and all existing phases.
+Normal CI no longer appends a second, partial extension inventory. Inspect both
+`CI` and `Plugin Prerelease` for hourly coverage; Full Release Validation pins
+both existing children to its exact target.
 
 Full Release Validation and ordinary manual CI retain `validation_tier=full`
-by default. They additionally run release-only tooling/runtime/UI tests,
+by default. They additionally run release-only runtime/UI tests,
 minimum-Node compatibility, iOS screenshots, native Release builds, Android
 packaging, and all six Docker seed scenarios. Hourly iOS retains
 `ios-build (tests)`: Swift lint, Rust tests, voice cleanup, native Access, and

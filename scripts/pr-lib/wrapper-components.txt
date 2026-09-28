@@ -1426,3 +1426,17 @@ test/vitest/vitest.ui-paths.mjs
 test/vitest/vitest.unit-fast-paths.mjs
 test/vitest/vitest.unit-paths.mjs
 tsconfig.json
+.github/actions/setup-security-review/action.yml
+.github/actions/setup-security-review/package-lock.json
+.github/actions/setup-security-review/package.json
+.github/security-review-policy.yml
+.github/workflows/security-review.yml
+scripts/github/dependency-guard.mjs
+scripts/github/guard-review.mjs
+scripts/github/guard-shared.mjs
+scripts/github/security-review-policy.mjs
+scripts/github/security-review-rollout.mjs
+scripts/github/security-review.mjs
+scripts/github/security-sensitive-guard.mjs
+scripts/lib/bounded-response.mjs
+scripts/pr-lib/merge-prior-ci-security.mjs

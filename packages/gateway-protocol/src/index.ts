@@ -46,6 +46,10 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/session-participant.js";
+export {
+  SessionOwnerSessionCountSchema,
+  type SessionOwnerSessionCount,
+} from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";

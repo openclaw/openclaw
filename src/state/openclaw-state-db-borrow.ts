@@ -4,6 +4,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
+  type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 
@@ -34,10 +35,18 @@ export function createStateDatabaseRetainer(
     touch(database: OpenClawStateDatabase): void;
   },
 ) {
-  const retain = (database: OpenClawStateDatabase, readOnly = false) => {
+  const admit = (pathname: string) => {
     const scope = getOpenClawDatabaseMaintenanceScope();
     scope?.assertAdmission();
-    operations.assertOpen(database.path);
+    operations.assertOpen(pathname);
+    return scope;
+  };
+  // Only the synchronous entry points below can reach this already-admitted step.
+  const retain = (
+    database: OpenClawStateDatabase,
+    scope: OpenClawDatabaseMaintenanceScope | undefined,
+    readOnly = false,
+  ) => {
     operations.capture(database.path).assertCurrent();
     if (state.cachedDatabases.get(database.path) !== database || !database.db.isOpen) {
       throw new Error("OpenClaw state database borrow requires its current canonical handle");
@@ -78,13 +87,15 @@ export function createStateDatabaseRetainer(
     return reference;
   };
   const findReadDatabase = (pathname: string) => {
-    getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
-    operations.assertOpen(pathname);
+    const scope = admit(pathname);
     const database = state.cachedDatabases.get(path.resolve(pathname));
-    return database?.db.isOpen ? database : undefined;
+    return { database: database?.db.isOpen ? database : undefined, scope };
   };
-  const retainReadReference = (database: OpenClawStateDatabase) => {
-    const reference = retain(database, true);
+  const retainReadReference = (
+    database: OpenClawStateDatabase,
+    scope: OpenClawDatabaseMaintenanceScope | undefined,
+  ) => {
+    const reference = retain(database, scope, true);
     const assertCurrent = () => {
       if (state.cachedDatabases.get(database.path) !== database || !database.db.isOpen) {
         throw new Error("Shared-state read lost its original native owner");
@@ -104,20 +115,20 @@ export function createStateDatabaseRetainer(
     };
   };
   return {
-    retain: (database: OpenClawStateDatabase) => retain(database),
+    retain: (database: OpenClawStateDatabase) => retain(database, admit(database.path)),
     retainForIndependentRead(this: void, pathname: string) {
-      const database = findReadDatabase(pathname);
-      return database ? retainReadReference(database) : undefined;
+      const { database, scope } = findReadDatabase(pathname);
+      return database ? retainReadReference(database, scope) : undefined;
     },
     borrowForRead(this: void, pathname: string) {
-      const database = findReadDatabase(pathname);
+      const { database, scope } = findReadDatabase(pathname);
       if (!database) {
         return undefined;
       }
       if (database.db.isTransaction) {
         throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
       }
-      return { database, ...retainReadReference(database) };
+      return { database, ...retainReadReference(database, scope) };
     },
   };
 }

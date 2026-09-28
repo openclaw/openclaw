@@ -109,7 +109,7 @@ export function registerMattermostInteractions(params: {
   handleModelPickerInteraction: MattermostModelPickerInteractionHandler;
 }): () => void {
   const { monitor } = params;
-  const { account, botUserId, cfg, client, core, pairing, resources, runtime } = monitor;
+  const { account, cfg, client, core, pairing, resources, runtime } = monitor;
   const { resolveChannelInfo } = resources;
   const handleQuestionInteraction = createMattermostQuestionInteractionHandler(monitor);
   return registerPluginHttpRoute({
@@ -118,7 +118,6 @@ export function registerMattermostInteractions(params: {
     auth: "plugin",
     handler: createMattermostInteractionHandler({
       client,
-      botUserId,
       accountId: account.accountId,
       allowedSourceIps: params.allowedSourceIps,
       trustedProxies: cfg.gateway?.trustedProxies,

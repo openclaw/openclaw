@@ -22,6 +22,7 @@ import {
   hasCompleteStartupCorpusCoverage,
   isExclusiveCompactShardName,
   packNodeTestGroups,
+  resolveCanonicalNodeTestConfig,
   resolveStartupCorpusTestFiles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -30,6 +31,7 @@ import {
 } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
+  isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
@@ -43,7 +45,10 @@ import {
   createCompactSplitTimingGeneration,
   parseCompactSplitTimingKey,
 } from "../../scripts/lib/vitest-shard-metadata.mts";
-import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
+import {
+  buildVitestRunPlans,
+  createVitestRunSpecs,
+} from "../../scripts/test-projects.test-support.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -57,10 +62,14 @@ import {
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
+import { createAutoReplyCoreVitestConfig } from "../vitest/vitest.auto-reply-core.config.ts";
+import { createAutoReplyTopLevelVitestConfig } from "../vitest/vitest.auto-reply-top-level.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { createCliVitestConfig } from "../vitest/vitest.cli.config.ts";
+import { createCommandsLightVitestConfig } from "../vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
+import { createDaemonVitestConfig } from "../vitest/vitest.daemon.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { diagnosticForksPool } from "../vitest/vitest.forks-pool.ts";
 import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client.config.ts";
@@ -77,6 +86,7 @@ import {
 } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "../vitest/vitest.gateway.config.ts";
+import { createHooksVitestConfig } from "../vitest/vitest.hooks.config.ts";
 import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
 import { createLoggingVitestConfig } from "../vitest/vitest.logging.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest/vitest.media-understanding.config.ts";
@@ -888,6 +898,50 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(native.every((job) => job.predictedSeconds === 220)).toBe(true);
   });
 
+  it.each([
+    { tailSeconds: 460, tailRunner: DEFAULT_NODE_TEST_RUNNER, expectedJobs: 1 },
+    { tailSeconds: 461, tailRunner: DEFAULT_NODE_TEST_RUNNER, expectedJobs: 2 },
+    { tailSeconds: 460, tailRunner: BUNDLED_NODE_TEST_RUNNER, expectedJobs: 2 },
+    { tailSeconds: 461, tailRunner: BUNDLED_NODE_TEST_RUNNER, expectedJobs: 2 },
+  ])(
+    "preserves hosted runner anchors and the serial budget with a $tailSeconds-second $tailRunner tail",
+    ({ tailSeconds, tailRunner, expectedJobs }) => {
+      const before = measuredToolingFixture().slice(0, 2);
+      const anchor = before[0]!;
+      const tail = before[1]!;
+      anchor.predictedSeconds = 200;
+      tail.runner = tailRunner;
+      tail.groups[0]!.runner = tailRunner;
+      tail.predictedSeconds = tailSeconds;
+      const after = rebalanceMeasuredSerialJobs(before, {
+        ...measuredPackingOptions,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        profile: "hosted-hourly",
+        estimateGroup: (group) => ({
+          seconds: group === anchor.groups[0] ? 200 : tailSeconds,
+          complete: true,
+        }),
+      });
+
+      expect(after).toHaveLength(expectedJobs);
+      expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
+      expect(Math.max(...after.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(720);
+      expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(
+        true,
+      );
+      if (expectedJobs === 1) {
+        expect(after[0]).toMatchObject({
+          checkName: tail.checkName,
+          shardName: tail.shardName,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+          predictedSeconds: 660,
+        });
+        expect(after[0]!.predictedSeconds! + 60).toBe(720);
+      }
+    },
+  );
+
   it("splits the observed CLI pair with its measured wall floors and complete child contracts", () => {
     const before = structuredClone(measuredCompactFixture.cliTailJob);
     const after = rebalanceMeasuredSerialJobs([before], measuredPackingOptions);
@@ -1152,10 +1206,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         return readFileSync.call(this, file, ...args);
       };
       syncBuiltinESMExports();
-      const { createChangedNodeTestShards } = await import("./scripts/lib/ci-changed-node-test-plan.mts");
+      const { createSelectedNodeTestShardBundles } = await import("./scripts/lib/ci-node-test-plan.mts");
       const importReads = sourceReads;
-      const target = "test/scripts/managed-child-process.test.ts";
-      const plan = createChangedNodeTestShards([target], { runnerBackend: "github" });
+      const plan = createSelectedNodeTestShardBundles([
+        "test/scripts/managed-child-process.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ], { runnerBackend: "github" });
       console.log(JSON.stringify({
         importReads,
         sourceReads,
@@ -2332,10 +2388,33 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("matches policy owners only for exact changed paths", () => {
+  it("matches policy owners with literal and native glob semantics", () => {
     const changedPath = "ui/src/styles/base.css";
     expect(isPolicyTestOwnedPath(changedPath)).toBe(true);
     expect(resolvePolicyTestTargets([changedPath])).not.toEqual([]);
+    expect(resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true })).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/base-theme-contrast.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+    expect(
+      resolvePolicyTestTargets(["ui/public/themes/tide.css"], { completeOwnersOnly: true }),
+    ).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/base-theme-contrast.node.test.ts",
+    ]);
+    expect(isPolicyTestOwnedPath("ui/public/themes/tide.css")).toBe(true);
+    expect(isPolicyTestOwnedPath("ui/src/styles/./base.css")).toBe(true);
+    expect(
+      resolvePolicyTestTargets(["ui/src/styles/./base.css"], { completeOwnersOnly: true }),
+    ).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/base-theme-contrast.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+    expect(
+      resolvePolicyTestTargets(["ui/src/pages/chat/view.ts"], { completeOwnersOnly: true }),
+    ).toEqual([]);
     for (const lookalike of [` ${changedPath}`, String.raw`ui\src\pages\chat\view.ts`]) {
       expect(isPolicyTestOwnedPath(lookalike), lookalike).toBe(false);
       expect(resolvePolicyTestTargets([lookalike]), lookalike).toEqual([]);
@@ -3043,7 +3122,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           );
         }
       }
+      const automatic = createNodeTestShards({ includePrExemptRuntimeTests: false });
       for (const { config, create } of [
+        {
+          config: "test/vitest/vitest.agents-tools.config.ts",
+          create: createAgentsToolsVitestConfig,
+        },
+        {
+          config: "test/vitest/vitest.auto-reply-core.config.ts",
+          create: createAutoReplyCoreVitestConfig,
+        },
+        {
+          config: "test/vitest/vitest.auto-reply-top-level.config.ts",
+          create: createAutoReplyTopLevelVitestConfig,
+        },
+        {
+          config: "test/vitest/vitest.commands-light.config.ts",
+          create: createCommandsLightVitestConfig,
+        },
+        { config: "test/vitest/vitest.daemon.config.ts", create: createDaemonVitestConfig },
+        { config: "test/vitest/vitest.hooks.config.ts", create: createHooksVitestConfig },
         { config: "test/vitest/vitest.logging.config.ts", create: createLoggingVitestConfig },
         { config: "test/vitest/vitest.process.config.ts", create: createProcessVitestConfig },
         { config: "test/vitest/vitest.plugins.config.ts", create: createPluginsVitestConfig },
@@ -3053,21 +3151,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           create: createPluginSdkLightVitestConfig,
         },
       ]) {
-        const expected = listMatchedTestFiles(create(env));
-        const actual = plan
-          .flatMap((job) => job.groups)
-          .filter((group) => group.configs.includes(config))
-          .flatMap((group) => {
-            if (!group.includePatterns) {
-              return listMatchedTestFiles(create(env));
-            }
-            writeFileSync(includeFile, JSON.stringify(group.includePatterns));
-            return listMatchedTestFiles(
-              create({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
-            );
-          });
-        expect(actual.toSorted(), config).toEqual(expected.toSorted());
-        expect(new Set(actual).size, config).toBe(actual.length);
+        const complete = listMatchedTestFiles(create(env));
+        for (const { groups, exempt } of [
+          { groups: plan.flatMap((job) => job.groups), exempt: true },
+          { groups: automatic, exempt: false },
+        ]) {
+          const expected = complete.filter((file) => exempt || !isPrExemptRuntimeTestFile(file));
+          const actual = groups
+            .filter((group) => group.configs.includes(config))
+            .flatMap((group) => {
+              if (!group.includePatterns) {
+                return listMatchedTestFiles(create(env));
+              }
+              writeFileSync(includeFile, JSON.stringify(group.includePatterns));
+              return listMatchedTestFiles(
+                create({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+              );
+            });
+          expect(actual.toSorted(), config).toEqual(expected.toSorted());
+          expect(new Set(actual).size, config).toBe(actual.length);
+        }
       }
     } finally {
       process.argv = originalArgv;
@@ -4647,7 +4750,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(requiresDistShardNames).toEqual(["core-support-boundary", "core-runtime-tui-pty"]);
   });
 
-  it("keeps lifecycle proofs on main while excluding PR and manual PR-fallback plans", () => {
+  it("retains the caught Codex recovery contract in main, PR, and manual Node plans", () => {
     const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
     const files = (mode: "push" | "pull-request") =>
       getCommittedCompactPlan(mode).flatMap((shard) =>
@@ -4658,12 +4761,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const manual = createNodeTestShards({ includeProofTests: false });
     for (const file of proofFiles) {
       expect(mainFiles.filter((target) => target === file)).toHaveLength(1);
-      expect(prFiles).not.toContain(file);
-      expect(manual.flatMap((shard) => shard.includePatterns ?? [])).not.toContain(file);
+      expect(prFiles.filter((target) => target === file)).toHaveLength(1);
+      const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+      const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(
+        manual.filter(
+          (shard) =>
+            shard.configs.includes(config) &&
+            (!shard.includePatterns ||
+              shard.includePatterns.some((pattern) => matchesGlob(file, pattern))),
+        ),
+      ).toHaveLength(1);
+      expect(isCiProofTestFile(file)).toBe(false);
     }
+    const isolated = expectDefined(
+      manual.find((shard) => shard.shardName === "agentic-gateway-server-isolated"),
+      "manual isolated Gateway owner",
+    );
+    expect(isolated.configs).toContain("test/vitest/vitest.gateway-server-isolated.config.ts");
     expect(
-      manual.find((shard) => shard.shardName === "agentic-gateway-server-isolated")
-        ?.includePatterns,
+      isolated.includePatterns ?? listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({})),
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
   });
 
@@ -7159,12 +7276,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(owners[0]?.pretestBuildMode).toBe("runtime");
   });
 
-  it("retains the changed host plugin test in a global fallback beside store aliases", () => {
+  it("retains the changed host plugin test in a bounded hub plan beside store aliases", () => {
     const target = "src/plugins/tools.optional.test.ts";
     const changedPaths = [...STORE_ALIAS_CHANGED_PATHS, "tsconfig.json"];
     const onFallback = vi.fn();
-    expect(createChangedNodeTestShards(changedPaths, { onFallback })).toBeNull();
-    expect(onFallback).toHaveBeenCalledWith("global execution or resolution input: tsconfig.json");
+    const changedShards = createChangedNodeTestShards(changedPaths, { onFallback });
+    expect(changedShards).not.toBeNull();
+    expect(onFallback).not.toHaveBeenCalled();
+    expect(
+      changedShards?.flatMap((shard) =>
+        (shard.targets ?? []).concat(
+          (shard.groups ?? [shard]).flatMap((group) => group.includePatterns ?? []),
+        ),
+      ),
+    ).toContain(target);
     const options = {
       changedPaths,
       includeReleaseOnlyPluginShards: false,

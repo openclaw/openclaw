@@ -52,6 +52,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    prewarm: reader(
+      "prewarm",
+      "prewarm acknowledgement",
+      (input) => ({ kind: "prewarm", ...input }),
+      () => undefined,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",

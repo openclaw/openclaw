@@ -81,6 +81,12 @@ export const SessionsListParamsSchema = closedObject({
   involvingProfileId: Type.Optional(NonEmptyString),
   /** Include a bounded people facet over visible matching sessions before the profile filter. */
   includePeople: Type.Optional(Type.Boolean()),
+  /**
+   * Include complete per-profile ownership counts over caller-visible matching sessions before
+   * pagination. Open counts only unarchived sessions; running excludes queued and descendant work.
+   * All list filters still apply; omit agentId for a cross-agent summary.
+   */
+  includeOwnerSessionCounts: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
@@ -92,3 +98,12 @@ export const SessionsListParamsSchema = closedObject({
 });
 
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+
+/** One canonical profile owner with at least one visible, matching unarchived session. */
+export const SessionOwnerSessionCountSchema = closedObject({
+  profileId: NonEmptyString,
+  open: Type.Integer({ minimum: 1 }),
+  running: Type.Integer({ minimum: 0 }),
+});
+
+export type SessionOwnerSessionCount = Static<typeof SessionOwnerSessionCountSchema>;

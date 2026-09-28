@@ -66,11 +66,11 @@ describe("fireworks provider plugin", () => {
       throw new Error("expected Fireworks catalog models");
     }
     expect(models.map((model) => model.id)).toEqual([
-      FIREWORKS_DEFAULT_MODEL_ID,
+      "accounts/fireworks/routers/glm-5p3-fast",
       FIREWORKS_KIMI_K2_6_MODEL_ID,
       FIREWORKS_KIMI_K2_6_TURBO_MODEL_ID,
     ]);
-    expect(models[0]?.name).toBe("GLM 5.2 Fast");
+    expect(models[0]?.name).toBe("GLM 5.3 Fast");
     expect(models[0]?.reasoning).toBe(true);
     expect(models[0]?.input).toEqual(["text"]);
     expect(models[0]?.contextWindow).toBe(FIREWORKS_DEFAULT_CONTEXT_WINDOW);

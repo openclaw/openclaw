@@ -34,7 +34,15 @@ describe("jsdom native API boundary", () => {
             await environment.teardown(globalThis);
           }
         `,
-        path.resolve("ui/package.json"),
+        path.join(
+          path.dirname(
+            process
+              .getBuiltinModule("module")
+              .createRequire(path.resolve("ui/package.json"))
+              .resolve("vitest/package.json"),
+          ),
+          "dist/workers/forks.js",
+        ),
       ],
       { encoding: "utf8" },
     );

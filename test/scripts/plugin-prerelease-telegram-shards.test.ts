@@ -184,7 +184,9 @@ describe("plugin prerelease Telegram extension shards", () => {
     const suite = workflow.jobs["plugin-prerelease-suite"];
     const matrix = runPluginPrereleaseManifest();
     const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
-    const telegramRows = matrix.include.filter((row) => row.task === "extension-file-shard");
+    const telegramRows = matrix.include.filter(
+      (row) => row.task === "extension-file-shard" && row.extensions_csv === "telegram",
+    );
     const allTelegramTestFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const runnableTelegramTestFiles = [
       ...listTelegramRunnableTestFiles(),

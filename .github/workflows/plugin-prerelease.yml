@@ -1,8 +1,10 @@
 name: Plugin Prerelease
 
-run-name: ${{ inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
+run-name: ${{ github.event_name == 'schedule' && 'Hourly Extension Tests' || inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
 
 on:
+  schedule:
+    - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
       target_ref:
@@ -64,8 +66,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}-${{ inputs.phase }}
-  cancel-in-progress: ${{ inputs.target_ref == 'main' }}
+  group: ${{ github.event_name == 'schedule' && 'plugin-prerelease-hourly-main' || format('plugin-prerelease-{0}-{1}-{2}', inputs.target_ref, github.sha, inputs.phase) }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' && inputs.target_ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -73,6 +75,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
+    if: github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
@@ -93,8 +96,8 @@ jobs:
       - name: Resolve target SHA
         id: resolve
         env:
-          TARGET_REF: ${{ inputs.target_ref }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          TARGET_REF: ${{ github.event_name == 'schedule' && github.sha || inputs.target_ref }}
+          EXPECTED_SHA: ${{ github.event_name == 'schedule' && github.sha || inputs.expected_sha }}
           OPENCLAW_REF_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           bash workflow/scripts/github/resolve-openclaw-ref.sh \
@@ -126,7 +129,7 @@ jobs:
           CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          PHASE: ${{ inputs.phase }}
+          PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
         shell: bash
         run: |
           set -euo pipefail
@@ -197,8 +200,8 @@ jobs:
         id: node_test_exclusions
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.node_test_exclude_patterns_json }}
-          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.extension_test_exclude_patterns_json }}
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ github.event_name == 'schedule' && '[]' || inputs.node_test_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ github.event_name == 'schedule' && '[]' || inputs.extension_test_exclude_patterns_json }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -230,7 +233,7 @@ jobs:
         id: manifest
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          PHASE: ${{ inputs.phase }}
+          PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.extension_patterns_json }}
         run: |
@@ -241,6 +244,7 @@ jobs:
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
+          const hourly = process.env.GITHUB_EVENT_NAME === "schedule";
           const phase = process.env.PHASE ?? "all";
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
@@ -251,6 +255,7 @@ jobs:
           const targetPlanPaths = {
             "plugin-prerelease-test-plan": "./scripts/lib/plugin-prerelease-test-plan.mts",
             "extension-test-plan": "./scripts/lib/extension-test-plan.mts",
+            "bundled-plugin-source-utils": "./scripts/lib/bundled-plugin-source-utils.mts",
             "ci-node-test-plan": "./scripts/lib/ci-node-test-plan.mts",
           };
           const targetPlanPath = (name) => {
@@ -297,6 +302,28 @@ jobs:
               ? planner.createExtensionTestShards({ extensionIds: ["telegram"], shardCount: 1 })
                   .flatMap((shard) => shard.planGroups)
               : [];
+            const sourcePlanGroups = new Map();
+            if (hasJobSplitter) {
+              const sources = await import(targetPlanPath("bundled-plugin-source-utils"));
+              // August frozen targets expose the public collector but not its tracked projection.
+              const candidates = typeof sources.collectTrackedBundledPluginSourceCandidates === "function"
+                ? sources.collectTrackedBundledPluginSourceCandidates(process.cwd())
+                : sources.collectBundledPluginSources({ repoRoot: process.cwd() });
+              if (!candidates) throw new Error("Cannot enumerate bundled plugin source metadata");
+              const sourceRoots = candidates.filter((entry) => entry.manifestPath && !entry.packageJsonPath)
+                .map((entry) => `extensions/${entry.dirName}`);
+              const sourceFiles = [
+                ...planner.listExtensionTestFilesForRoots(sourceRoots),
+                ...planner.listExtensionTestFilesForRoots(["extensions"])
+                  .filter((file) => path.posix.dirname(file) === "extensions"),
+              ];
+              for (const file of sourceFiles) {
+                const config = planner.resolveExtensionTestConfig(file);
+                const group = sourcePlanGroups.get(config) ?? { config, roots: [] };
+                group.roots.push(file);
+                sourcePlanGroups.set(config, group);
+              }
+            }
             const genericExtensionIds = hasJobSplitter
               ? allExtensionShards
                   .flatMap((shard) => shard.extensionIds)
@@ -336,7 +363,10 @@ jobs:
               }),
             })));
             const telegramShards = [];
-            for (const group of telegramPlanGroups) {
+            for (const group of [
+              ...telegramPlanGroups.map((group) => ({ ...group, family: "telegram" })),
+              ...[...sourcePlanGroups.values()].map((group) => ({ ...group, family: "source" })),
+            ]) {
               const vitestConfig = (await import(`./${group.config}`)).default;
               const testConfig = vitestConfig.test ?? {};
               const testDir = testConfig.dir ?? process.cwd();
@@ -360,8 +390,8 @@ jobs:
                 }
                 const index = telegramShards.length;
                 telegramShards.push({
-                  check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
-                  extensions_csv: "telegram",
+                  check_name: `checks-node-extensions-${group.family}-shard-${index + 1}`,
+                  extensions_csv: [...new Set(includePatterns.map((file) => file.split("/")[1]))].join(","),
                   includePatterns,
                   vitest_config: group.config,
                   exclusion_configs: [{ config: group.config, includePatterns }],
@@ -432,10 +462,13 @@ jobs:
           const dockerLanes = pluginPrereleasePlan.dockerLanes;
           const runIndependent = phase !== "candidate";
           const runCandidate = phase !== "independent";
-          const runStatic = runIndependent && staticChecks.length > 0;
-          const runNode = runIndependent && nodeShards.length > 0;
+          const runStatic = runIndependent && !hourly && staticChecks.length > 0;
+          const runNode = runIndependent && !hourly && nodeShards.length > 0;
           const runExtensions = runIndependent && extensionShards.length > 0;
-          const runInspector = runIndependent && (runStatic || runNode || runExtensions);
+          if (hourly && !runExtensions) {
+            throw new Error("Hourly plugin validation requires the complete extension test inventory");
+          }
+          const runInspector = runIndependent && !hourly && (runStatic || runNode || runExtensions);
           if (runIndependent && ((process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON || "[]") !== "[]" || (process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON || "[]") !== "[]")) {
             const { parseTestExclusions, validateTestExclusions } = await import("./.frv-tooling/scripts/frv-test-exclusions.mjs");
             await validateTestExclusions({
@@ -477,7 +510,7 @@ jobs:
       contents: read
     name: Plan plugin npm security artifacts
     needs: [resolve_target]
-    if: inputs.phase != 'candidate'
+    if: github.event_name != 'schedule' && inputs.phase != 'candidate'
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
@@ -1073,7 +1106,7 @@ jobs:
           RUN_NODE: ${{ needs.preflight.outputs.run_plugin_prerelease_node }}
           RUN_EXTENSIONS: ${{ needs.preflight.outputs.run_plugin_prerelease_extensions }}
           RUN_DOCKER: ${{ needs.preflight.outputs.run_plugin_prerelease_docker }}
-          RUN_NPM_SECURITY: ${{ inputs.phase != 'candidate' && 'true' || 'false' }}
+          RUN_NPM_SECURITY: ${{ github.event_name != 'schedule' && inputs.phase != 'candidate' && 'true' || 'false' }}
           SECURITY_RESULT: ${{ needs.plugin-npm-security-scan.result }}
           STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
           NODE_RESULT: ${{ needs.plugin-prerelease-node-shard.result }}

@@ -6,6 +6,10 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
+import {
+  createPriorCiFixtureState,
+  priorCiSecurityFixtureSource,
+} from "./pr-merge-prior-ci.test-support.js";
 import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
@@ -227,23 +231,7 @@ export function createMergeOutcomeFixtureHarness() {
       crash: "",
       comment: "success",
       admin: false,
-      priorCi: {
-        enabled: false,
-        head: sourceCommits[0]!,
-        runHead: sourceCommits[0]!,
-        event: "workflow_dispatch",
-        branch: "topic",
-        workflowPath: ".github/workflows/ci.yml",
-        missingCheck: "",
-        reviewDecision: "APPROVED" as string | null,
-        reviewCount: 1,
-        requireThreads: false,
-        resolved: true,
-        membership: "admin",
-        evidencePath: "",
-        mutateEvidence: false,
-        otherCheck: "",
-      },
+      priorCi: createPriorCiFixtureState(sourceCommits[0]!),
       audit: false,
       gates: "pass",
       requiredCheckName: "CI",
@@ -286,6 +274,7 @@ export function createMergeOutcomeFixtureHarness() {
       "gh.mjs",
       `
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 const [route,...args]=process.argv.slice(2);
 const file=process.env.FIXTURE_STATE;
@@ -380,7 +369,9 @@ const advanceMain=()=>{
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,parent]);
   s.mainAdvances.push(next);
 };
-if(args[0]==="browse") out(s.repo.url);
+${priorCiSecurityFixtureSource}
+if(securityResponse()) {}
+else if(args[0]==="browse") out(s.repo.url);
 else if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("rate_limit")) out({resources:{graphql:{remaining:0,limit:5000,reset:1900000000},core:{remaining:4999,limit:5000,reset:1900000000}}});
 else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(arg))) {
@@ -403,9 +394,10 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships/"))) {
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({state:"active",role:s.priorCi.membership,user:{login:s.operator}}));
 }
-else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501/attempts/2"))) {
-  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:1,jobs:[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}]}]);
-  else out({id:501,run_attempt:2,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:{full_name:s.repo.nameWithOwner},status:"completed",conclusion:"success",pull_requests:s.priorCi.event==="pull_request"?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
+  const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
+  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:jobs.length,jobs}]);
+  else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
 }
 else if(args.includes("graphql")&&args.some(arg=>arg.includes("reviewThreads("))) {
   out({data:{repository:{pullRequest:{headRefOid:s.pr.headRefOid,reviewDecision:s.priorCi.reviewDecision,reviewThreads:{nodes:[{isResolved:s.priorCi.resolved}],pageInfo:{hasNextPage:false}}}}}});
@@ -427,8 +419,8 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     state:s.pr.state==="OPEN"?"open":"closed",merged:s.pr.state==="MERGED",merged_at:s.pr.state==="MERGED"?"2026-09-20T00:00:00Z":null,
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
-    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
-    user:{login:s.pr.author.login,type:s.pr.author.__typename},
+    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
+    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
     mergeable:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
@@ -898,13 +890,14 @@ fi
             "123",
             head,
             state().operator,
+            git(["--git-dir=" + remote, "rev-parse", "refs/heads/main"]),
           ],
           { cwd: worktree, env, encoding: "utf8" },
         );
         return { ...result, output: result.stdout + result.stderr };
       },
-      adminPriorCi: (path: string) =>
-        run(false, repo, "squash", "", "", "", "", "", false, "", false, path, true),
+      adminPriorCi: (path: string, confirmed = true) =>
+        run(false, repo, "squash", "", "", "", "", "", false, "", false, path, confirmed),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),

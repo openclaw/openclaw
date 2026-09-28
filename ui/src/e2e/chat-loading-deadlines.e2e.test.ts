@@ -108,6 +108,9 @@ suite.define(() => {
             await page.locator('[data-chat-model-select="true"]').click();
           }
           await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+          // The native details toggle may send the retry after the click resolves.
+          // Advance its mock response timer only after that request is observed.
+          await page.clock.runFor(100);
           if (method === "chat.startup") {
             await page.getByText(readyText, { exact: true }).waitFor();
             const sent = await gateway.waitForRequest("chat.send");

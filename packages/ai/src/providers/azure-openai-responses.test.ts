@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { buildOpenAIResponsesReplayContext } from "../transports/openai-responses-compaction-replay.js";
+import { buildProviderReplayContext } from "../transports/provider-replay-context.js";
 import type { Context, Model } from "../types.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import {
@@ -186,7 +186,7 @@ describe("azure-openai-responses", () => {
     const routeA = "https://route-a.openai.azure.com/openai/v1";
     const routeB = "https://route-b.openai.azure.com/openai/v1";
     const sessionId = "azure-replay-session";
-    const replayContext = buildOpenAIResponsesReplayContext(
+    const replayContext = buildProviderReplayContext(
       { ...azureResponsesModel, baseUrl: routeA },
       { sessionId },
     );

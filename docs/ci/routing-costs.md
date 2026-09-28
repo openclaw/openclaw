@@ -6,6 +6,13 @@ read_when:
   - You need to distinguish measured workflow walls from planner estimates
 ---
 
+PR placement now prefers free hosted capacity while retaining the existing row
+counts and execution policies. The measurements below describe older routing
+and do not establish the wall time of the current PR layout. Hosted rows can
+outlast the earlier ten-minute target; shared hosted capacity can also queue.
+Focused local and Testbox proof qualify changes without dispatching additional CI
+runs. Observe ordinary CI for latency and fix forward when necessary.
+
 ## Routing from measured wall time
 
 Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity probe; labels are not worker counts.

@@ -139,6 +139,25 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "prewarm") {
+        await Promise.all([
+          import("../../gateway/session-history-worker-reader.js"),
+          import("../../gateway/server-methods/chat-history-page-kernel.js"),
+          import("../../gateway/session-history-snapshot.js"),
+        ]);
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
+            ...request.database,
+            env: cloneEnvWithPlatformSemantics(request.env),
+          });
+          if (!opened.found && opened.reason !== "database-missing") {
+            throw new Error(`Session history prewarm admission unavailable: ${opened.reason}`);
+          }
+          return { kind: "prewarm" as const };
+        });
+      }
       if (request.kind === "historical-eviction-candidates") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

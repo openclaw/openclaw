@@ -21,6 +21,7 @@ import {
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
+import { resolveRuntimeWorkerThreadExecArgv } from "../src/infra/runtime-worker-url.js";
 import { defineBundledChannelSetupEntry } from "../src/plugin-sdk/channel-entry-contract.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -444,7 +445,9 @@ describe("plugin npm runtime build planning", () => {
     );
     expect(plan.runtimeExtensions).toEqual(["./dist/index.js"]);
     const { workerUrl } = await import(pathToFileURL(path.join(packageDir, "dist/index.js")).href);
-    const worker = new Worker(workerUrl);
+    const worker = new Worker(workerUrl, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+    });
     try {
       const result = await new Promise((resolve, reject) => {
         worker.once("message", resolve);
