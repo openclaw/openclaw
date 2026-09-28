@@ -175,12 +175,17 @@ export async function executeWorkerTurn(
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
 
   assertContextCurrent();
-  const credential = await params.environments.acquireTurnCredential(params.turnClaim);
+  const credential = await waitForTurnOperation({
+    start: () => params.environments.acquireTurnCredential(params.turnClaim),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
   const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    }),
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: placement.environmentId,
+        ownerEpoch: placement.activeOwnerEpoch,
+      }),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });

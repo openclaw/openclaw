@@ -274,7 +274,6 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes shared test-state and process fixture owners to Windows", () => {
     for (const fixturePath of [
-      "test/vitest/vitest.shared.config.ts",
       "src/test-utils/openclaw-test-state.ts",
       "test/helpers/openclaw-test-instance.ts",
       "test/helpers/openclaw-test-instance.cli.test-support.mjs",

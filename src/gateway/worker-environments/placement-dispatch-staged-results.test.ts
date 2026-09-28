@@ -382,25 +382,36 @@ describe("staged worker placement result recovery", () => {
 
     const reconciliation = harness.service.reconcile();
 
-    await toolAdmissionClosed;
-    expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(harness.placements.current()).toMatchObject({
-      state: "draining",
-      turnClaim: { claimId: claim.claimId },
-    });
-    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
-
-    expect(
-      placementStore.completeWorkerSessionToolOperation({
-        sourceSessionId: claim.sessionId,
-        sourceClaimId: claim.claimId,
-        toolCallId: "running-session-operation-call",
-        requestDigest: "running-session-operation-digest",
-        resultJson: '{"status":"ok"}',
-      }),
-    ).toBe(true);
-    await reconciliation;
+    let completed = false;
+    try {
+      await Promise.race([
+        toolAdmissionClosed,
+        reconciliation.then(() => {
+          throw new Error("Reconciliation completed before closing tool admission");
+        }),
+      ]);
+      expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(harness.placements.current()).toMatchObject({
+        state: "draining",
+        turnClaim: { claimId: claim.claimId },
+      });
+      expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    } finally {
+      // Join recovery even when a fence assertion fails, before database teardown.
+      try {
+        completed = placementStore.completeWorkerSessionToolOperation({
+          sourceSessionId: claim.sessionId,
+          sourceClaimId: claim.claimId,
+          toolCallId: "running-session-operation-call",
+          requestDigest: "running-session-operation-digest",
+          resultJson: '{"status":"ok"}',
+        });
+      } finally {
+        await reconciliation;
+      }
+    }
+    expect(completed).toBe(true);
 
     expect(harness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
     expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });

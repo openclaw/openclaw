@@ -10,23 +10,6 @@ function isControlCharacter(char: string): boolean {
   return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
 }
 
-function escapeControlCharacter(char: string): string {
-  switch (char) {
-    case "\b":
-      return "\\b";
-    case "\f":
-      return "\\f";
-    case "\n":
-      return "\\n";
-    case "\r":
-      return "\\r";
-    case "\t":
-      return "\\t";
-    default:
-      return `\\u${char.codePointAt(0)?.toString(16).padStart(4, "0") ?? "0000"}`;
-  }
-}
-
 /**
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
@@ -115,7 +98,7 @@ export function repairJson(
       continue;
     }
 
-    repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+    repaired += isControlCharacter(char) ? JSON.stringify(char).slice(1, -1) : char;
     stringValuePrefix += char;
   }
 

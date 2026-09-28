@@ -111,6 +111,22 @@ export const TSGO_CORE_TEST_SHARDS = [
   },
 ] as const;
 
+// Root tests remain one CI inventory graph; execution partitions its checker heap.
+export const TSGO_ROOT_TEST_SHARDS = [
+  { name: "test-root-tooling", config: "test/tsconfig/tsconfig.test.root.tooling.json" },
+  { name: "test-root-scripts", config: "test/tsconfig/tsconfig.test.root.scripts.json" },
+  { name: "test-root-e2e", config: "test/tsconfig/tsconfig.test.root.e2e.json" },
+  { name: "test-root-other", config: "test/tsconfig/tsconfig.test.root.other.json" },
+] as const;
+
+export function expandTsgoExecutionGraphs(
+  graphs: readonly { name: string; config: string }[],
+): readonly { name: string; config: string }[] {
+  return graphs.flatMap((graph) =>
+    graph.config === "test/tsconfig/tsconfig.test.root.json" ? [...TSGO_ROOT_TEST_SHARDS] : [graph],
+  );
+}
+
 export const TSGO_CORE_GRAPHS = [
   { name: "core", config: "tsconfig.core.json" },
   { name: "ui", config: "tsconfig.ui.json" },
@@ -196,6 +212,9 @@ export const TSGO_TARGETED_TEST_SHARED_SHARDS = [
 export function selectTsgoCoreTestShards(
   requestedGroup?: string,
 ): readonly { name: string; config: string }[] | undefined {
+  if (requestedGroup === "root") {
+    return TSGO_ROOT_TEST_SHARDS;
+  }
   if (!requestedGroup) {
     return TSGO_CORE_TEST_SHARDS;
   }

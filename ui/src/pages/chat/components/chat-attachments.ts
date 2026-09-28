@@ -20,7 +20,7 @@ import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
-import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
+import { dataImageClipboardFile, resizeChatAttachmentImage } from "./chat-attachment-image.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import {
   ChatAttachmentReadLifecycle,
@@ -120,33 +120,6 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
   const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
   props.onAttachmentsChange([...currentAttachments(props), attachment]);
   return true;
-}
-
-function dataImageClipboardFile(
-  dataUrl: string,
-  baseName = "pasted-image",
-): { file: File; dataUrl: string } | null {
-  const trimmed = dataUrl.trim();
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(trimmed);
-  const mimeType = match?.[1]?.toLowerCase();
-  const base64 = match ? trimmed.slice(match[0].length).replace(/\s+/g, "") : undefined;
-  if (!mimeType || !base64) {
-    return null;
-  }
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    // Avoid the string iterator and a callback per byte on multi-megabyte pastes.
-    for (let index = 0; index < binary.length; index++) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return {
-      file: new File([bytes], `${baseName}.${mimeType.slice("image/".length)}`, { type: mimeType }),
-      dataUrl: `data:${mimeType};base64,${base64}`,
-    };
-  } catch {
-    return null;
-  }
 }
 
 /** Normalize clipboard images for the loaded composers. */

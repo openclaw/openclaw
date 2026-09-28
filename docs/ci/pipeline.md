@@ -229,11 +229,14 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `ddfce5d01f6a436203a8f41fc8bff074f9b09614` with WebKit
+The pinned build pairs Bun `6b9148b17a6df4d02776fbf4aeb0c874e2ff955a` with WebKit
 `4429d11361a5f1680a9e57884ebc1941c2cc7e48`, containing the
 `caa5d805b646edc59ca0d12b49a7a574f942dedb` FTL backport.
 The backport preserves string bounds checks through FTL dead-code elimination,
 fixing the CSS tokenizer's end-of-input loop.
+The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
+private fallback when that directory is unusable. This lets several accounts on
+one host run Bun installs without Node.
 Its prerelease tag includes both source revisions because `Bun.revision` alone
 does not distinguish builds linked against different WebKit revisions.
 

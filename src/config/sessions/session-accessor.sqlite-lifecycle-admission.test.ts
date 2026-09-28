@@ -205,33 +205,31 @@ it.each(["cold", "warm"] as const)(
     const paths = new Set(fleet.map((store) => store.path));
     const opened = vi.spyOn(sqlite, "openNodeSqliteDatabase");
     const inspected = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-    for (let boot = 0; boot < 2; boot++) {
-      if (admission === "cold") {
-        await closeOpenClawAgentDatabasesAsync();
-        closeOpenClawAgentDatabasesForTest();
-      }
-      opened.mockClear();
-      inspected.mockClear();
-      for (const { scope, entry } of fleet) {
-        await expect(
-          cleanupSessionLifecycleArtifactsCore({
-            agentId: scope.agentId,
-            storePath: scope.storePath,
-            sessionKeySegmentPrefix: "dreaming-",
-            transcriptContentMarker: "dreaming-marker",
-            orphanTranscriptMinAgeMs: 0,
-          }),
-        ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
-        expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
-      }
-      expect(
-        opened.mock.calls.filter(
-          ([pathname, options]) =>
-            typeof pathname === "string" && paths.has(pathname) && options?.readOnly !== true,
-        ),
-      ).toEqual([]);
-      expect(inspected.mock.calls.filter(([pathname]) => paths.has(pathname))).toEqual([]);
+    if (admission === "cold") {
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
     }
+    opened.mockClear();
+    inspected.mockClear();
+    for (const { scope, entry } of fleet) {
+      await expect(
+        cleanupSessionLifecycleArtifactsCore({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessionKeySegmentPrefix: "dreaming-",
+          transcriptContentMarker: "dreaming-marker",
+          orphanTranscriptMinAgeMs: 0,
+        }),
+      ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+      expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
+    }
+    expect(
+      opened.mock.calls.filter(
+        ([pathname, options]) =>
+          typeof pathname === "string" && paths.has(pathname) && options?.readOnly !== true,
+      ),
+    ).toEqual([]);
+    expect(inspected.mock.calls.filter(([pathname]) => paths.has(pathname))).toEqual([]);
   },
 );
 

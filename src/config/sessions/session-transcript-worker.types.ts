@@ -447,6 +447,7 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
@@ -490,6 +491,7 @@ export type SessionHistoryWorkerPreparedInput = {
 }[SessionHistoryDatabaseWorkerInput["kind"]];
 
 export type SessionTranscriptWorkerValues = {
+  prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "historical-eviction-candidates": {
     kind: "historical-eviction-candidates";
@@ -565,6 +567,7 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
     };
 
 export type SessionHistoryWorkerDatabase = {
+  prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
   readPendingArchives: (
     input: Omit<SessionPendingArchivesWorkerInput, "kind" | "database">,
     signal?: AbortSignal,

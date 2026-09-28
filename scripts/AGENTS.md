@@ -149,12 +149,20 @@ is a separate immediate-squash admission, not a fallback from auto/queue or a
 failed request. It verifies a prior successful CI attempt and its PR/head
 provenance, binds the reviewed prior-to-prepared delta and scoped-check
 attestations, and revalidates active organization/repository-admin authority and
-effective review rules. Only pending/skipped `openclaw/ci-gate` may be waived;
-failed checks, other required checks, and required reviews remain blocking.
+effective review rules. The original conflict-resolution route permits only
+pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure`
+attribution instead binds the current failed attempt, effective gate check-run,
+tested merge/base, unchanged failure inputs, and inspected qualification artifacts.
+Every failed job and fail-fast cancellation must be accounted for; cancelled
+coverage stays unrun. The review retains `tests.result: "fail"` with exact
+`tests.preExistingCi` head/run/attempt attribution. Ordinary merge admission refuses
+that review; the confirmed admin route must verify the same failed attempt.
+Branch-caused or unattributed failures, other required checks, security, and
+required reviews remain blocking.
 Exact-head `github_pending` preparation remains pending. GraphQL owns
 observations and reconciliation; the protected REST PUT above owns the SHA-pinned
 dispatch. The existing retained outcome owns `priorCiAdmin` evidence and retains
-its prior head object. Admin snapshot stability and the landing-parent audit
+its baseline/prior head and tested merge objects. Admin snapshot stability and the landing-parent audit
 still apply. See the [landing workflow](../.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing)
 for the evidence fields and supported policy limits.
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
@@ -33,6 +34,7 @@ import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
+import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -369,6 +371,111 @@ describe("canonical shared-state worker admission", () => {
     ).toBeUndefined();
     expect(existsSync(captured.admission.databasePath)).toBe(false);
   });
+
+  it.each(["same scope", "different scope", "active callback"] as const)(
+    "writes to the relocated database without recreating a retired inspection path (%s)",
+    async (ownership) => {
+      const seeded = context();
+      const originalPath = seeded.admission.databasePath;
+      const value = { generation: "retained-before-relocation", plugins: [] };
+      writeConfigMachineState("plugins.installedIndex", value, {
+        path: originalPath,
+        env: seeded.environment,
+      });
+      await closeOpenClawStateDatabaseAsync();
+      const originalMaintenance = createOpenClawDatabaseMaintenanceScope();
+      const relocatedMaintenance =
+        ownership === "same scope" ? originalMaintenance : createOpenClawDatabaseMaintenanceScope();
+      try {
+        const original = originalMaintenance.run(() =>
+          captureOpenClawStateWorkerContext({
+            path: originalPath,
+            env: seeded.environment,
+          }),
+        );
+        const relocate = () => {
+          const relocatedRoot = dirs.make("openclaw-worker-relocated-");
+          // Relocation keeps the real inode while ending the old path's admission.
+          renameSync(path.dirname(originalPath), path.join(relocatedRoot, "state"));
+          const relocated = relocatedMaintenance.run(() =>
+            captureOpenClawStateWorkerContext({
+              env: { OPENCLAW_STATE_DIR: relocatedRoot },
+            }),
+          );
+          expect(relocated.admission.identity.key).toBe(original.admission.identity.key);
+          expect(existsSync(originalPath)).toBe(false);
+          return relocated;
+        };
+        const entryKey = {
+          pluginId: "fixture-plugin",
+          namespace: "relocated-state",
+          key: "destination",
+        };
+        const valueJson = JSON.stringify({ generation: "written-after-relocation" });
+        const write = (relocated: ReturnType<typeof captureOpenClawStateWorkerContext>) =>
+          runOpenClawStateWorkerOperation(
+            relocated,
+            (scope) =>
+              scope.execute({
+                type: "pluginState.register",
+                input: { ...entryKey, valueJson, maxEntries: 1, overflowPolicy: "reject-new" },
+              }),
+            {
+              createAdmission: createSqliteWorkerWriteAdmission(relocated.admission.assertCurrent, [
+                relocated.admission.databasePath,
+              ]),
+            },
+          );
+        const relocatedDuringCallback = await runOpenClawStateWorkerOperation(
+          original,
+          async (scope) => {
+            expect(
+              await scope.execute({
+                type: "plugins.metadata.read",
+                input: { selector: "installed-index", artifactPreservingReadOnly: true },
+              }),
+            ).toEqual({ value_json: JSON.stringify(value) });
+            if (ownership === "active callback") {
+              const relocated = relocate();
+              // The old callback cannot await its own retirement through a new caller.
+              await expect(write(relocated)).rejects.toMatchObject({
+                code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              });
+              expect(existsSync(originalPath)).toBe(false);
+              return relocated;
+            }
+            return undefined;
+          },
+          { existingOnly: true },
+        );
+        const relocated = relocatedDuringCallback ?? relocate();
+        await expect(write(relocated)).resolves.toEqual({ ok: true, value: undefined });
+
+        expect(existsSync(originalPath)).toBe(false);
+        const database = openOpenClawStateDatabase({
+          path: relocated.admission.databasePath,
+          env: relocated.environment,
+        });
+        expect(
+          database.db
+            .prepare(
+              "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+            )
+            .get(entryKey.pluginId, entryKey.namespace, entryKey.key),
+        ).toEqual({ value_json: valueJson });
+        expect(
+          database.db
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("plugins.installedIndex"),
+        ).toEqual({ value_json: JSON.stringify(value) });
+      } finally {
+        await originalMaintenance.close();
+        if (relocatedMaintenance !== originalMaintenance) {
+          await relocatedMaintenance.close();
+        }
+      }
+    },
+  );
 
   it("preserves future-schema rejection through a cold worker open", async () => {
     const captured = context();
