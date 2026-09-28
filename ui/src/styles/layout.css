@@ -2552,12 +2552,12 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person {
   flex: 1;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 38px 54px;
-  align-items: center;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: baseline;
   gap: 8px;
   width: 100%;
   min-width: 0;
-  min-height: 30px;
+  min-height: 32px;
   padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-md);
@@ -2582,128 +2582,123 @@ openclaw-settings-save-indicator:empty {
   box-shadow: var(--focus-ring);
 }
 
-.sidebar-online__person--away {
-  color: var(--muted);
+.sidebar-online__avatar {
+  position: relative;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  width: 20px;
+  height: 20px;
 }
 
-.sidebar-online__person-status {
-  display: block;
-  color: var(--muted);
-  font-size: calc(11px * var(--control-ui-text-scale));
+/* All rows are connected; a hollow ring avoids implying observed activity. */
+.sidebar-online__avatar::after {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-sizing: content-box;
+  width: 6px;
+  height: 6px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--ok);
+  content: "";
 }
 
-.sidebar-online__person[data-presence-activity="active"] .sidebar-online__person-status {
-  color: var(--ok);
+.sidebar-online__person[data-presence-activity="idle"] .sidebar-online__avatar::after {
+  background: var(--warn);
 }
 
-.sidebar-online__person[data-presence-activity="idle"] .sidebar-online__person-status {
-  color: var(--warn);
-}
-
-.sidebar-online__person .viewer-avatar {
-  flex: none;
+.sidebar-online__person[data-presence-activity="unknown"] .sidebar-online__avatar::after {
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1.5px var(--ok);
 }
 
 .sidebar-online__person-name {
   display: block;
   min-width: 0;
   overflow: hidden;
-  color: inherit;
+  color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
-  text-overflow: ellipsis;
+  font-weight: 600;
+  line-height: calc(24px * var(--control-ui-text-scale));
   white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
 }
 
-.sidebar-online__person-copy {
-  min-width: 0;
+.sidebar-online__person-name:dir(rtl) {
+  mask-image: linear-gradient(to left, black calc(100% - 12px), transparent);
 }
 
-.sidebar-online__columns,
-.sidebar-online__totals {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 38px 54px;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
+/* Keep the group intrinsic and right-anchored; hover changes paint, not spacing. */
+.sidebar-online__counts {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  line-height: calc(24px * var(--control-ui-text-scale));
+  white-space: nowrap;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover .sidebar-online__counts,
+.sidebar-online__person:focus-visible .sidebar-online__counts {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.sidebar-online__open,
+.sidebar-online__running {
+  display: inline-block;
+}
+
+.sidebar-online__open {
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
-.sidebar-online__column,
-.sidebar-online__filter,
+.sidebar-online__open-icon {
+  display: inline-block;
+  /* The glyph fills about 9/10 of its box, so a 10px box matches the 9px spinner. */
+  width: calc(10px * var(--control-ui-text-scale));
+  height: calc(10px * var(--control-ui-text-scale));
+  margin-inline-end: 4px;
+  vertical-align: -0.03em;
+}
+
+.sidebar-online__open-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sidebar-online__running {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-strong));
+  font-weight: 500;
+}
+
+.sidebar-online__running .session-run-spinner {
+  width: calc(9px * var(--control-ui-text-scale));
+  height: calc(9px * var(--control-ui-text-scale));
+  margin-inline-end: 4px;
+  vertical-align: baseline;
+}
+
 .sidebar-online__retry {
-  min-width: 0;
+  margin: 4px 8px;
   padding: 4px 0;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--muted);
   font: inherit;
-  text-align: right;
-}
-
-.sidebar-online__column[aria-pressed="true"],
-.sidebar-online__filter[aria-pressed="true"] {
-  color: var(--ok);
-}
-
-.sidebar-online__filter {
-  justify-self: start;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
+  font-size: calc(11px * var(--control-ui-text-scale));
   text-align: left;
 }
 
-.sidebar-online__column:focus-visible,
-.sidebar-online__filter:focus-visible,
 .sidebar-online__retry:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.sidebar-online__count {
-  color: var(--text);
-  font-size: calc(12px * var(--control-ui-text-scale));
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.sidebar-online__count--running {
-  justify-self: end;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-  color: var(--ok);
-}
-
-.sidebar-online__count--zero {
-  padding-right: 6px;
-  color: var(--muted);
-}
-
-.sidebar-online__totals {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-variant-numeric: tabular-nums;
-}
-
-.sidebar-online__totals [data-session-total] {
-  text-align: right;
-}
-
-.sidebar-online__totals [data-session-total="running"] {
-  padding-right: 6px;
-  color: var(--ok);
-}
-
-.sidebar-online__empty,
-.sidebar-online__retry {
-  margin: 4px 8px;
-  color: var(--muted);
-  font-size: calc(11px * var(--control-ui-text-scale));
-  text-align: left;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -2715,7 +2710,8 @@ openclaw-settings-save-indicator:empty {
 @media (prefers-reduced-motion: reduce) {
   .sidebar-recent-sessions__head,
   .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
-  .sidebar-online__person {
+  .sidebar-online__person,
+  .sidebar-online__counts {
     transition: none;
   }
 }
