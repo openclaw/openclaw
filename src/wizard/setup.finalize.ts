@@ -525,10 +525,10 @@ export async function finalizeSetupWizard(
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
       };
-      // A failed replacement may leave the old Gateway alive. Observe it once;
-      // only successful install/restart needs the startup grace period.
+      // Without a service or session Gateway start, observe any already-running
+      // Gateway once instead of waiting for startup.
       gatewayProbe =
-        gateway.status === "failed"
+        gateway.status === "failed" || (gateway.status === "skipped" && !sessionGateway)
           ? await probeGatewayReachable(probeOptions)
           : await waitForGatewayReachable({
               ...probeOptions,
