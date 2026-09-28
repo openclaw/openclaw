@@ -267,13 +267,8 @@ export async function runIMessageCatchup(
       warnLog(`imessage catchup: missing payload for guid=${row.guid}, skipping`);
       return { ok: false };
     }
-    try {
-      await dispatchPayload(entry.message, entry.rawEnvelope);
-      return { ok: true };
-    } catch (err) {
-      warnLog(`imessage catchup: dispatch threw for guid=${row.guid}: ${String(err)}`);
-      return { ok: false };
-    }
+    await dispatchPayload(entry.message, entry.rawEnvelope);
+    return { ok: true };
   };
 
   return await performIMessageCatchup({

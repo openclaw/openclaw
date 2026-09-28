@@ -141,6 +141,7 @@ export function createManagedServiceManagerBoundary({
     cleanups.add(cleanup);
     try {
       await startManagedServiceUpdateHandoff({
+        ...(options?.systemScope ? { supervisor: "systemd" as const } : {}),
         runId: run?.runId,
         ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
         ...(options?.profileRequester ? { requesterAuthority: { assertCurrent() {} } } : {}),
@@ -278,6 +279,7 @@ export function createManagedServiceManagerBoundary({
             ? {}
             : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
           ...commandFixture,
+          ...(options?.systemScope ? { serviceRecovery: undefined } : {}),
           // Triage hangs must reach the diagnostic cap without timing out healthy recovery.
           ...(options?.recoveryHang ? { recoveryTimeoutMs: 1000 } : {}),
           recovery: options?.originalRecovery ?? { serviceRestartSafe: true, version: "1.0.0" },
@@ -447,9 +449,15 @@ export function createManagedServiceManagerBoundary({
           expect(parent).toMatchObject({ exitCode: null, signalCode: null });
           await expect(pathExists(commandsPath)).resolves.toBe(false);
           if (options.cancelDuringValidation) {
-            const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
+            const cancelled = waitForHandoffResponse(
+              runningHelper.stdout,
+              options.systemScope ? "cancel-unavailable" : "cancelled",
+            );
             runningHelper.stdin?.write("cancel\n");
             await cancelled;
+            if (options.systemScope) {
+              await fs.writeFile(validationReleasePath, "settle updater");
+            }
           } else {
             if (options.revokeWhileValidating) {
               await fs.writeFile(

@@ -6,6 +6,7 @@ import path from "node:path";
 import chokidar from "chokidar";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as nativeContent from "./refresh-content-native.js";
 import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
 
 vi.mock("../loading/plugin-skills.js", () => ({
@@ -15,7 +16,7 @@ vi.mock("../loading/plugin-skills.js", () => ({
 
 it.runIf(
   process.platform === "linux" && !process.versions.bun && !resolveSkillsWatcherUsePolling(),
-)("refreshes discovery after a skill rename before descendant watch registration", async () => {
+)("refreshes discovery after a skill rename during a registered descendant scan", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-registration-")));
   const workspaceDir = path.join(root, "workspace");
   const skillsRoot = path.join(workspaceDir, "skills");
@@ -38,7 +39,7 @@ it.runIf(
   let scanBlocked = false;
   const registeredPaths = new Set<string>();
   const errors: unknown[] = [];
-  const watches: Array<{ ready: boolean; watcher: ReturnType<typeof chokidar.watch> }> = [];
+  const watches: Array<{ ready: boolean; watcher: { readonly closed: boolean } }> = [];
   const changes: Array<{ reason: string; changedPath?: string }> = [];
   const unregister = registerSkillsChangeListener((event) => {
     if (event.workspaceDir === workspaceDir) {
@@ -62,11 +63,24 @@ it.runIf(
     watcher.on("error", (error) => errors.push(error));
     return watcher;
   });
+  const originalNativeContent = nativeContent.createNativeSkillsContentWatcher;
+  const watchContent = vi
+    .spyOn(nativeContent, "createNativeSkillsContentWatcher")
+    .mockImplementation((...args) => {
+      const watcher = originalNativeContent(...args);
+      const observation = { ready: false, watcher };
+      watches.push(observation);
+      watcher.on("ready", () => {
+        observation.ready = true;
+      });
+      watcher.on("error", (error) => errors.push(error));
+      return watcher;
+    });
   const originalReaddir = fs.readdir;
   const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
     if (path.resolve(String(args[0])) === skillDir) {
-      // Chokidar 5 emits addDir before this scan, then installs fs.watch after it.
-      // Hold real registration open without replacing event delivery or discovery.
+      // Hold the real listing after owned native admission. Event delivery and
+      // discovery remain real while the child scan cannot finish.
       scanBlocked = true;
       await releaseScan.promise;
     }
@@ -108,15 +122,15 @@ it.runIf(
         addDirPublished: true,
         names: ["registration-proof"],
       });
-    expect(registeredPaths.has(skillDir)).toBe(false);
+    expect(registeredPaths.has(skillDir)).toBe(true);
 
     nativeFs.renameSync(skillFile, renamedSkillFile);
-    const renameBeforeRegistration = !registeredPaths.has(skillDir);
+    const renameDuringRegisteredScan = registeredPaths.has(skillDir);
     expect(read()).toEqual(["registration-proof"]);
     releaseScan.resolve();
 
     await expect.poll(() => registeredPaths.has(skillDir), { timeout: 3_000 }).toBe(true);
-    expect(renameBeforeRegistration).toBe(true);
+    expect(renameDuringRegisteredScan).toBe(true);
     expect(errors).toEqual([]);
     await expect.poll(read, { timeout: 3_000 }).toEqual([]);
   } finally {
@@ -128,6 +142,7 @@ it.runIf(
     } finally {
       readdir.mockRestore();
       watch.mockRestore();
+      watchContent.mockRestore();
       watchNative.mockRestore();
       syncBuiltinESMExports();
       await fs.rm(root, { recursive: true, force: true });

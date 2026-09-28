@@ -51,14 +51,10 @@ function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
   return [...byId.values()];
 }
 
-function findExactTeams(items: GraphGroup[], query: string): GraphGroup[] {
-  const normalized = normalizeExactMatch(query);
-  return uniqueItemsById(
-    items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
-  );
-}
-
-function findExactChannels(items: GraphChannel[], query: string): GraphChannel[] {
+function findExactNames<T extends { id?: string; displayName?: string }>(
+  items: T[],
+  query: string,
+): T[] {
   const normalized = normalizeExactMatch(query);
   return uniqueItemsById(
     items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
@@ -160,8 +156,7 @@ export function parseMSTeamsConversationId(raw: string): string | null {
   if (!/^conversation:/i.test(trimmed)) {
     return null;
   }
-  const id = trimmed.slice("conversation:".length).trim();
-  return id;
+  return trimmed.slice("conversation:".length).trim();
 }
 
 /**
@@ -183,12 +178,6 @@ export function looksLikeMSTeamsConversationId(raw: string): boolean {
   if (/^conversation:/i.test(trimmed)) {
     return true;
   }
-  // Bare Bot Framework / Graph conversation id formats.
-  // Channel / group ids always start with `19:` and include an `@thread.*`
-  // suffix (`@thread.tacv2`, `@thread.v2`, or the legacy `@thread.skype`). Personal chat
-  // ids come in three shapes: `a:1...` (Bot Framework), `8:orgid:...`
-  // (org-scoped Bot Framework), and `19:{userId}_{appId}@unq.gbl.spaces`
-  // (Graph API 1:1 chat thread). Bot Framework user ids use `29:...`.
   if (MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed)) {
     return true;
   }
@@ -364,7 +353,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         if (result.truncated) {
           return { input, resolved: false, note: "team lookup incomplete" };
         }
-        const exactTeams = findExactTeams(result.items, team);
+        const exactTeams = findExactNames(result.items, team);
         const [exactTeam] = exactTeams;
         if (!exactTeam) {
           return { input, resolved: false, note: "team not found" };
@@ -399,7 +388,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       } catch {
         return { input, resolved: false, note: "channel lookup failed" };
       }
-      const generalChannels = findExactChannels(teamChannels, "general");
+      const generalChannels = findExactNames(teamChannels, "general");
       if (params.teamIdMode !== "graph" && generalChannels.length !== 1) {
         return {
           input,
@@ -423,7 +412,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         };
       }
       const channelById = teamChannels.find((item) => item.id === channel);
-      const exactChannels = channelById ? [channelById] : findExactChannels(teamChannels, channel);
+      const exactChannels = channelById ? [channelById] : findExactNames(teamChannels, channel);
       if (exactChannels.length === 0) {
         return { input, resolved: false, note: "channel not found" };
       }

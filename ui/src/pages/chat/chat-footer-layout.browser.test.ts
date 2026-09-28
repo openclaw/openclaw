@@ -232,9 +232,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       const bounds = await page.evaluate(() => {
         const row = document.querySelector<HTMLElement>("[data-focused-row]")!;
         const control = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        // Keep the clipping boundary at the control, independent of turn spacing.
+        // Otherwise extra room below the footer makes the below-row pixel oracle vacuous.
+        row.style.height = `${control.getBoundingClientRect().bottom - row.getBoundingClientRect().top}px`;
         const rowRect = row.getBoundingClientRect();
         const controlRect = control.getBoundingClientRect();
         return {
+          controlBottom: controlRect.bottom,
           clip: {
             x: Math.floor(controlRect.left - 8),
             y: Math.floor(controlRect.top - 8),
@@ -245,6 +249,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           deviceScaleFactor: window.devicePixelRatio,
         };
       });
+      expect(bounds.controlBottom).toBeCloseTo(bounds.rowBottom, 3);
       const png = await page.screenshot({ clip: bounds.clip });
       const widestAccentRunBelowRow = await page.evaluate(
         async ({ pngBase64, clipTop, rowBottom, deviceScaleFactor }) => {

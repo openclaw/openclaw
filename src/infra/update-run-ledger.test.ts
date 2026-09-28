@@ -1,6 +1,9 @@
 import { fork } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import {
+  UPDATE_RUN_DRIVER_LIMIT,
+  UPDATE_RUN_PHASES,
+} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,11 +24,27 @@ import {
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
-import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { parseUpdateAdmissionVerdict, UpdateRunRecordSchema } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const tempDirs = createTempDirTracker();
+const admissionRouting = {
+  requester: {
+    channel: "discord",
+    accountId: "primary",
+    senderId: "fixture-sender",
+    authorizationSource: "owner-allowlist",
+  },
+  sessionKey: "agent:main:discord:channel:fixture-channel",
+  deliveryContext: {
+    channel: "discord",
+    to: "channel:fixture-channel",
+    accountId: "primary",
+    threadId: "fixture-thread",
+  },
+  campaignId: "fixture-update-campaign",
+};
 
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
@@ -39,6 +58,238 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
+  it.each(["candidate", "installed"] as const)(
+    "persists and reports %s admission through the existing origin metadata",
+    (owner) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const checks = [{ name: "config", status: "warn" as const, detail: "Missing custom path." }];
+      const admission =
+        owner === "candidate"
+          ? { owner, protocol: 1 as const, candidateVersion: "2026.9.5", checks }
+          : { owner, fallbackReason: "update-admission-unsupported-target" };
+      const candidateAdmission =
+        owner === "candidate"
+          ? {
+              protocol: 1 as const,
+              verdict: "admit" as const,
+              reasons: [],
+              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
+              facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+            }
+          : undefined;
+      const saved = recordUpdateRunPhase(
+        run.runId,
+        "staging",
+        { origin: { admission, candidateAdmission } },
+        options,
+      );
+      expect(saved.admission).toEqual(admission);
+      const retained = getUpdateRun(run.runId, options)!;
+      expect(retained.admission).toEqual(admission);
+      expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
+      expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(`Admission: ${owner}`);
+      expect(report).toContain(
+        owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
+      );
+      const database = openOpenClawStateDatabase(options);
+      const row = database.db
+        .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+        .get(run.runId) as { origin_json: string };
+      expect(JSON.parse(row.origin_json).admission).toEqual(admission);
+    },
+  );
+
+  it("bounds and redacts candidate admission without corrupting its verdict or check statuses", () => {
+    const options = isolatedOptions();
+    const message =
+      `${options.env.OPENCLAW_STATE_DIR}/plugins/missing ` + "diagnostic ".repeat(100);
+    const checks = Array.from({ length: 32 }, (_, index) => ({
+      name: `check-${index}`,
+      status: "refuse" as const,
+      detail: message,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+          candidateAdmission: {
+            protocol: 1,
+            verdict: "refuse",
+            reasons: checks.map((check) => ({ code: check.name, message, nextAction: message })),
+            warnings: [],
+            facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+          },
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toMatchObject(admissionRouting);
+    expect(retained.admission?.owner).toBe("candidate");
+    expect(retained.admission?.checks).toHaveLength(32);
+    expect(retained.admission?.checks?.every((check) => check.status === "refuse")).toBe(true);
+    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.admission?.candidateVersion).toBe("2026.9.5");
+    expect(retained.origin.candidateAdmission?.verdict).toBe("refuse");
+    expect(retained.origin.candidateAdmission?.reasons).toHaveLength(32);
+    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.origin.candidateAdmission?.facts.candidateVersion).toBe("2026.9.5");
+    expect(retained.origin.candidateAdmission?.facts.installedVersion).toBe("2026.9.4");
+    expect(JSON.stringify(retained)).not.toContain(options.env.OPENCLAW_STATE_DIR);
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare(
+        "SELECT length(CAST(origin_json AS BLOB)) AS bytes FROM update_runs WHERE run_id = ?",
+      )
+      .get(run.runId) as { bytes: number };
+    expect(row.bytes).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("retains an accepted admission's identities beside maximum driver metadata and large warnings", () => {
+    const options = isolatedOptions();
+    const message = "diagnostic ".repeat(100);
+    const candidateVersion = `2026.9.5+${"v".repeat(70)}`;
+    const installedVersion = `2026.9.4+${"v".repeat(70)}`;
+    const checks = Array.from({ length: 4 }, (_, index) => ({
+      name: `check-${index}-${"x".repeat(115)}`,
+      status: "refuse" as const,
+      detail: message,
+    }));
+    const verdict = parseUpdateAdmissionVerdict({
+      protocol: 1,
+      verdict: "refuse",
+      reasons: checks.map(() => ({ code: "invalid-config", message, nextAction: message })),
+      warnings: Array.from({ length: 32 }, (_, index) => ({ code: `warning-${index}`, message })),
+      facts: { candidateVersion, installedVersion, checks },
+    });
+    expect(verdict).not.toBeNull();
+    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) => ({
+      host: "\0".repeat(255),
+      pid: Number.MAX_SAFE_INTEGER - index,
+      startIdentity: "9".repeat(128),
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          driver: drivers[0],
+          previousDrivers: drivers.slice(1),
+          ...admissionRouting,
+          doctorHint: message,
+          nextAction: message,
+          admission: { owner: "candidate", protocol: 1, candidateVersion, checks },
+          candidateAdmission: verdict!,
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin.driver).toEqual(drivers[0]);
+    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
+    expect(retained.origin).toMatchObject(admissionRouting);
+    expect(retained.admission?.candidateVersion).toBe(candidateVersion);
+    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
+      verdict!.reasons.map((reason) => reason.code),
+    );
+    expect(retained.origin.candidateAdmission?.facts).toMatchObject({
+      candidateVersion,
+      installedVersion,
+    });
+    expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("evicts irreducible admission diagnostics without refusing the ledger write", () => {
+    const options = isolatedOptions();
+    const checks = Array.from({ length: 32 }, (_, index) => ({
+      name: `check-${index}-${"x".repeat(1_000)}`,
+      status: "ok" as const,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toEqual({});
+    expect(retained.admission).toBeUndefined();
+  });
+
+  it("keeps full-capacity recovery receipts exact while evicting admission and routing", () => {
+    const options = isolatedOptions();
+    const receipts = {
+      driver: { host: "fixture", pid: 42, startIdentity: "2" },
+      previousDrivers: [{ host: "fixture", pid: 41, startIdentity: "1" }],
+      updateRecoveryCapture: {
+        manifestSha256: "a".repeat(64),
+        configWrites: [
+          {
+            path: `${options.env.OPENCLAW_STATE_DIR}/private-config.json`,
+            beforeHash: "b".repeat(64),
+            afterHash: "c".repeat(64),
+            contiguous: false,
+          },
+        ],
+        warnings: [
+          {
+            kind: "undeclared-migration-resources" as const,
+            pluginId: "legacy",
+            message: "Private state is undeclared",
+          },
+        ],
+        status: "restore-failed" as const,
+      },
+    };
+    receipts.updateRecoveryCapture.warnings[0]!.message += "w".repeat(
+      16 * 1024 - Buffer.byteLength(JSON.stringify(receipts)),
+    );
+    const checks = [{ name: "config", status: "ok" as const }];
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...receipts,
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+          candidateAdmission: {
+            protocol: 1,
+            verdict: "admit",
+            reasons: [],
+            warnings: [],
+            facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+          },
+        },
+      },
+      options,
+    );
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+      .get(run.runId) as { origin_json: string };
+    expect(Buffer.byteLength(row.origin_json)).toBe(16 * 1024);
+    expect(row.origin_json).toBe(JSON.stringify(receipts));
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toStrictEqual(receipts);
+    expect(retained.admission).toBeUndefined();
+    expect(listUpdateRuns({}, options)[0]?.admission).toBeUndefined();
+  });
+
   it.each(["selected", "refused", "unavailable"] as const)(
     "retains and reports snapshot capacity evidence (%s)",
     (outcome) => {
@@ -440,6 +691,8 @@ describe("update run ledger", () => {
         "previous generation restoration",
         "finalize:doctor",
         "finalize:future-phase",
+        // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
+        "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
         "post-update verification",
       ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {

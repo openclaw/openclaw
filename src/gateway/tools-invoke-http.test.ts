@@ -1,6 +1,5 @@
 // Tool invoke HTTP tests cover request auth, tool context construction, hook
 // filtering, plugin metadata, payload validation, and response shaping.
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -121,6 +120,14 @@ vi.mock("../agents/openclaw-tools.js", async () => {
     return err;
   };
 
+  function successfulTool(name: string, result: string) {
+    return {
+      name,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result }),
+    };
+  }
+
   const pluginDoctor = {
     name: "plugin_doctor",
     label: "Plugin doctor",
@@ -164,37 +171,13 @@ vi.mock("../agents/openclaw-tools.js", async () => {
         throw toolInputError("invalid args");
       },
     },
-    {
-      name: "automations",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "automations" }),
-    },
-    {
-      name: "exec",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "exec" }),
-    },
-    {
-      name: "apply_patch",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "apply_patch" }),
-    },
-    {
-      name: "nodes",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "nodes" }),
-    },
-    {
-      name: "browser",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "browser" }),
-    },
+    successfulTool("automations", "automations"),
+    successfulTool("exec", "exec"),
+    successfulTool("apply_patch", "apply_patch"),
+    successfulTool("nodes", "nodes"),
+    successfulTool("browser", "browser"),
     pluginDoctor,
-    {
-      name: "write_scoped_test",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "write-scoped" }),
-    },
+    successfulTool("write_scoped_test", "write-scoped"),
     {
       name: "tools_invoke_test",
       parameters: {
@@ -276,12 +259,9 @@ const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
 
-let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
-
 let sharedPort = 0;
 const server = createToolsInvokeHttpTestServer({
   handleToolsInvoke: handleToolsInvokeHttpRequest,
-  getPluginHandlers: () => pluginHttpHandlers,
 });
 
 beforeAll(async () => {
@@ -293,7 +273,6 @@ afterAll(() => server.close());
 beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-  pluginHttpHandlers = [];
   cfg = {};
   server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
@@ -750,6 +729,7 @@ describe("POST /tools/invoke", () => {
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("result");
     expect(lastCreateOpenClawToolsContext?.allowMediaInvokeCommands).toBe(true);
+    expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(true);
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
     const hookArg = firstHookCallArg();
@@ -762,14 +742,6 @@ describe("POST /tools/invoke", () => {
     expect(hookCtx.config).toBe(cfg);
     expect(hookCtx.sessionKey).toBe("agent:main:main");
     expect(hookCtx.loopDetection).toEqual({ warnAt: 3 });
-  });
-
-  it("opts direct gateway tool invocation into gateway subagent binding", async () => {
-    allowAgentsListForMain();
-    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
-
-    expect(res.status).toBe(200);
-    expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
   });
 
   it("keeps plugin tools enabled for non-core tool invokes", async () => {
@@ -843,19 +815,6 @@ describe("POST /tools/invoke", () => {
     expect(body.error?.message).toBe("blocked by test hook");
   });
 
-  it("accepts shared-secret bearer auth on the HTTP tools surface", async () => {
-    allowAgentsListForMain();
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
-      ok: true,
-      method: "token",
-    });
-
-    const res = await invokeAgentsListBearer();
-
-    const body = await expectOkInvokeResponse(res);
-    expect(body.result).toEqual({ ok: true, result: [] });
-  });
-
   it("uses before_tool_call adjusted params for HTTP tool execution", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockImplementationOnce(async () => ({
@@ -895,21 +854,6 @@ describe("POST /tools/invoke", () => {
     expect(resImplicit.status).toBe(200);
     const implicitBody = await resImplicit.json();
     expect(implicitBody.ok).toBe(true);
-  });
-
-  it("routes tools invoke before plugin HTTP handlers", async () => {
-    const pluginHandler = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
-      res.statusCode = 418;
-      res.end("plugin");
-      return true;
-    });
-    allowAgentsListForMain();
-    pluginHttpHandlers = [async (req, res) => pluginHandler(req, res)];
-
-    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
-
-    expect(res.status).toBe(200);
-    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
   it("returns 404 when denylisted or blocked by tools.profile", async () => {
@@ -1296,17 +1240,6 @@ describe("POST /tools/invoke", () => {
 
       await expectOkInvokeResponse(roleConfiguredOwnerResponse);
     });
-  });
-
-  it("executes tools for write-scoped callers on the HTTP path", async () => {
-    setMainAllowedTools({ allow: ["write_scoped_test"] });
-
-    const allowedRes = await invokeToolAuthed({
-      tool: "write_scoped_test",
-      sessionKey: "main",
-    });
-    const allowedBody = await expectOkInvokeResponse(allowedRes);
-    expect(allowedBody.result).toEqual({ ok: true, result: "write-scoped" });
   });
 
   it("derives sender owner identity from HTTP auth instead of caller headers", async () => {

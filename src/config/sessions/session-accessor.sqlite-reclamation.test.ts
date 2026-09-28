@@ -39,6 +39,7 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import {
   createHistoryEvictionReclamationPlan,
   createLifecycleArtifactReclamationPlan,
@@ -609,28 +610,20 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   }
   const budgetBefore = freePages();
   const databaseOptions = plan.databaseOptions;
-  const duringDrain = yieldToEventLoop().then(() => {
-    expect(budgetBefore - freePages()).toBeGreaterThan(0);
-    expect(budgetBefore - freePages()).toBeLessThanOrEqual(512);
+  await withSqliteSessionPageReclamation(databaseOptions, async (reclaimPages) => {
+    const first = await reclaimPages();
+    expect(first.remainingFreePages).toBeGreaterThan(0);
+    expect(budgetBefore - first.remainingFreePages!).toBeGreaterThan(0);
+    expect(budgetBefore - first.remainingFreePages!).toBeLessThanOrEqual(512);
     expect(database.db.isTransaction).toBe(false);
-    closeOpenClawAgentDatabaseByPath(database.path);
     for (const scope of scopes) {
       expect(appendTranscriptEventSync(scope, { type: "budget-progress" })).toEqual({
         ok: true,
         value: true,
       });
     }
+    await reclaimSqliteFreePages(databaseOptions, undefined, { reclaimPages });
   });
-  // Production retains writer admission across every yielded pass. In particular,
-  // retiring the old handle must queue its Worker checkpoint behind this drain.
-  await Promise.all([
-    runExclusiveSqliteSessionWrite(
-      databaseOptions,
-      () => reclaimSqliteFreePages(databaseOptions),
-      "session.history.free-pages",
-    ),
-    duringDrain,
-  ]);
   const reopened = openOpenClawAgentDatabase(databaseOptions);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });
@@ -685,7 +678,11 @@ test.each([false, true])(
     const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const workers: Array<{ worker: Worker; id: number }> = [];
-    const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
+    const exits: number[] = [];
+    const observeWorker = (worker: Worker) => {
+      workers.push({ worker, id: worker.threadId });
+      worker.once("exit", (code) => exits.push(code));
+    };
     setLoggerOverride({ level: "info", file });
     process.on("worker", observeWorker);
     let clock = 0;
@@ -741,8 +738,11 @@ test.each([false, true])(
         });
       expect(workers).toHaveLength(1);
       expect(workers[0]?.id).toBeGreaterThan(0);
+      expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
+      expect(exits).toEqual([]);
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
+      expect(exits).toEqual([0]);
       expect(records).toHaveLength(3);
       const workerRecords = records.filter((record) => record.workerThreadId === workers[0]?.id);
       expect(workerRecords).toHaveLength(2);
@@ -753,7 +753,7 @@ test.each([false, true])(
         })),
       ).toEqual([
         { id: 1, cause: "worker-release" },
-        { id: 2, cause: rejected ? "worker-exit" : "worker-release" },
+        { id: 2, cause: "worker-release" },
       ]);
       for (const record of workerRecords) {
         expect(record).toMatchObject({
@@ -843,9 +843,9 @@ test("a synchronous writer reports actual reclamation service time inside its BE
       })
       .filter(
         (record) =>
-          record.message === "slow SQLite transaction lock wait" &&
+          record.message === "slow SQLite transaction step" &&
           isRecord(record["1"]) &&
-          record["1"].operation === "agent.write",
+          record["1"].operation === "session-entry.replace",
       );
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject(writerTrace);
@@ -892,7 +892,11 @@ test.each([
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const workers: Array<{ worker: Worker; id: number }> = [];
-    const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
+    const exits: number[] = [];
+    const observeWorker = (worker: Worker) => {
+      workers.push({ worker, id: worker.threadId });
+      worker.once("exit", (code) => exits.push(code));
+    };
     process.on("worker", observeWorker);
     const failure = new Error("synthetic reclamation refusal", {
       cause: new Error("synthetic storage failure; Authorization: Bearer synthetic-private-token"),
@@ -952,8 +956,11 @@ test.each([
       expect(otherWriterRan).toBe(true);
       expect(workers).toHaveLength(1);
       expect(workers[0]?.id).toBeGreaterThan(0);
+      expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
+      expect(exits).toEqual([]);
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
+      expect(exits).toEqual([0]);
       expect(records.some((record) => record["1"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 || rejected ? 1 : 0);
       expect(observations).toHaveLength((elapsedMs > 0 || rejected) && !failLog ? 1 : 0);
@@ -974,7 +981,6 @@ test.each([
           outcome: rejected ? "rejected" : "resolved",
           ...(rejected
             ? {
-                exitCode: 1,
                 sessionIdHash: redactIdentifier(plan.sessionId),
                 error: expect.stringContaining(
                   "synthetic reclamation refusal | synthetic storage failure",

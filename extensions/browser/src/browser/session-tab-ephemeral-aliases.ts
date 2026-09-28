@@ -1,6 +1,7 @@
 /**
  * Process-local aliases for durable storage keys and non-durable tab rows.
  */
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
 
 type AliasIdentity = {
@@ -25,9 +26,7 @@ const volatileAliasStateSymbol = Symbol.for("openclaw.browser.session-tabs.volat
 const volatileExactStateSymbol = Symbol.for("openclaw.browser.session-tabs.exact-volatile-aliases");
 
 function interactionKey(identity: AliasIdentity): string {
-  const route = identity.route
-    ? browserSessionTabRouteKey(identity.route)
-    : browserSessionTabRouteKey({ kind: "browser-control" });
+  const route = browserSessionTabRouteKey(identity.route ?? { kind: "browser-control" });
   return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
 }
 
@@ -59,25 +58,20 @@ function normalizedProfiles(
 }
 
 function durableKeysByInteraction(): Map<string, Set<string>> {
-  const state = globalThis as typeof globalThis & {
-    [durableAliasStateSymbol]?: Map<string, Set<string>>;
-  };
-  state[durableAliasStateSymbol] ??= new Map();
-  return state[durableAliasStateSymbol];
+  return resolveGlobalMap(durableAliasStateSymbol);
 }
 
 function durableExactKeysByInteraction(): Map<string, Set<string>> {
-  const state = globalThis as typeof globalThis & {
-    [durableExactStateSymbol]?: Map<string, Set<string>>;
-  };
-  state[durableExactStateSymbol] ??= new Map();
-  return state[durableExactStateSymbol];
+  return resolveGlobalMap(durableExactStateSymbol);
 }
 
-function removeStorageKey(mappings: Map<string, Set<string>>, storageKey: string): void {
-  for (const [key, storageKeys] of mappings) {
-    storageKeys.delete(storageKey);
-    if (storageKeys.size === 0) {
+function removeAliasTarget<T extends Set<string> | Map<string, VolatileAliasTarget>>(
+  mappings: Map<string, T>,
+  targetKey: string,
+): void {
+  for (const [key, targets] of mappings) {
+    targets.delete(targetKey);
+    if (targets.size === 0) {
       mappings.delete(key);
     }
   }
@@ -89,8 +83,8 @@ export function resetDurableTabAliases(): void {
 }
 
 export function clearDurableTabAliases(storageKey: string): void {
-  removeStorageKey(durableKeysByInteraction(), storageKey);
-  removeStorageKey(durableExactKeysByInteraction(), storageKey);
+  removeAliasTarget(durableKeysByInteraction(), storageKey);
+  removeAliasTarget(durableExactKeysByInteraction(), storageKey);
 }
 
 export function rememberDurableTabAliases(
@@ -139,37 +133,17 @@ function volatileAliasTargetKey(target: VolatileAliasTarget): string {
 }
 
 function volatileAliasesByInteraction(): Map<string, Map<string, VolatileAliasTarget>> {
-  const state = globalThis as typeof globalThis & {
-    [volatileAliasStateSymbol]?: Map<string, Map<string, VolatileAliasTarget>>;
-  };
-  state[volatileAliasStateSymbol] ??= new Map();
-  return state[volatileAliasStateSymbol];
+  return resolveGlobalMap(volatileAliasStateSymbol);
 }
 
 function volatileExactTargetsByInteraction(): Map<string, Map<string, VolatileAliasTarget>> {
-  const state = globalThis as typeof globalThis & {
-    [volatileExactStateSymbol]?: Map<string, Map<string, VolatileAliasTarget>>;
-  };
-  state[volatileExactStateSymbol] ??= new Map();
-  return state[volatileExactStateSymbol];
-}
-
-function removeVolatileTarget(
-  mappings: Map<string, Map<string, VolatileAliasTarget>>,
-  targetKey: string,
-): void {
-  for (const [key, targets] of mappings) {
-    targets.delete(targetKey);
-    if (targets.size === 0) {
-      mappings.delete(key);
-    }
-  }
+  return resolveGlobalMap(volatileExactStateSymbol);
 }
 
 export function clearVolatileTabAliases(sessionKey: string, tabKey: string): void {
   const targetKey = volatileAliasTargetKey({ sessionKey, tabKey });
-  removeVolatileTarget(volatileAliasesByInteraction(), targetKey);
-  removeVolatileTarget(volatileExactTargetsByInteraction(), targetKey);
+  removeAliasTarget(volatileAliasesByInteraction(), targetKey);
+  removeAliasTarget(volatileExactTargetsByInteraction(), targetKey);
 }
 
 export function rememberVolatileTabAliases(

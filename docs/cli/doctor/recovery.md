@@ -30,9 +30,12 @@ Gateway stopped for maintenance. Doctor reports changed keys and backup paths;
 supported custom settings survive the rewrite. Automatic native-policy repair
 preserves unknown operator edits and uncertain definitions for operator review.
 Other command or credential changes still require interactive confirmation.
-Services already stopped keep their definitions and stop state; run the reported
-profile-aware `openclaw gateway install --force` command from the intended
-installation to reconcile them (installation may start the service).
+After successful standalone `openclaw doctor --fix`, an already stopped managed
+Gateway starts and verifies readiness when its service targets the current
+installation. Update-time Doctor leaves activation with the updater. A stopped
+service targeting another installation keeps its definition and stop state; run
+the reported profile-aware `openclaw gateway install --force` command from the
+intended installation to reconcile it (installation may start the service).
 It preserves the service's profile and an explicit service port when no port is
 configured. Source checkouts, deployment-owned overrides, and unavailable native
 inspection do not grant automatic installation repair authority; Doctor reports
@@ -59,6 +62,14 @@ Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
+
+If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
+or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
+admitted repair work and service restoration before exiting. An ordinary repair
+error also restores the managed service Doctor stopped, using the current saved
+configuration. Pending approval prompts cancel without interrupting admitted
+writes. Concrete data risks, lost service authority, and unverified child
+cleanup still prevent unsafe activation and report the recovery action.
 
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup

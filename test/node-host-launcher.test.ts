@@ -62,6 +62,7 @@ async function writePackage(root: string, version: string, body: string, schema 
   for (const name of [
     "openclaw.mjs",
     "node-host-launcher.mjs",
+    "node-compile-cache.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",

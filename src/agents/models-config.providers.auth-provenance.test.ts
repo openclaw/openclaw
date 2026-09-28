@@ -351,7 +351,25 @@ describe("models-config provider auth provenance", () => {
   it.each(
     discoveryRefCases.flatMap(({ type, callback, refSource }) =>
       unavailableStates
-        .filter((state) => refSource === "store" || state === "cold" || state === "unpublished")
+        .filter((state) => {
+          if (refSource === "env") {
+            return (
+              (state === "cold" || state === "unpublished") &&
+              ((type === "api_key" && callback === "resolveProviderAuth") ||
+                (type === "token" && callback === "resolveProviderApiKey"))
+            );
+          }
+          if (callback === "resolveProviderApiKey") {
+            return state === "unpublished";
+          }
+          return (
+            type === "api_key" ||
+            state === "ref-mismatch" ||
+            state === "missing-value" ||
+            state === "cold" ||
+            state === "unpublished"
+          );
+        })
         .map((state) => ({ type, callback, refSource, state })),
     ),
   )(
@@ -587,7 +605,6 @@ describe("models-config provider auth provenance", () => {
     {
       name: "keeps a profile with a one-model cooldown",
       usage: {
-        cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
         cooldownModel: "gpt-5.5",
       },
@@ -597,7 +614,6 @@ describe("models-config provider auth provenance", () => {
     {
       name: "demotes a profile-wide cooldown",
       usage: {
-        cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
       },
       expectedProfile: "backup",
@@ -612,7 +628,7 @@ describe("models-config provider auth provenance", () => {
         key: "cooldown-backup-key",
       };
       fixture.store.usageStats = {
-        [fixture.profileId]: usage,
+        [fixture.profileId]: { ...usage, cooldownUntil: Date.now() + 60_000 },
       };
       fixture.emitOutcome();
 
@@ -746,28 +762,30 @@ describe("models-config provider auth provenance", () => {
     expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
-  it("prefers profile auth over env auth in provider summaries to match runtime resolution", () => {
-    const auth = createProviderAuthResolver(
-      {
-        OPENAI_API_KEY: "env-openai-key",
-      } as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_PROFILE_KEY" },
-        },
-      }),
-    );
-
-    expect(auth("openai")).toEqual({
-      apiKey: "OPENAI_PROFILE_KEY",
-      discoveryApiKey: undefined,
-      mode: "api_key",
-      source: "profile",
-      profileId: "openai:default",
-    });
-  });
+  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
+    "exposes %s to provider catalog policy",
+    (authFlow) => {
+      const auth = createProviderAuthResolver(
+        {},
+        createAuthProfileStoreFixture({
+          "openai:shared": {
+            type: "oauth",
+            provider: "openai",
+            authFlow,
+            access: "shared-access",
+            refresh: "shared-refresh",
+            expires: Date.now() + 60_000,
+          },
+        }),
+      );
+      expect(auth("openai")).toMatchObject({
+        mode: "oauth",
+        authFlow,
+        profileId: "openai:shared",
+        discoveryApiKey: "shared-access",
+      });
+    },
+  );
 
   it("resolves plugin-owned synthetic auth through the provider hook", () => {
     // Plugin-owned synthetic auth can provide discovery keys while persisted
@@ -803,50 +821,23 @@ describe("models-config provider auth provenance", () => {
     });
   });
 
-  it("uses literal configured provider api keys for catalog discovery", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "proof-key",
-              api: "openai-completions",
-              models: [],
-            },
+  function configuredVllmAuth(apiKey: string, env: NodeJS.ProcessEnv = {}) {
+    return createProviderApiKeyResolver(env, createAuthProfileStoreFixture({}), {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            apiKey,
+            api: "openai-completions",
+            models: [],
           },
         },
       },
-    );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: "proof-key",
-      discoveryApiKey: "proof-key",
-      mode: "api_key",
     });
-  });
+  }
 
   it("resolves custom configured env markers for catalog discovery", () => {
-    const auth = createProviderApiKeyResolver(
-      {
-        MY_VLLM_KEY: "resolved-vllm-key",
-      } as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "${MY_VLLM_KEY}",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("${MY_VLLM_KEY}", { MY_VLLM_KEY: "resolved-vllm-key" });
 
     expect(auth("vllm")).toEqual({
       apiKey: "MY_VLLM_KEY",
@@ -856,22 +847,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("does not send missing custom env markers as catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "${MY_VLLM_KEY}",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("${MY_VLLM_KEY}");
 
     expect(auth("vllm")).toEqual({
       apiKey: undefined,
@@ -880,22 +856,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("does not send missing known provider env markers as catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "VLLM_API_KEY",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("VLLM_API_KEY");
 
     expect(auth("vllm")).toEqual({
       apiKey: undefined,
@@ -904,22 +865,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("preserves bare all-caps configured api keys as literal catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "ALLCAPS_SAMPLE",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+    const auth = configuredVllmAuth("ALLCAPS_SAMPLE");
 
     expect(auth("vllm")).toEqual({
       apiKey: "ALLCAPS_SAMPLE",
@@ -991,15 +937,6 @@ describe("models-config.providers.policy", () => {
 
     expect(resolver).toBeTypeOf("function");
     expect(resolver?.({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
-  });
-
-  it("resolves anthropic-vertex ADC markers through provider plugin hooks", () => {
-    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
-
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({ ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" } as NodeJS.ProcessEnv)).toBe(
-      "gcp-vertex-credentials",
-    );
   });
 
   it("normalizes Google provider config through provider plugin hooks", () => {

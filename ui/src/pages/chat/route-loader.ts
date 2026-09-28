@@ -525,11 +525,11 @@ export async function loadChatRoute(
       );
     }
   }
-  const resolution =
-    revalidatedResolution ??
-    (localRow
-      ? ({ kind: "unique", session: localRow } as const)
-      : await resolveShortSessionReference(context, target, routeLocation, signal));
+  const resolution = revalidatedResolution
+    ? { ...revalidatedResolution, isCurrent: isResolutionSourceCurrent }
+    : localRow
+      ? { kind: "unique" as const, session: localRow, isCurrent: isResolutionSourceCurrent }
+      : await resolveShortSessionReference(context, target, routeLocation, signal);
   if (resolution.kind === "prepared") {
     const canonicalLocationReady = resolution.resolution
       .then((resolved) => {
@@ -608,7 +608,8 @@ export async function loadChatRoute(
   }
   const resolved = resolvedSessionRouteData({
     context,
-    isResolutionSourceCurrent,
+    // RPC resolution owns the connection acquired after a cold route waited for hello.
+    isResolutionSourceCurrent: resolution.isCurrent,
     location: routeLocation,
     face,
     row: resolution.session,

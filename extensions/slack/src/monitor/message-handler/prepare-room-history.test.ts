@@ -63,15 +63,11 @@ describe("Slack platform-authoritative automatic room history", () => {
       text: "<@B1> current request",
       ts: "20.000",
     };
-    return {
-      storePath,
-      history,
-      replies,
-      createContext,
-      ctx: createContext(),
-      message,
-      account: createSlackTestAccount(),
-    };
+    const ctx = createContext();
+    const account = createSlackTestAccount();
+    const prepare = (overrides: Partial<Parameters<typeof prepareSlackMessage>[0]> = {}) =>
+      prepareSlackMessage({ ctx, account, message, opts: { source: "app_mention" }, ...overrides });
+    return { storePath, history, replies, createContext, ctx, message, account, prepare };
   }
 
   it("recovers a capped current platform snapshot across monitor replacement and edits", async () => {
@@ -84,12 +80,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       ],
     });
     for (const ctx of [f.ctx, f.createContext()]) {
-      const prepared = await prepareSlackMessage({
-        ctx,
-        account: f.account,
-        message: f.message,
-        opts: { source: "app_mention" },
-      });
+      const prepared = await f.prepare({ ctx });
       expect(prepared?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual([
         "offline discussion",
         "edited platform value",
@@ -102,12 +93,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     f.history.mockResolvedValue({
       messages: [{ ts: "19.000", user: "U1", text: "latest platform edit" }],
     });
-    const refreshed = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
-      opts: { source: "app_mention" },
-    });
+    const refreshed = await f.prepare();
     expect(refreshed?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual([
       "latest platform edit",
     ]);
@@ -144,11 +130,8 @@ describe("Slack platform-authoritative automatic room history", () => {
         },
       ],
     });
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
+    const prepared = await f.prepare({
       message: { ...f.message, text: "<@B1> inspect the recent diagram", ts: "501.000" },
-      opts: { source: "app_mention" },
     });
     const image = prepared?.ctxPayload.InboundHistory?.[0]?.media?.[0];
     try {
@@ -194,12 +177,7 @@ describe("Slack platform-authoritative automatic room history", () => {
           })),
         })),
       });
-      const prepared = await prepareSlackMessage({
-        ctx: f.ctx,
-        account: f.account,
-        message: f.message,
-        opts: { source: "app_mention" },
-      });
+      const prepared = await f.prepare();
       const media =
         prepared?.ctxPayload.InboundHistory?.flatMap((entry) => entry.media ?? []) ?? [];
       try {
@@ -230,10 +208,7 @@ describe("Slack platform-authoritative automatic room history", () => {
         { ts: "16.000", user: "U1", text: "permitted discussion" },
       ],
     });
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
+    const prepared = await f.prepare({
       opts: { source: "app_mention", sourceMessageIds: ["19.000", "20.000"] },
     });
     expect(prepared?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual([
@@ -250,9 +225,10 @@ describe("Slack platform-authoritative automatic room history", () => {
     { mode: "allowlist_quote", allowed: false },
     { mode: "all", allowed: false },
   ] as const)(
-    "gates initial bot thread text and media ($mode, allowed: $allowed)",
+    "keeps bot thread context independent of allowBots false ($mode, allowed: $allowed)",
     async ({ mode, allowed }) => {
       const f = fixture(5, mode);
+      f.account.config.allowBots = false;
       const root = {
         ts: "10.000",
         user: allowed ? "U1" : "UDENIED",
@@ -283,12 +259,7 @@ describe("Slack platform-authoritative automatic room history", () => {
             headers: { "content-type": "image/png" },
           }),
       );
-      const prepared = await prepareSlackMessage({
-        ctx: f.ctx,
-        account: f.account,
-        message: { ...f.message, thread_ts: "10.000" },
-        opts: { source: "app_mention" },
-      });
+      const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
       try {
         const includeRoot = allowed || mode === "all";
         expect(prepared?.ctxPayload.RawBody).toContain("current request");
@@ -318,10 +289,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     f.history.mockResolvedValue({
       messages: [{ ts: "19.000", user: "U1", text: "workspace one secret" }],
     });
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
+    const prepared = await f.prepare({
       opts: {
         source: "app_mention",
         eventScope: {
@@ -338,20 +306,13 @@ describe("Slack platform-authoritative automatic room history", () => {
 
   it("does no automatic room history transport for quiet ingress or historyLimit zero", async () => {
     const f = fixture();
-    const quiet = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
+    const quiet = await f.prepare({
       message: { ...f.message, text: "quiet discussion" },
       opts: { source: "message" },
     });
     expect(quiet).toBeNull();
     f.ctx.historyLimit = 0;
-    const active = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
-      opts: { source: "app_mention" },
-    });
+    const active = await f.prepare();
     expect(active?.ctxPayload.RawBody).toContain("current request");
     expect(active?.ctxPayload.InboundHistory).toBeUndefined();
     expect(f.history).not.toHaveBeenCalled();
@@ -372,14 +333,7 @@ describe("Slack platform-authoritative automatic room history", () => {
         { ts: "14.000", user: "U1", text: "discarded generation" },
       ],
     });
-    const prepare = () =>
-      prepareSlackMessage({
-        ctx: f.ctx,
-        account: f.account,
-        message: f.message,
-        opts: { source: "app_mention" },
-      });
-    const first = await prepare();
+    const first = await f.prepare();
     expect(first?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual(["after reset"]);
     expect(first?.ctxPayload.Body).not.toContain("discarded generation");
     await upsertSessionEntry({
@@ -388,7 +342,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       entry: { sessionId: "reset-tombstone", updatedAt: 0 },
     });
     f.history.mockClear();
-    const reset = await prepare();
+    const reset = await f.prepare();
     expect(reset?.ctxPayload.InboundHistory).toEqual([]);
     expect(reset?.ctxPayload.RawBody).toContain("current request");
     expect(f.history).not.toHaveBeenCalled();
@@ -398,12 +352,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     const f = fixture();
     f.history.mockRejectedValue(new Error("missing_scope"));
     const warn = vi.spyOn(f.ctx.logger, "warn").mockImplementation(() => undefined);
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
-      opts: { source: "app_mention" },
-    });
+    const prepared = await f.prepare();
     expect(prepared?.ctxPayload.RawBody).toContain("current request");
     expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
     expect(warn).toHaveBeenCalledWith(
@@ -437,12 +386,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       });
       return { messages: [{ ts: "19.000", user: "U1", text: "raced context" }] };
     });
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
-      opts: { source: "app_mention" },
-    });
+    const prepared = await f.prepare();
     expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
     expect(prepared?.ctxPayload.Body).not.toContain("raced context");
     expect(prepared?.ctxPayload.RawBody).toContain("current request");
@@ -456,22 +400,14 @@ describe("Slack platform-authoritative automatic room history", () => {
       return { messages: [{ ts: "19.000", user: "U1", text: "late context" }] };
     });
     await expect(
-      prepareSlackMessage({
-        ctx: f.ctx,
-        account: f.account,
-        message: f.message,
-        opts: { source: "app_mention", abortSignal: controller.signal },
-      }),
+      f.prepare({ opts: { source: "app_mention", abortSignal: controller.signal } }),
     ).rejects.toMatchObject({ name: "AbortError" });
     let policyCurrent = true;
     f.history.mockImplementation(async () => {
       policyCurrent = false;
       return { messages: [{ ts: "19.000", user: "U1", text: "revoked context" }] };
     });
-    const revoked = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: f.message,
+    const revoked = await f.prepare({
       opts: { source: "app_mention", isRuntimePolicyCurrent: () => policyCurrent },
     });
     expect(revoked).toBeNull();
@@ -505,12 +441,7 @@ describe("Slack platform-authoritative automatic room history", () => {
               { ts: "21.000", user: "U1", text: "future thread message" },
             ],
     }));
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: { ...f.message, thread_ts: "10.000" },
-      opts: { source: "app_mention" },
-    });
+    const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
     expect(prepared?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual([
       "thread history one",
       "thread history two",
@@ -547,12 +478,7 @@ describe("Slack platform-authoritative automatic room history", () => {
                 { ts: "12.000", user: "U1", text: "initial thread note two" },
               ],
       }));
-      const prepared = await prepareSlackMessage({
-        ctx: f.ctx,
-        account: f.account,
-        message: { ...f.message, thread_ts: "10.000" },
-        opts: { source: "app_mention" },
-      });
+      const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
       expect(prepared?.ctxPayload.ThreadHistoryBody).toContain("initial thread note one");
       expect(prepared?.ctxPayload.ThreadHistoryBody).toContain("initial thread note two");
       expect(prepared?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual(
@@ -568,12 +494,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       response_metadata: { next_cursor: limit === 1 ? "" : "another-page" },
     }));
     const warn = vi.spyOn(f.ctx.logger, "warn").mockImplementation(() => undefined);
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: { ...f.message, thread_ts: "10.000" },
-      opts: { source: "app_mention" },
-    });
+    const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
     expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
     expect(prepared?.ctxPayload.ThreadHistoryBody).toBeUndefined();
     expect(prepared?.ctxPayload.Body).not.toContain("incomplete old prefix");
@@ -598,15 +519,15 @@ describe("Slack platform-authoritative automatic room history", () => {
         response_metadata: { next_cursor: "another-page" },
       };
     });
-    const result = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: { ...f.message, thread_ts: "10.000" },
-      opts: { source: "app_mention", isRuntimePolicyCurrent: () => policyCurrent },
-    }).catch((error: unknown) => {
-      expect(error).toBeInstanceOf(Error);
-      return null;
-    });
+    const result = await f
+      .prepare({
+        message: { ...f.message, thread_ts: "10.000" },
+        opts: { source: "app_mention", isRuntimePolicyCurrent: () => policyCurrent },
+      })
+      .catch((error: unknown) => {
+        expect(error).toBeInstanceOf(Error);
+        return null;
+      });
     expect(result).toBeNull();
     expect(f.replies).toHaveBeenNthCalledWith(2, expect.objectContaining({ limit: 200 }));
     expect(f.replies).toHaveBeenCalledTimes(2);
@@ -626,12 +547,7 @@ describe("Slack platform-authoritative automatic room history", () => {
         response_metadata: { next_cursor: offset + count < 601 ? String(offset + count) : "" },
       };
     });
-    const prepared = await prepareSlackMessage({
-      ctx: f.ctx,
-      account: f.account,
-      message: { ...f.message, ts: "1000.000" },
-      opts: { source: "app_mention" },
-    });
+    const prepared = await f.prepare({ message: { ...f.message, ts: "1000.000" } });
     expect(prepared?.ctxPayload.InboundHistory).toHaveLength(601);
     expect(prepared?.ctxPayload.InboundHistory?.[0]?.messageId).toBe("399.000");
     expect(prepared?.ctxPayload.InboundHistory?.at(-1)?.messageId).toBe("999.000");

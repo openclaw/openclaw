@@ -3,10 +3,12 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descriptor.js";
-import { workerProtocolObject } from "./protocol-record.js";
+import {
+  WorkerGatewayNamespace,
+  workerProtocolIdentifier as identifier,
+  workerProtocolObject,
+} from "./protocol-record.js";
 
-const IDENTIFIER_MAX_CHARS = 256;
-const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
@@ -21,24 +23,10 @@ function isPlanHash(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
-const identifier = (label: string, maxChars = IDENTIFIER_MAX_CHARS) =>
-  z.custom<string>(
-    (value) =>
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length <= maxChars &&
-      value.trim() === value &&
-      !value.includes("\0"),
-    { error: `INVALID_REQUEST: ${label} must be a bounded non-empty identifier` },
-  );
 const nonNegativeInteger = (label: string) =>
   z.custom<number>(isNonNegativeInteger, {
     error: `INVALID_REQUEST: ${label} must be a non-negative safe integer`,
   });
-const GatewayNamespace = identifier("gatewayNamespace").refine(
-  (value) => typeof value === "string" && GATEWAY_NAMESPACE_PATTERN.test(value),
-  { error: "INVALID_REQUEST: gatewayNamespace must be a safe bounded path component" },
-);
 const IdentityShape = {
   launchId: identifier("launchId"),
   planHash: z.custom<string>(isPlanHash, {
@@ -52,7 +40,7 @@ const IdentityShape = {
 };
 const Identity = workerProtocolObject(IdentityShape);
 const EnvironmentStop = workerProtocolObject({
-  gatewayNamespace: GatewayNamespace,
+  gatewayNamespace: WorkerGatewayNamespace,
   environmentId: IdentityShape.environmentId,
   sessionId: IdentityShape.sessionId,
   ownerEpoch: IdentityShape.ownerEpoch,
@@ -63,7 +51,7 @@ const LaunchInput = workerProtocolObject({
   }),
   sessionKey: identifier("sessionKey", 1_024).optional(),
   launchId: IdentityShape.launchId,
-  gatewayNamespace: GatewayNamespace,
+  gatewayNamespace: WorkerGatewayNamespace,
   expectedBundleHash: z.custom<string>(isPlanHash, {
     error: "INVALID_REQUEST: expectedBundleHash must be 64 lowercase hexadecimal characters",
   }),

@@ -6,6 +6,7 @@ import { Socket } from "node:net";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
@@ -217,6 +218,7 @@ export function createHooksHandler(
   const options = typeof params === "string" ? { bindHost: params } : params;
   const hooksConfig = createHooksConfig();
   return createHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getHooksConfig: () => hooksConfig,
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,

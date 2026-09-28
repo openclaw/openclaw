@@ -1,8 +1,3 @@
-/**
- * Channel message action dispatcher.
- *
- * Runs plugin-owned message actions from the shared agent tool with sender trust checks.
- */
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
@@ -533,10 +528,10 @@ function enforceMessageActionConversationReadGate(
   );
 }
 
-function prepareScheduledMessageWriteContext(
+async function prepareScheduledMessageWriteContext(
   ctx: ChannelMessageActionDispatchContext,
   prepared: PreparedMessageActionReadContext,
-): ChannelMessageActionContext | undefined {
+): Promise<ChannelMessageActionContext | undefined> {
   const action = prepared.actionContext.action;
   const policy = SCHEDULED_MESSAGE_WRITE_POLICIES.get(action);
   if (!policy || !ctx.messageActionAuthorization?.scheduled) {
@@ -594,16 +589,16 @@ function prepareScheduledMessageWriteContext(
 }
 
 /** Admit provider preparation before resolving an external target. */
-export function prepareExternalMessageActionTargetForResolution(
+export async function prepareExternalMessageActionTargetForResolution(
   ctx: ChannelMessageActionDispatchContext,
-): {
+): Promise<{
   params: Record<string, unknown>;
   accountId?: string | null;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
-} {
+}> {
   const prepared = prepareMessageActionReadContext(ctx);
-  const scheduledWrite = prepared && prepareScheduledMessageWriteContext(ctx, prepared);
+  const scheduledWrite = prepared && (await prepareScheduledMessageWriteContext(ctx, prepared));
   if (scheduledWrite) {
     return {
       params: ctx.params,
@@ -653,18 +648,6 @@ export function shouldDeferExternalMessageActionTargetResolution(
   );
 }
 
-function requiresTrustedRequesterSender(
-  ctx: ChannelMessageActionContext,
-  plugin: ChannelPlugin,
-): boolean {
-  return Boolean(
-    plugin?.actions?.requiresTrustedRequesterSender?.({
-      action: ctx.action,
-      toolContext: ctx.toolContext,
-    }),
-  );
-}
-
 /**
  * Runs a channel message action if the target plugin supports it.
  */
@@ -675,7 +658,11 @@ export async function dispatchChannelMessageAction(
   if (!prepared) {
     return null;
   }
-  const scheduledWrite = prepareScheduledMessageWriteContext(ctx, prepared);
+  const scheduledWrite =
+    ctx.messageActionAuthorization?.scheduled &&
+    SCHEDULED_MESSAGE_WRITE_POLICIES.has(prepared.actionContext.action)
+      ? await prepareScheduledMessageWriteContext(ctx, prepared)
+      : undefined;
   const run = (actionContext: ChannelMessageActionContext) =>
     withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
       const { plugin } = prepared;
@@ -708,7 +695,10 @@ export async function dispatchChannelMessageAction(
       // Some plugin actions depend on the sender identity to enforce channel-local
       // trust. Reject tool-driven calls before invoking the action without it.
       if (
-        requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
+        plugin.actions?.requiresTrustedRequesterSender?.({
+          action: authorizedActionContext.action,
+          toolContext: authorizedActionContext.toolContext,
+        }) &&
         !authorizedActionContext.requesterSenderId?.trim()
       ) {
         throw new Error(

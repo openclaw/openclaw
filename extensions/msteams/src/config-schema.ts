@@ -21,21 +21,16 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
   })
   .strict();
 
-const MSTeamsTeamSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    replyStyle: MSTeamsReplyStyleSchema.optional(),
-    channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
-  })
-  .strict();
+const MSTeamsTeamSchema = MSTeamsChannelSchema.extend({
+  channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
+});
 
 const MSTEAMS_SERVICE_URL_HOST_ALLOWLIST = [
   "smba.trafficmanager.net",
@@ -104,16 +99,27 @@ export const MSTeamsConfigSchema = z
     managedIdentityClientId: z.string().optional(),
     webhook: z
       .object({
-        port: z.number().int().positive().optional(),
         path: z.string().optional(),
       })
       .strict()
+      .optional(),
+    legacyWebhook: z
+      .union([
+        z.literal(false),
+        z
+          .object({
+            port: z.number().int().min(1).max(65535),
+            host: z.string().optional(),
+          })
+          .strict(),
+      ])
       .optional(),
     typingIndicator: z.boolean().optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),
     graphMediaFallback: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
     /** Max inbound and outbound media size in MB (default: 100MB). */

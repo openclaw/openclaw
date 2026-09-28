@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { reportLimitViolations } from "../../../lib/check-limits.mts";
 
 const [summaryPath, phase, separator, command, ...args] = process.argv.slice(2);
 if (!summaryPath || !phase || separator !== "--" || !command) {
@@ -357,7 +358,14 @@ function finish(code, signal) {
   if (cpuCoreRatio > maxCpuCoreRatio) {
     violations.push(`cpu_core_ratio=${cpuCoreRatio.toFixed(3)} > ${maxCpuCoreRatio}`);
   }
-  if (violations.length > 0) {
+  const limitsFailed = reportLimitViolations(
+    violations.map((message) => ({
+      file: "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
+      title: "Plugin lifecycle resource budget",
+      message: `phase=${phase} ${message}`,
+    })),
+  );
+  if (limitsFailed) {
     console.error(
       `plugin lifecycle resource ceiling exceeded: phase=${phase} ${violations.join("; ")}`,
     );

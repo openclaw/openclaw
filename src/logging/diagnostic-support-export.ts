@@ -1,7 +1,7 @@
-// Diagnostic support export helpers write support bundles to disk.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { INCLUDE_KEY } from "../config/includes.js";
@@ -11,7 +11,6 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
@@ -83,11 +82,9 @@ type DiagnosticSupportExportManifest = {
   };
 };
 
-type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
-
 type DiagnosticSupportExportArtifact = {
   manifest: DiagnosticSupportExportManifest;
-  files: DiagnosticSupportExportFile[];
+  files: DiagnosticSupportBundleFile[];
 };
 
 export type WriteDiagnosticSupportExportResult = {
@@ -182,7 +179,7 @@ type SupportSnapshotStatus =
 
 type CollectedSupportSnapshot = {
   summary: SupportSnapshotStatus;
-  file?: DiagnosticSupportExportFile;
+  file?: DiagnosticSupportBundleFile;
 };
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
@@ -642,15 +639,6 @@ function renderSummary(params: {
   ].join("\n");
 }
 
-function defaultOutputPath(options: { now: Date; stateDir: string }): string {
-  return path.join(
-    options.stateDir,
-    "logs",
-    "support",
-    `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
-  );
-}
-
 function resolveOutputPath(options: {
   outputPath?: string;
   cwd: string;
@@ -658,9 +646,10 @@ function resolveOutputPath(options: {
   stateDir: string;
   now: Date;
 }): string {
+  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
   const raw = options.outputPath?.trim();
   if (!raw) {
-    return defaultOutputPath(options);
+    return path.join(options.stateDir, "logs", "support", filename);
   }
   const resolved =
     path.isAbsolute(raw) || raw.startsWith("~")
@@ -668,10 +657,7 @@ function resolveOutputPath(options: {
       : path.resolve(options.cwd, raw);
   try {
     if (fs.statSync(resolved).isDirectory()) {
-      return path.join(
-        resolved,
-        `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
-      );
+      return path.join(resolved, filename);
     }
   } catch {
     // Non-existing output paths are treated as files.
@@ -734,7 +720,7 @@ async function buildDiagnosticSupportExport(
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
   };
-  const files: DiagnosticSupportExportFile[] = [
+  const files: DiagnosticSupportBundleFile[] = [
     jsonSupportBundleFile("diagnostics.json", diagnostics),
     jsonSupportBundleFile("config/shape.json", config.shape),
     jsonSupportBundleFile("config/sanitized.json", config.sanitized ?? null),

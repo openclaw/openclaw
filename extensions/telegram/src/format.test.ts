@@ -199,13 +199,6 @@ describe("markdownToTelegramHtml", () => {
     ).toBe('<pre><code class="language-python">print(1)\n</code></pre>');
   });
 
-  it("renders blockquotes as native Telegram blockquote tags", () => {
-    const res = markdownToTelegramHtml("> Quote");
-    expect(res).toContain("<blockquote>");
-    expect(res).toContain("Quote");
-    expect(res).toContain("</blockquote>");
-  });
-
   it("renders blockquotes with inline formatting", () => {
     const res = markdownToTelegramHtml("> **bold** quote");
     expect(res).toContain("<blockquote>");
@@ -252,15 +245,16 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe('<a href="https://example.com"><b>bold</b></a>');
   });
 
+  it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
+    const res = markdownToTelegramHtml("[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)");
+    expect(res).not.toContain("file://");
+    expect(res).toContain("Nova_Core.md");
+  });
+
   it("wraps punctuated file references in code tags", () => {
     const res = markdownToTelegramHtml("See README.md. Also (backup.sh).");
     expect(res).toContain("<code>README.md</code>.");
     expect(res).toContain("(<code>backup.sh</code>).");
-  });
-
-  it("renders spoiler tags", () => {
-    const res = markdownToTelegramHtml("the answer is ||42||");
-    expect(res).toBe("the answer is <tg-spoiler>42</tg-spoiler>");
   });
 
   it("renders spoiler with nested formatting", () => {

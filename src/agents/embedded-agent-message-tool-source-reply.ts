@@ -149,7 +149,11 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   const sourceRouteReplyAction =
     (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
     isMessageToolSourceReplyActionName(args.action);
-  if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
+  if (
+    deliveryFact?.sourceReplyDelivered !== true &&
+    !isMessageToolSendActionName(args.action) &&
+    !sourceRouteReplyAction
+  ) {
     return false;
   }
   if (

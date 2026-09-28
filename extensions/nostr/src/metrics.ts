@@ -1,12 +1,3 @@
-/**
- * Comprehensive metrics system for Nostr bus observability.
- * Provides clear insight into what's happening with events, relays, and operations.
- */
-
-// ============================================================================
-// Metric Types
-// ============================================================================
-
 type EventMetricName =
   | "event.received"
   | "event.processed"
@@ -68,10 +59,6 @@ type RelayMetrics = {
   circuitBreakerCloses: number;
 };
 
-// ============================================================================
-// Metric Event
-// ============================================================================
-
 export interface MetricEvent {
   /** Metric name (e.g., "event.received", "relay.connect") */
   name: MetricName;
@@ -84,10 +71,6 @@ export interface MetricEvent {
 }
 
 type OnMetricCallback = (event: MetricEvent) => void;
-
-// ============================================================================
-// Metrics Snapshot (for getMetrics())
-// ============================================================================
 
 function createZeroMetricsState() {
   return {
@@ -164,157 +147,83 @@ export function createMetrics(onMetric?: OnMetricCallback) {
     return relay;
   }
 
+  const relayMetric =
+    (update: (relay: RelayMetrics, value: number) => void) =>
+    (value: number, relayUrl?: string): void => {
+      if (relayUrl) {
+        update(getOrCreateRelay(relayUrl), value);
+      }
+    };
+  const updates = new Map<MetricName, (value: number, relayUrl?: string) => void>([
+    ["event.received", (value) => (state.eventsReceived += value)],
+    ["event.processed", (value) => (state.eventsProcessed += value)],
+    ["event.duplicate", (value) => (state.eventsDuplicate += value)],
+    ["event.rejected.invalid_shape", (value) => (state.eventsRejected.invalidShape += value)],
+    ["event.rejected.wrong_kind", (value) => (state.eventsRejected.wrongKind += value)],
+    ["event.rejected.stale", (value) => (state.eventsRejected.stale += value)],
+    ["event.rejected.future", (value) => (state.eventsRejected.future += value)],
+    ["event.rejected.rate_limited", (value) => (state.eventsRejected.rateLimited += value)],
+    [
+      "event.rejected.invalid_signature",
+      (value) => (state.eventsRejected.invalidSignature += value),
+    ],
+    [
+      "event.rejected.oversized_ciphertext",
+      (value) => (state.eventsRejected.oversizedCiphertext += value),
+    ],
+    [
+      "event.rejected.oversized_plaintext",
+      (value) => (state.eventsRejected.oversizedPlaintext += value),
+    ],
+    ["event.rejected.decrypt_failed", (value) => (state.eventsRejected.decryptFailed += value)],
+    ["event.rejected.self_message", (value) => (state.eventsRejected.selfMessage += value)],
+    ["rate_limit.per_sender", (value) => (state.rateLimiting.perSenderHits += value)],
+    ["rate_limit.global", (value) => (state.rateLimiting.globalHits += value)],
+    ["decrypt.success", (value) => (state.decrypt.success += value)],
+    ["decrypt.failure", (value) => (state.decrypt.failure += value)],
+    ["memory.seen_tracker_size", (value) => (state.memory.seenTrackerSize = value)],
+    ["memory.rate_limiter_entries", (value) => (state.memory.rateLimiterEntries = value)],
+    ["relay.connect", relayMetric((relay, value) => (relay.connects += value))],
+    ["relay.disconnect", relayMetric((relay, value) => (relay.disconnects += value))],
+    ["relay.reconnect", relayMetric((relay, value) => (relay.reconnects += value))],
+    ["relay.error", relayMetric((relay, value) => (relay.errors += value))],
+    ["relay.message.event", relayMetric((relay, value) => (relay.messagesReceived.event += value))],
+    ["relay.message.eose", relayMetric((relay, value) => (relay.messagesReceived.eose += value))],
+    [
+      "relay.message.closed",
+      relayMetric((relay, value) => (relay.messagesReceived.closed += value)),
+    ],
+    [
+      "relay.message.notice",
+      relayMetric((relay, value) => (relay.messagesReceived.notice += value)),
+    ],
+    ["relay.message.ok", relayMetric((relay, value) => (relay.messagesReceived.ok += value))],
+    ["relay.message.auth", relayMetric((relay, value) => (relay.messagesReceived.auth += value))],
+    [
+      "relay.circuit_breaker.open",
+      relayMetric((relay, value) => {
+        relay.circuitBreakerState = "open";
+        relay.circuitBreakerOpens += value;
+      }),
+    ],
+    [
+      "relay.circuit_breaker.close",
+      relayMetric((relay, value) => {
+        relay.circuitBreakerState = "closed";
+        relay.circuitBreakerCloses += value;
+      }),
+    ],
+    [
+      "relay.circuit_breaker.half_open",
+      relayMetric((relay) => {
+        relay.circuitBreakerState = "half_open";
+      }),
+    ],
+  ]);
+
   function emit(name: MetricName, value = 1, labels?: Record<string, string | number>): void {
-    // Fire callback if provided
-    if (onMetric) {
-      onMetric({
-        name,
-        value,
-        timestamp: Date.now(),
-        labels,
-      });
-    }
-
-    // Update internal counters
-    const relayUrl = labels?.relay as string | undefined;
-
-    switch (name) {
-      // Event metrics
-      case "event.received":
-        state.eventsReceived += value;
-        break;
-      case "event.processed":
-        state.eventsProcessed += value;
-        break;
-      case "event.duplicate":
-        state.eventsDuplicate += value;
-        break;
-      case "event.rejected.invalid_shape":
-        state.eventsRejected.invalidShape += value;
-        break;
-      case "event.rejected.wrong_kind":
-        state.eventsRejected.wrongKind += value;
-        break;
-      case "event.rejected.stale":
-        state.eventsRejected.stale += value;
-        break;
-      case "event.rejected.future":
-        state.eventsRejected.future += value;
-        break;
-      case "event.rejected.rate_limited":
-        state.eventsRejected.rateLimited += value;
-        break;
-      case "event.rejected.invalid_signature":
-        state.eventsRejected.invalidSignature += value;
-        break;
-      case "event.rejected.oversized_ciphertext":
-        state.eventsRejected.oversizedCiphertext += value;
-        break;
-      case "event.rejected.oversized_plaintext":
-        state.eventsRejected.oversizedPlaintext += value;
-        break;
-      case "event.rejected.decrypt_failed":
-        state.eventsRejected.decryptFailed += value;
-        break;
-      case "event.rejected.self_message":
-        state.eventsRejected.selfMessage += value;
-        break;
-
-      // Relay metrics
-      case "relay.connect":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).connects += value;
-        }
-        break;
-      case "relay.disconnect":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).disconnects += value;
-        }
-        break;
-      case "relay.reconnect":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).reconnects += value;
-        }
-        break;
-      case "relay.error":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).errors += value;
-        }
-        break;
-      case "relay.message.event":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).messagesReceived.event += value;
-        }
-        break;
-      case "relay.message.eose":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).messagesReceived.eose += value;
-        }
-        break;
-      case "relay.message.closed":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).messagesReceived.closed += value;
-        }
-        break;
-      case "relay.message.notice":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).messagesReceived.notice += value;
-        }
-        break;
-      case "relay.message.ok":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).messagesReceived.ok += value;
-        }
-        break;
-      case "relay.message.auth":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).messagesReceived.auth += value;
-        }
-        break;
-      case "relay.circuit_breaker.open":
-        if (relayUrl) {
-          const r = getOrCreateRelay(relayUrl);
-          r.circuitBreakerState = "open";
-          r.circuitBreakerOpens += value;
-        }
-        break;
-      case "relay.circuit_breaker.close":
-        if (relayUrl) {
-          const r = getOrCreateRelay(relayUrl);
-          r.circuitBreakerState = "closed";
-          r.circuitBreakerCloses += value;
-        }
-        break;
-      case "relay.circuit_breaker.half_open":
-        if (relayUrl) {
-          getOrCreateRelay(relayUrl).circuitBreakerState = "half_open";
-        }
-        break;
-
-      // Rate limiting
-      case "rate_limit.per_sender":
-        state.rateLimiting.perSenderHits += value;
-        break;
-      case "rate_limit.global":
-        state.rateLimiting.globalHits += value;
-        break;
-
-      // Decrypt
-      case "decrypt.success":
-        state.decrypt.success += value;
-        break;
-      case "decrypt.failure":
-        state.decrypt.failure += value;
-        break;
-
-      // Memory (gauge-style - value replaces, not adds)
-      case "memory.seen_tracker_size":
-        state.memory.seenTrackerSize = value;
-        break;
-      case "memory.rate_limiter_entries":
-        state.memory.rateLimiterEntries = value;
-        break;
-    }
+    onMetric?.({ name, value, timestamp: Date.now(), labels });
+    updates.get(name)?.(value, labels?.relay as string | undefined);
   }
 
   function getSnapshot(): MetricsSnapshot {

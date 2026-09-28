@@ -38,7 +38,8 @@ function prepareYield(
     assistantTexts: [],
     lastAssistant: assistant,
     currentAttemptAssistant: undefined,
-    currentAttemptCompletedAssistant: undefined,
+    // The subscriber retains message_end after yield strips the synthetic abort from history.
+    currentAttemptCompletedAssistant: assistant,
     yieldDetected: input.yieldDetected ?? true,
     runtimeContinuationStarted: input.continuation ?? true,
     codeModeEngaged: input.codeModeEngaged,
@@ -88,7 +89,11 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
       if (result.action !== "complete") {
         throw new Error("Expected a paused terminal result, not a retry");
       }
-      expect(result.result.meta).toMatchObject({ yielded: true, livenessState: "paused" });
+      expect(result.result.meta).toMatchObject({
+        yielded: true,
+        aborted: false,
+        livenessState: "paused",
+      });
       expect(result.result.meta.error).toBeUndefined();
       expect(result.result.payloads ?? []).toEqual(
         continuation ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],

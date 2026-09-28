@@ -18,21 +18,15 @@ export function buildCaptureViewModel(state: UiState) {
   const sessions = state.captureSessions;
   const rows = state.captureQueryRows;
   const events = state.captureEvents;
-  const availableKinds = [
-    ...new Set(
-      events.map((event) => event.kind).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
-  const availableProviders = [
-    ...new Set(
-      events.map((event) => event.provider).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
-  const availableHosts = [
-    ...new Set(
-      events.map((event) => event.host).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
+  const availableValues = (field: "kind" | "provider" | "host") =>
+    [
+      ...new Set(
+        events.map((event) => event[field]).filter((value): value is string => Boolean(value)),
+      ),
+    ].toSorted();
+  const availableKinds = availableValues("kind");
+  const availableProviders = availableValues("provider");
+  const availableHosts = availableValues("host");
   const normalizedSearch = state.captureSearchText.trim().toLowerCase();
   const activeFilters: string[] = [];
   if (state.captureKindFilter.length > 0) {
@@ -419,9 +413,7 @@ export function buildCaptureViewModel(state: UiState) {
     availableKinds,
     availableProviders,
     availableHosts,
-    normalizedSearch,
     activeFilters,
-    baseFilteredEvents,
     minTs,
     maxTs,
     totalSpanMs,
@@ -429,9 +421,6 @@ export function buildCaptureViewModel(state: UiState) {
     activeWindowEndPct,
     draftWindowStartPct,
     draftWindowEndPct,
-    activeWindowStartTs,
-    activeWindowEndTs,
-    activeWindowLabel,
     filteredEvents,
     analysisEnabled,
     selectedSessions,
@@ -439,7 +428,6 @@ export function buildCaptureViewModel(state: UiState) {
     selectedSessionEventCount,
     selectedEvent,
     selectedEventKey,
-    kindCounts,
     topKinds,
     topProviders,
     topModels,
@@ -467,7 +455,6 @@ export function buildCaptureViewModel(state: UiState) {
     selectedMetaRows,
     rawPayloadBody,
     availableDetailViews,
-    preferredDetailView,
     effectiveDetailView,
     effectiveFlowLayout,
     effectivePayloadLayout,

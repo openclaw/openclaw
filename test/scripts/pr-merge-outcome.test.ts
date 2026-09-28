@@ -311,6 +311,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "missing-parent",
     "wrong-tree",
     "unreachable",
+    "missing-landed",
     "recovery-head",
     "recovery-extra",
     "recovery-unretained",
@@ -361,8 +362,13 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const detached = f.commit(f.git(["rev-parse", previous + "^{tree}"]), []);
       f.git(["update-ref", outcomeRef, detached]);
     }
-    if (fault === "wrong-tree" || fault === "unreachable") {
-      const landed = fault === "wrong-tree" ? f.advance("partial\n") : f.head;
+    if (fault === "wrong-tree" || fault === "unreachable" || fault === "missing-landed") {
+      const landed =
+        fault === "wrong-tree"
+          ? f.advance("partial\n")
+          : fault === "missing-landed"
+            ? "1".repeat(40)
+            : f.head;
       f.save({
         ...f.state(),
         pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
@@ -374,6 +380,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(f.git(["rev-parse", outcomeRef])).toBe(before);
+    if (fault === "unreachable" || fault === "missing-landed") {
+      const landed = fault === "unreachable" ? f.head : "1".repeat(40);
+      expect(retry.output).toContain(
+        `Merge receipt objects: main=${f.base} main_local=true landed=${landed} landed_local=${fault === "unreachable"}`,
+      );
+    }
   });
 
   it("does not overwrite a successor installed at intent CAS", () => {

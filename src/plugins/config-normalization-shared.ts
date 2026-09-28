@@ -81,6 +81,65 @@ function normalizeHookTimeouts(value: unknown): Record<string, number> | undefin
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+type NormalizedPluginEntry = NormalizedPluginsConfig["entries"][string];
+
+function normalizePluginHooks(value: unknown): NormalizedPluginEntry["hooks"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const hooks: NonNullable<NormalizedPluginEntry["hooks"]> = {};
+  for (const key of ["allowPromptInjection", "allowConversationAccess"] as const) {
+    if (typeof value[key] === "boolean") {
+      hooks[key] = value[key];
+    }
+  }
+  const timeoutMs = normalizeHookTimeoutMs(value.timeoutMs);
+  const timeouts = normalizeHookTimeouts(value.timeouts);
+  if (timeoutMs !== undefined) {
+    hooks.timeoutMs = timeoutMs;
+  }
+  if (timeouts !== undefined) {
+    hooks.timeouts = timeouts;
+  }
+  return Object.keys(hooks).length > 0 ? hooks : undefined;
+}
+
+function normalizePluginModelConfig(
+  value: unknown,
+  kind: "subagent" | "llm",
+): NormalizedPluginEntry["llm"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const config: NonNullable<NormalizedPluginEntry["llm"]> = {};
+  if (typeof value.allowModelOverride === "boolean") {
+    config.allowModelOverride = value.allowModelOverride;
+  }
+  for (const [key, configuredKey] of [
+    ["allowedModels", "hasAllowedModelsConfig"],
+    ["allowedCompletionModels", "hasAllowedCompletionModelsConfig"],
+  ] as const) {
+    if (key === "allowedCompletionModels" && kind !== "llm") {
+      continue;
+    }
+    const models = normalizeArrayBackedTrimmedStringList(value[key]);
+    if (models) {
+      config[configuredKey] = true;
+      if (models.length > 0) {
+        config[key] = models;
+      }
+    }
+  }
+  if (kind === "llm") {
+    for (const key of ["allowAuthProfileOverride", "allowAgentIdOverride"] as const) {
+      if (typeof value[key] === "boolean") {
+        config[key] = value[key];
+      }
+    }
+  }
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
 function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
@@ -99,111 +158,15 @@ function normalizePluginEntries(
       continue;
     }
     const entry = value;
-    const hooksRaw = entry.hooks;
-    const hooks = isRecord(hooksRaw)
-      ? {
-          allowPromptInjection: hooksRaw.allowPromptInjection,
-          allowConversationAccess: hooksRaw.allowConversationAccess,
-          timeoutMs: normalizeHookTimeoutMs(hooksRaw.timeoutMs),
-          timeouts: normalizeHookTimeouts(hooksRaw.timeouts),
-        }
-      : undefined;
-    const normalizedHooks =
-      hooks &&
-      (typeof hooks.allowPromptInjection === "boolean" ||
-        typeof hooks.allowConversationAccess === "boolean" ||
-        hooks.timeoutMs !== undefined ||
-        hooks.timeouts !== undefined)
-        ? {
-            ...(typeof hooks.allowPromptInjection === "boolean"
-              ? { allowPromptInjection: hooks.allowPromptInjection }
-              : {}),
-            ...(typeof hooks.allowConversationAccess === "boolean"
-              ? { allowConversationAccess: hooks.allowConversationAccess }
-              : {}),
-            ...(hooks.timeoutMs !== undefined ? { timeoutMs: hooks.timeoutMs } : {}),
-            ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
-          }
-        : undefined;
-    const subagentRaw = entry.subagent;
-    const subagent = isRecord(subagentRaw)
-      ? {
-          allowModelOverride: subagentRaw.allowModelOverride,
-          hasAllowedModelsConfig: Array.isArray(subagentRaw.allowedModels),
-          allowedModels: Array.isArray(subagentRaw.allowedModels)
-            ? normalizeArrayBackedTrimmedStringList(subagentRaw.allowedModels)
-            : undefined,
-        }
-      : undefined;
-    const normalizedSubagent =
-      subagent &&
-      (typeof subagent.allowModelOverride === "boolean" ||
-        subagent.hasAllowedModelsConfig ||
-        (Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0))
-        ? {
-            ...(typeof subagent.allowModelOverride === "boolean"
-              ? { allowModelOverride: subagent.allowModelOverride }
-              : {}),
-            ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
-            ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
-              ? { allowedModels: subagent.allowedModels }
-              : {}),
-          }
-        : undefined;
-    const llmRaw = entry.llm;
-    const llm = isRecord(llmRaw)
-      ? {
-          allowModelOverride: llmRaw.allowModelOverride,
-          hasAllowedModelsConfig: Array.isArray(llmRaw.allowedModels),
-          allowedModels: Array.isArray(llmRaw.allowedModels)
-            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedModels)
-            : undefined,
-          hasAllowedCompletionModelsConfig: Array.isArray(llmRaw.allowedCompletionModels),
-          allowedCompletionModels: Array.isArray(llmRaw.allowedCompletionModels)
-            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedCompletionModels)
-            : undefined,
-          allowAuthProfileOverride: llmRaw.allowAuthProfileOverride,
-          allowAgentIdOverride: llmRaw.allowAgentIdOverride,
-        }
-      : undefined;
-    const normalizedLlm =
-      llm &&
-      (typeof llm.allowModelOverride === "boolean" ||
-        llm.hasAllowedModelsConfig ||
-        (Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0) ||
-        llm.hasAllowedCompletionModelsConfig ||
-        (Array.isArray(llm.allowedCompletionModels) && llm.allowedCompletionModels.length > 0) ||
-        typeof llm.allowAuthProfileOverride === "boolean" ||
-        typeof llm.allowAgentIdOverride === "boolean")
-        ? {
-            ...(typeof llm.allowModelOverride === "boolean"
-              ? { allowModelOverride: llm.allowModelOverride }
-              : {}),
-            ...(llm.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
-            ...(Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0
-              ? { allowedModels: llm.allowedModels }
-              : {}),
-            ...(llm.hasAllowedCompletionModelsConfig
-              ? { hasAllowedCompletionModelsConfig: true }
-              : {}),
-            ...(Array.isArray(llm.allowedCompletionModels) && llm.allowedCompletionModels.length > 0
-              ? { allowedCompletionModels: llm.allowedCompletionModels }
-              : {}),
-            ...(typeof llm.allowAuthProfileOverride === "boolean"
-              ? { allowAuthProfileOverride: llm.allowAuthProfileOverride }
-              : {}),
-            ...(typeof llm.allowAgentIdOverride === "boolean"
-              ? { allowAgentIdOverride: llm.allowAgentIdOverride }
-              : {}),
-          }
-        : undefined;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
-      hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
-      subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
-      llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
+      hooks: normalizePluginHooks(entry.hooks) ?? normalized[normalizedKey]?.hooks,
+      subagent:
+        normalizePluginModelConfig(entry.subagent, "subagent") ??
+        normalized[normalizedKey]?.subagent,
+      llm: normalizePluginModelConfig(entry.llm, "llm") ?? normalized[normalizedKey]?.llm,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }

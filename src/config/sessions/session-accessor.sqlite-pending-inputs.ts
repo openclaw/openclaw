@@ -16,10 +16,17 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
+} from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type { CapturedSessionEntryReadSource } from "./session-accessor.types.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
@@ -93,10 +100,42 @@ export function registerSessionPendingInputOwner(owner: SessionPendingInputOwner
   owners.live.set(owner.inputId, owner);
 }
 
-export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
+function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
   if (owners.live.get(owner.inputId) === owner) {
     owners.live.delete(owner.inputId);
   }
+}
+
+export function finishSessionPendingInputOwner(
+  owner: SessionPendingInputOwner,
+  disposition: Exclude<SessionPendingInputState, "queued">,
+  source: CapturedSessionEntryReadSource,
+  options: OpenClawAgentDatabaseOptions,
+): void {
+  // Release authority even if recording the terminal disposition fails.
+  releaseSessionPendingInputOwner(owner);
+  if (owner.consumed) {
+    return;
+  }
+  const capturedOptions = { ...options, agentId: source.agentId, path: source.path };
+  assertCapturedSessionEntryReadSource(source, getOpenClawAgentDatabaseIfOpen(capturedOptions));
+  runOpenClawAgentWriteTransaction(
+    (current) => {
+      assertCapturedSessionEntryReadSource(source, current);
+      executeSqliteQuerySync(
+        current.db,
+        getSessionKysely(current.db)
+          .updateTable("session_pending_inputs")
+          .set({ state: disposition })
+          .where("input_id", "=", owner.inputId)
+          .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+          .where("state", "=", "queued")
+          .where("consumed_event_id", "is", null),
+      );
+    },
+    capturedOptions,
+    { operationLabel: "session.pending-input.finish-owner" },
+  );
 }
 
 function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
@@ -568,4 +607,37 @@ export function deleteSessionPendingInputs(
         .where("session_key", "=", sessionKey),
     );
   }
+}
+
+/** Select bounded receipt correlations without loading accepted message bodies. */
+export function readSessionPendingInputReceipts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  scope: Pick<ResolvedTranscriptScope, "sessionKey" | "sessionId">,
+  runIds: readonly string[],
+) {
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_pending_inputs")
+      .select(["run_id", "consumed_event_id"])
+      .where("session_key", "=", scope.sessionKey)
+      .where("session_id", "=", scope.sessionId)
+      .where("run_id", "in", runIds)
+      .orderBy("seq", "asc")
+      .limit(51),
+  ).rows;
+  // A run ID is correlation, not unique authority. Never retire an ambiguous
+  // provisional message when another source with that run is still pending.
+  if (rows.length > 50 || new Set(rows.map((row) => row.run_id)).size !== rows.length) {
+    throw new Error("Pending input receipt lookup has ambiguous source run IDs");
+  }
+  return rows.map((row) =>
+    row.consumed_event_id == null
+      ? { runId: row.run_id, state: "pending" as const }
+      : {
+          runId: row.run_id,
+          state: "consumed" as const,
+          consumedByEventId: row.consumed_event_id,
+        },
+  );
 }

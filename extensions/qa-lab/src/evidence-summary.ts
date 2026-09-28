@@ -80,12 +80,7 @@ type QaEvidenceScenarioResultInput = {
   details?: string;
   timing?: QaEvidenceTiming;
   rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs?: number;
-    requestStartedAt?: string;
-    responseObservedAt?: string;
-    source?: string;
-  };
+  rttMeasurement?: Partial<QaEvidenceRttMeasurement>;
 };
 
 type QaEvidenceRttInput = Pick<
@@ -258,20 +253,6 @@ function normalizeQaEvidenceStatus(status: QaEvidenceStatusInput): QaEvidenceSta
   return status === "skip" ? "skipped" : status;
 }
 
-function failureForResult(result: {
-  details?: string;
-  failureMessage?: string;
-  status: QaEvidenceStatusInput;
-}) {
-  const status = normalizeQaEvidenceStatus(result.status);
-  if (status === "pass") {
-    return undefined;
-  }
-  return {
-    reason: result.details?.trim() || result.failureMessage?.trim() || `${status} test`,
-  };
-}
-
 function evidenceForRttResult(check: QaEvidenceRttInput) {
   const timing: QaEvidenceTiming = { ...check.timing };
   const parsedMeasurement = qaEvidenceRttMeasurementSchema.safeParse(check.rttMeasurement);
@@ -306,9 +287,13 @@ function resultForEvidence(
   timing?: QaEvidenceTiming,
   rttMeasurement?: QaEvidenceRttMeasurement,
 ) {
+  const status = normalizeQaEvidenceStatus(result.status);
   return {
-    status: normalizeQaEvidenceStatus(result.status),
-    failure: failureForResult(result),
+    status,
+    failure:
+      status === "pass"
+        ? undefined
+        : { reason: result.details?.trim() || result.failureMessage?.trim() || `${status} test` },
     timing,
     rttMeasurement,
   };
@@ -561,11 +546,13 @@ export function buildQaSuiteEvidenceSummary(
   });
 }
 
+type QaTestRunnerEvidenceInput = QaEvidenceBuildBase & {
+  targets: readonly QaEvidenceTestTargetInput[];
+  results: readonly QaEvidenceTestResultInput[];
+};
+
 function buildTestRunnerEvidenceSummary(
-  params: QaEvidenceBuildBase & {
-    targets: readonly QaEvidenceTestTargetInput[];
-    results: readonly QaEvidenceTestResultInput[];
-  },
+  params: QaTestRunnerEvidenceInput,
   defaultRunner: string,
   testKind: string,
 ): QaEvidenceSummaryV2Json {
@@ -617,28 +604,19 @@ function buildTestRunnerEvidenceSummary(
 }
 
 export function buildVitestEvidenceSummary(
-  params: QaEvidenceBuildBase & {
-    targets: readonly QaEvidenceTestTargetInput[];
-    results: readonly QaEvidenceTestResultInput[];
-  },
+  params: QaTestRunnerEvidenceInput,
 ): QaEvidenceSummaryV2Json {
   return buildTestRunnerEvidenceSummary(params, "vitest", "vitest-test");
 }
 
 export function buildPlaywrightEvidenceSummary(
-  params: QaEvidenceBuildBase & {
-    targets: readonly QaEvidenceTestTargetInput[];
-    results: readonly QaEvidenceTestResultInput[];
-  },
+  params: QaTestRunnerEvidenceInput,
 ): QaEvidenceSummaryV2Json {
   return buildTestRunnerEvidenceSummary(params, "playwright", "playwright-test");
 }
 
 export function buildScriptEvidenceSummary(
-  params: QaEvidenceBuildBase & {
-    targets: readonly QaEvidenceTestTargetInput[];
-    results: readonly QaEvidenceTestResultInput[];
-  },
+  params: QaTestRunnerEvidenceInput,
 ): QaEvidenceSummaryV2Json {
   return buildTestRunnerEvidenceSummary(params, "script", "script-test");
 }

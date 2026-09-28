@@ -97,56 +97,50 @@ export async function handleBrowserAct(
       );
       return JSON.stringify(browserToolEnvelope(result, "browser_prepare"));
     }
-    case "browser_navigate": {
+    case "browser_navigate":
+    case "browser_click":
+    case "browser_type":
+    case "browser_pointer": {
       const target = browserTarget(driver, state, input);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_navigate",
-        { target_id: target.targetId, tab_id: target.tabId, url: input.url },
-        signal,
-      );
-      invalidateBrowserObservation(state);
-      return JSON.stringify(browserToolEnvelope(result, "browser_navigate"));
-    }
-    case "browser_click": {
-      const target = browserTarget(driver, state, input);
-      resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
-      const ref = browserElement(state, input, target);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_click",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
+      const args: Record<string, unknown> = {
+        target_id: target.targetId,
+        tab_id: target.tabId,
+      };
+      if (input.action === "browser_navigate") {
+        args.url = input.url;
+      } else if (input.action === "browser_type") {
+        Object.assign(args, {
+          ref: browserElement(state, input, target)!,
+          text: input.text,
+          ...(input.mode ? { mode: input.mode } : {}),
+          ...(input.replace !== undefined ? { replace: input.replace } : {}),
+        });
+      } else {
+        resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
+        const ref = browserElement(state, input, target);
+        if (input.action === "browser_pointer") {
+          const destinationRef = browserElement(state, input, target, input.destinationElementRef);
+          Object.assign(args, {
+            action: input.pointerAction,
+            ...(destinationRef ? { destination_ref: destinationRef } : {}),
+            ...(input.toX !== undefined ? { to_x: input.toX } : {}),
+            ...(input.toY !== undefined ? { to_y: input.toY } : {}),
+            ...(input.deltaX !== undefined ? { delta_x: input.deltaX } : {}),
+            ...(input.deltaY !== undefined ? { delta_y: input.deltaY } : {}),
+          });
+        }
+        Object.assign(args, {
           ...(ref ? { ref } : {}),
           ...(input.x !== undefined ? { x: input.x } : {}),
           ...(input.y !== undefined ? { y: input.y } : {}),
           ...(input.inputRoute ? { input_route: input.inputRoute } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_click"));
-    }
-    case "browser_type": {
-      const target = browserTarget(driver, state, input);
-      const ref = browserElement(state, input, target)!;
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_type",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ref,
-          text: input.text,
-          ...(input.mode ? { mode: input.mode } : {}),
-          ...(input.replace !== undefined ? { replace: input.replace } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_type"));
+        });
+      }
+      const result = await callWindowTool(driver, state, input.action, args, signal);
+      if (input.action === "browser_navigate") {
+        invalidateBrowserObservation(state);
+      }
+      return JSON.stringify(browserToolEnvelope(result, input.action));
     }
     case "browser_dialog": {
       const target = browserTarget(driver, state, input);
@@ -236,33 +230,6 @@ export async function handleBrowserAct(
           fileResourceHandles,
         },
       });
-    }
-    case "browser_pointer": {
-      const target = browserTarget(driver, state, input);
-      resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
-      const ref = browserElement(state, input, target);
-      const destinationRef = browserElement(state, input, target, input.destinationElementRef);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_pointer",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          action: input.pointerAction,
-          ...(input.inputRoute ? { input_route: input.inputRoute } : {}),
-          ...(ref ? { ref } : {}),
-          ...(input.x !== undefined ? { x: input.x } : {}),
-          ...(input.y !== undefined ? { y: input.y } : {}),
-          ...(destinationRef ? { destination_ref: destinationRef } : {}),
-          ...(input.toX !== undefined ? { to_x: input.toX } : {}),
-          ...(input.toY !== undefined ? { to_y: input.toY } : {}),
-          ...(input.deltaX !== undefined ? { delta_x: input.deltaX } : {}),
-          ...(input.deltaY !== undefined ? { delta_y: input.deltaY } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_pointer"));
     }
     default:
       return undefined;

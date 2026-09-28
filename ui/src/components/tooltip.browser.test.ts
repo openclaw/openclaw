@@ -381,6 +381,45 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome tooltip public l
     await expectVisibility(tooltip, true);
   });
 
+  it("retires anchor listeners without retaining a disconnect exception", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { host, trigger, tooltip, events } = await fixture();
+    tooltip.trigger = "focus";
+    await tooltip.updateComplete;
+    // Observe the native signal: a default abort exception can retain detached
+    // anchors through its stack while this tooltip waits in the title cache.
+    const lifecycle = tooltip as unknown as { eventController: AbortController };
+    const retired = lifecycle.eventController.signal;
+    expect(retired.aborted).toBe(false);
+
+    tooltip.remove();
+    expect(retired.aborted).toBe(true);
+    expect(retired.reason).toBeNull();
+
+    const replacement = document.createElement("button");
+    replacement.id = "reconnected-tooltip-trigger";
+    replacement.textContent = "Replacement";
+    host.append(replacement);
+    tooltip.for = replacement.id;
+    host.append(tooltip);
+    await tooltip.updateComplete;
+    expect(lifecycle.eventController.signal).not.toBe(retired);
+    expect(lifecycle.eventController.signal.aborted).toBe(false);
+
+    trigger.dispatchEvent(new FocusEvent("focus"));
+    await tooltip.updateComplete;
+    expect(tooltip.open).toBe(false);
+    expect(events).toEqual([]);
+    const shown = afterTransition(tooltip, "show");
+    replacement.focus();
+    await shown;
+    await expectVisibility(tooltip, true);
+    const hidden = afterTransition(tooltip, "hide");
+    await userEvent.keyboard("{Escape}");
+    await hidden;
+    await expectVisibility(tooltip, false);
+  });
+
   it.each(["show", "hide"] as const)(
     "settles a public %s interrupted before its animation sample without stale completion",
     async (operation) => {

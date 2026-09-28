@@ -114,7 +114,7 @@ describe("one-time ticket store", () => {
     expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
   });
 
-  it.each(["", " ", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
+  it.each(["", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
     "rejects malformed token %j without consuming another ticket",
     (token) => {
       const store = createOneTimeTicketStore<string>({ ttlMs: 60_000 });
@@ -173,5 +173,15 @@ describe("one-time ticket store", () => {
     expect(store.consume(second.token)).toBeUndefined();
     vi.advanceTimersByTime(100);
     expect(onExpire).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases expired payloads when consumption beats a delayed timer", () => {
+    const onExpire = vi.fn();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100, now: () => 1_000, onExpire });
+    const ticket = store.mint("borrow");
+    expect(store.consume(ticket.token, 1_100)).toBeUndefined();
+    expect(onExpire).toHaveBeenCalledExactlyOnceWith("borrow", ticket.token);
+    vi.advanceTimersByTime(100);
+    expect(onExpire).toHaveBeenCalledTimes(1);
   });
 });

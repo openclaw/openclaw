@@ -1,4 +1,3 @@
-// Control UI chat module implements chat welcome behavior.
 import { html, nothing } from "lit";
 import type {
   AgentsListResult,
@@ -174,12 +173,19 @@ function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" 
 function renderWelcomeHero(
   props: Pick<
     ChatWelcomeProps,
-    "currentAgentId" | "agents" | "assistantName" | "assistantAvatar" | "assistantAvatarUrl"
-  > & {
-    hint: unknown;
-  },
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "hint"
+  >,
 ) {
   const name = props.assistantName || "Assistant";
+  const hint =
+    props.hint ??
+    html`${t("chat.welcome.hintBeforeShortcut")}
+      <kbd>/</kbd> ${t("chat.welcome.hintAfterShortcut")}`;
   return html`
     <div class="agent-chat__welcome-identity">
       <span class="agent-chat__welcome-avatar" role="img" aria-label=${name}>
@@ -187,7 +193,7 @@ function renderWelcomeHero(
       </span>
       <div class="agent-chat__welcome-identity-copy">
         <h2>${name}</h2>
-        <p class="agent-chat__hint">${props.hint}</p>
+        <p class="agent-chat__hint">${hint}</p>
       </div>
     </div>
   `;
@@ -214,19 +220,7 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
   const recentSessions = selectWelcomeRecentSessions(props);
   return html`
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
-      ${renderWelcomeHero({
-        currentAgentId: props.currentAgentId,
-        agents: props.agents,
-        assistantName: props.assistantName,
-        assistantAvatar: props.assistantAvatar,
-        assistantAvatarUrl: props.assistantAvatarUrl,
-        hint:
-          props.hint ??
-          html`${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd> ${t(
-              "chat.welcome.hintAfterShortcut",
-            )}`,
-      })}
-      ${props.composer ?? nothing}
+      ${renderWelcomeHero(props)} ${props.composer ?? nothing}
       ${
         props.hideSecondaryContent
           ? nothing

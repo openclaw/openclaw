@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -12,10 +12,16 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import {
+  resolveSqliteStoreScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readCodexSessionContext } from "../../plugin-sdk/codex-session-transcript-runtime.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   forkSessionEntryFromParent,
   forkSessionFromParent,
@@ -112,6 +118,10 @@ describe("forkSessionEntryFromParent", () => {
         updatedAt: 2,
       },
     );
+    const databasePath = resolveOpenClawAgentSqlitePath(
+      toDatabaseOptions(resolveSqliteStoreScope(storePath, { agentId: "main" })),
+    );
+    const maintained = observeSessionMaintenanceCompletion(databasePath);
     await replaceSessionEntry(
       {
         agentId: "main",
@@ -170,13 +180,10 @@ describe("forkSessionEntryFromParent", () => {
         },
       ],
     );
-    await vi.waitFor(
-      () => {
-        expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
-          undefined,
-        );
-      },
-      { timeout: 5_000 },
+    // Maintenance owns archive publication; elapsed worker startup time is not completion.
+    await maintained;
+    expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
+      undefined,
     );
 
     const fallbackEntry: InternalSessionEntry = {

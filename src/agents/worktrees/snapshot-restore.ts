@@ -66,6 +66,19 @@ type RestoreContext = {
   recoveryClaim?: string;
 };
 
+async function restoreSnapshotProjection(
+  worktree: ManagedWorktreeRecord,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: WorktreeAllocationGuard["commitGuard"],
+) {
+  const { withSettledLocalWorkspace } =
+    await import("../../gateway/worker-environments/local-workspace-projection.js");
+  await withSettledLocalWorkspace(
+    { worktree, env, assertCurrent, restoreSnapshot: true },
+    async () => {},
+  );
+}
+
 /** An unfinished retirement still has a live row: reuse removal custody until recovery settles. */
 export async function restoreManagedWorktreeSnapshot(
   input: RestoreInput,
@@ -232,7 +245,8 @@ async function restoreSnapshot(
   }
   const repository = await resolveRepository(record.repoRoot);
   requireSpace(record.path, repository);
-  const provisionedState = getRegistryWorktreeProvisionedState(env, record.id);
+  const provisionedState = await getRegistryWorktreeProvisionedState(env, record.id);
+  params.commitGuard?.();
   if (provisionedState === undefined) {
     throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
   }
@@ -278,17 +292,7 @@ async function restoreSnapshot(
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
-      const { withSettledLocalWorkspace } =
-        await import("../../gateway/worker-environments/local-workspace-projection.js");
-      await withSettledLocalWorkspace(
-        {
-          worktree: restoreRecord,
-          env,
-          assertCurrent: params.commitGuard,
-          restoreSnapshot: true,
-        },
-        async () => {},
-      );
+      await restoreSnapshotProjection(restoreRecord, env, params.commitGuard);
       return await finishRestoredSnapshot(
         params,
         context,
@@ -444,17 +448,7 @@ async function restoreSnapshot(
       params.commitGuard,
     );
     params.commitGuard?.();
-    const { withSettledLocalWorkspace } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    await withSettledLocalWorkspace(
-      {
-        worktree: record,
-        env,
-        assertCurrent: params.commitGuard,
-        restoreSnapshot: true,
-      },
-      async () => {},
-    );
+    await restoreSnapshotProjection(record, env, params.commitGuard);
     requireSpace(record.path, repository);
     restoredProvisionedPaths = provisionedState.map((state) => state.path);
   } catch (error) {

@@ -68,8 +68,7 @@ export type PersistenceCommand =
       action: "publish-hold" | "stage-hold" | "save";
       pin: SkillLibrarySelection;
       version: "new" | "orphan";
-    }
-  | { action: "older-reader"; entrypoint: string; profileId: string };
+    };
 
 export type PersistenceReply =
   | { kind: "seeded"; profileId: string; pins: SkillLibrarySelection[] }
@@ -81,8 +80,7 @@ export type PersistenceReply =
       files: SkillLibraryFile[][];
       catalog: Array<{ name: string; baseDir: string }>;
       available: string[];
-    }
-  | { kind: "older-reader"; stateVersion: number; agentVersion: number };
+    };
 
 /** IPC owns readiness; close is installed before any signal, and every child is reaped in finally. */
 export async function withPersistenceChild<T>(

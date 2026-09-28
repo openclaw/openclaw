@@ -16,7 +16,7 @@ OpenClaw ships three installer scripts, served from `openclaw.ai`.
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL / FreeBSD | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm (FreeBSD) or npm/git (macOS/Linux/WSL). No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell)          | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
 
-All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.19.0 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
+All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.21.0 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
 Before changing packages, every installer probes the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
 
@@ -289,7 +289,7 @@ system Node packages.
 
 <Steps>
   <Step title="Install local Node runtime">
-    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `24.19.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `24.21.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
     Linux ARMv7 stops before installation because official Node 24+ ARMv7 binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host.
     On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:26-alpine` container or a glibc-based host when the safety check rejects the package.
   </Step>
@@ -389,7 +389,7 @@ its existing service-refresh behavior.
 | `--no-git-update`                       | Skip `git pull` for an existing git checkout                                      |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                  |
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
-| `--node-version <ver>`                  | Node version (default: `24.19.0`)                                                 |
+| `--node-version <ver>`                  | Node version (default: `24.21.0`)                                                 |
 | `--node-only`                           | Install only the private Node runtime under `--prefix`; no system package changes |
 | `--runtime-only`                        | Install Node and CLI without Gateway probes, service refresh, or onboarding       |
 | `--json`                                | Emit NDJSON events                                                                |

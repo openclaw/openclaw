@@ -303,16 +303,6 @@ describe("model provider localService config", () => {
 });
 
 describe("$schema key in config (#14998)", () => {
-  it("accepts config with $schema string", () => {
-    const result = OpenClawSchema.safeParse({
-      $schema: "https://openclaw.ai/config.json",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.$schema).toBe("https://openclaw.ai/config.json");
-    }
-  });
-
   it("accepts config without $schema", () => {
     const result = OpenClawSchema.safeParse({});
     expect(result.success).toBe(true);
@@ -321,14 +311,6 @@ describe("$schema key in config (#14998)", () => {
   it("rejects non-string $schema", () => {
     const result = OpenClawSchema.safeParse({ $schema: 123 });
     expect(result.success).toBe(false);
-  });
-
-  it("accepts $schema during full config validation", () => {
-    const result = validateConfigObject({
-      $schema: "./schema.json",
-      gateway: { port: 18789 },
-    });
-    expect(result.ok).toBe(true);
   });
 
   it("preserves $schema through validateConfigObject round-trip", () => {
@@ -1401,7 +1383,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
+      expect(issuePaths(snap.legacyIssues)).not.toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
@@ -1424,7 +1406,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
+      expect(issuePaths(snap.legacyIssues)).not.toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         showOk: true,
         showAlerts: false,
@@ -1517,7 +1499,7 @@ describe("config strict validation", () => {
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
       expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
-      expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
+      expect(issuePaths(snap.legacyIssues)).not.toContain("agents.defaults.sandbox");
       expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
         perSession: true,
       });

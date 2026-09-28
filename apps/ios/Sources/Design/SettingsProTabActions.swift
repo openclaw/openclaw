@@ -71,8 +71,8 @@ extension SettingsProTab {
                 icon: "bell",
                 title: "Notifications",
                 detail: "Approval and event alert channel",
-                value: .verbatim(self.notificationStatusText),
-                color: self.notificationStatusColor)
+                value: .verbatim(self.notificationPresentation.text),
+                color: self.notificationPresentation.color)
             self.diagnosticCheckRow(
                 icon: "rectangle.on.rectangle",
                 title: "Screen Capture",
@@ -113,12 +113,6 @@ extension SettingsProTab {
             value.text
                 .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    func detailListCard(@ViewBuilder content: () -> some View) -> some View {
-        Section {
-            content()
         }
     }
 
@@ -212,7 +206,7 @@ extension SettingsProTab {
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationServingActive)
+            notificationsAllowed: self.notificationPresentation.isActive)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
@@ -665,33 +659,22 @@ extension SettingsProTab {
 
     func persistGatewayToken(_ value: String) {
         self.gatewayToken = value
-        guard !self.suppressCredentialPersist else { return }
-        let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
-        self.gatewayCredentialFieldStableID = stableID
-        let saved = GatewaySettingsStore.updateGatewayCredentials(
-            token: value,
-            password: self.gatewayPassword,
-            gatewayStableID: stableID,
-            instanceId: instanceId)
-        self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-                current: self.pendingManualAuthOverride,
-                instanceId: instanceId,
-                targetStableID: stableID,
-                allowManualOverride: true)
-            : nil
+        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
     }
 
     func persistGatewayPassword(_ value: String) {
         self.gatewayPassword = value
+        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+    }
+
+    private func persistGatewayCredentials(for stableID: String?) {
         guard !self.suppressCredentialPersist else { return }
         let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
+        guard !instanceId.isEmpty, let stableID else { return }
         self.gatewayCredentialFieldStableID = stableID
         let saved = GatewaySettingsStore.updateGatewayCredentials(
             token: self.gatewayToken,
-            password: value,
+            password: self.gatewayPassword,
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
@@ -923,7 +906,7 @@ extension SettingsProTab {
         if self.appModel.isAppleReviewDemoModeEnabled {
             return String(localized: "Live gateway requests are disabled in demo mode.")
         }
-        if self.notificationsNeedAttention {
+        if self.notificationPresentation.needsAttention {
             return String(
                 localized: "Foreground approvals still appear while OpenClaw is connected.")
         }
@@ -957,29 +940,17 @@ extension SettingsProTab {
         self.appModel.gatewayServerName ?? "OpenClaw Gateway"
     }
 
-    var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
-        self.appModel.pendingExecApprovalPrompt
-    }
-
-    var pendingApprovalCount: Int {
-        self.appModel.pendingExecApprovalCount
-    }
-
     var approvalWaitingText: String {
-        if self.pendingApprovalCount == 1 {
+        if self.appModel.pendingExecApprovalCount == 1 {
             return String(localized: "1 waiting")
         }
         return String(
             format: String(localized: "%@ waiting"),
-            self.pendingApprovalCount.formatted())
-    }
-
-    var notificationsNeedAttention: Bool {
-        self.notificationPresentation.needsAttention
+            self.appModel.pendingExecApprovalCount.formatted())
     }
 
     var approvalItems: [SettingsApprovalItem] {
-        guard let pendingApproval else { return [] }
+        guard let pendingApproval = self.appModel.pendingExecApprovalPrompt else { return [] }
         let pendingTitle = pendingApproval.commandPreview.map(OpenClawTextValue.verbatim)
             ?? OpenClawTextValue.localized("Review gateway action")
         let agentDetail = String(
@@ -1026,18 +997,6 @@ extension SettingsProTab {
     var diagnosticsRunColor: Color {
         guard let diagnosticsIssueCount else { return .secondary }
         return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
-    }
-
-    var notificationStatusText: String {
-        self.notificationPresentation.text
-    }
-
-    var notificationStatusColor: Color {
-        self.notificationPresentation.color
-    }
-
-    var notificationServingActive: Bool {
-        self.notificationPresentation.isActive
     }
 
     var notificationDisclosureAccepted: Bool {

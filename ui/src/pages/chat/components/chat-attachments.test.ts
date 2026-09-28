@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import * as payloads from "../attachment-payload-store.ts";
 import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
@@ -30,6 +31,28 @@ it("admits same-name image payloads with independent identities", () => {
   ]);
   expect(attachments.map(payloads.getChatAttachmentDataUrl)).toEqual(sources);
 });
+
+// jsdom omits Blob.arrayBuffer; retain real File identity while supplying the
+// browser byte-reading contract from this fixture's own bytes.
+function resizePngFixture(bytes?: Uint8Array<ArrayBuffer>): File {
+  const data =
+    bytes ??
+    Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhZkAAAAASUVORK5CYII=",
+      ),
+      (char) => char.charCodeAt(0),
+    );
+  const file = new File([data], "large.png", { type: "image/png" });
+  file.arrayBuffer = async () => data.slice().buffer;
+  const slice = file.slice.bind(file);
+  file.slice = (start, end, contentType) => {
+    const blob = slice(start, end, contentType);
+    blob.arrayBuffer = async () => data.slice(start, end).buffer;
+    return blob;
+  };
+  return file;
+}
 
 class StubFileReader {
   static failNames = new Set<string>();
@@ -218,13 +241,69 @@ describe("chat attachment read failures", () => {
     expect(tiles[1]?.textContent?.trim()).toBe("");
   });
 
-  it("rejects oversized files against hello policy before encoding", async () => {
+  it("settles an eventless stalled attachment read through failure without leaving pending reads", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    StubFileReader.heldNames.add("stalled.png");
+    let attachments: ChatAttachment[] = [];
+    const container = document.createElement("div");
+    const redraw = () =>
+      render(
+        renderAttachmentPreview({
+          attachments,
+          attachmentReads: reads,
+          getAttachments: () => attachments,
+          onAttachmentsChange: (next) => {
+            attachments = next;
+            redraw();
+          },
+        }),
+        container,
+      );
+    const reads = new ChatAttachmentReadLifecycle(redraw);
+    const signal = reads.readSignal;
+    onTestFinished(() => {
+      reads.abortReads();
+      payloads.releaseChatAttachmentPayloads(attachments);
+      render(null, container);
+    });
+    handleChatAttachmentPaste(
+      pasteEventWithFiles([new File(["stalled"], "stalled.png", { type: "image/png" })]),
+      {
+        attachments,
+        attachmentReads: reads,
+        getAttachments: () => attachments,
+        readSignal: signal,
+        onPendingReadsChange: (delta) => reads.updatePending(signal, delta),
+        onAttachmentsChange: (next) => {
+          attachments = next;
+          redraw();
+        },
+      },
+    );
+    expect(reads.pendingReads).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect(reads.pendingReads).toBe(0);
+    expect(container.querySelector(".chat-attachment-thumb--error")).not.toBeNull();
+    expect(container.querySelector(".chat-attachment-error")).not.toBeNull();
+
+    const removeButton = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
+    expect(removeButton).not.toBeNull();
+    removeButton?.click();
+    expect(reads.pendingReads).toBe(0);
+    expect(container.querySelector(".chat-attachment-thumb")).toBeNull();
+  });
+
+  it("rejects oversized non-resizable images against hello policy before encoding", async () => {
     const onAttachmentsChange = vi.fn();
     const limits = { maxBytes: 8, maxImageBytes: 4 };
     handleChatAttachmentPaste(
       pasteEventWithFiles([
         new File(["tiny"], "small.png", { type: "image/png" }),
-        new File(["way-too-big"], "huge.png", { type: "image/png" }),
+        new File(["way-too-big"], "huge.gif", { type: "image/gif" }),
       ]),
       { attachmentLimits: limits, attachments: [], onAttachmentsChange },
     );
@@ -233,16 +312,16 @@ describe("chat attachment read failures", () => {
     });
     await toastHost.updateComplete;
     // Oversized file is named in a toast and never encoded; the small one attaches.
-    expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("huge.png");
+    expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("huge.gif");
     const attached = onAttachmentsChange.mock.calls[0]?.[0] as Array<{ fileName?: string }>;
     expect(attached).toHaveLength(1);
     expect(attached[0]?.fileName).toBe("small.png");
   });
 
-  it("blocks an image-only batch that exceeds the image ceiling entirely", async () => {
+  it("blocks a non-resizable image-only batch above the image ceiling", async () => {
     const onAttachmentsChange = vi.fn();
     handleChatAttachmentPaste(
-      pasteEventWithFiles([new File(["way-too-big"], "huge.png", { type: "image/png" })]),
+      pasteEventWithFiles([new File(["way-too-big"], "huge.gif", { type: "image/gif" })]),
       {
         attachmentLimits: { maxBytes: 1024, maxImageBytes: 4 },
         attachments: [],
@@ -251,7 +330,7 @@ describe("chat attachment read failures", () => {
     );
     await toastHost.updateComplete;
     await vi.waitFor(() => {
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("huge.png");
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("huge.gif");
     });
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
@@ -293,7 +372,7 @@ describe("chat attachment read failures", () => {
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
 
-  it("blocks a pasted data-URL image that exceeds the image ceiling", async () => {
+  it("blocks a pasted non-resizable data-URL image above the image ceiling", async () => {
     const onAttachmentsChange = vi.fn();
     const bigBase64 = btoa("p".repeat(64));
     handleChatAttachmentPaste(
@@ -302,7 +381,7 @@ describe("chat attachment read failures", () => {
         clipboardData: {
           items: [],
           getData: (type: string) =>
-            type === "text/plain" ? `data:image/png;base64,${bigBase64}` : "",
+            type === "text/plain" ? `data:image/gif;base64,${bigBase64}` : "",
         },
       } as unknown as ClipboardEvent,
       {
@@ -317,6 +396,223 @@ describe("chat attachment read failures", () => {
     });
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
+
+  it.each(["abort", "remove", "timeout"] as const)(
+    "settles pending image preparation on %s and discards a late worker result",
+    async (outcome) => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const started = createDeferred<ResizeWorker>();
+      class ResizeWorker extends EventTarget {
+        terminate = vi.fn();
+        postMessage() {
+          started.resolve(this);
+        }
+      }
+      vi.stubGlobal("Worker", ResizeWorker);
+      const onAttachmentsChange = vi.fn();
+      const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
+      const reads = new ChatAttachmentReadLifecycle(() => {});
+      const signal = reads.readSignal;
+      const deltas: number[] = [];
+      handleChatAttachmentPaste(pasteEventWithFiles([resizePngFixture()]), {
+        attachments: [],
+        attachmentLimits: { maxBytes: 8, maxImageBytes: 4 },
+        attachmentReads: reads,
+        readSignal: signal,
+        onAttachmentsChange,
+        onPendingReadsChange: (delta) => {
+          deltas.push(delta);
+          reads.updatePending(signal, delta);
+        },
+      });
+      expect(reads.pendingReads).toBe(1);
+      const worker = await started.promise;
+      if (outcome === "abort") {
+        reads.abortReads();
+      } else if (outcome === "remove") {
+        reads.remove(expectDefined(reads.project([])[0], "pending tile"));
+      } else {
+        await vi.advanceTimersByTimeAsync(15_001);
+        expect(reads.project([])[0]?.state).toBe("error");
+      }
+      expect(reads.pendingReads).toBe(0);
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      worker.dispatchEvent(
+        new MessageEvent("message", {
+          data: new File(["ok"], "large.png", { type: "image/png" }),
+        }),
+      );
+      await Promise.resolve();
+      expect(deltas).toEqual([1, -1]);
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+      expect(registered).not.toHaveBeenCalled();
+    },
+  );
+
+  it("skips a canceled queued image without starting a second encoder", async () => {
+    const started = createDeferred<ResizeWorker>();
+    const created = vi.fn();
+    class ResizeWorker extends EventTarget {
+      terminate = vi.fn();
+      constructor() {
+        super();
+        created();
+      }
+      postMessage() {
+        started.resolve(this);
+      }
+    }
+    vi.stubGlobal("Worker", ResizeWorker);
+    const done = createDeferred();
+    const reads = new ChatAttachmentReadLifecycle(() => {});
+    const signal = reads.readSignal;
+    let attachments: ChatAttachment[] = [];
+    onTestFinished(() => {
+      reads.abortReads();
+      payloads.releaseChatAttachmentPayloads(attachments);
+    });
+    handleChatAttachmentPaste(pasteEventWithFiles([resizePngFixture(), resizePngFixture()]), {
+      attachmentLimits: { maxBytes: 8, maxImageBytes: 4 },
+      attachments,
+      getAttachments: () => attachments,
+      attachmentReads: reads,
+      readSignal: signal,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+      onPendingReadsChange: (delta) => {
+        reads.updatePending(signal, delta);
+        if (reads.pendingReads === 0) {
+          done.resolve();
+        }
+      },
+    });
+    const worker = await started.promise;
+    expect(reads.pendingReads).toBe(2);
+    reads.remove(expectDefined(reads.project([])[1], "queued image"));
+    worker.dispatchEvent(
+      new MessageEvent("message", {
+        data: new File(["ok"], "large.png", { type: "image/png" }),
+      }),
+    );
+    await done.promise;
+    expect(attachments).toHaveLength(1);
+    expect(created).toHaveBeenCalledOnce();
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it("gives each queued resize its own processing timeout", async () => {
+    vi.useFakeTimers();
+    const first = createDeferred<ResizeWorker>();
+    const second = createDeferred<ResizeWorker>();
+    const pendingStarts = [first, second];
+    class ResizeWorker extends EventTarget {
+      terminate() {}
+      postMessage() {
+        expectDefined(pendingStarts.shift(), "expected image worker").resolve(this);
+      }
+      complete() {
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: new File(["ok"], "large.png", { type: "image/png" }),
+          }),
+        );
+      }
+    }
+    vi.stubGlobal("Worker", ResizeWorker);
+    const done = createDeferred();
+    const reads = new ChatAttachmentReadLifecycle(() => {});
+    const signal = reads.readSignal;
+    let attachments: ChatAttachment[] = [];
+    onTestFinished(() => {
+      reads.abortReads();
+      payloads.releaseChatAttachmentPayloads(attachments);
+      vi.useRealTimers();
+    });
+    handleChatAttachmentPaste(pasteEventWithFiles([resizePngFixture(), resizePngFixture()]), {
+      attachmentLimits: { maxBytes: 8, maxImageBytes: 4 },
+      attachments,
+      getAttachments: () => attachments,
+      attachmentReads: reads,
+      readSignal: signal,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+      onPendingReadsChange: (delta) => {
+        reads.updatePending(signal, delta);
+        if (reads.pendingReads === 0) {
+          done.resolve();
+        }
+      },
+    });
+    const worker = await first.promise;
+    await vi.advanceTimersByTimeAsync(10_000);
+    worker.complete();
+    const next = await second.promise;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(reads.pendingReads).toBe(1);
+    next.complete();
+    await done.promise;
+    expect(attachments).toHaveLength(2);
+  });
+
+  it.each(["header", "pixels", "animation", "decode"] as const)(
+    "keeps a rejected PNG %s as a failed tile and releases send",
+    async (failure) => {
+      const decode = vi.fn();
+      class ResizeWorker extends EventTarget {
+        terminate() {}
+        postMessage() {
+          decode();
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: null })));
+        }
+      }
+      vi.stubGlobal("Worker", ResizeWorker);
+      const bytes = new Uint8Array(await resizePngFixture().arrayBuffer());
+      let source = bytes;
+      if (failure === "header") {
+        source = new Uint8Array([1, 2, 3, 4, 5]);
+      } else if (failure === "pixels") {
+        const header = new DataView(bytes.buffer);
+        header.setUint32(16, 10_000);
+        header.setUint32(20, 10_000);
+      } else if (failure === "animation") {
+        // Advertise APNG before IDAT; header admission must refuse before decode.
+        const control = new Uint8Array(20);
+        const chunk = new DataView(control.buffer);
+        chunk.setUint32(0, 8);
+        chunk.setUint32(4, 0x6163544c);
+        chunk.setUint32(8, 2);
+        source = new Uint8Array([...bytes.slice(0, 33), ...control, ...bytes.slice(33)]);
+      }
+      const file = resizePngFixture(source);
+      const done = createDeferred();
+      const reads = new ChatAttachmentReadLifecycle(() => {});
+      const signal = reads.readSignal;
+      const onAttachmentsChange = vi.fn();
+      handleChatAttachmentPaste(pasteEventWithFiles([file]), {
+        attachments: [],
+        attachmentLimits: { maxBytes: 8, maxImageBytes: 4 },
+        attachmentReads: reads,
+        readSignal: signal,
+        onAttachmentsChange,
+        onPendingReadsChange: (delta) => {
+          reads.updatePending(signal, delta);
+          if (delta === -1) {
+            done.resolve();
+          }
+        },
+      });
+      await done.promise;
+      expect(decode).toHaveBeenCalledTimes(failure === "decode" ? 1 : 0);
+      expect(reads.pendingReads).toBe(0);
+      expect(reads.project([])[0]?.state).toBe("error");
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not toast when every read succeeds", async () => {
     const onAttachmentsChange = vi.fn();

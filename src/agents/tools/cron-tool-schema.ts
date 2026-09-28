@@ -291,31 +291,34 @@ function createCronDeliverySchema(): TSchema {
   );
 }
 
-// Omitting `failureAlert` means "leave defaults/unchanged"; `false` disables regular alerts.
-// Runtime handles `failureAlert === false` in cron/service/failure-alerts.ts.
-// The schema declares `type: "object"` to stay compatible with providers that
-// enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
-// description tells the LLM that `false` is also accepted.
+// Keep the policy object first for restricted-provider projections; runtime
+// validation must still accept the documented false sentinel.
 function createCronFailureAlertSchema(): TSchema {
   return Type.Optional(
-    Type.Unsafe<Record<string, unknown> | false>({
-      type: "object",
-      properties: {
-        after: optionalPositiveIntegerSchema({
-          description:
-            "Consecutive execution failures before alert; delivery failures bypass this threshold",
-        }),
-        channel: Type.Optional(Type.String({ description: "Alert channel" })),
-        to: Type.Optional(Type.String({ description: "Alert target" })),
-        cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
-        includeSkipped: Type.Optional(Type.Boolean({ description: "Count skipped runs." })),
-        mode: optionalStringEnum(["announce", "webhook"] as const),
-        accountId: Type.Optional(Type.String()),
+    Type.Union(
+      [
+        Type.Object(
+          {
+            after: optionalPositiveIntegerSchema({
+              description:
+                "Consecutive execution failures before alert; delivery failures bypass this threshold",
+            }),
+            channel: Type.Optional(Type.String({ description: "Alert channel" })),
+            to: Type.Optional(Type.String({ description: "Alert target" })),
+            cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
+            includeSkipped: Type.Optional(Type.Boolean({ description: "Count skipped runs." })),
+            mode: optionalStringEnum(["announce", "webhook"] as const),
+            accountId: Type.Optional(Type.String()),
+          },
+          { additionalProperties: true },
+        ),
+        Type.Literal(false),
+      ],
+      {
+        description:
+          "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
       },
-      additionalProperties: true,
-      description:
-        "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
-    }),
+    ),
   );
 }
 

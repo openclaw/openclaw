@@ -5,6 +5,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
@@ -12,6 +13,77 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it.each([false, true])(
+    "reconciles warm agent defaults while preserving explicit folder=%s",
+    async (explicit) => {
+      await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
+        const roster = (workspace: string) => ({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "main", workspace, workspaceGit: false, model: { primary: "openai/gpt-5.5" } },
+          ],
+        });
+        const gateway = await installMockGateway(page, {
+          heldMethods: ["connect", "agents.list"],
+          authMethod: "token",
+          authMode: "token",
+          workspace: "/workspace-a",
+          presenceUsers: [{ id: "warm-roster-profile", self: true }],
+          methodResponses: { "agents.list": roster("/workspace-a") },
+        });
+        await page.goto(`${suite.server.baseUrl}chat?session=main#token=synthetic-test-token`);
+        await gateway.waitForRequest("connect");
+        await gateway.resolveDeferred("connect");
+        await gateway.waitForRequest("agents.list");
+        await gateway.resolveDeferred("agents.list");
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              Object.keys(localStorage).some(
+                (key) =>
+                  key.startsWith("openclaw.control.bootRecord.v1:") &&
+                  localStorage.getItem(key)?.includes("/workspace-a"),
+              ),
+            ),
+          )
+          .toBe(true);
+
+        await page.goto(`${suite.server.baseUrl}new?agent=main`, { waitUntil: "commit" });
+        const message = page.locator(".new-session-page__message");
+        await message.fill("Keep the warm draft");
+        await gateway.waitForRequest("connect");
+        await gateway.resolveDeferred("connect");
+        await gateway.waitForRequest("agents.list");
+        if (explicit) {
+          await page.locator("#new-session-project-trigger").click();
+          await page.locator('.new-session-page__project-popover [data-value="workspace"]').click();
+        }
+        const start = page.getByRole("button", { name: "Start session", exact: true });
+        if (!explicit) {
+          await captureUiProof(suite, page, "warm-agent-defaults.png");
+        }
+        expect(await start.getAttribute("aria-disabled")).toBe("true");
+        await start.click({ force: true });
+        await message.press("Enter");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+        await gateway.resolveDeferred("agents.list", roster("/workspace-b"));
+        await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
+        expect(await message.inputValue()).toBe("Keep the warm draft");
+        await start.click();
+        const create = await gateway.waitForRequest("sessions.create");
+        expect(create.params).toMatchObject({ agentId: "main", message: "Keep the warm draft" });
+        if (explicit) {
+          expect(create.params).toHaveProperty("cwd", "/workspace-a");
+        } else {
+          expect(create.params).not.toHaveProperty("cwd");
+        }
+      });
+    },
+  );
+
   it("keeps a reloaded new-session page responsive before the Gateway reconnects", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

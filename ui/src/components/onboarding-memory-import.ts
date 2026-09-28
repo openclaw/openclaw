@@ -23,10 +23,6 @@ type ProviderResult =
   | { kind: "partial"; result: MigrationsMemoryApplyResult }
   | { kind: "error"; message: string };
 
-function toErrorMessage(error: unknown): string {
-  return formatUiError(error, t("onboarding.memoryImport.unknownError"));
-}
-
 function plannedItems(provider: MemoryMigrationProviderPlan) {
   return provider.items.filter((item) => item.status === "planned");
 }
@@ -253,7 +249,10 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       } catch (error) {
         this.results = {
           ...this.results,
-          [provider.providerId]: { kind: "error", message: toErrorMessage(error) },
+          [provider.providerId]: {
+            kind: "error",
+            message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
+          },
         };
       }
     }

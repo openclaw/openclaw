@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { patchSessionEntryWithKey, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasOperatorToolGatewayAuthority } from "../../gateway/operator-invocation-authority.js";
 import { withSessionStatusModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import type { SessionsPatchResult } from "../../gateway/session-utils.types.js";
@@ -18,7 +19,7 @@ import {
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
-import { normalizeToolModelOverride } from "./common.js";
+import { normalizeToolModelOverride, ToolAuthorizationError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import type { resolveSessionStatusEntry } from "./session-status-session-resolve.js";
 
@@ -82,9 +83,6 @@ async function resolveModelOverride(params: {
           ...(workspaceDir ? { workspaceDir } : {}),
           env: process.env,
         });
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot,
-  };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
@@ -93,7 +91,7 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
     allowManifestNormalization: true,
     allowPluginNormalization: true,
-    ...modelManifestContext,
+    manifestPlugins: manifestMetadataSnapshot,
   });
 
   const resolved = resolveModelRefFromString({
@@ -104,7 +102,7 @@ async function resolveModelOverride(params: {
     aliasIndex,
     allowManifestNormalization: true,
     allowPluginNormalization: true,
-    ...modelManifestContext,
+    manifestPlugins: manifestMetadataSnapshot,
   });
   if (!resolved) {
     throw new Error(`Unrecognized model "${raw}".`);
@@ -136,6 +134,9 @@ export async function patchSessionStatusModel(params: {
   gatewayCall?: AgentToolGatewayRequestCaller;
 }): Promise<{ resolved: ResolvedStatusSession; changedModel: boolean }> {
   const { cfg, agentId, resolved } = params;
+  if (hasOperatorToolGatewayAuthority() && !params.gatewayCall) {
+    throw new ToolAuthorizationError("Operator model selection requires a current Gateway.");
+  }
   if (params.gatewayCall) {
     const gatewayCall = params.gatewayCall;
     const { result, applied } = await withSessionStatusModelPatchOrigin(() =>
@@ -169,18 +170,18 @@ export async function patchSessionStatusModel(params: {
   });
   const modelSelection =
     selection.kind === "reset" ? { ...configured, isDefault: true } : selection;
-  const applied = applyModelOverrideWithAuthProfileCompatibility({
-    cfg,
-    agentDir: params.agentDir,
-    entry: { ...resolved.entry },
-    currentProvider:
-      resolved.entry.providerOverride?.trim() ||
-      resolved.entry.modelProvider?.trim() ||
-      configured.provider,
-    selection: modelSelection,
-    explicitDefaultSelection: modelSelection.isDefault,
-    markLiveSwitchPending: true,
-  });
+  const applySelection = (entry: SessionEntry) =>
+    applyModelOverrideWithAuthProfileCompatibility({
+      cfg,
+      agentDir: params.agentDir,
+      entry,
+      currentProvider:
+        entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
+      selection: modelSelection,
+      explicitDefaultSelection: modelSelection.isDefault,
+      markLiveSwitchPending: true,
+    });
+  const applied = applySelection({ ...resolved.entry });
   if (!applied.updated) {
     return { resolved, changedModel: false };
   }
@@ -188,16 +189,7 @@ export async function patchSessionStatusModel(params: {
     { agentId, sessionKey: resolved.key, storePath: params.storePath },
     (entry, context) => {
       const next: SessionEntry = { ...entry };
-      applyModelOverrideWithAuthProfileCompatibility({
-        cfg,
-        agentDir: params.agentDir,
-        entry: next,
-        currentProvider:
-          entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
-        selection: modelSelection,
-        explicitDefaultSelection: modelSelection.isDefault,
-        markLiveSwitchPending: true,
-      });
+      applySelection(next);
       if (!next.sessionId.trim() && !context.existingEntry?.sessionId?.trim()) {
         next.sessionId = randomUUID();
       }

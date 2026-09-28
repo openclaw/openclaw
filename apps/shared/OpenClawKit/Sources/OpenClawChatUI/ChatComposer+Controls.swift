@@ -83,9 +83,11 @@ extension OpenClawChatComposer {
         // Sections come from an O(n) recompute over the catalog; bind once per body eval.
         let sections = self.viewModel.modelPickerSections
         return Menu {
-            self.modelMenuOption(
-                self.viewModel.defaultModelLabel,
-                selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            if self.viewModel.canSelectDefaultModel {
+                self.modelMenuOption(
+                    self.viewModel.defaultModelLabel,
+                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            }
             if !sections.pinned.isEmpty {
                 Section {
                     self.modelOptions(sections.pinned)
@@ -216,7 +218,7 @@ extension OpenClawChatComposer {
                 .disabled(branch.active)
             }
             .task {
-                await self.viewModel.refreshSessionBranchesForMenuPresentation()
+                await self.viewModel.refreshSessionBranches()
             }
         } label: {
             Image(systemName: "arrow.triangle.branch")

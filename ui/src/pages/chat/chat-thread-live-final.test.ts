@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
-import { projectTranscriptMessageIndex } from "./components/chat-transcript-message-index.ts";
+import { projectTranscriptIndex } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const person = (id: string) => ({
@@ -48,6 +49,13 @@ function props(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProp
 function project(input: BuildChatItemsProps) {
   return coalesceAgentRunFrames(coalesceStreamRuns(buildChatItems(input)));
 }
+function indexItems(
+  items: ReturnType<typeof coalesceAgentRunFrames>,
+  labels: Parameters<typeof projectTranscriptIndex>[2],
+) {
+  const chain = { collapsedItems: items, transcriptItems: items, continuations: new Map() };
+  return projectTranscriptIndex(chain, new Map(), labels);
+}
 function completed() {
   return rememberLiveTerminalRun(
     { role: "assistant", content: "The answer being read.", timestamp: 40 },
@@ -56,6 +64,62 @@ function completed() {
 }
 
 describe("live terminal continuity with pending collaborators", () => {
+  it.each([
+    { runId: null, localQueue: true },
+    { runId: "active", localQueue: true },
+    { runId: "active", localQueue: false },
+  ])(
+    "keeps the active input before progress through custody with runId=$runId, localQueue=$localQueue",
+    ({ runId, localQueue }) => {
+      const local = {
+        id: "active-local",
+        sendRunId: "active",
+        text: "Current input",
+        createdAt: 10,
+        sendAttempts: 1,
+        sendState: "sending" as const,
+      };
+      const accepted = {
+        ...pending,
+        id: "active-input",
+        runId: "active",
+        acceptedAt: 20,
+        message: {
+          role: "user",
+          content: local.text,
+          timestamp: 20,
+          __openclaw: { id: "pending:active-input" },
+        },
+      };
+      for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
+        if (!localQueue && pendingInputs.length === 0) {
+          continue;
+        }
+        const rows = buildChatItems(
+          props({
+            messages: [],
+            queue: localQueue ? [local] : [],
+            runId,
+            stream: "",
+            pendingInputs,
+          }),
+        );
+        expect(
+          rows.flatMap((item) =>
+            item.kind === "group"
+              ? item.messages.map(({ message }) => extractTextCached(message))
+              : item.kind === "reading-indicator"
+                ? ["Working"]
+                : [],
+          ),
+        ).toEqual([
+          "Current input",
+          "Working",
+          ...(pendingInputs.includes(pending) ? ["Peer follow-up"] : []),
+        ]);
+      }
+    },
+  );
   it.each([false, true])(
     "keeps the live reply and terminal before queued custody (system=%s)",
     (system) => {
@@ -120,6 +184,78 @@ describe("live terminal continuity with pending collaborators", () => {
     );
     expect(visibleMessages).toEqual([...history, stale.message]);
   });
+  it.each(["interrupted", "cancelled"] as const)(
+    "keeps earlier %s automation before a newly submitted message and its canonical receipt",
+    (state) => {
+      const automation = {
+        ...pending,
+        id: "earlier-automation",
+        runId: "automation-run",
+        state,
+        message: {
+          role: "user",
+          content: "Earlier scheduled maintenance",
+          timestamp: 30,
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          senderSession: {
+            sessionKey: "agent:main:cron:maintenance:run:earlier",
+            label: "Scheduled maintenance",
+          },
+          __openclaw: { id: "pending:earlier-automation" },
+        },
+      };
+      const submitted = user("New follow-up", "reader", 4);
+      const submitting = {
+        id: "new-follow-up",
+        sendRunId: "New follow-up",
+        text: "New follow-up",
+        createdAt: 40,
+        sendSubmittedAtMs: 40,
+        sendState: "submitting" as const,
+      };
+      const disposition =
+        state === "interrupted"
+          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
+          : "Cancelled before the agent started it. It will not run automatically; copy it and send again.";
+      const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
+      for (const { overrides, expected } of [
+        { overrides: {}, expected: originalRows },
+        {
+          overrides: { queue: [submitting] },
+          expected: [...originalRows, "New follow-up"],
+        },
+        {
+          overrides: {
+            messages: [...history, submitted],
+            queue: [submitting],
+            pendingInputs: [
+              automation,
+              { ...pending, acceptedAt: 5, message: { ...pending.message, timestamp: 5 } },
+            ],
+          },
+          expected: [...originalRows, "New follow-up", "Peer follow-up"],
+        },
+      ]) {
+        const items = buildChatItems(
+          props({
+            pendingInputs: [automation],
+            stream: null,
+            runId: null,
+            runWorking: false,
+            ...overrides,
+          }),
+        );
+        const visibleRows = items.flatMap((item) =>
+          item.kind === "group"
+            ? item.messages.map(({ message }) => extractTextCached(message))
+            : item.kind === "notice"
+              ? [item.text]
+              : [],
+        );
+        expect(visibleRows).toEqual(expected);
+      }
+    },
+  );
   it("already attributes a streaming reply to the same participant as its terminal", () => {
     const before = project(props());
     const frame = before.find((item) => item.kind === "agent-run-frame");
@@ -139,12 +275,11 @@ describe("live terminal continuity with pending collaborators", () => {
     const stream = frame.parts.find((part) => part.kind === "stream-run");
     const key = stream?.parts.find((part) => part.kind === "stream")?.key;
     expect(key).toBeDefined();
-    const index = projectTranscriptMessageIndex(
-      items,
-      new Map(),
-      { assistantName: "Assistant", userId: "reader", userName: "Reader" },
-      new Map(),
-    );
+    const index = indexItems(items, {
+      assistantName: "Assistant",
+      userId: "reader",
+      userName: "Reader",
+    });
     expect(index.transcriptMessageKeys.get(key!)).toBe(frame.key);
   });
   it("keeps streamed anchor keys after earlier messages in the same frame", () => {
@@ -155,18 +290,20 @@ describe("live terminal continuity with pending collaborators", () => {
       timestamp: 21,
       __openclaw: { id: "commentary", seq: 3, runId: "active" },
     };
-    const items = project(props({ messages: [...history, commentary] }));
+    const latestCommentary = {
+      ...commentary,
+      content: "Continuing work",
+      timestamp: 22,
+      __openclaw: { id: "latest-commentary", seq: 4, runId: "active" },
+    };
+    const items = project(props({ messages: [...history, commentary, latestCommentary] }));
     const frame = items.find((item) => item.kind === "agent-run-frame");
     if (frame?.kind !== "agent-run-frame") {
       throw new Error("Missing mixed frame");
     }
     const group = frame.parts.find((part) => part.kind === "group");
-    const index = projectTranscriptMessageIndex(
-      [frame],
-      new Map(),
-      { assistantName: "Assistant" },
-      new Map(),
-    );
+    expect(group?.messages[0]?.message).toBe(commentary);
+    const index = indexItems([frame], { assistantName: "Assistant" });
     expect(index.transcriptMessageKeys.keys().next().value).toBe(group?.messages[0]?.key);
   });
   it("keeps standalone activity messages addressable for replies and anchors", () => {
@@ -191,18 +328,12 @@ describe("live terminal continuity with pending collaborators", () => {
       { kind: "activity-run", key: "standalone-activity", groups },
     ]);
     expect(items[0]?.kind).toBe("activity-run");
-    const loaded = new Map();
-    const index = projectTranscriptMessageIndex(
-      items,
-      new Map(),
-      { assistantName: "Assistant" },
-      loaded,
-    );
+    const index = indexItems(items, { assistantName: "Assistant" });
     expect(index.transcriptMessageKeys.get(groups[0]!.messages[0]!.key)).toBe(
       "standalone-activity",
     );
     expect(index.messageRowKeysById.get("activity-message")).toBe("standalone-activity");
-    expect(loaded.get("activity-message")).toMatchObject({
+    expect(index.loadedReplySources.get("activity-message")).toMatchObject({
       message,
       messageId: groups[0]!.messages[0]!.key,
     });

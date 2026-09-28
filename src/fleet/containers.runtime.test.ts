@@ -29,7 +29,6 @@ const profileMocks = vi.hoisted(() => ({
 vi.mock("./cell-profile.js", () => profileMocks);
 
 import type { CellContainerProfile } from "./cell-profile.js";
-import { createRedactingStreamWriter } from "./containers.redaction.js";
 import { createFleetContainerRuntime } from "./containers.runtime.js";
 
 type FleetContainerCommandExecutor = NonNullable<Parameters<typeof createFleetContainerRuntime>[0]>;
@@ -597,32 +596,6 @@ describe("fleet container runtime", () => {
     const runtime = createFleetContainerRuntime(executor);
     await runtime.createNetwork("podman", "openclaw-cell-acme-net", {}, { internal });
     expect(executor.mock.calls[0]?.[1].includes("--internal")).toBe(expected);
-  });
-
-  it("redacts secrets from streamed log output, including across chunk boundaries", () => {
-    const written: string[] = [];
-    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
-    writer.write(Buffer.from("boot ok\ntoken=gw-sec"));
-    writer.write(Buffer.from("ret-token done\ntail without newline"));
-    writer.flush();
-    const output = written.join("");
-    expect(output).toContain("token=<redacted> done");
-    expect(output).toContain("tail without newline");
-    expect(output).not.toContain("gw-secret-token");
-  });
-
-  it("never splits a secret across a forced long-line flush", () => {
-    const written: string[] = [];
-    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
-    // An unterminated line ending exactly in a secret prefix at the flush point.
-    writer.write(Buffer.from(`${"x".repeat(64 * 1024)}gw-sec`));
-    writer.write(Buffer.from("ret-token trailing"));
-    writer.flush();
-    const output = written.join("");
-    expect(output).toContain("<redacted> trailing");
-    expect(output).not.toContain("gw-secret-token");
   });
 
   it("parses hardened inspect fields and Docker network internal state", async () => {

@@ -132,33 +132,16 @@ async function maybeApplyApiKeyFromOption(params: {
 }
 
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
-export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
-  token: string | undefined;
-  tokenProvider: string | undefined;
-  secretInputMode?: SecretInputMode;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  expectedProviders: string[];
-  provider: string;
-  envLabel: string;
-  promptMessage: string;
-  normalize: (value: string) => string;
-  validate: (value: string) => string | undefined;
-  prompter: WizardPrompter;
-  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
-  noteMessage?: string;
-  noteTitle?: string;
-}): Promise<string> {
-  const optionApiKey = await maybeApplyApiKeyFromOption({
-    token: params.token,
-    tokenProvider: params.tokenProvider,
-    secretInputMode: params.secretInputMode,
-    expectedProviders: params.expectedProviders,
-    normalize: params.normalize,
-    validate: params.validate,
-    setCredential: params.setCredential,
-  });
+export async function ensureApiKeyFromOptionEnvOrPrompt(
+  params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
+    token: string | undefined;
+    tokenProvider: string | undefined;
+    expectedProviders: string[];
+    noteMessage?: string;
+    noteTitle?: string;
+  },
+): Promise<string> {
+  const optionApiKey = await maybeApplyApiKeyFromOption(params);
   if (optionApiKey) {
     return optionApiKey;
   }
@@ -167,19 +150,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
     await params.prompter.note(params.noteMessage, params.noteTitle);
   }
 
-  return await ensureApiKeyFromEnvOrPrompt({
-    config: params.config,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    provider: params.provider,
-    envLabel: params.envLabel,
-    promptMessage: params.promptMessage,
-    normalize: params.normalize,
-    validate: params.validate,
-    prompter: params.prompter,
-    secretInputMode: params.secretInputMode,
-    setCredential: params.setCredential,
-  });
+  return await ensureApiKeyFromEnvOrPrompt(params);
 }
 
 /** Resolves an API key from environment or interactive prompt and records the chosen secret mode. */

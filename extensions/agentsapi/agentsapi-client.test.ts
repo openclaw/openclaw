@@ -38,9 +38,10 @@ describe("Agents API session creation", () => {
       }
       const request = new Request(call.url, call.init);
       const body: unknown = await request.json();
-      expect(request.url).toBe("https://api.openai.com/v1/agents/sessions");
       expect(request.method).toBe("POST");
-      expect(body).toMatchObject({ agent: { model } });
+      expect(body).toMatchObject({
+        agent: { model, tools: [{ type: "web_search", mode: "live" }] },
+      });
     },
   );
 

@@ -28,21 +28,8 @@ export async function readPolicyFile(
   ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
   const displayName = policyDisplayName(ctx);
-  const path = resolveWorkspacePath(ctx, policyPathSetting(ctx));
-  try {
-    const fs = await loadFsPromisesModule();
-    return {
-      raw: await fs.readFile(path, "utf-8"),
-      path,
-      displayName,
-      ocDocName: basename(displayName),
-    };
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      return null;
-    }
-    throw err;
-  }
+  const file = await readWorkspaceFile(ctx, policyPathSetting(ctx));
+  return file === null ? null : { ...file, displayName, ocDocName: basename(displayName) };
 }
 
 export async function readExecApprovalsFile(
@@ -158,38 +145,18 @@ export function readChannelDenyRules(
   ) {
     return [];
   }
-  return policy.channels.denyRules
-    .map((rule, index) => ({ rule, index }))
-    .filter(
-      (
-        entry,
-      ): entry is {
-        readonly index: number;
-        readonly rule: {
-          readonly id?: string;
-          readonly when?: { readonly provider?: string };
-          readonly reason?: string;
-        };
-      } => isChannelDenyRule(entry.rule),
-    )
-    .map(({ rule, index }) => {
-      const next: {
-        id?: string;
-        when?: { readonly provider?: string };
-        reason?: string;
-        requirement: string;
-      } = {
-        when: rule.when,
-        requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
-      };
-      if (rule.id !== undefined) {
-        next.id = rule.id;
-      }
-      if (rule.reason !== undefined) {
-        next.reason = rule.reason;
-      }
-      return next;
-    });
+  return policy.channels.denyRules.flatMap((rule, index) =>
+    isChannelDenyRule(rule)
+      ? [
+          {
+            when: rule.when,
+            requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
+            ...(rule.id === undefined ? {} : { id: rule.id }),
+            ...(rule.reason === undefined ? {} : { reason: rule.reason }),
+          },
+        ]
+      : [],
+  );
 }
 
 export function channelIdsFromFindings(findings: readonly HealthFinding[]): readonly string[] {

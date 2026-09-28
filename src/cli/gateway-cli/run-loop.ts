@@ -12,10 +12,7 @@ import {
 import type { GatewayHostLifecycle, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
-import {
-  registerGatewayInstallationReplacementHandler,
-  type GatewayInstallationReplacement,
-} from "../../gateway/stale-install.js";
+import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
@@ -41,6 +38,7 @@ import { drainGatewayActiveWork } from "./run-loop-drain.js";
 import * as loopLogs from "./run-loop-log-flush.js";
 import {
   isUpdateProcessRestartReason,
+  registerGatewayRunInstallationReplacement,
   resolveGatewayRunSignalRequestUpgrade,
   sameManagedUpdateOwner,
   type GatewayRunSignalAction,
@@ -725,13 +723,13 @@ export async function runGatewayLoop(params: {
       }
       shutdownDeadline = performance.now() + forceExitMs;
       forceExitTimer = setTimeout(() => {
-        const cleanExit = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
+        const exitOk = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
         gatewayLog.warn(
-          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "with incomplete cleanup"}`,
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; cleanup incomplete; exitCode=${exitOk ? 0 : 1}`,
         );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-          cleanExit ? 0 : 1,
+          exitOk ? 0 : 1,
           shutdownFailure,
         );
       }, forceExitMs);
@@ -786,7 +784,7 @@ export async function runGatewayLoop(params: {
         | undefined;
       const drainBudget = resolveGatewayShutdownDrainBudget({
         budget,
-        isRestart,
+        action,
         forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,
@@ -1232,15 +1230,14 @@ export async function runGatewayLoop(params: {
   process.on("SIGINT", onSigint);
   // SIGUSR1 belongs to Node's on-demand inspector; never register a listener for it.
   process.on("SIGUSR2", onRestartSignal);
-  const releaseInstallationObserver = registerGatewayInstallationReplacementHandler((fact) => {
-    installationReplacement = fact;
-    gatewayLog.warn(fact.message);
-    if (!supervisorMode) {
-      gatewayLog.error(
-        `The foreground Gateway must stop after its installation was replaced. Restart it with: ${formatCliCommand("openclaw gateway run")}`,
-      );
-    }
-    request("restart", "SIGUSR2", fact.reason);
+  const releaseInstallationObserver = registerGatewayRunInstallationReplacement({
+    waitForUpdates: eagerLifecycleRuntime.waitForSystemServiceUpdateHandoffs,
+    logger: gatewayLog,
+    supervised: Boolean(supervisorMode),
+    accept: (fact) => {
+      installationReplacement = fact;
+      request("restart", "SIGUSR2", fact.reason);
+    },
   });
 
   try {

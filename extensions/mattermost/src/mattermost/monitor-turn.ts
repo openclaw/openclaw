@@ -1,4 +1,3 @@
-// Mattermost plugin module owns one accepted message's reply turn and delivery.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   isChannelPartialDeliveryError,
@@ -133,9 +132,7 @@ export async function dispatchMattermostInboundTurn(
     : createDisabledMattermostDraftStream();
   const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
     enabled: draftPreviewEnabled && account.streamingMode === "block",
-    forceNewMessage: async () => {
-      await draftStream.forceNewMessage();
-    },
+    forceNewMessage: draftStream.forceNewMessage,
   });
   let lastPartialText = "";
   let firstAssistantPreviewPrefix: string | undefined;
@@ -237,14 +234,7 @@ export async function dispatchMattermostInboundTurn(
     if (!chunks.length && formatted) {
       chunks.push(formatted);
     }
-    if (chunks.length !== 1) {
-      return {
-        deliveryText,
-        confirmedDelivery,
-        alreadyDelivered: resolution.kind === "already-delivered",
-      };
-    }
-    const trimmed = chunks[0]?.trim();
+    const trimmed = chunks.length === 1 ? chunks[0]?.trim() : undefined;
     if (!trimmed) {
       return {
         deliveryText,
@@ -485,7 +475,6 @@ export async function dispatchMattermostInboundTurn(
               progressDraft.beginAssistantMessage();
               if (account.streamingMode === "block") {
                 blockPreviewAssistantMessagePending = true;
-                return false;
               }
               return false;
             },

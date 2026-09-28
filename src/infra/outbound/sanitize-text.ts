@@ -7,8 +7,16 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 // Retained for the deprecated plugin-sdk/infra-runtime compatibility barrel.
 export { stripInternalRuntimeScaffolding };
 
-// A tag name ends at whitespace, `/`, or `>`; `<user@example.com>` is prose, not markup.
+// Preserve the existing tag grammar; only exclude unspaced comparison prose.
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
+// Disjoint whitespace/prose branches avoid quadratic backtracking on malformed tags.
+const COMPARISON_PROSE_RE = /^<([a-z][a-z0-9_]*\.?)\s+[^<>=/"'\s][^<>=/"']*>$/i;
+const COMPARISON_LEFT_OPERAND_RE = /[\p{L}\p{N}_\p{S}]$/u;
+const COMPARISON_CLAUSE_RE = /\b(?:and|or)\s|[.!?;:]\s|且/iu;
+// Standard HTML element names are never comparison operands: retain main's
+// stripping even beside numeric text or prose-like bare attributes.
+const HTML_ELEMENT_NAME_RE =
+  /^(?:a|abbr|address|area|article|aside|audio|b|base|bdi|bdo|blockquote|body|br|button|canvas|caption|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|picture|pre|progress|q|rp|rt|ruby|s|samp|script|search|section|select|selectedcontent|slot|small|source|span|strong|style|sub|summary|sup|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|u|ul|var|video|wbr)$/i;
 const LABELED_ANGLE_LINK_RE =
   /<(?:https?:\/\/|mailto:)[^<>\s|]+\|([^<>\r\n|]*[^<>\s|][^<>\r\n|]*)>/gi;
 const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
@@ -22,14 +30,40 @@ const CONVERTIBLE_HTML_OPEN_TAG_RE =
 const EMPTY_HTML_ELEMENT_RE =
   /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
 
-function removeMatchesUntilStable(text: string, pattern: RegExp): string {
+function removeMatchesUntilStable(
+  text: string,
+  pattern: RegExp,
+  replacement?: (match: string, offset: number, source: string) => string,
+): string {
   let previous: string;
   let current = text;
   do {
     previous = current;
-    current = current.replace(pattern, "");
+    current = replacement ? current.replace(pattern, replacement) : current.replace(pattern, "");
   } while (current !== previous);
   return current;
+}
+
+function stripHtmlTagUnlessComparison(
+  tag: string,
+  offset: number,
+  source: string,
+  closingTagNames: ReadonlySet<string>,
+): string {
+  const rightOperand = source.charCodeAt(offset + tag.length);
+  if (
+    !(rightOperand >= 48 && rightOperand <= 57) ||
+    !COMPARISON_LEFT_OPERAND_RE.test(source.slice(Math.max(0, offset - 2), offset))
+  ) {
+    return "";
+  }
+  const comparisonName = COMPARISON_PROSE_RE.exec(tag)?.[1];
+  return comparisonName !== undefined &&
+    !HTML_ELEMENT_NAME_RE.test(comparisonName) &&
+    COMPARISON_CLAUSE_RE.test(tag) &&
+    !closingTagNames.has(comparisonName.toLowerCase())
+    ? tag
+    : "";
 }
 
 function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): string {
@@ -56,7 +90,14 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
     .replace(/<h[1-6]>(.*?)<\/h[1-6]>/gi, `\n${boldMarker}$1${boldMarker}\n`)
     .replace(/<li>(.*?)<\/li>/gi, "• $1\n");
 
-  return removeMatchesUntilStable(converted, HTML_TAG_RE).replace(/\n{3,}/g, "\n\n");
+  // A matching closer is positive markup evidence, even when its content is numeric.
+  const closingTagNames = new Set<string>();
+  for (const tag of converted.matchAll(/<\/[a-z][a-z0-9_.:-]*\s*>/gi)) {
+    closingTagNames.add(tag[0].slice(2, -1).trim().toLowerCase());
+  }
+  return removeMatchesUntilStable(converted, HTML_TAG_RE, (tag, offset, source) =>
+    stripHtmlTagUnlessComparison(tag, offset, source, closingTagNames),
+  ).replace(/\n{3,}/g, "\n\n");
 }
 
 /**

@@ -348,7 +348,7 @@ function resolveApprovalRouteNotice(params: {
       requestGateway,
       target,
       text: ambiguousOwner
-        ? resolveAmbiguousApprovalRouteNoticeText()
+        ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
         : resolveApprovalDeliveryFailedNoticeText({
             approvalId: params.request.id,
             approvalKind: params.approvalKind,
@@ -506,29 +506,15 @@ async function maybeFinalizeApprovalRouteNotice(
 }
 
 /** Tracks native approval deliveries and sends origin-chat notices after all observed runtimes report. */
-export function createApprovalNativeRouteReporter(params: {
-  handledKinds: ReadonlySet<ChannelApprovalKind>;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string | null;
-  requestGateway: GatewayRequestFn;
-  shouldHandle: (request: ApprovalRequest) => boolean;
-  classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
-}) {
+export function createApprovalNativeRouteReporter(
+  params: Omit<ApprovalRouteRuntimeRecord, "runtimeId">,
+) {
   return createApprovalNativeRouteReporterForState(defaultCoordinatorState, params);
 }
 
 function createApprovalNativeRouteReporterForState(
   state: ApprovalNativeRouteCoordinatorState,
-  params: {
-    handledKinds: ReadonlySet<ChannelApprovalKind>;
-    channel?: string;
-    channelLabel?: string;
-    accountId?: string | null;
-    requestGateway: GatewayRequestFn;
-    shouldHandle: (request: ApprovalRequest) => boolean;
-    classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
-  },
+  params: Omit<ApprovalRouteRuntimeRecord, "runtimeId">,
 ) {
   const runtimeId = `native-approval-route:${++state.runtimeSeq}`;
   let registered = false;

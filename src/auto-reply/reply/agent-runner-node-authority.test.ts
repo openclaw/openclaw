@@ -104,7 +104,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         unusedEnvironments,
       } = fixture;
       await upsertSessionEntryCore(sessionTarget, { permissionMode: "full" });
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const workspace = {
         workspaceDir: "/worker/workspace",
         sessionKey: SESSION_KEY,
@@ -338,7 +338,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(claimed.value, {
+                    placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;

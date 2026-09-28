@@ -71,6 +71,26 @@ export const UserProfileSchema = closedObject({
 export const UsersListParamsSchema = closedObject({});
 export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
 
+// The profile and relative path are derived from the authenticated connection.
+export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
+export const UsersPersonalFileSetParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  content: Type.String({ maxLength: 4_000 }),
+  expectedHash: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+});
+export const UsersPersonalFileGetResultSchema = closedObject({
+  agentId: NonEmptyString,
+  profileId: UserProfileIdSchema,
+  content: Type.String(),
+  hash: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+  missing: Type.Boolean(),
+});
+export const UsersPersonalFileSetResultSchema = UsersPersonalFileGetResultSchema;
+export type UsersPersonalFileGetParams = Static<typeof UsersPersonalFileGetParamsSchema>;
+export type UsersPersonalFileSetParams = Static<typeof UsersPersonalFileSetParamsSchema>;
+export type UsersPersonalFileGetResult = Static<typeof UsersPersonalFileGetResultSchema>;
+export type UsersPersonalFileSetResult = Static<typeof UsersPersonalFileSetResultSchema>;
+
 export const UsersSelfParamsSchema = closedObject({});
 export const UsersSelfResultSchema = closedObject({ profile: UserProfileSchema });
 
@@ -79,6 +99,18 @@ export const UsersLinkEmailParamsSchema = closedObject({
   targetProfileId: UserProfileIdSchema,
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
+
+export const UsersMergeParamsSchema = closedObject({
+  sourceProfileId: UserProfileIdSchema,
+  targetProfileId: UserProfileIdSchema,
+});
+export const UsersMergeResultSchema = closedObject({
+  profile: UserProfileSchema,
+  movedAliasKinds: Type.Array(
+    Type.Union([Type.Literal("email"), Type.Literal("provider"), Type.Literal("channel")]),
+    { maxItems: 3, uniqueItems: true },
+  ),
+});
 
 const ChannelIdentityPartSchema = Type.String({
   minLength: 1,
@@ -284,6 +316,8 @@ export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
 export type UsersSelfResult = Static<typeof UsersSelfResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
+export type UsersMergeParams = Static<typeof UsersMergeParamsSchema>;
+export type UsersMergeResult = Static<typeof UsersMergeResultSchema>;
 export type UsersLinkChannelIdentityParams = Static<typeof UsersLinkChannelIdentityParamsSchema>;
 export type UsersLinkChannelIdentityResult = Static<typeof UsersLinkChannelIdentityResultSchema>;
 export type UsersUnlinkChannelIdentityParams = Static<

@@ -150,6 +150,12 @@ await runWithFailedTrailer("macos-native", async () => {
                 "inherited",
                 "browser-sign-in-before",
                 "browser-sign-in-after",
+                "guest-model-permitted",
+                "guest-model-null",
+                "guest-model-open",
+                "guest-model-invalidated",
+                "guest-model-recovered",
+                "history-message-recovery",
               ]
             : ["thread-reasoning", "thread-tool-activity", "model-initial", "thread-restored"];
         const allowed = new RegExp(

@@ -1,27 +1,35 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
+  projectUserProfileDisplay,
+  selectProfileDisplayEntries,
   selectResolvedUserProfile,
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
   userProfileDisplaySelection,
-  normalizeUserProfileAvatarMime,
+  toUserProfile,
 } from "./user-profiles-internal.js";
 import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
 import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
+
+export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
+  path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 
 /** Worker hydration retains unknown legacy bindings without inventing their lifetime. */
 export function readUserProfileEmailBindings(
@@ -62,13 +70,7 @@ export function readUserProfileIdForEmail(db: DatabaseSync, email: string): stri
   if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const alias = executeSqliteQueryTakeFirstSync(
-    db,
-    userProfilesDb(db)
-      .selectFrom("user_profile_emails")
-      .select("profile_id")
-      .where("email", "=", email),
-  );
+  const alias = selectUserProfileEmailAlias(db, email);
   return alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id)?.id : undefined;
 }
 
@@ -108,24 +110,45 @@ export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {})
         emailsByProfile.get(profile_id)?.push(email);
       }
       return profiles.map((profile) =>
-        Object.assign(
-          {
-            id: profile.id,
-            displayName: profile.display_name,
-            avatarMime: normalizeUserProfileAvatarMime(profile.avatar_mime),
-            mergedInto: profile.merged_into,
-            createdAt: profile.created_at,
-            updatedAt: profile.updated_at,
-            emails: emailsByProfile.get(profile.id) ?? [],
-            githubIdentity: githubIdentities.get(profile.id) ?? null,
-            hasAvatar: profile.has_avatar === 1,
-          },
-          profile.role ? { role: profile.role } : {},
-        ),
+        Object.assign(toUserProfile(profile), {
+          emails: emailsByProfile.get(profile.id) ?? [],
+          githubIdentity: githubIdentities.get(profile.id) ?? null,
+          hasAvatar: profile.has_avatar === 1,
+        }),
       );
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
+}
+
+/** Resolve current authority and display together on the caller's admitted connection. */
+export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: string) {
+  return runSqliteDeferredTransactionSync(db, () => {
+    const current = tableExists(db, "user_profiles")
+      ? selectResolvedUserProfileMetadataById(db, profileId)
+      : undefined;
+    if (!current) {
+      return undefined;
+    }
+    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+    if (!display) {
+      return undefined;
+    }
+    const aliases = executeSqliteQuerySync(
+      db,
+      userProfilesDb(db)
+        .selectFrom("user_profiles")
+        .select("id")
+        .where("merged_into", "=", current.id)
+        .orderBy("id", "asc"),
+    ).rows;
+    return {
+      profileId: current.id,
+      role: current.role ?? null,
+      aliases: [current.id, ...aliases.map((alias) => alias.id)],
+      display: projectUserProfileDisplay(display),
+    };
+  });
 }
 
 /** Disclosure scopes need current aliases, never the resident display catalog. */
@@ -149,12 +172,21 @@ export function readCurrentUserProfileAliases(
   });
 }
 
-/** True when session-sharing policy can distinguish at least two durable people. */
-export function hasMultipleSessionSharingIdentities(
-  options: OpenClawStateDatabaseOptions = {},
+/** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */
+export function projectHasMultipleSessionSharingIdentities(
+  rows: ReadonlyMap<string, ProfileDisplayRow>,
 ): boolean {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
+  let people = 0;
+  for (const row of rows.values()) {
+    if (!row.merged_into && row.id !== GATEWAY_OWNER_PROFILE_ID && ++people === 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when session-sharing policy can distinguish at least two durable people. */
+export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boolean {
   const profiles = executeSqliteQuerySync(
     db,
     userProfilesDb(db)

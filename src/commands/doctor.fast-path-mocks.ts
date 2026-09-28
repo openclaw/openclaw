@@ -106,9 +106,12 @@ vi.mock("./doctor-gateway-health.js", () => ({
     .mockResolvedValue({ checked: false, ready: false, skipped: false }),
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("./doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -155,9 +158,12 @@ vi.mock("./doctor-skills.js", () => ({
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: vi.fn(() => null),
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
-  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("./doctor-workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-workspace.js")>()),
+  collectWorkspaceBackupTip: vi.fn(() => null),
 }));
 
 vi.mock("./doctor-ui.js", () => ({

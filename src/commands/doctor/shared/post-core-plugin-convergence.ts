@@ -130,7 +130,7 @@ async function repairInstalledOpenClawHostLinks(params: {
       }
       repaired += result.value.repaired;
     }
-    // Registered npm and ClawHub installs also live under extensions/, outside managed npm roots.
+    // Registered npm, ClawHub, and archive installs also live under extensions/, outside managed npm roots.
     const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
       installRecords: params.installRecords,
       extensionsDir: resolveDefaultPluginExtensionsDir(params.env),

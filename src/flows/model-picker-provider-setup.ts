@@ -135,6 +135,7 @@ export async function maybeHandleProviderPluginSelection(params: {
   }
   const applied = await runProviderPluginAuthMethod({
     config: params.cfg,
+    providerId: resolved.provider.id,
     runtime: params.runtime,
     prompter: params.prompter,
     method: resolved.method,

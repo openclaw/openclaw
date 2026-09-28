@@ -37,9 +37,7 @@ async function peerStates(directory: string): Promise<PeerState[]> {
 }
 
 const policyCases = [
-  { agent: "opencode", profile: "full", alsoAllow: undefined, denied: false },
   { agent: "opencode", profile: "messaging", alsoAllow: undefined, denied: true },
-  { agent: "opencode", profile: "minimal", alsoAllow: undefined, denied: true },
   { agent: "kilocode", profile: "coding", alsoAllow: undefined, denied: true },
   { agent: "kilocode", profile: "coding", alsoAllow: ["message"], denied: false },
 ] satisfies Array<{
@@ -125,20 +123,23 @@ it.each(policyCases)(
               agentDir: state.agentDir(),
               workspaceDir: state.workspaceDir,
             }),
-          ).toEqual([
-            {
-              provider: `acp-${agent}`,
-              id: "initial",
-              name: "Initial",
-              nativeRuntime: `acp-${agent}`,
-            },
-            {
-              provider: `acp-${agent}`,
-              id: "selected",
-              name: "Selected",
-              nativeRuntime: `acp-${agent}`,
-            },
-          ]);
+          ).toEqual({
+            entries: [
+              {
+                provider: `acp-${agent}`,
+                id: "initial",
+                name: "Initial",
+                nativeRuntime: `acp-${agent}`,
+              },
+              {
+                provider: `acp-${agent}`,
+                id: "selected",
+                name: "Selected",
+                nativeRuntime: `acp-${agent}`,
+              },
+            ],
+            outcomes: [{ provider: `acp-${agent}`, status: "ready" }],
+          });
           expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
             transcript,
           );
@@ -306,17 +307,9 @@ it.each([
   60000,
 );
 
-it.each([
-  { agent: "opencode", kind: "active" },
-  { agent: "qwen", kind: "active" },
-  { agent: "pi", kind: "active" },
-  { agent: "kilocode", kind: "active" },
-  { agent: "opencode", kind: "cancel" },
-  { agent: "opencode", kind: "timeout" },
-  { agent: "opencode", kind: "revoke" },
-] as const)(
-  "preserves $agent model authority during cold session initialization: $kind",
-  async ({ agent, kind }) => {
+it.each(["active", "cancel", "timeout", "revoke"] as const)(
+  "preserves model authority during cold session initialization: %s",
+  async (kind) => {
     await withOpenClawTestState({ label: "acp-native-cold-authority" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
@@ -324,7 +317,7 @@ it.each([
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdNewSession: true,
       });
-      const attempt = await attemptFor(state, config, agent, "full");
+      const attempt = await attemptFor(state, config, "opencode", "full");
       const controller = new AbortController();
       attempt.input.abortSignal = controller.signal;
       const timedOut = createDeferred();

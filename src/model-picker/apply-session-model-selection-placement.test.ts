@@ -53,7 +53,7 @@ vi.mock("../logging/subsystem.js", factories.logging);
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
 vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
 
-import { applySessionModelSelection } from "./apply-session-model-selection.js";
+import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 
 const { createEntry, createParams } = createModelSelectionInputs();
 

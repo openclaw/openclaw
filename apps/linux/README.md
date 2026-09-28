@@ -358,6 +358,8 @@ the additional sign-in options.
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
+If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
+
 While a newer Gateway release waits for its Linux app, the latest release keeps
 the previous published Linux updater manifest. Its original version, signature,
 and download URL stay intact. Successful Linux publication advances that
@@ -433,6 +435,8 @@ credential store and uncheck it again to save the off preference.
 Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
 
 Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
+
+Quick Chat pins its native request identity before sending, so activity from other runs cannot evict its buffered reply while the acknowledgment is pending. If an earlier retry prefix was already lost, a complete snapshot or recovered history can restore it; otherwise Quick Chat reports incomplete text instead of silently completing an empty reply.
 
 ## Installer resource
 
@@ -542,7 +546,7 @@ Core finalization remains independent of Linux readiness. After finalization,
 a detached mirror-only request catches up the legacy endpoint. A dispatch is
 not a successful mirror: cancellation, queue overflow, timeout, or readback
 failure leaves a visible degraded result for reconciliation. See the
-[Linux publication contract](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication).
+[Linux publication contract](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps

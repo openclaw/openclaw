@@ -20,7 +20,6 @@ import type {
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
-import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 

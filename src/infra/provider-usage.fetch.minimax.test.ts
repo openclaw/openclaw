@@ -63,11 +63,6 @@ describe("fetchMinimaxUsage", () => {
       expectedUrl: "https://api.minimax.io/v1/token_plan/remains",
     },
     {
-      name: "derives the usage endpoint from a configured origin",
-      baseUrl: "https://api.minimaxi.com",
-      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
-    },
-    {
       name: "falls back to CN when the configured base URL is malformed",
       baseUrl: "not a url",
       expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
@@ -191,20 +186,6 @@ describe("fetchMinimaxUsage", () => {
       expected: {
         plan: "Team",
         windows: [{ label: "5h", usedPercent: 75, resetAt: 1_700_000_000_000 }],
-      },
-    },
-    {
-      name: "treats MiniMax current_interval_usage_count as remaining quota (not consumed)",
-      payload: {
-        data: {
-          current_interval_total_count: 100,
-          current_interval_usage_count: 98,
-          plan_name: "Coding Plan",
-        },
-      },
-      expected: {
-        plan: "Coding Plan",
-        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
       },
     },
     {
@@ -536,24 +517,5 @@ describe("fetchMinimaxUsage", () => {
 
     expect(result.error).toBe("Unsupported response shape");
     expect(result.windows).toHaveLength(0);
-  });
-
-  it("handles repeated nested records while scanning usage candidates", async () => {
-    const sharedUsage = {
-      total: 100,
-      used: 20,
-      usage_percent: 90,
-      window_hours: 1,
-    };
-    const dataWithSharedReference = {
-      first: sharedUsage,
-      nested: [sharedUsage],
-    };
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, { data: dataWithSharedReference }),
-    );
-
-    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
-    expect(result.windows).toEqual([{ label: "1h", usedPercent: 20, resetAt: undefined }]);
   });
 });

@@ -8,6 +8,7 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "../src/agents/auth-profiles/oauth-refresh-marker.js";
+import { reloadSharedAuthStoreOwnership } from "../src/agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -467,6 +468,8 @@ function expectAuthError(result: AgentResult, message: string): void {
 }
 
 async function connect(instance: OpenClawTestInstance) {
+  // Gateway startup can publish shared-auth ownership from its separate process.
+  reloadSharedAuthStoreOwnership(instance.env);
   const client = await connectGatewayClient({
     url: instance.url,
     token: instance.gatewayToken,
@@ -777,6 +780,11 @@ describe("OAuth refresh authority chain", () => {
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
       expect(readSharedCredential(scenario.instance)).toBeUndefined();
+
+      // CLI logout may finish with a refresh warning; the follow-up needs published auth state.
+      await expect(
+        client.request("models.authRefresh", { agentId: "owner", operation: "logout" }),
+      ).resolves.toEqual({ refreshed: true });
 
       const followup = await startTurn({
         client,

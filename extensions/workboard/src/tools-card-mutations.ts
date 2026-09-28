@@ -25,6 +25,16 @@ export function strictObject<const Properties extends TProperties>(properties: P
   return Type.Object(properties, { additionalProperties: false });
 }
 
+export function workspaceField() {
+  return Type.Optional(
+    strictObject({
+      kind: Type.String({ description: "scratch, dir, or worktree." }),
+      path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+      branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+    }),
+  );
+}
+
 export function createWorkboardMoveTool(params: {
   store: WorkboardStore;
   readScopedCardToolParams: (rawParams: unknown) => Promise<ScopedMoveParams>;

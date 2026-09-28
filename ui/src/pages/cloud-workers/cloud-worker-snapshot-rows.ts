@@ -232,6 +232,8 @@ export function renderSnapshotBuildRow(
     return nothing;
   }
   const failed = worker.state === "failed" || worker.state === "orphaned";
+  const action = failed ? options.onDismiss : options.onCancel;
+  const actionLabel = t(failed ? "cloudWorkersPage.snapshots.dismiss" : "common.cancel");
   return renderSettingsRow({
     title: t(
       failed
@@ -242,28 +244,16 @@ export function renderSnapshotBuildRow(
     ${t(`cloudWorkersPage.snapshots.buildStates.${worker.state}`)} ·
     ${t("cloudWorkersPage.snapshots.buildAge", { age: formatDurationHuman(worker.ageMs) })}
     ${failed && worker.error ? html`<div class="callout warning" role="alert">${worker.error}</div>` : nothing}`,
-    control: failed
-      ? options.onDismiss
-        ? html`<button
-            class="btn btn--sm"
-            type="button"
-            aria-label=${`${t("cloudWorkersPage.snapshots.dismiss")}: ${environment.id}`}
-            ?disabled=${options.busy}
-            @click=${options.onDismiss}
-          >
-            ${t("cloudWorkersPage.snapshots.dismiss")}
-          </button>`
-        : nothing
-      : options.onCancel
-        ? html`<button
-            class="btn btn--sm"
-            type="button"
-            aria-label=${`${t("common.cancel")}: ${environment.id}`}
-            ?disabled=${options.busy}
-            @click=${options.onCancel}
-          >
-            ${t("common.cancel")}
-          </button>`
-        : nothing,
+    control: action
+      ? html`<button
+          class="btn btn--sm"
+          type="button"
+          aria-label=${`${actionLabel}: ${environment.id}`}
+          ?disabled=${options.busy}
+          @click=${action}
+        >
+          ${actionLabel}
+        </button>`
+      : nothing,
   });
 }

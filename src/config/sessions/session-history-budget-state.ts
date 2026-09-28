@@ -157,6 +157,16 @@ export function recordPhysicalBudgetOutcome(
   }
   if (result.totalBytesAfter <= result.maxBytes) {
     state.blockedUntil = undefined;
+    if (result.overBudget) {
+      log.info("session history disk budget cleanup completed", {
+        storePath: params.storePath,
+        totalBytesBefore: result.totalBytesBefore,
+        totalBytesAfter: result.totalBytesAfter,
+        removedEntries: result.removedEntries,
+        removedFiles: result.removedFiles,
+        maxBytes: result.maxBytes,
+      });
+    }
     return;
   }
   const alreadyBlocked = state.blockedUntil !== undefined;

@@ -15,8 +15,10 @@ import {
   NodeRegistry,
   serializeEventPayload,
   type NodeRegistryOptions,
+  type NodeEventPayloadPreparation,
   type SerializedEventPayload,
 } from "./node-registry.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -88,19 +90,24 @@ export function createGatewayNodeSessionRuntime(params: {
     pairingGeneration: string;
     event: string;
     payloadJSON?: SerializedEventPayload | null;
+    preparePayload?: NodeEventPayloadPreparation;
   }) => {
     return nodeRegistry.sendEventRawForPairingGeneration(
       opts.nodeId,
       opts.pairingGeneration,
       opts.event,
       opts.payloadJSON ?? null,
+      opts.preparePayload,
     );
   };
   // Session fanout goes through the subscription manager so node reconnects and
   // explicit unsubscribes keep both node->session indexes in sync.
-  const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) => {
-    void nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
-  };
+  const nodeSendToSession = (
+    sessionKey: string,
+    event: string,
+    payload: unknown,
+    opts?: GatewayBroadcastOpts,
+  ) => nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent, opts);
   const nodeSendToAllSubscribed = (event: string, payload: unknown) => {
     void nodeSubscriptions.sendToAllSubscribed(event, payload, nodeSendEvent);
   };

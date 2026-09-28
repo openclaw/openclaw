@@ -34,7 +34,7 @@ import {
 import {
   callAgentToolGatewayRequest,
   hasInProcessGatewayToolContext,
-  runWithGatewayToolCleanupContext,
+  runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
@@ -44,7 +44,6 @@ import {
   resolveSessionToolAccess,
   runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
-/** Session self-service tool. */
 import { listSessionCloudProfiles } from "./sessions-cloud-profiles.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -396,9 +395,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
-        const expectedSessionId = normalizeOptionalString(
-          readToolStringParam(params, "expectedSessionId"),
-        );
+        const expectedSessionId = readToolStringParam(params, "expectedSessionId");
         if (!expectedSessionId) {
           throw new ToolInputError("Session lifecycle action requires a durable session identity");
         }
@@ -455,15 +452,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "assign_owner") {
         const ownerType = readToolStringParam(params, "ownerType", { required: true });
-        const ownerId = normalizeOptionalString(
-          readToolStringParam(params, "ownerId", { required: true }),
-        );
+        const ownerId = readToolStringParam(params, "ownerId", { required: true });
         if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
           throw new ToolInputError("assign_owner requires ownerType and ownerId");
         }
         const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
           opts,
-          normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+          readToolStringParam(params, "sessionKey"),
           gatewayRequest,
         );
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
@@ -533,12 +528,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
         opts,
-        normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+        readToolStringParam(params, "sessionKey"),
         gatewayRequest,
       );
       const archived = values.archived;
       const expectedSessionId =
-        normalizeOptionalString(readToolStringParam(params, "expectedSessionId")) ??
+        readToolStringParam(params, "expectedSessionId") ??
         (typeof archived === "boolean" && isRequesterSession
           ? normalizeOptionalString(opts.agentSessionId)
           : undefined);
@@ -589,87 +584,87 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // Archive only after the final tool result, transcript, and every
             // admitted owner have settled. Gateway-owned compare-and-swap
             // keeps a reset replacement from being archived between checks.
-            runWithGatewayToolCleanupContext(() => {
-              void released
-                .then(async () => {
-                  const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
-                  const archivePatch = {
-                    key,
-                    ...agentScope,
-                    archived: true,
-                    ...expectedSessionIdentity,
-                  };
-                  let unobservedRunRetries = 0;
+            // Accepted work retains its source authority, not the request/turn
+            // lifetime that must end before the archive can commit.
+            void runWithGatewayToolContinuationContext(() =>
+              released.then(async () => {
+                const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
+                const archivePatch = {
+                  key,
+                  ...agentScope,
+                  archived: true,
+                  ...expectedSessionIdentity,
+                };
+                let unobservedRunRetries = 0;
 
-                  while (true) {
-                    const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-                    if (
-                      latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
-                      (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
-                        latestEntry.lifecycleRevision !==
-                          expectedSessionIdentity.expectedLifecycleRevision)
-                    ) {
-                      return;
+                while (true) {
+                  const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
+                  if (
+                    latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
+                    (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
+                      latestEntry.lifecycleRevision !==
+                        expectedSessionIdentity.expectedLifecycleRevision)
+                  ) {
+                    return;
+                  }
+
+                  const competingRelease = getSessionWorkAdmissionRelease({
+                    scope: storePath,
+                    identities: archiveIdentities,
+                  });
+                  if (competingRelease) {
+                    unobservedRunRetries = 0;
+                    await competingRelease;
+                    continue;
+                  }
+
+                  try {
+                    await callGateway("sessions.patch", archivePatch);
+                    return;
+                  } catch (error) {
+                    // A new turn can enter after the idle check. Wait for that
+                    // admitted owner, or retry a transient gateway disconnect,
+                    // instead of losing an archive that was already scheduled.
+                    const message = formatErrorMessage(error);
+                    const retryableGatewayFailure =
+                      error instanceof GatewayTransportError ||
+                      isTransientNetworkError(error) ||
+                      (typeof error === "object" &&
+                        error !== null &&
+                        "retryable" in error &&
+                        error.retryable === true);
+                    if (!retryableGatewayFailure) {
+                      throw error;
                     }
-
-                    const competingRelease = getSessionWorkAdmissionRelease({
+                    log.warn(`retrying deferred self-archive for ${key}: ${message}`);
+                    const retryAfterRelease = getSessionWorkAdmissionRelease({
                       scope: storePath,
                       identities: archiveIdentities,
                     });
-                    if (competingRelease) {
+                    if (retryAfterRelease) {
                       unobservedRunRetries = 0;
-                      await competingRelease;
-                      continue;
-                    }
-
-                    try {
-                      await callGateway("sessions.patch", archivePatch);
-                      return;
-                    } catch (error) {
-                      // A new turn can enter after the idle check. Wait for that
-                      // admitted owner, or retry a transient gateway disconnect,
-                      // instead of losing an archive that was already scheduled.
-                      const message = formatErrorMessage(error);
-                      const retryableGatewayFailure =
-                        error instanceof GatewayTransportError ||
-                        isTransientNetworkError(error) ||
-                        (typeof error === "object" &&
-                          error !== null &&
-                          "retryable" in error &&
-                          error.retryable === true);
-                      if (!retryableGatewayFailure) {
-                        throw error;
-                      }
-                      log.warn(`retrying deferred self-archive for ${key}: ${message}`);
-                      const retryAfterRelease = getSessionWorkAdmissionRelease({
-                        scope: storePath,
-                        identities: archiveIdentities,
+                      await retryAfterRelease;
+                    } else {
+                      // Projected work can outlive local admission tracking.
+                      // Cap the interval, not the archive, so it cannot spin or
+                      // abandon a session whose remote turn is still running.
+                      const retryDelayMs = Math.min(
+                        25 * 2 ** Math.min(unobservedRunRetries, 8),
+                        SELF_ARCHIVE_MAX_RETRY_DELAY_MS,
+                      );
+                      await new Promise<void>((resolve) => {
+                        // A pending self-archive must not keep a shutting-down
+                        // gateway alive solely to retry its own transport.
+                        const retryTimer = setTimeout(resolve, retryDelayMs);
+                        retryTimer.unref?.();
                       });
-                      if (retryAfterRelease) {
-                        unobservedRunRetries = 0;
-                        await retryAfterRelease;
-                      } else {
-                        // Projected work can outlive local admission tracking.
-                        // Cap the interval, not the archive, so it cannot spin or
-                        // abandon a session whose remote turn is still running.
-                        const retryDelayMs = Math.min(
-                          25 * 2 ** Math.min(unobservedRunRetries, 8),
-                          SELF_ARCHIVE_MAX_RETRY_DELAY_MS,
-                        );
-                        await new Promise<void>((resolve) => {
-                          // A pending self-archive must not keep a shutting-down
-                          // gateway alive solely to retry its own transport.
-                          const retryTimer = setTimeout(resolve, retryDelayMs);
-                          retryTimer.unref?.();
-                        });
-                        unobservedRunRetries = Math.min(unobservedRunRetries + 1, 8);
-                      }
+                      unobservedRunRetries = Math.min(unobservedRunRetries + 1, 8);
                     }
                   }
-                })
-                .catch((error: unknown) => {
-                  log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
-                });
+                }
+              }),
+            ).catch((error: unknown) => {
+              log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
             });
 
             recordSessionToolActionFact({

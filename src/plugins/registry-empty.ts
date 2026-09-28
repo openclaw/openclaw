@@ -29,7 +29,6 @@ export const pluginArrays = [
   "agentToolResultMiddlewareOwners",
   "agentToolResultMiddlewares",
   "agentHarnesses",
-  "detachedTaskRuntimes",
   "legacyInternalHooks",
   "memoryCapabilities",
   "memoryCorpusSupplements",

@@ -84,9 +84,108 @@ const SCRIPTS_SHARD = {
   args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
 };
 
-/**
- * Builds the platform-specific oxlint shard list.
- */
+async function lintWorkspacePackages(cwd: string): Promise<string[] | undefined> {
+  const { parse: parseYaml } = await import("yaml");
+  const workspace: unknown = parseYaml(
+    fs.readFileSync(path.join(cwd, "pnpm-workspace.yaml"), "utf8"),
+  );
+  if (
+    !workspace ||
+    typeof workspace !== "object" ||
+    !("packages" in workspace) ||
+    !Array.isArray(workspace.packages) ||
+    !workspace.packages.every((entry) => typeof entry === "string" && !entry.startsWith("!"))
+  ) {
+    return undefined;
+  }
+  const roots = [
+    ...new Set(
+      workspace.packages.flatMap((pattern: string) =>
+        (pattern === "." ? ["."] : [...fs.globSync(pattern, { cwd })])
+          .filter((root) => fs.existsSync(path.join(cwd, root, "package.json")))
+          .map((root) => root.replaceAll(path.sep, "/")),
+      ),
+    ),
+  ];
+  return roots.includes(".")
+    ? roots.toSorted((left, right) => right.length - left.length)
+    : undefined;
+}
+
+/** Workspace metadata owns package boundaries; test/ remains outside full semantic lint. */
+export async function resolveChangedOxlintPackageScope(
+  files: readonly string[],
+  cwd = process.cwd(),
+) {
+  const roots = await lintWorkspacePackages(cwd);
+  if (!roots) {
+    return undefined;
+  }
+  const selected = new Set<string>();
+  for (const file of files) {
+    if (
+      path.isAbsolute(file) ||
+      file !== file.trim() ||
+      file.split("/").includes("..") ||
+      !OXLINT_SOURCE_FILE_PATTERN.test(file) ||
+      /\.d\.[cm]?ts$/u.test(file) ||
+      !fs.existsSync(path.join(cwd, file))
+    ) {
+      return undefined;
+    }
+    const owner = roots.find((root) => root !== "." && file.startsWith(`${root}/`)) ?? ".";
+    selected.add(owner);
+  }
+  return prepareOxlintPackageScope(roots, [...selected].toSorted(), cwd);
+}
+
+/** Filter after stripe assignment so package scope never changes execution ownership. */
+export async function createOxlintPackageScope(packages: readonly string[], cwd = process.cwd()) {
+  const roots = await lintWorkspacePackages(cwd);
+  if (!roots) {
+    throw new Error("Oxlint package selection requires canonical workspace roots");
+  }
+  return prepareOxlintPackageScope(roots, packages, cwd);
+}
+
+function prepareOxlintPackageScope(
+  roots: readonly string[],
+  packages: readonly string[],
+  cwd: string,
+) {
+  const selected = new Set(packages);
+  if (selected.size !== packages.length || packages.some((root) => !roots.includes(root))) {
+    throw new Error("Oxlint package selection must name unique canonical workspace roots");
+  }
+  const project = (target: string): string[] => {
+    const owner =
+      roots.find((root) => root !== "." && (target === root || target.startsWith(`${root}/`))) ??
+      ".";
+    const nested = roots.filter((root) => root !== "." && root.startsWith(`${target}/`));
+    if (!selected.has(owner)) {
+      return nested.filter((root) => selected.has(root));
+    }
+    if (nested.length === 0) {
+      return fs.statSync(path.join(cwd, target)).isDirectory() ||
+        OXLINT_SOURCE_FILE_PATTERN.test(target)
+        ? [target]
+        : [];
+    }
+    // A canonical container such as packages/ can contain both workspace
+    // packages and root-owned files. Split only along declared package roots.
+    return fs.readdirSync(path.join(cwd, target)).flatMap((entry) => project(`${target}/${entry}`));
+  };
+  return {
+    packages: [...selected].toSorted(),
+    selectShards(shards: readonly OxlintShard[]) {
+      return shards.flatMap((shard) => {
+        const targets = [...new Set(shard.args.slice(2).flatMap(project))];
+        return targets.length ? [{ ...shard, args: [...shard.args.slice(0, 2), ...targets] }] : [];
+      });
+    },
+  };
+}
+
 export function createOxlintShards({
   cwd = process.cwd(),
   env = process.env,
@@ -133,9 +232,6 @@ export function createOxlintShards({
   return [...coreShards, ...extensionShards, SCRIPTS_SHARD];
 }
 
-/**
- * Splits core oxlint targets into smaller source/package/UI shards.
- */
 function createCoreOxlintShards({
   cwd = process.cwd(),
   readDir = fs.readdirSync,
@@ -166,7 +262,7 @@ export function createExtensionOxlintShards({
   readDir = fs.readdirSync,
   chunkSize: requestedChunkSize = DEFAULT_EXTENSION_CHUNK_SIZE,
 }: ShardOptions & PlatformOptions & { chunkSize?: number } = {}) {
-  const entries = listExtensionEntries({ cwd, readDir });
+  const entries = listOxlintRootEntries(EXTENSIONS_DIR, { cwd, readDir });
   if (entries.dirs.length === 0 && entries.rootFiles.length === 0) {
     return [EXTENSIONS_SHARD];
   }
@@ -193,20 +289,13 @@ export function createExtensionOxlintShards({
   return shards;
 }
 
-/**
- * Reads the Windows extension shard chunk size.
- */
 export function resolveWindowsExtensionChunkSize(env: NodeJS.ProcessEnv = process.env) {
-  return resolvePositiveEnvIntWithFallback(
-    env,
-    "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE",
-    DEFAULT_EXTENSION_CHUNK_SIZE,
+  return (
+    resolvePositiveEnvInt(env, "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE") ??
+    DEFAULT_EXTENSION_CHUNK_SIZE
   );
 }
 
-/**
- * Chooses serial shard execution for constrained hosts or Windows.
- */
 export function shouldRunOxlintShardsSerial({
   env = process.env,
   platform = process.platform,
@@ -255,16 +344,16 @@ function readDirectoryEntries(readDir: ReadDirectoryEntries, target: string) {
   }
 }
 
-function listExtensionEntries({ cwd, readDir }: DirectoryLookup) {
-  const entries = readDirectoryEntries(readDir, path.join(cwd, EXTENSIONS_DIR));
+function listOxlintRootEntries(root: string, { cwd, readDir }: DirectoryLookup) {
+  const entries = readDirectoryEntries(readDir, path.join(cwd, root));
 
   const dirs = entries
     .filter((entry) => entry.isDirectory())
-    .map((entry) => `${EXTENSIONS_DIR}/${entry.name}`)
+    .map((entry) => `${root}/${entry.name}`)
     .toSorted((left, right) => left.localeCompare(right));
   const rootFiles = entries
     .filter((entry) => entry.isFile() && OXLINT_SOURCE_FILE_PATTERN.test(entry.name))
-    .map((entry) => `${EXTENSIONS_DIR}/${entry.name}`)
+    .map((entry) => `${root}/${entry.name}`)
     .toSorted((left, right) => left.localeCompare(right));
 
   return {
@@ -273,24 +362,11 @@ function listExtensionEntries({ cwd, readDir }: DirectoryLookup) {
   };
 }
 
-function listSourceRootTargetGroups({ cwd, readDir }: DirectoryLookup) {
-  const entries = readDirectoryEntries(readDir, path.join(cwd, "src"));
-
-  const dirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => `src/${entry.name}`)
-    .toSorted((left, right) => left.localeCompare(right));
-  const rootFiles = entries
-    .filter((entry) => entry.isFile() && OXLINT_SOURCE_FILE_PATTERN.test(entry.name))
-    .map((entry) => `src/${entry.name}`)
-    .toSorted((left, right) => left.localeCompare(right));
-
+function listSourceRootTargetGroups(options: DirectoryLookup) {
+  const { dirs, rootFiles } = listOxlintRootEntries("src", options);
   return [...dirs.map((target) => [target]), ...(rootFiles.length > 0 ? [rootFiles] : [])];
 }
 
-/**
- * Runs selected oxlint shards and returns process-style success/failure.
- */
 export async function main(
   extraArgs: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
@@ -308,12 +384,15 @@ export async function main(
     splitCore: shardArgs.splitCore,
     splitExtensions,
   });
-  const selectedShards = selectExtensionOxlintStripe(
+  const stripedShards = selectExtensionOxlintStripe(
     selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe, {
       isolateLargeTargets: true,
     }),
     shardArgs.extensionStripe,
   );
+  const selectedShards = shardArgs.packages
+    ? (await createOxlintPackageScope(shardArgs.packages)).selectShards(stripedShards)
+    : stripedShards;
 
   const needsArtifacts = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
     selectedShards,
@@ -379,20 +458,31 @@ function resolveHostResources(hostResources?: HostResources) {
   };
 }
 
-/**
- * Parses shard-runner flags separately from forwarded oxlint args.
- */
 export function parseShardRunnerArgs(args: string[]) {
   const only = new Set<string>();
   const oxlintArgs: string[] = [];
   let coreStripe: ShardStripe | undefined;
   let extensionStripe: ShardStripe | undefined;
   let splitCore = false;
+  let packages: string[] | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) {
       break;
+    }
+    if (arg === "--packages-json") {
+      const value: unknown = JSON.parse(args[index + 1] ?? "null");
+      if (
+        !Array.isArray(value) ||
+        value.length === 0 ||
+        !value.every((root) => typeof root === "string")
+      ) {
+        throw new Error("--packages-json requires a nonempty JSON string array");
+      }
+      packages = value;
+      index += 1;
+      continue;
     }
     if (arg === "--split-core") {
       splitCore = true;
@@ -434,7 +524,14 @@ export function parseShardRunnerArgs(args: string[]) {
   if (coreStripe && !splitCore) {
     throw new Error("--core-stripe requires --split-core");
   }
-  return { coreStripe, extensionStripe, only, oxlintArgs, splitCore };
+  return {
+    coreStripe,
+    extensionStripe,
+    only,
+    oxlintArgs,
+    splitCore,
+    ...(packages ? { packages } : {}),
+  };
 }
 
 function parseShardStripe(value: string | undefined, flag: string): ShardStripe {
@@ -453,9 +550,6 @@ function parseShardStripe(value: string | undefined, flag: string): ShardStripe 
   return { index, total };
 }
 
-/**
- * Filters shards by optional shard names and rejects unknown selectors.
- */
 export function filterOxlintShards<T extends { name: string }>(shards: T[], only: Set<string>) {
   if (only.size === 0) {
     return shards;
@@ -550,9 +644,6 @@ function matchesShardSelector(shard: { name: string }, selector: string) {
   return selector === shard.name || selector === shard.name.split(":")[0];
 }
 
-/**
- * Resolves shard concurrency from env, platform, and host resources.
- */
 export function resolveOxlintShardConcurrency({
   env = process.env,
   platform = process.platform,
@@ -590,16 +681,33 @@ async function runShards({ concurrency, entries, env, extraArgs, runner }: Shard
       if (isParentTerminationRequested()) {
         return undefined;
       }
-      return await runShard({ env, extraArgs, runner, shard });
+      const targets = shard.args.slice(2);
+      const boundedTargets =
+        (shard.name.startsWith("core:") &&
+          (targets.length === 1 ||
+            targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
+        (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
+      const boundedArgs =
+        boundedTargets &&
+        extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
+      return await runShard({
+        env: {
+          ...env,
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: String(concurrency),
+          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
+            ? JSON.stringify([...shard.args, ...extraArgs])
+            : "",
+        },
+        extraArgs,
+        runner,
+        shard,
+      });
     },
     { concurrency, stopOnError: false },
   );
   return results.filter((status) => status !== undefined);
 }
 
-/**
- * Runs one oxlint shard with bounded output, heartbeat, and forced cleanup.
- */
 export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
@@ -734,9 +842,6 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
   });
 }
 
-/**
- * Reads the shard heartbeat interval.
- */
 export function resolveShardHeartbeatMs(env: NodeJS.ProcessEnv) {
   return resolveNonNegativeEnvInt(
     env,
@@ -745,9 +850,6 @@ export function resolveShardHeartbeatMs(env: NodeJS.ProcessEnv) {
   );
 }
 
-/**
- * Reads the per-shard timeout.
- */
 export function resolveShardTimeoutMs(env: NodeJS.ProcessEnv) {
   return resolveNonNegativeEnvInt(
     env,
@@ -756,9 +858,6 @@ export function resolveShardTimeoutMs(env: NodeJS.ProcessEnv) {
   );
 }
 
-/**
- * Reads the graceful shutdown window before SIGKILL.
- */
 export function resolveShardKillGraceMs(env: NodeJS.ProcessEnv) {
   return resolveNonNegativeEnvInt(
     env,
@@ -788,19 +887,6 @@ function resolvePositiveEnvInt(env: NodeJS.ProcessEnv, key: string) {
   const rawValue = env[key];
   if (rawValue === undefined || rawValue === "") {
     return null;
-  }
-
-  return parsePositiveEnvInt(rawValue, key);
-}
-
-function resolvePositiveEnvIntWithFallback(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  defaultValue: number,
-) {
-  const rawValue = env[key];
-  if (rawValue === undefined || rawValue === "") {
-    return defaultValue;
   }
 
   return parsePositiveEnvInt(rawValue, key);

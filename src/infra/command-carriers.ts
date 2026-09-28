@@ -324,30 +324,34 @@ function resolveCommandBuiltinCarriedArgv(argv: string[]): string[] | null {
   return null;
 }
 
-function resolveSudoLikeCarriedArgv(argv: string[]): string[] | null {
+function resolveOptionCarrierArgv(argv: string[]): string[] | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
   const standaloneOptions =
     executable === "sudo"
       ? SUDO_STANDALONE_OPTIONS
       : executable === "doas"
         ? DOAS_STANDALONE_OPTIONS
-        : null;
+        : executable === "exec"
+          ? EXEC_STANDALONE_OPTIONS
+          : null;
   const optionsWithValue =
     executable === "sudo"
       ? SUDO_OPTIONS_WITH_VALUE
       : executable === "doas"
         ? DOAS_OPTIONS_WITH_VALUE
-        : null;
+        : executable === "exec"
+          ? EXEC_OPTIONS_WITH_VALUE
+          : null;
   if (!standaloneOptions || !optionsWithValue) {
     return null;
   }
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
-    if (token === "--") {
-      return stripSudoEnvAssignmentsFromCommandArgv(executable, argv.slice(index + 1));
-    }
-    if (!token.startsWith("-")) {
-      return stripSudoEnvAssignmentsFromCommandArgv(executable, argv.slice(index));
+    if (token === "--" || !token.startsWith("-")) {
+      const commandArgv = argv.slice(token === "--" ? index + 1 : index);
+      return executable === "exec"
+        ? commandArgv
+        : stripSudoEnvAssignmentsFromCommandArgv(executable, commandArgv);
     }
     const option = parseCarrierOptionToken(
       token,
@@ -373,30 +377,6 @@ function resolveSudoLikeCarriedArgv(argv: string[]): string[] | null {
   return null;
 }
 
-function resolveExecCarriedArgv(argv: string[]): string[] | null {
-  if (normalizeExecutableToken(argv[0] ?? "") !== "exec") {
-    return null;
-  }
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? "";
-    if (token === "--") {
-      return argv.slice(index + 1);
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(index);
-    }
-    const option = parseCarrierOptionToken(token, EXEC_STANDALONE_OPTIONS, EXEC_OPTIONS_WITH_VALUE);
-    if (!option) {
-      return null;
-    }
-    const consumeNextValue = knownCarrierOptionConsumesNextValue(option, EXEC_OPTIONS_WITH_VALUE);
-    if (consumeNextValue) {
-      index += 1;
-    }
-  }
-  return null;
-}
-
 export function resolveCarrierCommandArgv(
   argv: string[],
   depth = 0,
@@ -411,9 +391,9 @@ export function resolveCarrierCommandArgv(
       return resolveCommandBuiltinCarriedArgv(argv);
     case "sudo":
     case "doas":
-      return resolveSudoLikeCarriedArgv(argv);
+      return resolveOptionCarrierArgv(argv);
     case "exec":
-      return options?.includeExec ? resolveExecCarriedArgv(argv) : null;
+      return options?.includeExec ? resolveOptionCarrierArgv(argv) : null;
     default:
       return null;
   }

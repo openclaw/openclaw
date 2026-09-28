@@ -41,18 +41,6 @@ const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
   }>({ dirName: "memory-core", artifactBasename: "status-api.js" });
 });
 
-function loadGatewayProbeModule() {
-  return gatewayProbeModuleLoader.load();
-}
-
-function loadProbeGatewayModule() {
-  return probeGatewayModuleLoader.load();
-}
-
-function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
-}
-
 async function hasBuiltInMemoryState(databasePath: string): Promise<boolean> {
   if (!existsSync(databasePath)) {
     return false;
@@ -143,7 +131,8 @@ async function applyLocalStatusRpcFallback(params: {
     return params.gatewayProbe;
   }
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
-  const status = await loadGatewayCallModule()
+  const status = await gatewayCallModuleLoader
+    .load()
     .then(({ callGateway }) => {
       const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(params));
       if (timeoutMs === 0) {
@@ -215,7 +204,9 @@ export async function resolveGatewayProbeSnapshot(params: {
     config: params.cfg,
     configPath: params.configPath,
   });
-  const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
+  const { gatewayMode, mode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
+  const originScopedDeviceAuth =
+    mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim());
   const shouldResolveAuth =
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.resolveAuthWhenRemoteUrlMissing === true);
@@ -223,9 +214,11 @@ export async function resolveGatewayProbeSnapshot(params: {
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
   const gatewayProbeAuthResolution = shouldResolveAuth
-    ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
-        resolveGatewayProbeAuthResolution(params.cfg, params.env),
-      )
+    ? await gatewayProbeModuleLoader
+        .load()
+        .then(({ resolveGatewayProbeAuthResolution }) =>
+          resolveGatewayProbeAuthResolution(params.cfg, params.env),
+        )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const remainingTimeoutMs = () => resolveStatusGatewayProbeTimeoutMs(params.opts);
@@ -270,7 +263,8 @@ export async function resolveGatewayProbeSnapshot(params: {
     (readiness && !canDiagnose) || (shouldProbe && remainingTimeoutMs() === 0)
       ? unavailableProbe()
       : shouldProbe
-        ? await loadProbeGatewayModule()
+        ? await probeGatewayModuleLoader
+            .load()
             .then(({ probeGateway }) => {
               const timeoutMs = remainingTimeoutMs();
               return timeoutMs === 0
@@ -278,6 +272,8 @@ export async function resolveGatewayProbeSnapshot(params: {
                 : probeGateway({
                     url: gatewayConnection.url,
                     config: params.cfg,
+                    originScopedDeviceAuth,
+                    configuredRemote: gatewayConnection.urlSource === "config gateway.remote.url",
                     auth: gatewayProbeAuthResolution.auth,
                     env: params.env,
                     timeoutMs,
@@ -296,6 +292,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     timeoutMs: remainingTimeoutMs(),
     gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
     enabled:
+      !originScopedDeviceAuth &&
       params.opts.localStatusRpcFallback !== false &&
       remainingTimeoutMs() > 0 &&
       (!readiness || canDiagnose),

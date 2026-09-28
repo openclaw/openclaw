@@ -42,7 +42,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
-import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
 import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
@@ -703,33 +702,13 @@ export function handlePageGatewayEvent(
     recordChatSendServerTiming(state, event.payload);
     return;
   }
-  if (event.event === "session.message") {
-    const scopedChange = handleSessionMessageEvent(
-      state,
-      event.payload,
-      isPresented,
-      sessionResult,
-    );
+  if (event.event === "session.message" || event.event === "sessions.changed") {
+    const handle =
+      event.event === "session.message" ? handleSessionMessageEvent : handleSessionsChangedEvent;
+    const scopedChange = handle(state, event.payload, isPresented, sessionResult);
     void resumeStoredChatOutboxes(state, event);
     if (scopedChange) {
       requestChatPageUpdate(state, "animation-frame");
     }
-    return;
-  }
-  if (event.event === "sessions.changed") {
-    const scopedChange = handleSessionsChangedEvent(
-      state,
-      event.payload,
-      isPresented,
-      sessionResult,
-    );
-    void resumeStoredChatOutboxes(state, event);
-    if (scopedChange) {
-      requestChatPageUpdate(state, "animation-frame");
-    }
-    return;
-  }
-  if (event.event === "task") {
-    handleBackgroundTasksEvent(state, event.payload, isPresented());
   }
 }

@@ -11,7 +11,7 @@ import type {
   WebPushVapidPublicKeyParams,
 } from "./schema-modules.js";
 import { WorkerComputerParamsSchema } from "./schema/worker-computer.js";
-import type { ValidationError } from "./validation-errors.js";
+import { checkProtocolJson } from "./validation-errors.js";
 export { validateApprovalPresentation } from "./approval-result-validators.js";
 export {
   validateDecisionReceiptV1,
@@ -35,51 +35,11 @@ export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSche
 export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
 export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
 export const validateWorkerPortalParams = compile(S.WorkerPortalParamsSchema);
+export const validateWorkerPresenceParams = compile(S.WorkerPresenceParamsSchema);
 export const validateWorkerComputerParams = compile(WorkerComputerParamsSchema);
 
-function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
-  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
-  const seen = new WeakSet<object>();
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    if (current.depth > S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
-      return {
-        keyword: "maxDepth",
-        params: { limit: S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
-        message: `must not exceed JSON nesting depth ${S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
-      };
-    }
-    if (
-      current.value === null ||
-      typeof current.value === "string" ||
-      typeof current.value === "boolean"
-    ) {
-      continue;
-    }
-    if (typeof current.value === "number") {
-      if (!Number.isFinite(current.value)) {
-        return { keyword: "finite", message: "must contain only finite JSON numbers" };
-      }
-      continue;
-    }
-    if (typeof current.value !== "object") {
-      return { keyword: "jsonValue", message: "must contain only JSON values" };
-    }
-    if (seen.has(current.value)) {
-      return { keyword: "acyclic", message: "must be an acyclic JSON value" };
-    }
-    seen.add(current.value);
-    const values = Array.isArray(current.value)
-      ? current.value
-      : Object.values(current.value as Record<string, unknown>);
-    for (const value of values) {
-      stack.push({ depth: current.depth + 1, value });
-    }
-  }
-  return undefined;
+function checkWorkerProtocolJson(data: unknown) {
+  return checkProtocolJson(data, S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH);
 }
 
 export const validateWorkerTranscriptCommitParams = compile(
@@ -121,6 +81,8 @@ export const validateMentionsListResult = compile(S.MentionsListResultSchema);
 export const validateMentionsChangedEvent = compile(S.MentionsChangedEventSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
 export const validateUsersPrefsSetParams = compile(S.UsersPrefsSetParamsSchema);
+export const validateUsersPersonalFileGetParams = compile(S.UsersPersonalFileGetParamsSchema);
+export const validateUsersPersonalFileSetParams = compile(S.UsersPersonalFileSetParamsSchema);
 export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
 export const validateUsersGitHubStatusParams = compile(S.UsersGitHubStatusParamsSchema);
 export const validateUsersGitHubAuthorizeStartParams = compile(
@@ -136,6 +98,8 @@ export const validateUsersGitHubDisconnectParams = compile(S.UsersGitHubDisconne
 export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
 export const validateUsersLinkEmailResult = compile(S.UsersLinkEmailResultSchema);
+export const validateUsersMergeParams = compile(S.UsersMergeParamsSchema);
+export const validateUsersMergeResult = compile(S.UsersMergeResultSchema);
 export const validateUsersLinkChannelIdentityParams = compile(
   S.UsersLinkChannelIdentityParamsSchema,
 );
@@ -238,6 +202,9 @@ export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusPara
 export const validatePortalListParams = compile(S.PortalListParamsSchema);
 export const validatePortalOpenParams = compile(S.PortalOpenParamsSchema);
 export const validatePortalCloseParams = compile(S.PortalCloseParamsSchema);
+export const validateSessionPortalListParams = compile(S.SessionPortalListParamsSchema);
+export const validateSessionPortalOpenParams = compile(S.SessionPortalOpenParamsSchema);
+export const validateSessionPortalCloseParams = compile(S.SessionPortalCloseParamsSchema);
 export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserveParamsSchema);
 export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateWorkerDesktopLaunchParams = compile(S.WorkerDesktopLaunchParamsSchema);
@@ -249,6 +216,8 @@ export const validateDesktopReleaseParams = compile(S.DesktopReleaseParamsSchema
 export const validateDesktopReleaseResult = compile(S.DesktopReleaseResultSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
+export const validatePresenceQueryParams = compile(S.PresenceQueryParamsSchema);
+export const validatePresenceQueryResult = compile(S.PresenceQueryResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = compile(S.NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = compile(S.NodeInvokeParamsSchema);
@@ -376,11 +345,6 @@ export const validateTaskSuggestionsListParams = compile(S.TaskSuggestionsListPa
 export const validateTaskSuggestionsCreateParams = compile(S.TaskSuggestionsCreateParamsSchema);
 export const validateTaskSuggestionsAcceptParams = compile(S.TaskSuggestionsAcceptParamsSchema);
 export const validateTaskSuggestionsDismissParams = compile(S.TaskSuggestionsDismissParamsSchema);
-export const validateTasksListParams = compile(S.TasksListParamsSchema);
-export const validateTasksGetParams = compile(S.TasksGetParamsSchema);
-export const validateTasksHistoryParams = compile(S.TasksHistoryParamsSchema);
-export const validateTasksCancelParams = compile(S.TasksCancelParamsSchema);
-export const validateTasksRecoveryParams = compile(S.TasksRecoveryParamsSchema);
 export const validateConfigGetParams = compile(S.ConfigGetParamsSchema);
 export const validateConfigSetParams = compile(S.ConfigSetParamsSchema);
 export const validateConfigApplyParams = compile(S.ConfigApplyParamsSchema);
@@ -516,6 +480,7 @@ export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema);
 export const validateCronRemoveParams = compile(S.CronRemoveParamsSchema);
 export const validateCronRunParams = compile(S.CronRunParamsSchema);
 export const validateCronRunsParams = compile(S.CronRunsParamsSchema);
+export const validateCronHistoryParams = compile(S.CronHistoryParamsSchema);
 export const validateCronScratchGetParams = compile(S.CronScratchGetParamsSchema);
 export const validateCronScratchSetParams = compile(S.CronScratchSetParamsSchema);
 export const validateDevicePairListParams = compile(S.DevicePairListParamsSchema);

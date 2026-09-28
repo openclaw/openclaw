@@ -62,6 +62,7 @@ export const CORE_BUILT_IN_MODEL_APIS = new Set([
   "anthropic-messages",
   "azure-openai-responses",
   "google-generative-ai",
+  "google-interactions",
   "google-vertex",
   "mistral-conversations",
   "openai-chatgpt-responses",

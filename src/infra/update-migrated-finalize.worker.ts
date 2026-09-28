@@ -20,11 +20,17 @@ import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-comman
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  adoptCandidateManagedServiceStop,
+  stopSupervisedPredecessorGateway,
+} from "./update-candidate-predecessor-stop.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -185,6 +191,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   const response: MigratedUpdateFinalizationResult = {
     result: finalized.result,
     exitCode: finalized.exitCode,
+    candidateStartAttempted: finalized.candidateStartAttempted || gatewayRestartPending,
     ...(gatewayRestartPending
       ? { restartRunId: terminal.runId }
       : { terminalRunId: terminal.runId }),
@@ -248,6 +255,12 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      await stopSupervisedPredecessorGateway(input, {
+        root: input.root,
+        assertCurrent,
+        warn: (message) => process.stderr.write(`${message}\n`),
+      });
+      assertCurrent();
       await runDoctorHealthFlow(
         {
           ...defaultRuntime,
@@ -266,6 +279,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),
@@ -291,13 +305,13 @@ async function finalizeInput(
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
-  executorFence?.assertCurrent();
+  executorFence.assertCurrent();
   adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     ...runIdentity,
-    ...(executorFence ? { executorFence } : {}),
+    executorFence,
     ...(descriptor
       ? {
           requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
@@ -313,10 +327,29 @@ async function finalizeInput(
   executorFence.assertCurrent();
   registerRun(run);
   for (const step of input.bufferedSteps) {
-    executorFence?.assertCurrent();
+    executorFence.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
-  const stopped = input.params.preManagedServiceStop;
+  const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
+    transferred: input.params.preManagedServiceStop,
+    shouldRestart: input.params.shouldRestart,
+    mode: input.params.result.mode,
+    windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
+    runId: run.runId,
+    ledger: { env: run.env },
+    root: input.params.result.root ?? input.params.root,
+    timeoutMs: input.params.updateStepTimeoutMs,
+    assertCurrent: () => {
+      executorFence.assertCurrent();
+      if (run.requesterAuthority?.isCurrent() === false) {
+        throw new UpdateRequesterRevokedError();
+      }
+    },
+    onStep: (step) => input.params.result.steps.push(step),
+  });
+  if (restartRequired) {
+    input.params.shouldRestart = true;
+  }
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }
@@ -341,6 +374,7 @@ async function finalizeInput(
       : undefined;
   let result;
   let exitCode = 0;
+  let candidateStartAttempted = false;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     // This worker already loaded the candidate; the local flag conveys no authority.
@@ -353,7 +387,12 @@ async function finalizeInput(
           ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
           : {}),
       },
-      { candidateRuntime: true },
+      {
+        candidateRuntime: true,
+        onGatewayStartAttempted: () => {
+          candidateStartAttempted = true;
+        },
+      },
     );
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
@@ -366,14 +405,35 @@ async function finalizeInput(
     await windowsRecovery?.complete(result?.status === "ok");
   }
   executorFence.assertCurrent();
-  return { run, result, exitCode, automaticTriage };
+  return { run, result, exitCode, automaticTriage, candidateStartAttempted };
 }
 
 void (async () => {
+  const errors: unknown[] = [];
   try {
     await finalizeMigratedUpdate();
-  } finally {
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await finalizeActiveDebugProxyCaptures();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
     await closeOpenClawStateDatabaseAsync();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(
+      errors,
+      "Update finalization and resource cleanup failed.",
+      errors[0],
+    );
   }
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);

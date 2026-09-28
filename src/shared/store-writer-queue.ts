@@ -175,6 +175,8 @@ export async function runQueuedStoreWrite<T>(params: {
   fn: () => Promise<T>;
   reentrant?: boolean;
   timing?: StoreWriterTiming;
+  /** Cancellation removes only a waiting task; admitted work must settle normally. */
+  signal?: AbortSignal;
 }): Promise<T> {
   if (!params.storePath || typeof params.storePath !== "string") {
     throw new Error(
@@ -183,6 +185,7 @@ export async function runQueuedStoreWrite<T>(params: {
       )}`,
     );
   }
+  params.signal?.throwIfAborted();
   // Explicit reentrancy keeps one logical read/decide/write section on the
   // active lane; ordinary async children must queue behind the current writer.
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
@@ -202,31 +205,51 @@ export async function runQueuedStoreWrite<T>(params: {
   // async context. The active-writer scope still belongs to actual execution.
   const runInAsyncContext = AsyncLocalStorage.snapshot();
   const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
-  return await new Promise<T>((resolve, reject) => {
+  let detach = () => {};
+  const completion = new Promise<T>((resolve, reject) => {
+    detach = () => params.signal?.removeEventListener("abort", abort);
+    const abort = () => {
+      const index = queue.pending.indexOf(task);
+      if (index !== -1) {
+        queue.pending.splice(index, 1);
+        task.reject(params.signal?.reason);
+      }
+    };
     const task: StoreWriterTask = {
-      fn: async () =>
-        await runInAsyncContext(
+      fn: async () => {
+        detach();
+        return await runInAsyncContext(
           runActiveStoreWriter,
           params.queues,
           params.storePath,
           params.fn,
           params.timing,
-        ),
+        );
+      },
       resolve: (value) => resolve(value as T),
       reject,
     };
     queue.pending.push(task);
+    params.signal?.addEventListener("abort", abort, { once: true });
     void drainStoreWriterQueue(params.queues, params.storePath);
   });
+  if (params.signal) {
+    // Observe cleanup without adding a settlement hop to the writer's result.
+    void completion.then(detach, detach);
+  }
+  return await completion;
 }
 
-/** Rejects pending queued writes and clears queue state for test cleanup. */
+/** Rejects pending queued writes and clears idle queue state for test cleanup. */
 export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message: string): void {
-  for (const queue of queues.values()) {
+  for (const [storePath, queue] of queues) {
     for (const task of queue.pending) {
       task.reject(new Error(message));
     }
     queue.pending.length = 0;
+    // An active writer keeps its lane; a fresh queue would admit a second writer.
+    if (!queue.drainPromise) {
+      queues.delete(storePath);
+    }
   }
-  queues.clear();
 }

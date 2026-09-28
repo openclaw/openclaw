@@ -7,8 +7,8 @@ import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type {
-  SubagentRunReadRecord,
   SubagentCompletionDeliveryState,
+  SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
 
 export type SubagentCompletionRequest = {
@@ -67,7 +67,6 @@ type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
   suppressSessionEffects?: true;
   acceptedAt?: number;
   interruptedAt?: number;
-  interruptionReason?: "gateway-restart";
   transcriptTarget?: AgentRunSessionTarget;
 };
 
@@ -180,6 +179,7 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   wakeOnDescendantSettle?: boolean;
   execution: SubagentExecutionState;
   completion?: SubagentCompletionState;
@@ -237,6 +237,7 @@ export type SubagentRunMaintenanceRecord = Pick<
 
 export type SubagentRegistrationScope = {
   readonly waitForClaim: () => Promise<void> | undefined;
+  readonly waitForRetirementPublication: () => Promise<void> | undefined;
   readonly canLaunch: () => boolean;
   readonly canCleanupSession: () => boolean;
   readonly canAcceptLaunch: () => boolean;

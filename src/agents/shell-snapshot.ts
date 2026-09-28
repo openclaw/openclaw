@@ -8,8 +8,8 @@ import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { resolveStateDir } from "../config/paths.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { spawnProcess } from "../process/spawn-utils.js";
@@ -337,9 +337,6 @@ function buildTrustedSnapshotCaptureEnv(
 function buildStartupSourceScript(shellName: string): string {
   if (shellName === "zsh") {
     return `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`;
-  }
-  if (shellName === "bash") {
-    return ":";
   }
   return ":";
 }

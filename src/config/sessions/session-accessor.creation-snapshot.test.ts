@@ -3,9 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir, cleanupTempDirs } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   createSessionEntryWithTranscript,
   assignSessionOwner,
@@ -14,20 +18,22 @@ import {
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
-import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 
 const tempDirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
 });
 
 describe("session creation snapshot", () => {
-  it.each([undefined, 3, 4, 99])(
+  it.each([undefined, 3, 99])(
     "preserves adopted history without selecting a new projection (header=%s)",
     async (version) => {
       const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
@@ -58,7 +64,7 @@ describe("session creation snapshot", () => {
     },
   );
 
-  it("prepares and adopts a complete target without decoding sibling saved prompts", async () => {
+  it("prepares and adopts a complete target without decoding sibling entries", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-snapshot-") };
     const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
     const target = {
@@ -81,6 +87,7 @@ describe("session creation snapshot", () => {
         {
           sessionId: `sibling-${index}`,
           updatedAt: 1,
+          displayName: "unrelated-entry-marker",
           skillsSnapshot: { prompt: "unrelated-saved-prompt".repeat(1024), skills: [] },
         },
       );
@@ -91,14 +98,21 @@ describe("session creation snapshot", () => {
       assignedAt: 1,
     });
     recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
+    const database = openOpenClawAgentDatabase(scope);
+    readSessionCreationSnapshotInDatabase(database, scope.sessionKey);
     const parse = vi.spyOn(JSON, "parse");
+    const prepared = readSessionCreationSnapshotInDatabase(
+      openOpenClawAgentDatabase(scope),
+      scope.sessionKey,
+    );
+    const siblingPayloadReads = parse.mock.calls.filter(([json]) =>
+      json.includes("unrelated-entry-marker"),
+    ).length;
+    parse.mockRestore();
+    expect(prepared.existingEntry).toMatchObject(target);
+    expect(siblingPayloadReads).toBe(0);
     const created = await createSessionEntryWithTranscript(scope, ({ existingEntry }) => {
-      const siblingPayloadReads = parse.mock.calls.filter(([json]) =>
-        json.includes("unrelated-saved-prompt"),
-      ).length;
-      parse.mockRestore();
       expect(existingEntry).toMatchObject(target);
-      expect(siblingPayloadReads).toBe(0);
       return { ok: true, entry: { ...existingEntry!, label: "adopted" } };
     });
     expect(created).toMatchObject({ ok: true, entry: { ...target, label: "adopted" } });
@@ -128,6 +142,16 @@ describe("session creation snapshot", () => {
         { ...scope, sessionKey: sibling },
         { sessionId: "sibling", updatedAt: 1, label: "taken" },
       );
+      for (const [sessionKey, label, archivedAt] of [
+        ["agent:main:archived", "archived", 1],
+        ["agent:main:spaced", " padded ", undefined],
+        ["agent:main:internal-session-effects:hidden", "hidden", undefined],
+      ] as const) {
+        replaceSessionEntrySync(
+          { ...scope, sessionKey },
+          { sessionId: sessionKey, updatedAt: 1, label, archivedAt },
+        );
+      }
       if (cold) {
         closeOpenClawAgentDatabasesForTest();
       }
@@ -136,18 +160,30 @@ describe("session creation snapshot", () => {
         (context) => {
           expect(context.existingEntry).toMatchObject(entry);
           expect(context.targetEntry).toMatchObject(entry);
-          expect(context.isLabelInUse("own")).toBe(false);
-          expect(context.isLabelInUse("taken")).toBe(true);
+          expect(context.labelInUse).toBe(false);
           return { ok: false, error: "inspection complete" };
         },
+        { label: "own" },
       );
       expect(result).toMatchObject({ ok: false, phase: "entry" });
       expect(loadSessionEntry({ ...scope, sessionKey: sibling })?.sessionId).toBe("sibling");
+      const database = openOpenClawAgentDatabase(scope);
+      for (const [label, expected] of [
+        ["archived", true],
+        [" padded ", true],
+        ["padded", false],
+        ["hidden", false],
+        [undefined, false],
+      ] as const) {
+        expect(readSessionCreationSnapshotInDatabase(database, key, label).labelInUse).toBe(
+          expected,
+        );
+      }
     },
   );
 
   it.each(["malformed", "mismatched-window", "mismatched-time", "nul"])(
-    "preserves warm listing behavior for a %s target",
+    "preserves native warm listing but refuses corrupt worker input for a %s target",
     async (kind) => {
       const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-warm-rows-") };
       const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
@@ -183,12 +219,18 @@ describe("session creation snapshot", () => {
       const expected = listSessionEntriesCore(scope).find(
         (row) => row.sessionKey === scope.sessionKey,
       )?.entry;
-      await createSessionEntryWithTranscript(scope, (context) => {
-        expect(context.existingEntry).toEqual(expected);
-        expect(context.targetEntry).toEqual(expected);
-        expect(context.isLabelInUse("taken")).toBe(true);
-        return { ok: false, error: "inspection complete" };
-      });
+      const context = readSessionCreationSnapshotInDatabase(
+        openOpenClawAgentDatabase(scope),
+        scope.sessionKey,
+        "taken",
+      );
+      expect(context.existingEntry).toEqual(expected);
+      expect(context.targetEntry).toEqual(expected);
+      expect(context.labelInUse).toBe(true);
+      await expect(
+        createSessionEntryWithTranscript(scope, () => ({ ok: false, error: "unreachable" })),
+      ).rejects.toThrow("openclaw doctor --fix");
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       await expect(
         createSessionEntryWithTranscript(scope, () => ({ ok: false, error: "unreachable" })),
@@ -229,43 +271,32 @@ describe("session creation snapshot", () => {
       return result;
     });
     try {
-      await createSessionEntryWithTranscript(scope, async (context) => {
-        await Promise.resolve();
-        expect(changed).toBe(true);
-        expect(context.targetEntry).toMatchObject(entry);
-        expect(context.isLabelInUse("old label")).toBe(true);
-        expect(context.isLabelInUse("new label")).toBe(false);
-        return { ok: false, error: "inspection complete" };
-      });
+      const context = readSessionCreationSnapshotInDatabase(
+        openOpenClawAgentDatabase(scope),
+        scope.sessionKey,
+        "old label",
+      );
+      await Promise.resolve();
+      expect(changed).toBe(true);
+      expect(context.targetEntry).toMatchObject(entry);
+      expect(context.labelInUse).toBe(true);
+      expect(
+        readSessionCreationSnapshotInDatabase(
+          openOpenClawAgentDatabase(scope),
+          scope.sessionKey,
+          "new label",
+        ).labelInUse,
+      ).toBe(true);
+      expect(
+        readSessionCreationSnapshotInDatabase(
+          openOpenClawAgentDatabase(scope),
+          scope.sessionKey,
+          "old label",
+        ).labelInUse,
+      ).toBe(false);
     } finally {
       external.close();
     }
     expect(loadSessionEntry(scope)?.skillsSnapshot?.prompt).toBe("new target");
-  });
-  it("keeps selective full payloads detached from the metadata cache", () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-cache-") };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
-    replaceSessionEntrySync(scope, {
-      sessionId: "target",
-      updatedAt: 1,
-      label: "original",
-      skillsSnapshot: { prompt: "saved target", skills: [] },
-    });
-    const database = openOpenClawAgentDatabase(scope);
-    const options = { cache: true, projection: "list" as const };
-    readSessionEntryCache(database, options);
-    const mixed = readSessionEntryCache(database, {
-      ...options,
-      fullEntryKeys: [scope.sessionKey],
-    });
-    const target = mixed.entries.get(scope.sessionKey);
-    expect(target?.skillsSnapshot?.prompt).toBe("saved target");
-    if (!target) {
-      throw new Error("Missing target");
-    }
-    target.label = "caller mutation";
-    const metadata = readSessionEntryCache(database, options).entries.get(scope.sessionKey);
-    expect(metadata?.label).toBe("original");
-    expect(metadata).not.toHaveProperty("skillsSnapshot");
   });
 });

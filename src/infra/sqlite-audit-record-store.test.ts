@@ -76,23 +76,6 @@ describe("SQLite audit record store", () => {
     });
   });
 
-  it("keeps the newest configured number of rows per scope", async () => {
-    await withAuditStoreFixture({ prefix: "openclaw-audit-store-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
-        scope: "bounded-test",
-        maxEntries: 2,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-
-      store.register("one", { value: 1 }, 1);
-      store.register("two", { value: 2 }, 2);
-      store.register("three", { value: 3 }, 3);
-
-      expect(store.size()).toBe(2);
-      expect(store.entries().map((entry) => entry.key)).toEqual(["two", "three"]);
-    });
-  });
-
   it("reads bounded newest-first pages by sequence", async () => {
     await withAuditStoreFixture({ prefix: "openclaw-audit-store-latest-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({
@@ -128,6 +111,7 @@ describe("SQLite audit record store", () => {
       expect(store.entries().map((entry) => entry.key)).toEqual(["z-first", "a-second"]);
 
       store.register("m-third", { value: 3 }, 1);
+      expect(store.size()).toBe(2);
       expect(store.entries().map((entry) => entry.key)).toEqual(["a-second", "m-third"]);
     });
   });
@@ -312,30 +296,5 @@ describe("SQLite audit record store", () => {
         { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
       ]);
     });
-  });
-
-  it("orders legacy batches before existing runtime rows", async () => {
-    await withAuditStoreFixture(
-      { prefix: "openclaw-audit-store-legacy-order-" },
-      async (stateDir) => {
-        const store = createSqliteAuditRecordStore<{ value: number }>({
-          scope: "legacy-order",
-          maxEntries: 4,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        });
-
-        store.register("runtime", { value: 3 }, 3);
-        store.registerLegacyMany([
-          { key: "legacy-one", value: { value: 1 }, createdAt: 1 },
-          { key: "legacy-two", value: { value: 2 }, createdAt: 2 },
-        ]);
-
-        expect(store.entries().map((entry) => entry.key)).toEqual([
-          "legacy-one",
-          "legacy-two",
-          "runtime",
-        ]);
-      },
-    );
   });
 });

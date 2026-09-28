@@ -862,7 +862,7 @@ describe("session row observations", () => {
       h.reply(
         "sessions.list",
         { limit: 50, includeGlobal: true, includeUnknown: true },
-        sessionsResult([primary, other], 900),
+        sessionsResult([{ ...primary }, other], 900),
       );
       await managed.refresh();
       const before = h.sessions.listSnapshot(query).result;

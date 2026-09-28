@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
@@ -14,7 +15,6 @@ import {
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
-  reportRatchetFailures,
   reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
@@ -193,24 +193,21 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     );
     const increased = compareLineCapViolations(after, before, renames);
     if (
-      reportRatchetFailures(
-        [
-          {
-            title: "Line-cap ratchet rejects new violations or growth:",
-            entries: increased.map(
-              ({ entry, allowed, current }) =>
-                `${entry}: ${allowed} -> ${current} counted lines (cap ${after.get(entry)!.cap})`,
-            ),
-          },
-        ],
-        "Extract a coherent sibling module; never trim coverage or disable max-lines.",
+      reportLimitViolations(
+        increased.map(({ entry, allowed, current }) => ({
+          file: entry,
+          title: "Line-cap ratchet rejects new violations or growth:",
+          message: `${allowed} -> ${current} counted lines (cap ${after.get(entry)!.cap}). Extract a coherent sibling module; never trim coverage or disable max-lines.`,
+        })),
       )
     ) {
       return 1;
     }
-    reportRatchetSuccess(
-      `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
-    );
+    if (increased.length === 0) {
+      reportRatchetSuccess(
+        `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
+      );
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

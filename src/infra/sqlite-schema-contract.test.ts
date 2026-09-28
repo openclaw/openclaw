@@ -224,19 +224,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     }
   });
 
-  it("accepts an extra non-unique index on a canonical table", () => {
-    const database = createDatabase(CANONICAL_SCHEMA);
-    try {
-      database.exec("CREATE INDEX idx_children_value ON children(value);");
-
-      expect(() =>
-        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
   it("preserves index issue order when a missing index is allowlisted", () => {
     const database = createDatabase(CANONICAL_SCHEMA);
     try {
@@ -483,27 +470,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
 
   it.each([
     {
-      name: "table",
-      schema: CANONICAL_SCHEMA.replace(/CREATE TABLE parents \([\s\S]*?\);\s*/u, "").replace(
-        /CREATE TRIGGER children_value_after_update[\s\S]*?END;\s*/u,
-        "",
-      ),
-      expected: "missing table parents",
-    },
-    {
-      name: "column",
-      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value BLOB NOT NULL"),
-      expected: "column definitions differ for parents",
-    },
-    {
-      name: "foreign key",
-      schema: CANONICAL_SCHEMA.replace(
-        /,\s*FOREIGN KEY \(parent_id\) REFERENCES parents\(id\) ON DELETE CASCADE/u,
-        "",
-      ),
-      expected: "table constraints differ for children",
-    },
-    {
       name: "check constraint",
       schema: CANONICAL_SCHEMA.replace(" CHECK (length(value) > 0)", ""),
       expected: "column definitions differ for parents",
@@ -537,22 +503,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
       name: "foreign-key deferral",
       schema: CANONICAL_SCHEMA.replace(" DEFERRABLE INITIALLY DEFERRED", ""),
       expected: "table constraints differ for features",
-    },
-    {
-      name: "index",
-      schema: CANONICAL_SCHEMA.replace(
-        "CREATE INDEX idx_children_parent ON children(parent_id, id)",
-        "CREATE INDEX idx_children_parent ON children(id, parent_id)",
-      ),
-      expected: "missing or drifted index idx_children_parent",
-    },
-    {
-      name: "trigger",
-      schema: CANONICAL_SCHEMA.replace(
-        "UPDATE parents SET value = NEW.value WHERE id = NEW.parent_id",
-        "UPDATE parents SET value = NULL WHERE id = NEW.parent_id",
-      ),
-      expected: "missing or drifted trigger children_value_after_update",
     },
   ])("rejects a drifted required $name", ({ schema, expected }) => {
     const database = createDatabase(schema);

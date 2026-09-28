@@ -35,7 +35,7 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   };
 });
 
-import { launchTeamsMeetingInChrome, launchTeamsMeetingOnNode } from "./chrome.js";
+import { teamsMeetingsChrome } from "./chrome.js";
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_rollback%40thread.v2/0";
 
@@ -47,8 +47,8 @@ describe("Microsoft Teams meeting Chrome startup cleanup", () => {
     nodeCommand: "teamsmeetings.chrome",
     preserveTrackedBrowser: false,
     resolveConfig: resolveTeamsMeetingsConfig,
-    launchInChrome: launchTeamsMeetingInChrome,
-    launchOnNode: launchTeamsMeetingOnNode,
+    launchInChrome: teamsMeetingsChrome.launchInChrome,
+    launchOnNode: teamsMeetingsChrome.launchOnNode,
     engineMocks,
   });
 });

@@ -117,8 +117,25 @@ function loadStoredOAuthRefreshStore(agentDir?: string, profileId?: string): Aut
 
 /** Create an OAuth manager bound to provider-specific build/refresh adapters. */
 export function createOAuthManager(adapter: OAuthManagerAdapter) {
+  async function buildValidatedAccess(
+    credential: OAuthCredential,
+    context: {
+      cfg?: OpenClawConfig;
+      agentDir?: string;
+      validateCredential?: (credential: OAuthCredential) => void;
+    },
+  ): Promise<ResolvedOAuthAccess> {
+    context.validateCredential?.(credential);
+    return {
+      apiKey: await adapter.buildApiKey(credential.provider, credential, {
+        cfg: context.cfg,
+        agentDir: context.agentDir,
+      }),
+      credential,
+    };
+  }
+
   function adoptNewerMainOAuthCredential(params: {
-    store: AuthProfileStore;
     profileId: string;
     agentDir?: string;
     credential: OAuthCredential;
@@ -794,27 +811,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           ) {
             return null;
           }
-          params.validateCredential?.(credential);
-          return {
-            apiKey: await adapter.buildApiKey(credential.provider, credential, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential,
-          };
+          return await buildValidatedAccess(credential, params);
         },
       });
       return observed;
     }
     if (claim.kind === "use") {
-      params.validateCredential?.(claim.credential);
-      return {
-        apiKey: await adapter.buildApiKey(claim.credential.provider, claim.credential, {
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-        }),
-        credential: claim.credential,
-      };
+      return await buildValidatedAccess(claim.credential, params);
     }
 
     params.attemptedCredentials?.push(claim.credential);
@@ -941,14 +944,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       if (supersedingOwner) {
         try {
-          params.validateCredential?.(supersedingOwner);
-          return {
-            apiKey: await adapter.buildApiKey(supersedingOwner.provider, supersedingOwner, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential: supersedingOwner,
-          };
+          return await buildValidatedAccess(supersedingOwner, params);
         } catch (error) {
           const combinedFailure =
             initiatingError !== undefined
@@ -1098,14 +1094,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!settled) {
           throw new Error("Failed to persist refreshed OAuth credential");
         }
-        params.validateCredential?.(settled.credential);
-        return {
-          apiKey: await adapter.buildApiKey(settled.credential.provider, settled.credential, {
-            cfg: params.cfg,
-            agentDir: params.agentDir,
-          }),
-          credential: settled.credential,
-        };
+        return await buildValidatedAccess(settled.credential, params);
       } catch (error) {
         if (error instanceof OAuthSettlementCredentialValidationError) {
           throw error;
@@ -1146,7 +1135,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       credential = owned;
     }
     const newerMainCredential = adoptNewerMainOAuthCredential({
-      store: params.store,
       profileId: params.profileId,
       agentDir: params.agentDir,
       credential,
@@ -1181,14 +1169,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       !isOAuthRefreshFence(adoptedCredential) &&
       hasUsableOAuthCredential(effectiveCredential)
     ) {
-      params.validateCredential?.(effectiveCredential);
-      return {
-        apiKey: await adapter.buildApiKey(effectiveCredential.provider, effectiveCredential, {
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-        }),
-        credential: effectiveCredential,
-      };
+      return await buildValidatedAccess(effectiveCredential, params);
     }
 
     try {
@@ -1226,14 +1207,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         candidate: OAuthCredential,
       ): Promise<ResolvedOAuthAccess | null> => {
         try {
-          params.validateCredential?.(candidate);
-          return {
-            apiKey: await adapter.buildApiKey(candidate.provider, candidate, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential: candidate,
-          };
+          return await buildValidatedAccess(candidate, params);
         } catch (cleanupError) {
           refreshError = appendOAuthRefreshCleanupErrors(refreshError, [cleanupError]);
           recoveryBuildFailed = true;

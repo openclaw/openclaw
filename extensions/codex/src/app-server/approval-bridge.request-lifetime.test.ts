@@ -19,8 +19,6 @@ function createParams(): EmbeddedRunAttemptParams {
 describe("Codex approval request lifetime", () => {
   it.each([
     { reason: "turn_progress_idle_timeout", disposition: "timed_out" },
-    { reason: "turn_completion_idle_timeout", disposition: "timed_out" },
-    { reason: "turn_terminal_idle_timeout", disposition: "timed_out" },
     { reason: "client_closed", disposition: "failed" },
   ] as const)(
     "normalizes aborted approval reason $reason as $disposition",

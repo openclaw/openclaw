@@ -45,23 +45,10 @@ const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFo
   return createTimeZoneDayKeyFormatter(timeZone);
 };
 
-/**
- * Maximum window (in days) for which we will zero-fill missing calendar
- * days. Bounded ranges from the UI's range filter top out at 90 days for
- * the explicit picker and "All" is the wildcard escape hatch — anything
- * wider than this threshold is treated as an all-time / open-ended range
- * and falls back to sparse behavior (only days with activity), since a
- * dense series at that scale would produce tens of thousands of zero
- * buckets (e.g. a 1970-based startMs → ~20k entries) without any user
- * value. 366 days covers a full year + leap-day cushion.
- */
+// Wider, open-ended ranges stay sparse instead of generating years of empty buckets.
 const MAX_ZERO_FILL_DAYS = 366;
 
-/**
- * Parse a `YYYY-MM-DD` day key into its UTC calendar-day timestamp. The
- * timestamp is only used to enumerate calendar labels; usage timestamps stay
- * in their requested timezone bucket.
- */
+// UTC timestamps enumerate labels; usage timestamps remain in the requested calendar zone.
 const parseDayKeyToUtcMs = (dayKey: string): number | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
   if (!match) {
@@ -79,16 +66,7 @@ const parseDayKeyToUtcMs = (dayKey: string): number | null => {
     : null;
 };
 
-/**
- * Ensure the daily map has an entry for every calendar day in [startMs, endMs].
- * Days without activity are inserted with a zero-valued totals bucket so the
- * resulting `daily` series matches the requested range length (one bar per
- * calendar day) instead of only covering days with recorded usage.
- *
- * Day keys must use the same calendar zone as the request range. Otherwise a
- * remote Gateway can return local-date labels for UTC/browser-local ranges,
- * which drops boundary usage when the UI compares calendar windows.
- */
+// Match the request's calendar zone so the UI does not discard boundary-day usage.
 const fillMissingDays = (
   dailyMap: Map<string, CostUsageTotals>,
   startMs: number,
@@ -104,9 +82,7 @@ const fillMissingDays = (
   const startDayMs = parseDayKeyToUtcMs(startKey);
   const endDayMs = parseDayKeyToUtcMs(endKey);
   if (startDayMs === null || endDayMs === null) {
-    // Defensive fallback — formatDayKey should always produce a YYYY-MM-DD
-    // key, but if locale data ever shifts under us, at least make sure the
-    // endpoint days are present so the chart isn't completely empty.
+    // Preserve the endpoints if locale data produces an unexpected day-key format.
     if (!dailyMap.has(startKey)) {
       dailyMap.set(startKey, emptyTotals());
     }
@@ -121,13 +97,11 @@ const fillMissingDays = (
   if (spanDays > MAX_ZERO_FILL_DAYS) {
     return;
   }
-  const maxIterations = MAX_ZERO_FILL_DAYS + 1;
-  for (let cursorMs = startDayMs, i = 0; cursorMs <= endDayMs && i < maxIterations; i += 1) {
+  for (let cursorMs = startDayMs; cursorMs <= endDayMs; cursorMs += dayMs) {
     const key = formatUtcDayKey(new Date(cursorMs));
     if (!dailyMap.has(key)) {
       dailyMap.set(key, emptyTotals());
     }
-    cursorMs += dayMs;
   }
   if (!dailyMap.has(endKey)) {
     dailyMap.set(endKey, emptyTotals());
@@ -324,10 +298,10 @@ export async function projectSessionCostSummaries(
       continue;
     }
     latestScan = Math.max(latestScan, envelope.scannedAt);
-    const freshRequests = requests.filter(({ file }) =>
-      isUsageCostRollupFresh({ checkpoint: envelope.checkpoint, file }),
+    const usableRequests = requests.filter(({ file }) =>
+      canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file }),
     );
-    if (freshRequests.length === 0) {
+    if (usableRequests.length === 0) {
       continue;
     }
     const entry = decodeUsageCostRollup(
@@ -339,22 +313,27 @@ export async function projectSessionCostSummaries(
       params.onInvalidBody(row.key);
       continue;
     }
-    for (const { index, session } of freshRequests) {
+    for (const { index, session, file } of usableRequests) {
       cachedFiles += 1;
-      summaries[index] = buildSessionCostSummaryFromRollup({
-        rollup: entry.rollup,
-        sessionId: session.sessionId,
-        sessionFile: session.sessionFile,
-        startMs,
-        endMs,
-        includeUntimestamped,
-        formatDay,
-      });
+      const fresh = isUsageCostRollupFresh({ checkpoint: entry.checkpoint, file });
+      summaries[index] = {
+        ...buildSessionCostSummaryFromRollup({
+          rollup: entry.rollup,
+          sessionId: session.sessionId,
+          sessionFile: session.sessionFile,
+          startMs,
+          endMs,
+          includeUntimestamped,
+          formatDay,
+        }),
+        computedAt: entry.scannedAt,
+        ...(!fresh ? { refreshing: params.refreshing, staleSince: file.mtimeMs } : {}),
+      };
     }
   }
   const staleSessionFiles = new Set<string>();
   for (const [index, session] of params.sessions.entries()) {
-    if (summaries[index] === null) {
+    if (summaries[index] === null || summaries[index]?.staleSince !== undefined) {
       staleSessionFiles.add(params.files[index]?.sourcePath ?? session.sessionFile);
     }
   }

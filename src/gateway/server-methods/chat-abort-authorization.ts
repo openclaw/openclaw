@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Authorization and pending-run state transitions for chat cancellation.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
@@ -7,10 +8,6 @@ import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-o
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { pendingChatSendDedupeKey, PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
-import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 export type ChatAbortRequester = {
@@ -61,8 +58,8 @@ export function resolveChatAbortRequester(
 ): ChatAbortRequester {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return {
-    connId: normalizeOptionalText(client?.connId),
-    deviceId: normalizeOptionalText(client?.connect?.device?.id),
+    connId: normalizeOptionalString(client?.connId),
+    deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
   };
 }
@@ -75,8 +72,8 @@ export function canRequesterAbortChatRun(
   if (requester.isAdmin) {
     return true;
   }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  const ownerDeviceId = normalizeOptionalString(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalString(entry.ownerConnId);
   return Boolean(
     (!options.requireOwnerMatch && !ownerDeviceId && !ownerConnId) ||
     (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
@@ -103,21 +100,21 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
-  const payloadRunId = normalizeUnknownText(payload.runId);
+  const payloadRunId = normalizeOptionalString(payload.runId);
   if (payloadRunId && payloadRunId !== params.runId) {
     return undefined;
   }
   const payloadSessionKeys = new Set([
-    normalizeUnknownText(payload.sessionKey),
+    normalizeOptionalString(payload.sessionKey),
     ...(Array.isArray(payload.sessionKeyAliases)
-      ? payload.sessionKeyAliases.map(normalizeUnknownText)
+      ? payload.sessionKeyAliases.map(normalizeOptionalString)
       : []),
   ]);
   const hasPayloadSessionKey = [...payloadSessionKeys].some(Boolean);
   if (
     params.requiredSessionId !== undefined &&
     (!payloadSessionKeys.has(params.sessionKey) ||
-      normalizeUnknownText(payload.sessionId) !== params.requiredSessionId)
+      normalizeOptionalString(payload.sessionId) !== params.requiredSessionId)
   ) {
     return undefined;
   }
@@ -127,10 +124,10 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   ) {
     return undefined;
   }
-  const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
+  const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
   if (agentId) {
     const sessionAgentId = resolveChatRunOwnerAgentId({
-      agentId: normalizeUnknownText(payload.agentId),
+      agentId: normalizeOptionalString(payload.agentId),
       sessionKey: params.sessionKey,
       defaultAgentId: params.defaultAgentId,
     });
@@ -158,9 +155,9 @@ export function readPreRegisteredRun(params: {
     return undefined;
   }
   const runId =
-    normalizeUnknownText(payload.runId) ??
-    normalizeOptionalText(params.key.slice(params.keyPrefix.length));
-  const sessionKey = normalizeUnknownText(payload.sessionKey);
+    normalizeOptionalString(payload.runId) ??
+    normalizeOptionalString(params.key.slice(params.keyPrefix.length));
+  const sessionKey = normalizeOptionalString(payload.sessionKey);
   if (!runId || !sessionKey) {
     return undefined;
   }
@@ -173,8 +170,8 @@ export function canRequesterAbortPreRegisteredRun(
 ): boolean {
   return canRequesterAbortChatRun(
     {
-      ownerConnId: normalizeUnknownText(payload.ownerConnId),
-      ownerDeviceId: normalizeUnknownText(payload.ownerDeviceId),
+      ownerConnId: normalizeOptionalString(payload.ownerConnId),
+      ownerDeviceId: normalizeOptionalString(payload.ownerDeviceId),
     },
     requester,
   );
@@ -187,7 +184,7 @@ function resolvePreRegisteredAgentDedupeKeys(
   const keys = [`agent:${runId}`];
   const payloadKeys = Array.isArray(payload.dedupeKeys) ? payload.dedupeKeys : [];
   for (const key of payloadKeys) {
-    const normalized = normalizeUnknownText(key);
+    const normalized = normalizeOptionalString(key);
     if (normalized?.startsWith("agent:")) {
       keys.push(normalized);
     }
@@ -211,7 +208,7 @@ export function writePreRegisteredAgentAbort(params: {
     return false;
   }
   const endedAt = params.endedAt ?? Date.now();
-  const payloadAgentId = normalizeUnknownText(params.payload.agentId);
+  const payloadAgentId = normalizeOptionalString(params.payload.agentId);
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
     if (
       params.expectedPayload &&
@@ -266,7 +263,7 @@ export function writePreRegisteredChatAbort(params: {
     createChatAbortMarker(endedAt);
   const pendingKey = pendingChatSendDedupeKey(params.runId);
   const pendingEntry = params.context.dedupe.get(pendingKey);
-  const pendingAttemptId = normalizeUnknownText(
+  const pendingAttemptId = normalizeOptionalString(
     (pendingEntry?.payload as PreRegisteredAgentDedupePayload | undefined)?.attemptId,
   );
   const ownsPendingAttempt = !params.attemptId || pendingAttemptId === params.attemptId;
@@ -288,6 +285,35 @@ export function writePreRegisteredChatAbort(params: {
   return true;
 }
 
+function createChatAbortRunSelection<T extends { runId: string }>() {
+  const authorizedByRunId = new Map<string, T>();
+  const matchedRunIds = new Set<string>();
+  const authorization = {
+    hasUnauthorizedRuns: false,
+    hasUnauthorizedProtectedRuns: false,
+    hasProtectedRuns: false,
+  };
+  return {
+    add(run: T, requesterCanAbort: boolean, isProtected: boolean | undefined) {
+      matchedRunIds.add(run.runId);
+      if (isProtected) {
+        // Lifecycle cleanup still checks ownership of hidden and preserved work.
+        authorization.hasProtectedRuns = true;
+        authorization.hasUnauthorizedProtectedRuns ||= !requesterCanAbort;
+      } else if (requesterCanAbort) {
+        authorizedByRunId.set(run.runId, run);
+      } else {
+        authorization.hasUnauthorizedRuns = true;
+      }
+    },
+    result: () => ({
+      authorizedRuns: [...authorizedByRunId.values()],
+      matchedRunIds: [...matchedRunIds],
+      ...authorization,
+    }),
+  };
+}
+
 export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
@@ -298,18 +324,13 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   keyPrefix: string;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalString(sessionKey)).filter(
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
-  const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  const matchedRunIds = new Set<string>();
-  let hasUnauthorizedRuns = false;
-  let hasUnauthorizedProtectedRuns = false;
-  let hasProtectedRuns = false;
+  const selection = createChatAbortRunSelection<PreRegisteredAgentRun>();
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({
       key,
@@ -322,17 +343,14 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     }
     if (
       params.requiredSessionId !== undefined &&
-      normalizeUnknownText(run.payload.sessionId) !== params.requiredSessionId
+      normalizeOptionalString(run.payload.sessionId) !== params.requiredSessionId
     ) {
-      continue;
-    }
-    if (params.excludeRunIds?.has(run.runId)) {
       continue;
     }
     const runSessionKeys = [
       run.sessionKey,
       ...(Array.isArray(run.payload.sessionKeyAliases)
-        ? run.payload.sessionKeyAliases.map(normalizeUnknownText)
+        ? run.payload.sessionKeyAliases.map(normalizeOptionalString)
         : []),
     ];
     if (!runSessionKeys.some((sessionKey) => Boolean(sessionKey && sessionKeys.has(sessionKey)))) {
@@ -341,12 +359,12 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     if (params.context.chatAbortControllers.has(run.runId)) {
       continue;
     }
-    const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
+    const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
     if (
       agentId &&
       !chatRunBelongsToAgent(
         {
-          agentId: normalizeUnknownText(run.payload.agentId),
+          agentId: normalizeOptionalString(run.payload.agentId),
           sessionKey: run.sessionKey,
           defaultAgentId: params.defaultAgentId,
         },
@@ -355,34 +373,14 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedRunIds.add(run.runId);
     const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
       (run.payload.controlUiVisible === false ||
-        (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw"));
-    if (isProtected) {
-      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
-      // must keep treating hidden or preserved work as a non-match.
-      hasProtectedRuns = true;
-      if (!requesterCanAbort) {
-        hasUnauthorizedProtectedRuns = true;
-      }
-      continue;
-    }
-    if (requesterCanAbort) {
-      authorizedByRunId.set(run.runId, run);
-    } else {
-      hasUnauthorizedRuns = true;
-    }
+        (params.preserveSideRuns && normalizeOptionalString(run.payload.turnKind) === "btw"));
+    selection.add(run, requesterCanAbort, isProtected);
   }
-  return {
-    authorizedRuns: [...authorizedByRunId.values()],
-    matchedRunIds: [...matchedRunIds],
-    hasUnauthorizedRuns,
-    hasUnauthorizedProtectedRuns,
-    hasProtectedRuns,
-  };
+  return selection.result();
 }
 
 export function resolveAuthorizedRunsForSessionKeys(params: {
@@ -395,34 +393,26 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalString(sessionKey)).filter(
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
   const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalText(sessionId)).filter(
+    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalString(sessionId)).filter(
       (sessionId): sessionId is string => Boolean(sessionId),
     ),
   );
-  const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  const authorizedRuns: Array<{
+  const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
+  const selection = createChatAbortRunSelection<{
     runId: string;
     sessionKey: string;
     sessionId: string;
     agentId?: string;
     entry: ChatAbortControllerEntry;
-  }> = [];
-  const matchedRunIds: string[] = [];
-  let hasUnauthorizedRuns = false;
-  let hasUnauthorizedProtectedRuns = false;
-  let hasProtectedRuns = false;
+  }>();
   for (const [runId, active] of params.chatAbortControllers) {
-    if (params.excludeRunIds?.has(runId)) {
-      continue;
-    }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
@@ -445,39 +435,23 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedRunIds.push(runId);
     const requesterCanAbort = canRequesterAbortChatRun(active, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
       (active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw"));
-    if (isProtected) {
-      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
-      // must keep treating hidden or preserved work as a non-match.
-      hasProtectedRuns = true;
-      if (!requesterCanAbort) {
-        hasUnauthorizedProtectedRuns = true;
-      }
-      continue;
-    }
-    if (requesterCanAbort) {
-      authorizedRuns.push({
+    selection.add(
+      {
         runId,
         sessionKey: active.sessionKey,
         sessionId: active.sessionId,
         agentId: active.agentId,
         entry: active,
-      });
-    } else {
-      hasUnauthorizedRuns = true;
-    }
+      },
+      requesterCanAbort,
+      isProtected,
+    );
   }
-  return {
-    authorizedRuns,
-    matchedRunIds,
-    hasUnauthorizedRuns,
-    hasUnauthorizedProtectedRuns,
-    hasProtectedRuns,
-  };
+  return selection.result();
 }
 
 const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
@@ -490,7 +464,6 @@ export function resolveAuthorizedQueuedTurnsForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
   requester: ChatAbortRequester;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const matches = listQueuedChatTurnsForSession({
     chatQueuedTurns: params.context.chatQueuedTurns,
@@ -499,7 +472,7 @@ export function resolveAuthorizedQueuedTurnsForSession(params: {
     requiredSessionId: params.requiredSessionId,
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
-  }).filter((match) => !params.excludeRunIds?.has(match.runId));
+  });
   const authorized = matches
     .filter((match) => canRequesterAbortChatRun(match.entry, params.requester))
     .map((match) => ({

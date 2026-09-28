@@ -285,8 +285,9 @@ export function makeCfg(home: string): OpenClawConfig {
         models: {
           "anthropic/claude-haiku-4-5-20251001": {},
           "anthropic/claude-opus-4-7": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
+          // Model selections execute through this harness's embedded runner.
+          "openai/gpt-4.1-mini": { agentRuntime: { id: "openclaw" } },
+          "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
         },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.

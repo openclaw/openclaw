@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { ArtifactTransferBusyError } from "./artifact-transfer-service.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 
 describe("node worker bundle transfer service", () => {
@@ -55,12 +56,12 @@ describe("node worker bundle transfer service", () => {
 
     const admission = service.authorize({
       token: prepared.token,
-      bundleHash: prepared.input.build.bundleHash,
+      artifactKey: prepared.input.build.bundleHash,
     });
     expect(admission).toBeDefined();
-    expect(
-      service.authorize({ token: prepared.token, bundleHash: prepared.input.build.bundleHash }),
-    ).toBeUndefined();
+    expect(() =>
+      service.authorize({ token: prepared.token, artifactKey: prepared.input.build.bundleHash }),
+    ).toThrow(ArtifactTransferBusyError);
     const file = await service.openFile(admission!);
     try {
       expect(file).toMatchObject({ bytes: 6, sha256: "b".repeat(64) });
@@ -100,11 +101,11 @@ describe("node worker bundle transfer service", () => {
     });
 
     expect(
-      service.authorize({ token: prepared.token, bundleHash: "c".repeat(64) }),
+      service.authorize({ token: prepared.token, artifactKey: "c".repeat(64) }),
     ).toBeUndefined();
     owner.abort();
     expect(
-      service.authorize({ token: prepared.token, bundleHash: prepared.input.build.bundleHash }),
+      service.authorize({ token: prepared.token, artifactKey: prepared.input.build.bundleHash }),
     ).toBeUndefined();
   });
 });

@@ -864,8 +864,10 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("retains explicit publication wire values and reopens the same request read-only", () => {
+  it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture();
+    const excluded = ["extensions/example/src/example.test.ts"];
+    const excludedJson = JSON.stringify(excluded, null, 1);
     const selection = JSON.stringify(
       {
         route: "normal",
@@ -885,6 +887,8 @@ describe("full-release-validation-at-sha", () => {
         "validation_purpose=publish",
         "-f",
         `publication_selection_json=${selection}`,
+        "-f",
+        `extension_test_exclude_patterns_json=${excludedJson}`,
       ]);
       expect(result.status, result.stderr).toBe(0);
       const record = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
@@ -897,11 +901,17 @@ describe("full-release-validation-at-sha", () => {
         },
         validationPurpose: "publish",
         publicationSelection: JSON.parse(selection),
+        laneInputs: {
+          extension_test_exclude_patterns_json: JSON.stringify(excluded),
+        },
       });
       expect(record.request.inputs.trusted_workflow_json).toBe(wire);
       expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
       expect(record.request.inputs).not.toHaveProperty("validation_purpose");
       expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
+      expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
+      expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
+      expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
       const before = readFileSync(fixture.requestPath());
       const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
       const reopened = fixture.run(
@@ -912,10 +922,19 @@ describe("full-release-validation-at-sha", () => {
           "validation_purpose=publish",
           "-f",
           `publication_selection_json=${JSON.stringify(JSON.parse(selection))}`,
+          "-f",
+          `extension_test_exclude_patterns_json=${excludedJson}`,
         ],
         true,
       );
       expect(reopened.status, reopened.stderr).toBe(0);
+      expect(readFileSync(fixture.requestPath())).toEqual(before);
+      const changedExclusion = fixture.run(
+        ["--request-file", fixture.requestPath(), "-f", "extension_test_exclude_patterns_json=[]"],
+        true,
+      );
+      expect(changedExclusion.status).toBe(1);
+      expect(changedExclusion.stderr).toContain("conflict with the retained request");
       expect(readFileSync(fixture.requestPath())).toEqual(before);
       expect(
         fixture
@@ -1731,6 +1750,38 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
+  it.each([
+    {
+      name: "packed lane",
+      marker: "FULL_RELEASE_LANE_INPUTS_CONTRACT",
+      input: 'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
+      error: "does not support packed lane inputs",
+    },
+    {
+      name: "declared flake",
+      marker: undefined,
+      input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
+      error: "Automatic test retries are disabled",
+    },
+  ])(
+    "refuses unsupported $name controls before creating refs or dispatching",
+    ({ marker, input, error }) => {
+      const fixture = createDispatchFixture({
+        workflowSource: marker
+          ? CURRENT_WORKFLOW_SOURCE.replace(`  ${marker}: "1"\n`, "")
+          : CURRENT_WORKFLOW_SOURCE,
+      });
+      try {
+        const result = fixture.run(["--workflow-sha", fixture.workflowSha, "-f", input]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(error);
+        expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
   it.each([false, true])(
     "reopens the same retained request without mutations (explicit=%s)",
     (explicit) => {
@@ -2065,7 +2116,6 @@ describe("full-release-validation-at-sha", () => {
     { name: "missing witness", options: { witnessMissing: true } },
     { name: "duplicate witness", options: { witnessDuplicate: true } },
     { name: "API denial", options: { inventoryError: "HTTP 403: forbidden" } },
-    { name: "API outage", options: { inventoryError: "HTTP 503: unavailable" } },
     { name: "malformed inventory", options: { malformedInventory: true } },
     {
       name: "wrong repository",
@@ -2075,12 +2125,6 @@ describe("full-release-validation-at-sha", () => {
     {
       name: "wrong path",
       options: { runIdentityOverrides: { path: ".github/workflows/other.yml" } },
-    },
-    {
-      name: "foreign short-ref suffix",
-      options: {
-        runIdentityOverrides: { path: ".github/workflows/full-release-validation.yml@main" },
-      },
     },
     {
       name: "foreign full-ref suffix",

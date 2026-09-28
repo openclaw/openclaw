@@ -23,6 +23,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -228,6 +229,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           if (committed.identity) {
             publishCommittedSessionIdentity(
               captured.agentId,
+              readOpenClawAgentDatabaseIdentity(database).identity,
               committed.identity.previous,
               committed.identity.current,
             );
@@ -577,10 +579,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
       throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
     }
-    if (
-      options?.idempotencyLookup === "caller-checked" &&
-      (!result?.appended || result.messageId !== entry.id)
-    ) {
+    if (options?.idempotencyLookup === "caller-checked" && !result.appended) {
       throw new Error(`Session transcript append was not persisted: ${entry.id}`);
     }
     if (result.effectiveParentId === undefined) {

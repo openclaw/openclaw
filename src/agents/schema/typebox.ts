@@ -4,7 +4,7 @@
  * Tool definitions use these helpers for channel targets and common optional
  * numeric fields so provider-facing schemas stay consistent.
  */
-import { Type } from "typebox";
+import { Type, type TOptional, type TString } from "typebox";
 import {
   CHANNEL_TARGET_DESCRIPTION,
   CHANNEL_TARGETS_DESCRIPTION,
@@ -12,13 +12,15 @@ import {
 export { optionalStringEnum, stringEnum } from "./string-enum.js";
 
 /** Describe the intended work; completion is reported by the tool result. */
-export function executionTitleSchema() {
-  return Type.Optional(
-    Type.String({
-      maxLength: 120,
-      description: "Every call: short purpose; never claim success. No secrets.",
-    }),
-  );
+export function executionTitleSchema(options: { required: true }): TString;
+export function executionTitleSchema(options?: { required?: false }): TOptional<TString>;
+export function executionTitleSchema(options: { required?: boolean } = {}) {
+  const schema = Type.String({
+    maxLength: 120,
+    description: "Every call: short purpose; never claim success. No secrets.",
+    ...(options.required ? { minLength: 1, pattern: "\\S" } : {}),
+  });
+  return options.required ? schema : Type.Optional(schema);
 }
 
 /** Builds a schema for one outbound channel target. */

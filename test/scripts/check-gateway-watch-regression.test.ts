@@ -345,10 +345,7 @@ describe("check-gateway-watch-regression", () => {
       samples: [50_000, 59_000],
       idleCpuMs: 9_000,
       lateError: "fixture shutdown error",
-      failures: [
-        "gateway:watch failed to start: fixture shutdown error",
-        "LOUD ALARM: gateway:watch used 9000ms CPU in 10000ms window, above loud-alarm threshold 8000ms",
-      ],
+      failures: ["gateway:watch failed to start: fixture shutdown error"],
     },
   ])("$name", async ({ ready, samples, idleCpuMs, lateError, failures }) => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-measurement-");
@@ -414,6 +411,17 @@ describe("check-gateway-watch-regression", () => {
     });
     expect(findings.failures).toEqual(failures);
     expect(findings.warnings).toEqual([]);
+    expect(findings.limitViolations).toEqual(
+      idleCpuMs !== null && idleCpuMs > options.cpuFailMs
+        ? [
+            {
+              file: "scripts/check-gateway-watch-regression.mts",
+              title: "Gateway watch CPU budget",
+              message: "gateway:watch used 9000ms CPU in 10000ms window, above threshold 8000ms",
+            },
+          ]
+        : [],
+    );
   });
 
   it("reports early gateway watch exit before readiness distinctly", () => {

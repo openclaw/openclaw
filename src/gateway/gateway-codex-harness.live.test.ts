@@ -13,9 +13,23 @@ import type {
   SessionsCatalogListResult,
   ToolsInvokeResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { verifyCodexNativeSubagentBridgeProbe } from "../../test/helpers/gateway-codex-harness-native-subagent.js";
+import {
+  verifyCodexNativeSubagentBridgeProbe,
+  withCodexNativeThreadReader,
+} from "../../test/helpers/gateway-codex-harness-native-subagent.js";
 import {
   createCodexHarnessLiveInstance,
+  createCodexHarnessWorkspace as createLiveWorkspace,
+  parseCodexHarnessModelKey as parseModelKey,
+  buildCodexHarnessDenseContext,
+  buildCodexCompactionAppServerArgs,
+  CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT,
+  type CodexCompactionStressMode,
+  readCompletedCodexCompactionStats,
+  extractChatFinalText,
+  readCodexAppServerPluginApprovalId,
+  extractAssistantTexts,
+  formatAssistantTextPreview,
   createCodexHarnessEventCapture,
   readCodexNativeUsageSnapshots,
   CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
@@ -31,12 +45,14 @@ import {
   validateLongOutput,
   type LongOutputMarkers,
 } from "../../test/helpers/openai-long-context-live.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { splitCommandArgs } from "../utils/shell-argv.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -107,10 +123,11 @@ const CODEX_HARNESS_RESUME_STRESS_RESTARTS = resolveBoundedPositiveIntEnv(
   3,
   10,
 );
-type CodexCompactionStressMode =
-  | { kind: "off" }
-  | { kind: "reduced" }
-  | { kind: "full"; modelCatalogPath: string };
+const CODEX_HARNESS_EXPLICIT_COMPACT_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPLICIT_COMPACT_PROBE,
+);
+const CODEX_HARNESS_SESSION_DELETION_PROBE =
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_SESSION_DELETION_PROBE !== "0";
 
 function resolveCodexCompactionStressMode(): CodexCompactionStressMode {
   if (isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT)) {
@@ -225,7 +242,6 @@ type CodexHarnessAgentResult = {
   usage?: CodexHarnessAttemptUsage;
 };
 
-const CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT = 4_000;
 const CODEX_REDUCED_CONTEXT_PRESSURE_CHARS = 90_000;
 const CODEX_FULL_CONTEXT_AUTO_COMPACT_LIMIT = 700_000;
 const CODEX_FULL_CONTEXT_EFFECTIVE_WINDOW = 875_900;
@@ -319,41 +335,6 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
   console.error(`[gateway-codex-live] ${step}${suffix}`);
 }
 
-function readCompletedCodexCompactionStats(events: readonly CapturedAgentEvent[]): {
-  count: number;
-  durationMs?: number;
-  startedCount: number;
-} {
-  const startedItemIds = new Set<string>();
-  const startedAtByItemId = new Map<string, number>();
-  let count = 0;
-  let durationMs = 0;
-  let measuredCount = 0;
-  for (const event of events) {
-    if (event.stream !== "compaction") {
-      continue;
-    }
-    const itemId = event.data?.itemId;
-    if (event.data?.phase === "start" && typeof itemId === "string") {
-      startedItemIds.add(itemId);
-      if (event.ts !== undefined) {
-        startedAtByItemId.set(itemId, event.ts);
-      }
-      continue;
-    }
-    if (event.data?.phase !== "end" || event.data?.completed !== true) {
-      continue;
-    }
-    count += 1;
-    const startedAt = typeof itemId === "string" ? startedAtByItemId.get(itemId) : undefined;
-    if (startedAt !== undefined && event.ts !== undefined) {
-      durationMs += Math.max(0, event.ts - startedAt);
-      measuredCount += 1;
-    }
-  }
-  return { count, startedCount: startedItemIds.size, ...(measuredCount > 0 ? { durationMs } : {}) };
-}
-
 function logCodexHarnessTurnMeasurement(label: string, result: CodexHarnessAgentResult): void {
   const nativeUsage = readCodexNativeUsageSnapshots(result.events).at(-1);
   const compaction = readCompletedCodexCompactionStats(result.events);
@@ -411,62 +392,6 @@ async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => 
       data: event.data,
     });
   });
-}
-
-async function createLiveWorkspace(workspace: string): Promise<void> {
-  await fs.mkdir(workspace, { recursive: true });
-  await fs.writeFile(
-    path.join(workspace, "AGENTS.md"),
-    [
-      "# AGENTS.md",
-      "",
-      "Follow exact reply instructions from the user.",
-      "Do not add commentary when asked for an exact response.",
-    ].join("\n"),
-  );
-}
-
-function parseModelKey(modelKey: string): { provider: string; modelId: string } {
-  const [provider, ...modelParts] = modelKey.split("/");
-  const modelId = modelParts.join("/");
-  if (!provider?.trim() || !modelId.trim()) {
-    throw new Error(`invalid model key: ${modelKey}`);
-  }
-  return { provider: provider.trim(), modelId: modelId.trim() };
-}
-
-function buildCodexHarnessDenseContext(params: { marker: string; chars: number }): string {
-  const lines: string[] = [];
-  let length = 0;
-  for (let index = 0; length < params.chars; index += 1) {
-    const line =
-      `${params.marker}|Context stress record ${index}: the copper lighthouse tracks violet weather ` +
-      `while patient engineers preserve durable state across each compacted conversation.\n`;
-    lines.push(line);
-    length += line.length;
-  }
-  return lines.join("").slice(0, params.chars);
-}
-
-function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): string[] | undefined {
-  const overrides =
-    mode.kind === "full"
-      ? [
-          `model_catalog_json=${JSON.stringify(mode.modelCatalogPath)}`,
-          "model_context_window=922000",
-          "model_auto_compact_token_limit=700000",
-          "model_auto_compact_token_limit_scope=total",
-          "tool_output_token_limit=200000",
-        ]
-      : mode.kind === "reduced"
-        ? [
-            "model_auto_compact_token_limit_scope=body_after_prefix",
-            // Raw nested CodeMode output is not necessarily emitted to model context.
-            `model_auto_compact_token_limit=${CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT}`,
-            "tool_output_token_limit=10000",
-          ]
-        : undefined;
-  return overrides ? buildCodexHarnessAppServerArgs(overrides) : undefined;
 }
 
 async function assertCodexHarnessSessionSelection(params: {
@@ -580,7 +505,7 @@ async function writeLiveGatewayConfig(params: {
   port: number;
   token: string;
   workspace: string;
-}): Promise<void> {
+}): Promise<OpenClawConfig> {
   const parsedModel = parseModelKey(params.modelKey);
   const appServerArgs = buildCodexCompactionAppServerArgs(params.compactionMode);
   const cfg: OpenClawConfig = {
@@ -667,6 +592,7 @@ async function writeLiveGatewayConfig(params: {
       : {}),
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+  return cfg;
 }
 
 async function requestAgentTextWithEvents(params: {
@@ -1008,85 +934,6 @@ async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Prom
   if (result?.status !== "ok") {
     throw new Error(`agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
   }
-}
-
-function extractChatFinalText(event: EventFrame, runId: string): string | undefined {
-  if (event.event !== "chat") {
-    return undefined;
-  }
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  if (record.runId !== runId || record.state !== "final") {
-    return undefined;
-  }
-  const message = record.message;
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const messageRecord = message as Record<string, unknown>;
-  if (typeof messageRecord.text === "string" && messageRecord.text.trim()) {
-    return messageRecord.text;
-  }
-  const content = Array.isArray(messageRecord.content) ? messageRecord.content : [];
-  return content
-    .map((entry) =>
-      entry && typeof entry === "object" ? (entry as Record<string, unknown>).text : undefined,
-    )
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .join("\n")
-    .trim();
-}
-
-function readCodexAppServerPluginApprovalId(event: EventFrame): string | undefined {
-  if (event.event !== "plugin.approval.requested") {
-    return undefined;
-  }
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  const request = record.request;
-  if (!request || typeof request !== "object") {
-    return undefined;
-  }
-  const requestRecord = request as Record<string, unknown>;
-  if (requestRecord.pluginId !== "codex") {
-    return undefined;
-  }
-  return typeof record.id === "string" && record.id ? record.id : undefined;
-}
-
-function extractAssistantTexts(messages: unknown[]): string[] {
-  const texts: string[] = [];
-  for (const entry of messages) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    if ((entry as { role?: unknown }).role !== "assistant") {
-      continue;
-    }
-    const text = extractFirstTextBlock(entry);
-    if (typeof text === "string" && text.trim().length > 0) {
-      texts.push(text);
-    }
-  }
-  return texts;
-}
-
-function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
-  const combined = texts.join("\n\n").trim();
-  if (!combined) {
-    return "<none>";
-  }
-  if (combined.length <= maxChars) {
-    return combined;
-  }
-  const half = Math.floor(maxChars / 2);
-  return `${combined.slice(0, half)}\n...\n${combined.slice(-half)}`;
 }
 
 async function readCodexHarnessCompactionCount(params: {
@@ -2524,9 +2371,28 @@ describeLive("gateway live (Codex harness)", () => {
 
       try {
         instance.state.applyEnv();
+        const configuredNativeArgs =
+          buildCodexCompactionAppServerArgs(CODEX_HARNESS_COMPACTION_MODE) ??
+          splitCommandArgs(instance.env.OPENCLAW_CODEX_APP_SERVER_ARGS ?? "", {
+            allowUnclosedQuotes: true,
+          });
+        const nativeProbeArgs =
+          configuredNativeArgs.length > 0
+            ? configuredNativeArgs
+            : buildCodexHarnessAppServerArgs([]);
+        if (CODEX_HARNESS_SUBAGENT_PROBE) {
+          // This reader supports the fixture's local stdio launch, not an
+          // arbitrary custom binary or proxy that could select another home.
+          expect(instance.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() ?? "").toBe("");
+          expect(nativeProbeArgs.slice(0, 3)).toEqual(["app-server", "--listen", "stdio://"]);
+          expect(
+            nativeProbeArgs.slice(3).every((arg, index) => index % 2 === 1 || arg === "-c"),
+          ).toBe(true);
+          expect(nativeProbeArgs.slice(3).length % 2).toBe(0);
+        }
         const workspace = instance.state.workspaceDir;
         await createLiveWorkspace(workspace);
-        await writeLiveGatewayConfig({
+        const probeConfig = await writeLiveGatewayConfig({
           configPath,
           modelKey,
           port,
@@ -2562,6 +2428,23 @@ describeLive("gateway live (Codex harness)", () => {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
             const sessionKey = "agent:dev:live-codex-harness";
+            const refreshedCatalog = await activeClient.request<{
+              models?: Array<{
+                agentRuntime?: { id?: string };
+                id?: string;
+                provider?: string;
+              }>;
+            }>("models.list", { refresh: true });
+            expect(refreshedCatalog.models).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  id: parseModelKey(modelKey).modelId,
+                  provider: parseModelKey(modelKey).provider,
+                  agentRuntime: expect.objectContaining({ id: "codex" }),
+                }),
+              ]),
+            );
+            logCodexLiveStep("model-catalog-refreshed", { modelKey });
             const modelCommandText = await requestCodexCommandText({
               client: activeClient,
               events: gatewayEvents,
@@ -2598,22 +2481,48 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("subagent-probe:start", { sessionKey });
               await verifyCodexSubagentProbe({ client: activeClient, sessionKey });
               logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
-              await verifyCodexNativeSubagentBridgeProbe(
+              // The ordinary harness is agent-scoped. Do not route its child reads
+              // through the user-home codex_threads tool or the native session catalog.
+              const codexPackagePath = bundledPluginFileAt(
+                path.resolve(import.meta.dirname, "../.."),
+                "codex",
+                "package.json",
+              );
+              const codexCommand = createRequire(codexPackagePath).resolve(
+                "@openai/codex/bin/codex.js",
+              );
+              await withCodexNativeThreadReader(
                 {
-                  annotate: context.annotate,
-                  client: activeClient,
-                  events: gatewayEvents,
-                  sessionKey,
-                },
-                {
+                  command: process.execPath,
+                  args: [codexCommand, ...nativeProbeArgs],
+                  codexHome: path.join(
+                    resolveAgentDir(probeConfig, "dev", instance.env),
+                    "codex-home",
+                  ),
+                  stateDir: instance.stateDir,
+                  cwd: workspace,
+                  env: instance.env,
                   requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
-                  observedCodexThreadIds,
-                  logCodexLiveStep,
-                  requestAgentTextWithEvents,
-                  recordCodexAttemptIdentity,
-                  requestCodexCommandText,
-                  requestAgentText,
                 },
+                (readNativeThread) =>
+                  verifyCodexNativeSubagentBridgeProbe(
+                    {
+                      annotate: context.annotate,
+                      client: activeClient,
+                      events: gatewayEvents,
+                      sessionKey,
+                    },
+                    {
+                      requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+                      observedCodexThreadIds,
+                      readNativeThread,
+                      logCodexLiveStep,
+                      requestAgentTextWithEvents,
+                      recordCodexAttemptIdentity,
+                      requestCodexCommandText,
+                      requestAgentText,
+                    },
+                  ),
               );
               logCodexLiveStep("subagent-probe:done");
               if (CODEX_HARNESS_SUBAGENT_ONLY) {
@@ -2786,6 +2695,51 @@ describeLive("gateway live (Codex harness)", () => {
               });
               logCodexLiveStep("guardian-probe:done");
             }
+            if (CODEX_HARNESS_EXPLICIT_COMPACT_PROBE) {
+              const warmThreadId = observedCodexThreadIds.get(sessionKey);
+              const warmClientId = observedCodexClientIds.get(sessionKey);
+              expect(warmThreadId).toBeTypeOf("string");
+              expect(warmClientId).toBeTypeOf("string");
+              const unsubscribeCompactionDebugEvents =
+                await subscribeCodexLiveDebugEvents(sessionKey);
+              try {
+                const explicitCompactText = await requestCodexCommandText({
+                  client: activeClient,
+                  events: gatewayEvents,
+                  sessionKey,
+                  command: "/codex compact",
+                  expectedText: [],
+                  isExpectedText: (text) =>
+                    text.toLowerCase().includes("compacted codex session ("),
+                  predicateOnly: true,
+                });
+                logCodexLiveStep("explicit-compact-probe", {
+                  text: explicitCompactText,
+                  warmClientId,
+                  warmThreadId,
+                });
+                const continuationToken = `CODEX-EXPLICIT-COMPACT-CONTINUATION-${randomBytes(3)
+                  .toString("hex")
+                  .toUpperCase()}`;
+                const continuationText = await requestAgentText({
+                  client: activeClient,
+                  sessionKey,
+                  expectedReply: continuationToken,
+                  message: `Reply exactly ${continuationToken} and nothing else.`,
+                });
+                const continuationThreadId = observedCodexThreadIds.get(sessionKey);
+                const continuationClientId = observedCodexClientIds.get(sessionKey);
+                expect(continuationThreadId).toBe(warmThreadId);
+                expect(continuationClientId).toBe(warmClientId);
+                logCodexLiveStep("explicit-compact-continuation", {
+                  text: continuationText,
+                  clientId: continuationClientId,
+                  threadId: continuationThreadId,
+                });
+              } finally {
+                unsubscribeCompactionDebugEvents();
+              }
+            }
             const compactionStressState = CODEX_HARNESS_COMPACTION_STRESS
               ? await verifyCodexCompactionStress({
                   client: activeClient,
@@ -2831,6 +2785,7 @@ describeLive("gateway live (Codex harness)", () => {
               };
               logCodexLiveStep("resume-stress:history-ready", {
                 historyTurns: historyTurns + 2,
+                clientId,
                 threadId,
               });
             }
@@ -2952,12 +2907,14 @@ describeLive("gateway live (Codex harness)", () => {
             );
           }
         }
-        await verifyCodexSessionDeletion({
-          client,
-          events: gatewayEvents,
-          modelKey,
-          sessionKey: "agent:dev:live-codex-harness",
-        });
+        if (CODEX_HARNESS_SESSION_DELETION_PROBE) {
+          await verifyCodexSessionDeletion({
+            client,
+            events: gatewayEvents,
+            modelKey,
+            sessionKey: "agent:dev:live-codex-harness",
+          });
+        }
       } catch (error) {
         console.error(instance.logs());
         throw error;

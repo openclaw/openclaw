@@ -1,11 +1,24 @@
+import { isStartupConfigRefusal } from "../../commands/doctor-startup-migration-refusal.js";
+import { isInvalidConfigError } from "../../config/io.invalid-config.js";
+import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
+import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.messages.js";
 import { formatCliCommand } from "../command-format.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+export function resolveGatewayStartupFailureExitCode(err: unknown): number {
+  return isInvalidConfigError(err) ||
+    isTailscaleRouteOwnershipConflictError(err) ||
+    isGatewayEffectiveConfigConflictError(err) ||
+    isStartupConfigRefusal(err)
+    ? 78
+    : 1;
+}
 
 export function resolveGatewayStartupMaintenanceReason(error: unknown) {
   return findStartupMaintenanceRequiredError(error)?.reason;

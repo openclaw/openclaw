@@ -13,9 +13,12 @@ export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDrive
   );
 }
 
-export function readUpdateRunDriver(): UpdateRunDriver | undefined {
+export function readUpdateRunDriver(pid = process.pid): UpdateRunDriver | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
+  }
   const host = hostname();
-  const startedAt = getFileLockProcessStartTime(process.pid);
+  const startedAt = getFileLockProcessStartTime(pid);
   if (
     !host ||
     host.length > 255 ||
@@ -25,7 +28,7 @@ export function readUpdateRunDriver(): UpdateRunDriver | undefined {
   ) {
     return undefined;
   }
-  return { host, pid: process.pid, startIdentity: String(startedAt) };
+  return { host, pid, startIdentity: String(startedAt) };
 }
 
 export function inspectUpdateRunDriver(driver: UpdateRunDriver): "alive" | "dead" | "unknown" {

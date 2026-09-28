@@ -48,13 +48,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
 import { buildDeviceAuthPayload } from "../device-auth.js";
@@ -161,7 +162,7 @@ async function attachStartupNodeConnect(params: {
   gatewayToken?: string;
   identityPath: string;
   isPendingWorkerNodeSetup: (setupId: string, deviceId: string) => boolean;
-  rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
+  rateLimiter?: ReturnType<typeof createGatewayAuthRateLimiter>;
   onNodeRegistered?: () => void;
 }) {
   const identityPath = params.identityPath;
@@ -833,12 +834,15 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         { label: "gateway-startup-cloud-worker-invalid", layout: "state-only" },
         async (state) => {
           const { store } = await seedProvisioningNodeSetup();
-          const rateLimiter = createAuthRateLimiter({
-            maxAttempts: 1,
-            windowMs: 60_000,
-            lockoutMs: 60_000,
-            exemptLoopback: false,
-          });
+          const rateLimiter = createGatewayAuthRateLimiter(
+            {
+              maxAttempts: 1,
+              windowMs: 60_000,
+              lockoutMs: 60_000,
+              exemptLoopback: false,
+            },
+            { scheduler: createTestGatewayScheduler() },
+          );
           try {
             const harness = await attachStartupNodeConnect({
               bootstrapToken: "invalid-startup-token",

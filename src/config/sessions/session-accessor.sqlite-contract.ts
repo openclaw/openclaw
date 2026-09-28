@@ -33,6 +33,8 @@ export type CanonicalSessionValidationResult = {
 /** Worker operation facts; no Worker object or plan payload is retained. */
 export type SqliteSessionReclamationDiagnostics = {
   kind?:
+    | "archive-publish-prepare"
+    | "archive-publish-record"
     | "entry"
     | "lifecycle-artifacts"
     | "history-eviction"
@@ -78,9 +80,6 @@ export type SqliteSessionArtifactPreparationDiagnostics =
 /** One pruning attempt retains only aggregate stage observations. */
 export type SqliteSessionArchivePruningDiagnostics = {
   trigger: "initial" | "after-eviction" | "final";
-  admissionMs?: number;
-  cachedAdmissions?: number;
-  asyncAdmissions?: number;
   checkpointCalls?: number;
   checkpointIncomplete?: number;
   checkpoint?: SqliteWalHealth;
@@ -107,7 +106,6 @@ export type SqliteSessionArchivePruningDiagnostics = {
 
 export type SqliteSessionWriteDiagnostics = SqliteSessionReclamationDiagnostics & {
   artifactPreparation?: SqliteSessionArtifactPreparationDiagnostics;
-  archivePruning?: SqliteSessionArchivePruningDiagnostics;
   reclamationAdmission?: SqliteSessionReclamationAdmissionDiagnostics;
 };
 

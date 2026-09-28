@@ -1,9 +1,5 @@
 import path from "node:path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-/**
- * Resolves workspace, runtime setup, context guards, and startup for an embedded attempt.
- * It may assume dispatch inputs and provider metadata are ready.
- */
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
@@ -54,7 +50,6 @@ import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
-import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -64,10 +59,6 @@ import {
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-
-/**
- * Resolves workspace, sandbox, provider runtime, and phase reporting for an embedded attempt.
- */
 
 type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
   modelId: string;
@@ -79,8 +70,8 @@ export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAtte
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
-  const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel, params.model);
+  const agentCoreThinkingLevel = mapThinkingLevel(providerThinkingLevel);
   const proactiveSubagentOrchestration = params.thinkLevel === "ultra";
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 
@@ -170,8 +161,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   };
 }
 
-/** Installs attempt-local context engine, tool-result, image, and frame guards. */
-
 type PromptCacheRetention = Parameters<typeof buildLoopPromptCacheInfo>[0]["retention"];
 
 export function installEmbeddedAttemptContextGuards(input: {
@@ -227,7 +216,7 @@ export function installEmbeddedAttemptContextGuards(input: {
             getReplay: () => ({
               model: attempt.model,
               sessionId: attempt.sessionId,
-              authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+              authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
               enabled: input.getCompactionReplayEnabled(),
             }),
             contextTokenBudget,
@@ -464,10 +453,6 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
   };
   return { diagnosticTrace, runTrace, emitCompleted };
 }
-
-/**
- * Maps bootstrap context files into the attempt workspace.
- */
 
 function isRelativePathInsideOrEqual(relativePath: string): boolean {
   // `path.relative` returns "" for the workspace root; reject parent escapes and absolute paths.

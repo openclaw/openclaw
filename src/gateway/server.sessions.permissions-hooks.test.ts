@@ -1,14 +1,6 @@
 // Session permissions and hooks tests protect gateway access control around
 // patch/delete/compact/fork APIs plus emitted internal hook payloads.
-import path from "node:path";
-import { afterAll, expect, test, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-
-const permHookTempDirs: string[] = [];
-
-afterAll(() => {
-  cleanupTempDirs(permHookTempDirs);
-});
+import { expect, test, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -20,7 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { requireGatewayRecord } from "./test-helpers.assertions.js";
-import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { connectWebchatClient, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionHookMocks,
@@ -167,9 +159,7 @@ test("webchat session mutations follow operator scope policy", async () => {
 });
 
 test("session:patch hook fires with correct context", async () => {
-  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-patch-hook-");
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
+  await createSessionStoreDir();
 
   await writeSessionStore({
     entries: {
@@ -207,9 +197,7 @@ test("session:patch hook fires with correct context", async () => {
 });
 
 test("session:patch hook does not fire after scope rejection", async () => {
-  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-webchat-hook-");
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
+  await createSessionStoreDir();
 
   await writeSessionStore({
     entries: {
@@ -237,9 +225,7 @@ test("session:patch hook does not fire after scope rejection", async () => {
 });
 
 test("session:patch hook only fires after successful patch", async () => {
-  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-success-hook-");
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
+  await createSessionStoreDir();
 
   await writeSessionStore({
     entries: {
@@ -278,6 +264,7 @@ test("session:patch hook only fires after successful patch", async () => {
 });
 
 test("session:patch skips clone and dispatch when no hooks listen", async () => {
+  await createPermissionSessionStore();
   const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
   sessionHookMocks.hasInternalHookListeners.mockReturnValue(false);
 

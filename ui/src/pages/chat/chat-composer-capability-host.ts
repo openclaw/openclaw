@@ -4,10 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import "../../components/modal-dialog.ts";
 import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
+import "../../components/modal-dialog.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
@@ -39,6 +40,8 @@ import {
   composerWebSearchBaseEnabled,
 } from "./composer-capability-catalog.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
+
+registerMcpEnglish();
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
@@ -93,53 +96,32 @@ export class ChatComposerCapabilityHost {
   }): Promise<CapabilityMutationResult> {
     const globalConfig =
       options.scope === "session" ? { ...options.config, enabled: false } : options.config;
-    let globalResult: Awaited<ReturnType<typeof options.patchGlobal>>;
+    let stage: "config" | "session" = "config";
     try {
-      globalResult = await options.patchGlobal(globalConfig);
+      const globalResult = await options.patchGlobal(globalConfig);
+      if (!globalResult.ok) {
+        return { ...globalResult, stage };
+      }
+      if (options.scope === "everywhere") {
+        return { ok: true };
+      }
+      stage = "session";
+      const loaded = await options.loadSessionOverrides();
+      if (!loaded.ok) {
+        return { ...loaded, stage };
+      }
+      const next = nextBooleanToolOverrides(
+        loaded.overrides,
+        "mcpServers",
+        options.name,
+        true,
+        false,
+      );
+      const sessionResult = await options.patchSession(next);
+      return sessionResult.ok ? sessionResult : { ...sessionResult, stage };
     } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "config",
-      };
+      return { ok: false, error: formatUiError(error), stage };
     }
-    if (!globalResult.ok) {
-      return { ...globalResult, stage: "config" };
-    }
-    if (options.scope === "everywhere") {
-      return { ok: true };
-    }
-    let loaded: Awaited<ReturnType<typeof options.loadSessionOverrides>>;
-    try {
-      loaded = await options.loadSessionOverrides();
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "session",
-      };
-    }
-    if (!loaded.ok) {
-      return { ...loaded, stage: "session" };
-    }
-    const next = nextBooleanToolOverrides(
-      loaded.overrides,
-      "mcpServers",
-      options.name,
-      true,
-      false,
-    );
-    let sessionResult: Awaited<ReturnType<typeof options.patchSession>>;
-    try {
-      sessionResult = await options.patchSession(next);
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "session",
-      };
-    }
-    return sessionResult.ok ? sessionResult : { ...sessionResult, stage: "session" };
   }
 
   private loadSkills(context: ApplicationContext, state: ChatPageHost, agentId: string): void {
@@ -273,19 +255,15 @@ export class ChatComposerCapabilityHost {
       state.client === client &&
       state.sessionKey === sessionKey &&
       this.patchTokens.get(sessionKey) === patchToken;
-    if (state.sessionKey === sessionKey) {
-      state.lastError = null;
-      state.chatError = null;
-    }
+    state.lastError = null;
+    state.chatError = null;
     this.notify();
     try {
       const result = await patchChatSessionSettings(
         state,
         sessionKey,
         { toolOverrides: next },
-        {
-          ...scopedAgentParamsForSession(state, sessionKey),
-        },
+        scopedAgentParamsForSession(state, sessionKey),
       );
       if (!result) {
         throw new Error(t("chat.composer.menu.offlineBlocked"));

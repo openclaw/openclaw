@@ -129,65 +129,44 @@ export function parseArgs(argv) {
     shippedRefs: [],
     writeLedger: false,
   };
+  const booleanOptions = new Map([
+    ["--help", "help"],
+    ["--check-github", "checkGithub"],
+    ["--json", "json"],
+    ["--no-github-snapshot", "noGithubSnapshot"],
+    ["--refresh-github-snapshot", "refreshGithubSnapshot"],
+    ["--write-ledger", "writeLedger"],
+  ]);
+  const valueOptions = new Map([
+    ["--base", "base"],
+    ["--target", "target"],
+    ["--version", "version"],
+    ["--release-tag", "releaseTags"],
+    ["--release-provenance", "releaseProvenance"],
+    ["--shipped-ref", "shippedRefs"],
+    ["--github-snapshot", "githubSnapshotPath"],
+    ["--main-ref", "mainRef"],
+    ["--manifest", "manifestPath"],
+    ["--seed-ref", "seedRef"],
+  ]);
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help") {
-      options.help = true;
+    const booleanKey = booleanOptions.get(arg);
+    if (booleanKey) {
+      options[booleanKey] = true;
       continue;
     }
-    if (
-      arg === "--check-github" ||
-      arg === "--json" ||
-      arg === "--no-github-snapshot" ||
-      arg === "--refresh-github-snapshot" ||
-      arg === "--write-ledger"
-    ) {
-      options[
-        arg === "--check-github"
-          ? "checkGithub"
-          : arg === "--write-ledger"
-            ? "writeLedger"
-            : arg === "--no-github-snapshot"
-              ? "noGithubSnapshot"
-              : arg === "--refresh-github-snapshot"
-                ? "refreshGithubSnapshot"
-                : "json"
-      ] = true;
-      continue;
-    }
-    if (
-      arg === "--base" ||
-      arg === "--target" ||
-      arg === "--version" ||
-      arg === "--release-tag" ||
-      arg === "--release-provenance" ||
-      arg === "--shipped-ref" ||
-      arg === "--github-snapshot" ||
-      arg === "--main-ref" ||
-      arg === "--manifest" ||
-      arg === "--seed-ref"
-    ) {
+    const valueKey = valueOptions.get(arg);
+    if (valueKey) {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
         fail(`missing value for ${arg}`);
       }
-      if (arg === "--release-tag") {
-        options.releaseTags.push(value);
-      } else if (arg === "--release-provenance") {
-        options.releaseProvenance.push(value);
-      } else if (arg === "--shipped-ref") {
-        options.shippedRefs.push(value);
-      } else if (arg === "--manifest") {
-        options.manifestPath = value;
-      } else if (arg === "--github-snapshot") {
-        options.githubSnapshotPath = value;
-      } else if (arg === "--main-ref") {
-        options.mainRef = value;
-      } else if (arg === "--seed-ref") {
-        options.seedRef = value;
+      if (Array.isArray(options[valueKey])) {
+        options[valueKey].push(value);
       } else {
-        options[arg.slice(2)] = value;
+        options[valueKey] = value;
       }
       index += 1;
       continue;
@@ -894,12 +873,8 @@ export function withoutExcludedContributionRecords(record, excludedReferences) {
   return filtered;
 }
 
-function contributionRecordReferences(record) {
-  return [...record.pullRequests.keys()];
-}
-
 function contributionRecordMetadataReferences(record) {
-  const references = contributionRecordReferences(record);
+  const references = [...record.pullRequests.keys()];
   for (const entry of record.pullRequests.values()) {
     appendReferences(references, entry.references);
   }
@@ -1265,35 +1240,15 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const coauthorsByReference = new Map();
   const activeCommits = [];
   for (const commit of commits.values()) {
-    if (commit.isRevert && isActive(commit.hash)) {
-      const coauthorEmails = [...commit.body.matchAll(/^Co-authored-by:\s*.+?<([^>\s]+)>$/gim)].map(
-        (match) => match[1],
-      );
-      activeCommits.push({
-        authorEmail: commit.authorEmail,
-        authorHandle: githubHandleFromNoreply(commit.authorEmail),
-        authorName: commit.authorName,
-        body: commit.body,
-        closingReferences: [],
-        committedAt: commit.committedAt,
-        coauthors: coauthorEmails.map(githubHandleFromNoreply).filter(isEligibleHandle),
-        coauthorEmails,
-        hash: commit.hash,
-        isRevert: true,
-        pullRequests: [],
-        references: [],
-        subject: commit.subject,
-      });
-      continue;
-    }
-    if (commit.isRevert) {
-      continue;
-    }
-    const uniqueReferences = [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
+    const uniqueReferences = commit.isRevert
+      ? []
+      : [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
     if (!isActive(commit.hash)) {
-      revertedCommitHashes.add(commit.hash);
-      for (const number of uniqueReferences) {
-        revertedReferences.add(number);
+      if (!commit.isRevert) {
+        revertedCommitHashes.add(commit.hash);
+        for (const number of uniqueReferences) {
+          revertedReferences.add(number);
+        }
       }
       continue;
     }
@@ -1306,12 +1261,14 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       authorHandle: githubHandleFromNoreply(commit.authorEmail),
       authorName: commit.authorName,
       body: commit.body,
-      closingReferences: closingReferencesIn(`${commit.subject}\n${commit.body}`),
+      closingReferences: commit.isRevert
+        ? []
+        : closingReferencesIn(`${commit.subject}\n${commit.body}`),
       committedAt: commit.committedAt,
       coauthors,
       coauthorEmails,
       hash: commit.hash,
-      isRevert: false,
+      isRevert: commit.isRevert,
       pullRequests: [],
       references: uniqueReferences,
       subject: commit.subject,
@@ -2009,32 +1966,17 @@ function thanksFor(node, coauthorHandles) {
   if (node.author?.__typename === "User" && isEligibleHandle(node.author.login)) {
     handles.push(node.author.login);
   }
-  for (const handle of coauthorHandles) {
-    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
-      handles.push(handle);
-    }
-  }
+  appendUnique(handles, coauthorHandles);
   return handles;
 }
 
 function addHandles(handles, additions) {
-  for (const handle of additions) {
-    if (!isEligibleHandle(handle)) {
-      continue;
-    }
-    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
-      handles.push(handle);
-    }
-  }
+  appendUnique(handles, [...additions].filter(isEligibleHandle));
   return handles;
 }
 
 function titleReferences(entries) {
   return [...new Set(entries.flatMap((entry) => referencesIn(entry.title)))];
-}
-
-function releaseTitle(title) {
-  return title;
 }
 
 function withSentenceEnding(value) {
@@ -2236,7 +2178,7 @@ export function ledgerFor(
       .filter(Boolean);
     return {
       number,
-      title: releaseTitle(node.title.replace(/\s+/g, " ").trim()),
+      title: node.title.replace(/\s+/g, " ").trim(),
       type: node.__typename,
       mergedAt: node.mergedAt,
       closingIssuesReferences: node.closingIssuesReferences,
@@ -2863,10 +2805,8 @@ function main() {
       );
     }
   }
-  if (errors.length === 0) {
-    if (options.writeLedger) {
-      writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
-    }
+  if (errors.length === 0 && options.writeLedger) {
+    writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
   }
 
   const result = {

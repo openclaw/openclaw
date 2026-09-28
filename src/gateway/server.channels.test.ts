@@ -160,14 +160,13 @@ describe("gateway server channels", () => {
       envToken?: boolean;
       channel?: string;
     }>(ws, "channels.logout", { channel: "telegram" });
-    expect(res.ok).toBe(true);
-    expect(res.payload?.channel).toBe("telegram");
-    expect(res.payload?.cleared).toBe(true);
-    expect(res.payload?.envToken).toBe(false);
-
     const snap = await readConfigFileSnapshot();
     expect(snap.valid).toBe(true);
     expect(snap.config?.channels?.telegram?.botToken).toBeUndefined();
     expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res).toMatchObject({ ok: true });
+    expect(res.payload?.channel).toBe("telegram");
+    expect(res.payload?.cleared).toBe(true);
+    expect(res.payload?.envToken).toBe(false);
   });
 });

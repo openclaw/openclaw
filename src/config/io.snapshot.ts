@@ -1,5 +1,7 @@
-import { createHash } from "node:crypto";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
+import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -12,8 +14,13 @@ import {
 } from "./agent-roster-provenance.js";
 import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
-import { ConfigIncludeError } from "./includes.js";
+import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
+import {
+  createConfigReadError,
+  formatInvalidConfigDetails,
+  isConfigReadFailure,
+} from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   prepareSuspiciousConfigRead,
@@ -22,14 +29,16 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
+  hashConfigRevision,
   parseConfigJson5,
+  readConfigFileIfPresent,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
 import {
   materializeConfigSnapshotDefaults,
   prepareConfigSnapshotValidation,
@@ -80,18 +89,6 @@ function listResolvedIncludePaths(includeFilePathsForWatch: ReadonlySet<string>)
   return [...includeFilePathsForWatch].toSorted();
 }
 
-export function hashConfigRevision(
-  raw: string,
-  includeFileHashes: Record<string, string>,
-  includeFileTargets: Record<string, string>,
-): string {
-  const revision = createHash("sha256").update(raw);
-  for (const [includePath, includeHash] of Object.entries(includeFileHashes)) {
-    revision.update(JSON.stringify([includePath, includeFileTargets[includePath], includeHash]));
-  }
-  return revision.digest("hex");
-}
-
 export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
   options: InternalReadOptions = {},
@@ -120,40 +117,6 @@ async function readConfigSnapshotWithPreparation(
   const preparation = options.preparation;
   maybeLoadDotEnvForConfig(deps.env);
   const envBeforeRead = snapshotEnv(deps.env);
-  if (sourceRaw === undefined && !deps.fs.existsSync(configPath)) {
-    const migrated = migratePersistedImplicitMainRoster({});
-    const config = coerceConfig(migrated.config);
-    const metadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: config,
-      env: deps.env,
-      allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
-    });
-    const legacyIssues: LegacyConfigIssue[] = [];
-    return await finalizeReadConfigSnapshotInternalResult(deps, {
-      snapshot: createConfigFileSnapshot({
-        path: configPath,
-        exists: false,
-        raw: null,
-        parsed: {},
-        sourceConfig: config,
-        valid: true,
-        // Missing config is the fresh-install default path: materialize the
-        // same runtime defaults an existing empty {} config gets, so snapshot
-        // consumers see identical out-of-box behavior either way.
-        runtimeConfig: preparation
-          ? await preparation((prepare) =>
-              prepare({ kind: "materialize", context, metadata, config }),
-            )
-          : materializeConfigSnapshotDefaults(context, config, metadata),
-        hash: hashConfigRaw(null),
-        issues: [],
-        warnings: [],
-        legacyIssues,
-      }),
-      pluginMetadataSnapshot: metadata.getSnapshot(),
-    });
-  }
-
   let fallbackRaw: string | null = null;
   let fallbackParsed: unknown = {};
   let fallbackSourceConfig: OpenClawConfig = {};
@@ -169,8 +132,38 @@ async function readConfigSnapshotWithPreparation(
   try {
     const raw = await deps.measure(
       "config.snapshot.read.file",
-      () => sourceRaw ?? deps.fs.readFileSync(configPath, "utf-8"),
+      () => sourceRaw ?? readConfigFileIfPresent(deps, configPath),
     );
+    if (raw === undefined) {
+      const migrated = migratePersistedImplicitMainRoster({});
+      const config = coerceConfig(migrated.config);
+      const metadata = context.createValidationPluginMetadataSnapshotLoader({
+        env: deps.env,
+        allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
+      });
+      const legacyIssues: LegacyConfigIssue[] = [];
+      return await finalizeReadConfigSnapshotInternalResult(deps, {
+        snapshot: createConfigFileSnapshot({
+          path: configPath,
+          exists: false,
+          raw: null,
+          parsed: {},
+          sourceConfig: config,
+          valid: true,
+          // Fresh installs materialize the same defaults as an existing empty config.
+          runtimeConfig: preparation
+            ? await preparation((prepare) =>
+                prepare({ kind: "materialize", context, metadata, config }),
+              )
+            : materializeConfigSnapshotDefaults(context, config, metadata),
+          hash: hashConfigRaw(null),
+          issues: [],
+          warnings: [],
+          legacyIssues,
+        }),
+        pluginMetadataSnapshot: metadata.getSnapshot(),
+      });
+    }
     const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
     fallbackRaw = raw;
     fallbackHash = rawHash;
@@ -189,7 +182,13 @@ async function readConfigSnapshotWithPreparation(
           valid: false,
           runtimeConfig: {},
           hash: rawHash,
-          issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
+          issues: [
+            {
+              path: "",
+              errorCode: "CONFIG_SOURCE_INVALID",
+              message: `JSON5 parse failed: ${parsedRes.error}`,
+            },
+          ],
           warnings: [],
           legacyIssues: [],
         }),
@@ -218,6 +217,9 @@ async function readConfigSnapshotWithPreparation(
         ),
       );
     } catch (error) {
+      if (findStartupMaintenanceRequiredError(error)) {
+        throw error;
+      }
       const message =
         error instanceof ConfigIncludeError
           ? error.message
@@ -233,7 +235,16 @@ async function readConfigSnapshotWithPreparation(
           valid: false,
           runtimeConfig: coerceConfig(effectiveParsed),
           hash: rawHash,
-          issues: [{ path: "", message }],
+          issues: [
+            {
+              path: "",
+              errorCode:
+                error instanceof ConfigIncludeReadError || !(error instanceof ConfigIncludeError)
+                  ? "CONFIG_READ_FAILED"
+                  : "CONFIG_SOURCE_INVALID",
+              message,
+            },
+          ],
           warnings: [],
           legacyIssues: [],
         }),
@@ -263,9 +274,6 @@ async function readConfigSnapshotWithPreparation(
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
-    const validationConfigRaw = effectiveConfigRaw;
-    const snapshotRaw = raw;
-    const snapshotParsed = effectiveParsed;
     // The write revision covers every authored input, without hashing runtime defaults or env.
     const snapshotHash = hashConfigRevision(
       raw,
@@ -275,7 +283,6 @@ async function readConfigSnapshotWithPreparation(
     fallbackHash = snapshotHash;
     fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
@@ -284,7 +291,7 @@ async function readConfigSnapshotWithPreparation(
       prepareValidation: options.prepareValidation,
       context,
       metadata: pluginMetadata,
-      raw: validationConfigRaw,
+      raw: effectiveConfigRaw,
       sourceRaw: effectiveParsed,
     };
     const { deferredPluginMigrations, validated } = await deps.measure(
@@ -298,7 +305,7 @@ async function readConfigSnapshotWithPreparation(
                 const pending = context.resolveDeferredPluginMigrations();
                 return {
                   deferredPluginMigrations: pending,
-                  validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+                  validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
                     ...pathResolution,
                     pluginValidation: context.options.pluginValidation,
                     loadPluginMetadataSnapshot: pluginMetadata.load,
@@ -309,6 +316,23 @@ async function readConfigSnapshotWithPreparation(
                 };
               }),
     );
+    const snapshotSource = () => ({
+      path: configPath,
+      includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
+      exists: true,
+      raw,
+      parsed: effectiveParsed,
+      authoredConfig: coerceConfig(resolved),
+      includeProvenance,
+      agentRosterIncludeOwned,
+      bindingsIncludeOwned,
+      sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
+      sourceConfig: coerceConfig(effectiveConfigRaw),
+      hash: snapshotHash,
+      deferredPluginMigrations,
+      warnings: [...validated.warnings, ...envVarWarnings],
+      resolutionFacts: readResolution.resolutionFacts,
+    });
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
       const collect = () =>
@@ -331,24 +355,10 @@ async function readConfigSnapshotWithPreparation(
       });
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
-          path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          authoredConfig: coerceConfig(resolved),
-          includeProvenance,
-          agentRosterIncludeOwned,
-          bindingsIncludeOwned,
-          sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
-          sourceConfig: coerceConfig(effectiveConfigRaw),
+          ...snapshotSource(),
           valid: false,
           runtimeConfig: coerceConfig(effectiveConfigRaw),
-          hash: snapshotHash,
           issues: validated.issues,
-          deferredPluginMigrations,
-          warnings: [...validated.warnings, ...envVarWarnings],
-          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -420,24 +430,10 @@ async function readConfigSnapshotWithPreparation(
         deps,
         {
           snapshot: createConfigFileSnapshot({
-            path: configPath,
-            includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-            exists: true,
-            raw: snapshotRaw,
-            parsed: snapshotParsed,
-            authoredConfig: coerceConfig(resolved),
-            includeProvenance,
-            agentRosterIncludeOwned,
-            bindingsIncludeOwned,
-            sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
-            sourceConfig: coerceConfig(effectiveConfigRaw),
+            ...snapshotSource(),
             valid: true,
             runtimeConfig: snapshotConfig,
-            hash: snapshotHash,
             issues: [],
-            warnings: [...validated.warnings, ...envVarWarnings],
-            deferredPluginMigrations,
-            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -451,7 +447,13 @@ async function readConfigSnapshotWithPreparation(
     );
   } catch (error) {
     preparation?.assertCurrent();
-    if (findStartupMaintenanceRequiredError(error)) {
+    if (
+      findStartupMaintenanceRequiredError(error) ||
+      collectNestedErrorCandidates(error).some(
+        (failure) =>
+          failure instanceof OpenClawStateOwnershipError || isSqliteSchemaMismatchError(failure),
+      )
+    ) {
       throw error;
     }
     const nodeError = error as NodeJS.ErrnoException;
@@ -483,7 +485,8 @@ async function readConfigSnapshotWithPreparation(
         runtimeConfig: fallbackSourceConfig,
         hash: fallbackHash,
         ...(fallbackRaw === null ? { readError: { code: nodeError?.code ?? null } } : {}),
-        issues: [{ path: "", message }],
+        // Diagnostic classification must not broaden readError's unavailable-source write guard.
+        issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message }],
         warnings: [],
         legacyIssues: [],
       }),
@@ -513,12 +516,15 @@ export async function prepareConfigRecoveryFromContext(
         retryable: false,
       });
     }
-    const previewContext = createConfigIoContext({
-      ...context.options,
-      configPath: context.configPath,
-      env: cloneEnvWithPlatformSemantics(context.deps.env),
-      observe: false,
-    });
+    const previewContext = createConfigIoContext(
+      {
+        ...context.options,
+        configPath: context.configPath,
+        env: cloneEnvWithPlatformSemantics(context.deps.env),
+        observe: false,
+      },
+      context.transformRecoveryCandidate,
+    );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
       configPath: context.configPath,
@@ -536,6 +542,9 @@ export async function prepareConfigRecoveryFromContext(
         { allowCurrentPluginMetadata: false },
         plan.candidate.raw,
       );
+      if (isConfigReadFailure(snapshot)) {
+        throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+      }
       return snapshot.valid ? { snapshot, pluginMetadataSnapshot, apply: plan.apply } : null;
     } finally {
       // The prepared writer keeps the selected environment; candidate env.vars are preview-only.
@@ -586,7 +595,6 @@ async function readConfigSnapshotWithPluginMetadata(
   let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
   if (!pluginMetadataSnapshot && result.snapshot.valid) {
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: result.snapshot.sourceConfig,
       env: context.deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });

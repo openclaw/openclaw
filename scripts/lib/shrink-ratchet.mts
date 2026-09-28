@@ -236,7 +236,7 @@ function collectRatchetDeltas(
     .toSorted((left, right) => compareEntries(left.entry, right.entry));
 }
 
-export function formatRatchetMessage(title: string, entries: readonly string[]) {
+function formatRatchetMessage(title: string, entries: readonly string[]) {
   return [title, ...entries.map((entry) => "  " + entry)].join("\n");
 }
 
@@ -256,16 +256,4 @@ export function reportRatchetFailures(
 
 export function reportRatchetSuccess(message: string) {
   console.log(message);
-}
-
-export function enforceRatchetScalar(
-  current: number,
-  allowed: number,
-  messages: { decreased?: string; increased?: string },
-) {
-  const failure =
-    current > allowed ? messages.increased : current < allowed ? messages.decreased : undefined;
-  if (failure) {
-    throw new Error(failure);
-  }
 }

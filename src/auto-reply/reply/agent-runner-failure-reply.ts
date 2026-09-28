@@ -8,7 +8,6 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -16,16 +15,12 @@ import {
 } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
-  describeFailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
-import {
-  renderAssistantRequestFailureCopy,
-  renderFormatErrorCopy,
-} from "../../agents/failover/assistant-request-failure-copy.js";
-import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -37,7 +32,6 @@ import {
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
@@ -51,7 +45,6 @@ import {
   readErrorCauses,
   readErrorName,
 } from "../../infra/errors.js";
-import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -64,33 +57,6 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-
-export function resolveReplyFailoverFacts(error: unknown, message: string) {
-  const described = describeFailoverError(error);
-  const rawError = described.rawError ?? message;
-  const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
-  const reason =
-    described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
-  const classification = reason ? ({ kind: "reason", reason } as const) : null;
-  return {
-    reason: classification?.kind === "reason" ? classification.reason : undefined,
-    code: described.code,
-    provider: described.provider,
-    model: described.model,
-    status,
-    authMode: described.authMode,
-    formatFailureText: reason === "format" ? renderFormatErrorCopy(rawError) : undefined,
-    providerRequestError: resolveProviderRequestFailureCopy({
-      classification,
-      facet: classifyProviderRequestFacets({
-        status,
-        message: rawError,
-      }),
-      status,
-      technicalMessage: message,
-    }),
-  };
-}
 
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
 

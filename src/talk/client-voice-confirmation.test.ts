@@ -650,6 +650,60 @@ describe("client voice confirmation", () => {
     ).toThrow("missing, expired");
   });
 
+  it("keeps one challenge when the same action retries in a new run", () => {
+    const toolParams = { action: "send", message: "same" };
+    const first = block({ voiceSessionId: "voice-1", runId: "run-1", toolParams, now: 100 });
+    const retry = block({ voiceSessionId: "voice-1", runId: "run-2", toolParams, now: 101 });
+    expect(retry).toBe(first);
+    // Reusing a challenge must not itself authorize the retried action.
+    expect(
+      checkClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-1",
+        runId: "run-2",
+        toolName: "message",
+        toolParams,
+        now: 102,
+      }).allowed,
+    ).toBe(false);
+  });
+
+  it("points a reused challenge at the latest blocked call without renewing it", () => {
+    const base = {
+      voiceSessionId: "voice-1",
+      toolName: "message",
+      toolParams: { action: "send", message: "same" },
+    };
+    const first = checkClientVoiceToolConfirmationPolicy({
+      ...base,
+      runId: "run-1",
+      toolCallId: "call-1",
+      now: 100,
+    });
+    if (first.allowed) {
+      throw new Error("expected a blocked action");
+    }
+    const confirmationId = confirmationIdFrom(first.reason);
+    checkClientVoiceToolConfirmationPolicy({
+      ...base,
+      runId: "run-2",
+      toolCallId: "call-2",
+      now: 101,
+    });
+    noteClientVoiceConfirmationUtterance({
+      voiceSessionId: "voice-1",
+      text: "yes",
+      timestamp: 102,
+    });
+    const grant = authorizeClientVoiceConfirmation({
+      voiceSessionId: "voice-1",
+      confirmationId,
+      now: 103,
+    });
+    expect(grant.retryContext).toContain('"runId":"run-2"');
+    expect(grant.retryContext).toContain('"toolCallId":"call-2"');
+    expect(grant.expiresAt).toBe(120_100);
+  });
+
   it("binds an approved fingerprint to its follow-up run", () => {
     const toolParams = { action: "send", message: "same" };
     const confirmationId = block({

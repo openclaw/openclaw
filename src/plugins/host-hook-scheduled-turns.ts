@@ -75,16 +75,6 @@ function resolveSchedule(
   return { kind: "at", at: at.toISOString() };
 }
 
-function resolveSessionEventDeliveryMode(deliveryMode: unknown): "none" | "announce" | undefined {
-  if (deliveryMode === undefined) {
-    return undefined;
-  }
-  if (deliveryMode === "none" || deliveryMode === "announce") {
-    return deliveryMode;
-  }
-  return undefined;
-}
-
 function formatScheduleLogContext(params: {
   pluginId: string;
   sessionKey?: string;
@@ -253,38 +243,28 @@ export async function schedulePluginSessionTurn(params: {
   if (!cronSchedule) {
     return undefined;
   }
-  const rawDeliveryMode = (params.schedule as { deliveryMode?: unknown }).deliveryMode;
-  const deliveryMode = resolveSessionEventDeliveryMode(rawDeliveryMode);
+  const deliveryMode: unknown = params.schedule.deliveryMode;
   const scheduleName = normalizeOptionalString(params.schedule.name);
-  if (rawDeliveryMode !== undefined && !deliveryMode) {
+  const logSchedulingFailure = (reason: string, name = scheduleName) => {
     log.warn(
       `plugin session turn scheduling failed (${formatScheduleLogContext({
         pluginId: params.pluginId,
         sessionKey,
-        ...(scheduleName ? { name: scheduleName } : {}),
-      })}): unsupported deliveryMode`,
+        ...(name ? { name } : {}),
+      })}): ${reason}`,
     );
+  };
+  if (deliveryMode !== undefined && deliveryMode !== "none" && deliveryMode !== "announce") {
+    logSchedulingFailure("unsupported deliveryMode");
     return undefined;
   }
   if (cronSchedule.kind === "cron" && params.schedule.deleteAfterRun === true) {
-    log.warn(
-      `plugin session turn scheduling failed (${formatScheduleLogContext({
-        pluginId: params.pluginId,
-        sessionKey,
-        ...(scheduleName ? { name: scheduleName } : {}),
-      })}): deleteAfterRun requires a one-shot schedule`,
-    );
+    logSchedulingFailure("deleteAfterRun requires a one-shot schedule");
     return undefined;
   }
   const { tag, invalid: invalidTag } = resolvePluginSessionTurnTag(params.schedule.tag);
   if (invalidTag) {
-    log.warn(
-      `plugin session turn scheduling failed (${formatScheduleLogContext({
-        pluginId: params.pluginId,
-        sessionKey,
-        ...(scheduleName ? { name: scheduleName } : {}),
-      })}): tag contains reserved delimiter ":"`,
-    );
+    logSchedulingFailure('tag contains reserved delimiter ":"');
     return undefined;
   }
   const cronDeliveryMode = deliveryMode ?? "announce";
@@ -292,13 +272,7 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   if (!params.cron) {
-    log.warn(
-      `plugin session turn scheduling failed (${formatScheduleLogContext({
-        pluginId: params.pluginId,
-        sessionKey,
-        ...(scheduleName ? { name: scheduleName } : {}),
-      })}): cron service unavailable`,
-    );
+    logSchedulingFailure("cron service unavailable");
     return undefined;
   }
   const cron = params.cron;
@@ -329,13 +303,7 @@ export async function schedulePluginSessionTurn(params: {
       },
     });
   } catch (error) {
-    log.warn(
-      `plugin session turn scheduling failed (${formatScheduleLogContext({
-        pluginId: params.pluginId,
-        sessionKey,
-        name: cronJobName,
-      })}): ${formatErrorMessage(error)}`,
-    );
+    logSchedulingFailure(formatErrorMessage(error), cronJobName);
     return undefined;
   }
   const jobId = result.id;
@@ -362,7 +330,7 @@ export async function schedulePluginSessionTurn(params: {
     }
     return undefined;
   }
-  const handle = registerPluginSessionSchedulerJob({
+  return registerPluginSessionSchedulerJob({
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     ownerRegistry: params.ownerRegistry,
@@ -384,7 +352,6 @@ export async function schedulePluginSessionTurn(params: {
       },
     },
   });
-  return handle;
 }
 
 export async function unschedulePluginSessionTurnsByTag(params: {

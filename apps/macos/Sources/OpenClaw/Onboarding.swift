@@ -75,12 +75,12 @@ enum OnboardingSystemAgentResumeStore {
     }
 
     private struct Record {
-        let phase: RecordPhase
+        var phase: RecordPhase
         let startedAt: Date?
-        let deadline: Date?
+        var deadline: Date?
         let activationOwner: ActivationOwner?
         let modelTarget: OnboardingAISetupModel.ModelTarget?
-        let utilityModel: String?
+        var utilityModel: String?
     }
 
     struct ActivationModel: Equatable {
@@ -226,16 +226,12 @@ enum OnboardingSystemAgentResumeStore {
     {
         guard let routeIdentity = normalized(routeIdentity) else { return }
         var records = self.loadRecords(defaults: defaults, now: now)
-        guard let record = records[routeIdentity],
+        guard var record = records[routeIdentity],
               ownerMatches(record, activationOwner: activationOwner)
         else { return }
-        records[routeIdentity] = Record(
-            phase: .verified,
-            startedAt: record.startedAt,
-            deadline: record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-            activationOwner: record.activationOwner,
-            modelTarget: record.modelTarget,
-            utilityModel: record.utilityModel)
+        record.phase = .verified
+        record.deadline = record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds)
+        records[routeIdentity] = record
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -248,16 +244,11 @@ enum OnboardingSystemAgentResumeStore {
     {
         guard let routeIdentity = normalized(routeIdentity) else { return false }
         var records = self.loadRecords(defaults: defaults, now: now)
-        guard let record = records[routeIdentity],
+        guard var record = records[routeIdentity],
               ownerMatches(record, activationOwner: activationOwner)
         else { return false }
-        records[routeIdentity] = Record(
-            phase: .completed,
-            startedAt: record.startedAt,
-            deadline: record.deadline,
-            activationOwner: record.activationOwner,
-            modelTarget: record.modelTarget,
-            utilityModel: record.utilityModel)
+        record.phase = .completed
+        records[routeIdentity] = record
         self.writeRecords(records, defaults: defaults)
         return true
     }
@@ -291,15 +282,10 @@ enum OnboardingSystemAgentResumeStore {
     {
         guard let routeIdentity = normalized(routeIdentity), let modelRef = normalized(modelRef) else { return }
         var records = self.loadRecords(defaults: defaults)
-        guard let record = records[routeIdentity], record.modelTarget == .utility,
+        guard var record = records[routeIdentity], record.modelTarget == .utility,
               ownerMatches(record, activationOwner: activationOwner) else { return }
-        records[routeIdentity] = Record(
-            phase: record.phase,
-            startedAt: record.startedAt,
-            deadline: record.deadline,
-            activationOwner: record.activationOwner,
-            modelTarget: record.modelTarget,
-            utilityModel: modelRef)
+        record.utilityModel = modelRef
+        records[routeIdentity] = record
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -437,28 +423,15 @@ enum OnboardingSystemAgentResumeStore {
         guard let phaseRaw = payload["phase"] as? String,
               let phase = RecordPhase(rawValue: phaseRaw)
         else { return self.conservativeLegacyRecord(now: now) }
-        let startedAt = self.date(payload["startedAt"])
-        let deadline = self.date(payload["deadlineAt"])
-        switch phase {
-        case .activating:
-            return Record(
-                phase: .activating,
-                startedAt: startedAt ?? now,
-                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-                activationOwner: nil,
-                modelTarget: nil,
-                utilityModel: nil)
-        case .verified, .completed:
-            // v1 `verified` could be written by an early read-only probe and
-            // carried no deadline, so migration must restore a full lease.
-            return Record(
-                phase: .verified,
-                startedAt: startedAt ?? now,
-                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-                activationOwner: nil,
-                modelTarget: nil,
-                utilityModel: nil)
-        }
+        // v1 `verified` could be written by an early read-only probe and
+        // carried no deadline, so migration must restore a full lease.
+        return Record(
+            phase: phase == .activating ? .activating : .verified,
+            startedAt: self.date(payload["startedAt"]) ?? now,
+            deadline: self.date(payload["deadlineAt"]) ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
+            activationOwner: nil,
+            modelTarget: nil,
+            utilityModel: nil)
     }
 
     private static func conservativeLegacyRecord(now: Date) -> Record {
@@ -763,23 +736,10 @@ struct OnboardingView: View {
     let aiPageIndex = 3
     let readyPageIndex = 9
 
-    var heroFrameHeight: CGFloat {
-        145
-    }
-
-    var heroSize: CGFloat {
-        130
-    }
-
     /// The active page is scrollable on short screens. Taller windows donate all
     /// extra room instead of leaving the content pinned to a fixed canvas.
-    func contentHeight(for windowHeight: CGFloat) -> CGFloat {
-        Self.contentHeight(for: windowHeight, usesCompactHero: self.usesCompactHero)
-    }
-
-    static func contentHeight(for windowHeight: CGFloat, usesCompactHero: Bool) -> CGFloat {
-        let heroHeight: CGFloat = usesCompactHero ? 78 : 145
-        return max(0, windowHeight - heroHeight - 72)
+    static func contentHeight(for windowHeight: CGFloat) -> CGFloat {
+        max(0, windowHeight - 145 - 72)
     }
 
     static func pageOrder(

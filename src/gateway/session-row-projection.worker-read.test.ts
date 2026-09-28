@@ -40,6 +40,7 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
@@ -214,6 +215,89 @@ it.each([
   },
 );
 
+it.each([
+  { rowCount: 1, first: "bulk" },
+  { rowCount: 2, first: "bulk" },
+  { rowCount: 2, first: "exact" },
+] as const)(
+  "shares $rowCount dirty row reads with $first preparation first",
+  async ({ rowCount, first }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const rows = Array.from({ length: rowCount }, (_, index) => ({
+        query: { agentId: "main", key: `agent:main:shared-row-read-${index}` },
+        entry: { sessionId: `shared-row-read-${index}`, updatedAt: 1, label: "Previous" },
+      }));
+      for (const { query, entry } of rows) {
+        replaceSessionEntrySync({ agentId: query.agentId, sessionKey: query.key }, entry);
+      }
+      const releaseForeground = retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const pending: Promise<unknown>[] = [];
+      try {
+        await projection.ensureMaterialized();
+        const reads: string[][] = [];
+        const readDatabases = history.withSessionHistoryWorkerDatabases;
+        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+          (databases, consume) =>
+            readDatabases(databases, (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  async readRowFacts(input) {
+                    reads.push([...input.sessionKeys]);
+                    const reply = await owner.readRowFacts(input);
+                    entered.resolve();
+                    await release.promise;
+                    return reply;
+                  },
+                })),
+              ),
+            ),
+        );
+        for (const { query, entry } of rows) {
+          replaceSessionEntrySync(
+            { agentId: query.agentId, sessionKey: query.key },
+            { ...entry, updatedAt: 2, label: "Committed" },
+          );
+        }
+        const selected = rows[0]!;
+        const describe = () =>
+          withReadySessionRows(
+            projection,
+            () => [selected.query],
+            (read) => read.describe(selected.query)?.entry,
+          );
+        const firstRead = first === "bulk" ? projection.ensureMaterialized() : describe();
+        pending.push(firstRead);
+        await entered.promise;
+        const secondRead = first === "bulk" ? describe() : projection.ensureMaterialized();
+        pending.push(secondRead);
+        release.resolve();
+        const description = await (first === "bulk" ? secondRead : firstRead);
+        expect(description).toMatchObject({
+          sessionId: selected.entry.sessionId,
+          label: "Committed",
+        });
+        await Promise.all(pending);
+        expect(reads.flat().toSorted()).toEqual(rows.map(({ query }) => query.key));
+        for (const { query, entry } of rows) {
+          expect(projection.snapshot(query).row).toMatchObject({
+            sessionId: entry.sessionId,
+            label: "Committed",
+          });
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled(pending);
+        projection.dispose();
+        releaseForeground();
+      }
+    });
+  },
+);
+
 it("preserves a keyed replacement while an older worker reply is pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const query = { agentId: "main", key: "agent:main:worker-replacement" };
@@ -275,11 +359,14 @@ it.each([
   "membership revocation",
   "runtime stored facts",
   "invalidated presentation facts",
+  "unrelated stored row",
+  "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
+    const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
     const owner = ensureProfileForEmail("projection-owner@example.test");
@@ -293,6 +380,10 @@ it.each([
       createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
     };
     replaceSessionEntrySync(scope, entry);
+    const unrelated = { agentId: "main", sessionKey: "agent:main:worker-fact-unrelated" };
+    if (changesSibling) {
+      replaceSessionEntrySync(unrelated, { sessionId: "unrelated", updatedAt: 0 });
+    }
     addSessionMember(scope, { identityId: viewer.id, addedBy: owner.id, addedAt: 1 });
     const releaseForeground = retainSessionListForegroundWork();
     try {
@@ -330,10 +421,13 @@ it.each([
                   async readRowFacts(input) {
                     const reply = await database.readRowFacts(input);
                     if (first) {
+                      if (change === "captured sibling row") {
+                        expect(input.sessionKeys).toContain(unrelated.sessionKey);
+                      }
                       first = false;
                       captured.resolve();
                       await releaseFirst.promise;
-                    } else {
+                    } else if (input.sessionKeys.includes(scope.sessionKey)) {
                       repeated.resolve();
                       await releaseRepeated.promise;
                     }
@@ -344,6 +438,13 @@ it.each([
             ),
         );
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
+        if (change === "captured sibling row") {
+          replaceSessionEntrySync(unrelated, {
+            sessionId: "unrelated",
+            updatedAt: 0,
+            label: "Previous sibling",
+          });
+        }
         reading = listSessions({ client, context, request });
         await Promise.race([
           captured.promise,
@@ -351,7 +452,13 @@ it.each([
             throw new Error("List bypassed pending dirty row facts");
           }),
         ]);
-        if (change === "profile display") {
+        if (changesSibling) {
+          replaceSessionEntrySync(unrelated, {
+            sessionId: "unrelated",
+            updatedAt: 0,
+            label: "Current sibling",
+          });
+        } else if (change === "profile display") {
           setDisplayName(owner.id, "Current owner");
         } else if (change === "run publication" || change === "capacity transition") {
           registerAgentRunContext(runId, {
@@ -426,6 +533,12 @@ it.each([
           expect(boundary).toBe("response");
         }
         const result = await reading;
+        if (changesSibling) {
+          expect(
+            projection.snapshot({ agentId: unrelated.agentId, key: unrelated.sessionKey }).row
+              ?.label,
+          ).toBe("Current sibling");
+        }
         expect(result.sessions).toEqual([
           expect.objectContaining({
             key: scope.sessionKey,

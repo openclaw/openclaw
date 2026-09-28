@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type ts from "typescript";
-import { getTypeScript } from "./ts-guard-utils.mts";
+import * as ts from "typescript/unstable/ast";
+import type { NativeTypeScriptParser } from "./native-typescript.mts";
 import { buildUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 
 export type UpdateCompatibilityOrigin = { module: string; symbol: string };
@@ -22,23 +22,16 @@ type ModuleInfo = {
   declarations: Map<string, UpdateCompatibilityOrigin | undefined>;
 };
 
-export function parseModule(file: string, source: string): ts.SourceFile {
-  const ts = getTypeScript();
-  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-}
-
 function namedBinding(node: ts.BindingName): string[] {
-  const ts = getTypeScript();
   if (ts.isIdentifier(node)) {
     return [node.text];
   }
   return node.elements.flatMap((element) =>
-    ts.isBindingElement(element) ? namedBinding(element.name) : [],
+    ts.isBindingElement(element) && element.name ? namedBinding(element.name) : [],
   );
 }
 
-function inspectModule(file: string, source: string, sourceModule?: string): ModuleInfo {
-  const ts = getTypeScript();
+function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: string): ModuleInfo {
   const info: ModuleInfo = {
     imports: new Map(),
     exports: new Map(),
@@ -58,10 +51,10 @@ function inspectModule(file: string, source: string, sourceModule?: string): Mod
     const resolvedFile = target(specifier);
     return resolvedFile ? { file: resolvedFile, symbol } : { external: specifier, symbol };
   };
-  const regions = [...source.matchAll(/^\/\/#region (.+)$/gm)];
+  const regions = [...sourceFile.text.matchAll(/^\/\/#region (.+)$/gm)];
   let regionIndex = 0;
   let regionOwner: string | undefined;
-  for (const statement of parseModule(file, source).statements) {
+  for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const clause = statement.importClause;
       if (clause?.name) {
@@ -131,10 +124,10 @@ function inspectModule(file: string, source: string, sourceModule?: string): Mod
     for (const symbol of names) {
       info.declarations.set(symbol, owner ? { module: owner, symbol } : undefined);
       if (
-        ts.canHaveModifiers(statement) &&
-        ts
-          .getModifiers(statement)
-          ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+        (ts.isVariableStatement(statement) ||
+          ts.isFunctionDeclaration(statement) ||
+          ts.isClassDeclaration(statement)) &&
+        statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
       ) {
         info.exports.set(symbol, { local: symbol });
       }
@@ -159,8 +152,10 @@ function moduleBindingKey(binding: ModuleBinding): string {
 export class ModuleGraph {
   private modules = new Map<string, ModuleInfo>();
   private sourceDir: string | undefined;
+  private parser: NativeTypeScriptParser;
 
-  constructor(sourceDir?: string) {
+  constructor(parser: NativeTypeScriptParser, sourceDir?: string) {
+    this.parser = parser;
     this.sourceDir = sourceDir;
   }
 
@@ -170,7 +165,7 @@ export class ModuleGraph {
       const source = fs.readFileSync(file, "utf8");
       info = inspectModule(
         file,
-        source,
+        this.parser.parseSourceFile(file, source),
         this.sourceDir === undefined
           ? undefined
           : path.relative(this.sourceDir, file).split(path.sep).join("/"),
@@ -187,7 +182,13 @@ export class ModuleGraph {
         const targetSource = fs.readFileSync(targetFile, "utf8");
         // Only the complete generated read contract proves delegation. Unknown wrappers
         // must still fail provenance tracing; never execute a release to discover exports.
-        if (source === buildUpdateConfigRuntimeAlias(delegatedTarget, targetSource)) {
+        if (
+          source ===
+          buildUpdateConfigRuntimeAlias(
+            delegatedTarget,
+            this.parser.parseSourceFile(targetFile, targetSource),
+          )
+        ) {
           for (const name of info.exports.keys()) {
             info.exports.set(name, { file: targetFile, symbol: name });
           }

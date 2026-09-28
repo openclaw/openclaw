@@ -58,10 +58,7 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   openOpenClawStateReadOnlyLocation: mocks.forbiddenNative,
   withOpenClawStateReadOnlyLocation: mocks.forbiddenNative,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  hasStateDatabaseSourceExclusion: () => false,
-}));
+
 vi.mock("./openclaw-state-read-worker.js", () => ({
   createOpenClawStateReadTransport: () => ({
     read: mocks.read,
@@ -78,6 +75,7 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
+  withSynchronousArtifactPreservingStateSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
   getExistingOpenClawStateSchemaPath,
@@ -154,6 +152,8 @@ async function probeRetiredAdmission(source: string) {
     getter: () => getActiveOpenClawStateDatabaseReadSnapshot(options),
     native: () => withExistingOpenClawStateDatabaseReadOnly(() => "read", options),
     currentRows: () => withExistingOpenClawStateDatabaseCurrentReadOnly(() => "read", options),
+    currentSnapshot: () =>
+      withSynchronousArtifactPreservingStateSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withOpenClawStateDatabaseReadSnapshot(async () => "nested", options),
     nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
     worker: () => executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
@@ -176,6 +176,7 @@ const rejectedAdmissions = {
   getter: true,
   native: true,
   currentRows: true,
+  currentSnapshot: true,
   nestedSnapshot: true,
   nestedDisposable: true,
   worker: true,

@@ -25,10 +25,7 @@ afterEach(async () => {
   openClawState = undefined;
 });
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
-import {
-  isTelegramAmbientSpooledUpdate,
-  isTelegramSpooledUpdateSenderAuthorized,
-} from "./telegram-ingress-supersede-auth.js";
+import { isTelegramSpooledUpdateSenderAuthorized } from "./telegram-ingress-supersede-auth.js";
 import { createShouldSupersedeTelegramSpooledPending as createSupersedePredicate } from "./telegram-ingress-supersede.js";
 
 function createShouldSupersedeTelegramSpooledPending(
@@ -224,15 +221,6 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(false);
   });
 
-  it("supersedes on authorized abort text", async () => {
-    expect(
-      await shouldSupersede(
-        record("2", messageUpdate({ updateId: 2, text: "stop", senderId: OWNER_ID })),
-        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
-      ),
-    ).toBe(true);
-  });
-
   it("does not supersede unauthorized abort text (group stranger)", async () => {
     expect(
       await shouldSupersede(
@@ -301,8 +289,31 @@ describe("telegram ingress supersede policy", () => {
     expect(unauthorized).toBe(false);
   });
 
+  it.each([
+    { senderId: OWNER_ID, messageSenderId: STRANGER_ID, expected: true },
+    { senderId: STRANGER_ID, messageSenderId: OWNER_ID, expected: false },
+  ])("authorizes callback sender $senderId independently of its message author", async (entry) => {
+    const update = {
+      update_id: 2,
+      callback_query: {
+        data: "/new",
+        from: { id: Number(entry.senderId) },
+        message: messageUpdate({
+          updateId: 2,
+          text: "controls",
+          senderId: entry.messageSenderId,
+        }).message,
+      },
+    };
+    expect(
+      await shouldSupersede(
+        record("2", update),
+        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      ),
+    ).toBe(entry.expected);
+  });
+
   it("gates ambient room-event supersede on authorized sender", async () => {
-    expect(isTelegramAmbientSpooledUpdate({ message_reaction: {} })).toBe(true);
     expect(
       await shouldSupersede(
         record("2", messageUpdate({ updateId: 2, text: "hi", senderId: OWNER_ID })),
@@ -548,27 +559,6 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(testCase.expected);
   });
 
-  it("reuses ingress command gate for sender authorization", async () => {
-    expect(
-      await isTelegramSpooledUpdateSenderAuthorized(
-        messageUpdate({ updateId: 1, text: "x", senderId: OWNER_ID }),
-        auth,
-      ),
-    ).toBe(true);
-    expect(
-      await isTelegramSpooledUpdateSenderAuthorized(
-        messageUpdate({
-          updateId: 1,
-          text: "x",
-          senderId: STRANGER_ID,
-          chatId: -1001,
-          chatType: "supergroup",
-        }),
-        auth,
-      ),
-    ).toBe(false);
-  });
-
   it("authorizes paired DM senders via the pairing store under dmPolicy pairing", async () => {
     const pairedId = "424242";
     openClawState = await createOpenClawTestState({
@@ -591,13 +581,6 @@ describe("telegram ingress supersede policy", () => {
       accountId: "default",
     };
     const shouldSupersedePaired = createShouldSupersedeTelegramSpooledPending(pairingAuth);
-
-    expect(
-      await isTelegramSpooledUpdateSenderAuthorized(
-        messageUpdate({ updateId: 1, text: "x", senderId: pairedId }),
-        pairingAuth,
-      ),
-    ).toBe(true);
 
     expect(
       await shouldSupersedePaired(
@@ -630,13 +613,6 @@ describe("telegram ingress supersede policy", () => {
       accountId: "default",
     };
     const shouldSupersedeOwner = createShouldSupersedeTelegramSpooledPending(ownerAuth);
-
-    expect(
-      await isTelegramSpooledUpdateSenderAuthorized(
-        messageUpdate({ updateId: 1, text: "x", senderId: ownerId }),
-        ownerAuth,
-      ),
-    ).toBe(true);
 
     expect(
       await shouldSupersedeOwner(

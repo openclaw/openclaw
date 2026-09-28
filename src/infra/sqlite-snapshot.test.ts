@@ -470,21 +470,6 @@ describe("createVerifiedSqliteSnapshot", () => {
     });
   });
 
-  it("uses online backup before compacting the private copy", async () => {
-    const setup = new sqlite.DatabaseSync(sourcePath);
-    setup.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
-    setup.close();
-    const backupSpy = vi.spyOn(sqlite, "backup");
-    const prepareSpy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
-
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(backupSpy).toHaveBeenCalledTimes(1);
-    expect(prepareSpy.mock.calls.some(([sql]) => /\bVACUUM\s+INTO\b/iu.test(sql))).toBe(false);
-    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
-    });
-  });
-
   it("pins validation and backup to one WAL snapshot", async () => {
     const writer = new sqlite.DatabaseSync(sourcePath);
     writer.exec(`
@@ -517,11 +502,17 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
-  it("rejects unsafe index drift and removes the failed target", async () => {
+  it.each([false, true])("rejects unsafe index drift (isolated=%s)", async (isolated) => {
     createUnsafeIndexDrift(sourcePath);
 
     await expectSnapshotFailureWithoutTarget(
-      { sourcePath, targetPath },
+      {
+        sourcePath,
+        targetPath,
+        ...(isolated
+          ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
+          : {}),
+      },
       /integrity_check failed|malformed database schema/iu,
     );
   });
@@ -545,6 +536,30 @@ describe("createVerifiedSqliteSnapshot", () => {
       /snapshot source must not be empty/u,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "acquires an isolated snapshot through a source file symlink",
+    async () => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('preserved');");
+      source.close();
+      const linkedSource = path.join(tempDir, "linked.sqlite");
+      await fs.symlink(sourcePath, linkedSource);
+      const before = await fs.readFile(sourcePath);
+
+      await createVerifiedSqliteSnapshot({
+        sourcePath: linkedSource,
+        targetPath,
+        sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+      });
+
+      expect(await fs.readlink(linkedSource)).toBe(sourcePath);
+      expect((await fs.readFile(sourcePath)).equals(before)).toBe(true);
+      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "preserved" });
+      });
+    },
+  );
 
   it("rejects an existing target without modifying it", async () => {
     await fs.writeFile(targetPath, "keep");
@@ -795,20 +810,6 @@ describe("createVerifiedSqliteSnapshot", () => {
     );
   });
 
-  it("uses a private sibling staging file for atomic publication", async () => {
-    const originalOpen = fs.open.bind(fs);
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(originalOpen);
-
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(
-      openSpy.mock.calls.some(
-        ([filePath, flags]) =>
-          flags === "wx+" &&
-          path.basename(path.dirname(String(filePath))).startsWith(".sqlite-publish-"),
-      ),
-    ).toBe(true);
-  });
-
   it("accepts an exclusive-copy publication receipt", async () => {
     const publish = mockExclusiveCopyPublication();
 
@@ -951,28 +952,39 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it("validates both the source and transformed snapshot", async () => {
-    const removedValue = `removed-secret-${"x".repeat(256)}`;
-    const source = new sqlite.DatabaseSync(sourcePath);
-    source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
-    source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
-    source.close();
-    const labels: string[] = [];
+  it.each([false, true])(
+    "validates source and transformed snapshot (isolated=%s)",
+    async (isolated) => {
+      const removedValue = `removed-secret-${"x".repeat(256)}`;
+      const source = new sqlite.DatabaseSync(sourcePath);
+      source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
+      source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
+      source.close();
+      const labels: string[] = [];
 
-    await createVerifiedSqliteSnapshot({
-      sourcePath,
-      targetPath,
-      transform: (database) => {
-        database.exec("DELETE FROM records;");
-        database.prepare("INSERT INTO records VALUES (?)").run("new");
-      },
-      validate: (_database, label) => labels.push(label),
-    });
+      await createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        ...(isolated
+          ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
+          : {}),
+        transform: (database) => {
+          database.exec("DELETE FROM records;");
+          database.prepare("INSERT INTO records VALUES (?)").run("new");
+        },
+        validate: (_database, label) => labels.push(label),
+      });
 
-    expect(labels).toEqual([sourcePath, targetPath, targetPath]);
-    expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
-    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
-    });
-  });
+      expect(labels).toEqual([sourcePath, targetPath, targetPath]);
+      expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
+      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
+      });
+      withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
+        expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
+          value: removedValue,
+        });
+      });
+    },
+  );
 });

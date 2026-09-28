@@ -11,24 +11,10 @@ export type SnapshotDatabaseRef = {
   readonly identity: SnapshotDatabaseIdentity;
 };
 
-export type SnapshotDatabaseManifest =
-  | {
-      readonly role: "global";
-      readonly basename: string;
-      readonly userVersion: number;
-    }
-  | {
-      readonly role: "agent";
-      readonly agentId: string;
-      readonly basename: string;
-      readonly userVersion: number;
-    }
-  | {
-      readonly role: "generic";
-      readonly id: string;
-      readonly basename: string;
-      readonly userVersion: number;
-    };
+export type SnapshotDatabaseManifest = SnapshotDatabaseIdentity & {
+  readonly basename: string;
+  readonly userVersion: number;
+};
 
 export type SnapshotManifest = {
   readonly schemaVersion: 1;

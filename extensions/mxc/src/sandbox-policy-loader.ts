@@ -5,7 +5,6 @@ import { z } from "zod";
 import {
   DEFAULT_SANDBOX_BASELINE,
   resolveSandboxBaseline,
-  type BaselineFilesystemPolicyInput,
   type SandboxBaselinePolicy,
   type SandboxBaselinePolicyInput,
 } from "./sandbox-baseline.js";
@@ -34,11 +33,6 @@ type SandboxPolicyLayer = SandboxBaselinePolicyInput & {
 
 export type LoadedSandboxBaselinePolicy = SandboxBaselinePolicy & {
   configuredPaths: SandboxConfiguredPaths;
-};
-
-type SandboxPolicySource = {
-  label: string;
-  policy: SandboxPolicyLayer;
 };
 
 type MutableConfiguredPathMaps = {
@@ -71,20 +65,15 @@ const SandboxPolicyLayerSchema = z
 export function loadSandboxBaselinePolicy(
   options: SandboxPolicyLoaderOptions = {},
 ): LoadedSandboxBaselinePolicy {
-  const sources: SandboxPolicySource[] = [];
-
-  for (const policyPath of options.policyPaths ?? []) {
-    sources.push({ label: policyPath, policy: readSandboxPolicyFile(policyPath) });
-  }
-
-  const merged = mergeSandboxPolicyLayers(sources);
+  const layers = (options.policyPaths ?? []).map(readSandboxPolicyFile);
+  const merged = mergeSandboxPolicyLayers(layers);
   const resolved = resolveSandboxBaseline(merged);
   return {
     ...resolved,
     process: {
       ...resolved.process,
-      timeoutSecondsConfigured: sources.some(
-        ({ policy }) => policy.process?.timeoutSeconds !== undefined,
+      timeoutSecondsConfigured: layers.some(
+        (policy) => policy.process?.timeoutSeconds !== undefined,
       ),
     },
     configuredPaths: merged.configuredPaths,
@@ -92,14 +81,8 @@ export function loadSandboxBaselinePolicy(
 }
 
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
-  } catch (err) {
-    throw policyFileError(policyPath, err);
-  }
-
-  try {
+    const parsed: unknown = JSON.parse(readFileSync(policyPath, "utf-8"));
     return parseSandboxPolicyLayer(parsed, policyPath);
   } catch (err) {
     throw policyFileError(policyPath, err);
@@ -126,21 +109,6 @@ function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPo
 
   return {
     ...parsed.data,
-    filesystem: filesystem
-      ? {
-          ...filesystem,
-          ...(readonlyPaths.length > 0
-            ? {
-                additionalReadonlyPaths: readonlyPaths.map((entry) => entry.path),
-              }
-            : {}),
-          ...(readwritePaths.length > 0
-            ? {
-                additionalReadwritePaths: readwritePaths.map((entry) => entry.path),
-              }
-            : {}),
-        }
-      : undefined,
     configuredPaths: {
       readonlyPaths,
       readwritePaths,
@@ -148,20 +116,14 @@ function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPo
   };
 }
 
-function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): SandboxPolicyLayer {
+function mergeSandboxPolicyLayers(layers: readonly SandboxPolicyLayer[]): SandboxPolicyLayer {
   const timeoutCandidates = [DEFAULT_SANDBOX_BASELINE.process.timeoutSeconds];
-  const filesystem: BaselineFilesystemPolicyInput = {
-    restrictToProjectDir: DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
-    additionalReadonlyPaths: [],
-    additionalReadwritePaths: [],
-  };
   const configuredPathMaps: MutableConfiguredPathMaps = {
     readonlyPaths: new Map<string, SandboxConfiguredPathEntry>(),
     readwritePaths: new Map<string, SandboxConfiguredPathEntry>(),
   };
 
-  for (const { policy, label } of sources) {
-    mergeFilesystemPolicy(filesystem, policy.filesystem);
+  for (const policy of layers) {
     mergeConfiguredPathEntries(
       configuredPathMaps.readonlyPaths,
       policy.configuredPaths.readonlyPaths,
@@ -172,14 +134,14 @@ function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): Sand
     );
     const timeoutSeconds = policy.process?.timeoutSeconds;
     if (timeoutSeconds !== undefined) {
-      assertPositiveFiniteNumber(timeoutSeconds, `${label}.process.timeoutSeconds`);
       timeoutCandidates.push(timeoutSeconds);
     }
   }
 
   return {
     filesystem: {
-      ...filesystem,
+      // The schema admits only true, so configured layers cannot relax the baseline.
+      restrictToProjectDir: DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
       additionalReadonlyPaths: [...configuredPathMaps.readonlyPaths.values()].map(
         (entry) => entry.path,
       ),
@@ -195,21 +157,6 @@ function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): Sand
       readwritePaths: [...configuredPathMaps.readwritePaths.values()],
     },
   };
-}
-
-function mergeFilesystemPolicy(
-  target: BaselineFilesystemPolicyInput | undefined,
-  layer: BaselineFilesystemPolicyInput | undefined,
-): void {
-  if (!target || !layer) {
-    return;
-  }
-
-  target.restrictToProjectDir = mostRestrictiveBoolean(
-    DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
-    target.restrictToProjectDir,
-    layer.restrictToProjectDir,
-  );
 }
 
 function mergeConfiguredPathEntries(
@@ -284,19 +231,6 @@ function assertConfiguredPathExists(pathValue: string, source: string): void {
       );
     }
     throw err;
-  }
-}
-
-function mostRestrictiveBoolean(
-  defaultValue: boolean,
-  ...values: readonly (boolean | undefined)[]
-): boolean {
-  return defaultValue || values.some((value) => value === true);
-}
-
-function assertPositiveFiniteNumber(value: unknown, label: string): asserts value is number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-    throw new TypeError(`Sandbox policy field ${label} must be a positive number.`);
   }
 }
 

@@ -4,10 +4,12 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { parse, type Node as AcornNode, type Program } from "acorn";
+import type { Node as AcornNode } from "acorn";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
+import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
+import { visitJavaScriptStatements } from "./lib/javascript-statements.mjs";
 import { isUnstagedWorkerDeployRuntimeArtifact } from "./lib/worker-deploy-build-plugin.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
@@ -137,18 +139,8 @@ function isRequireLikeCallee(value: unknown): boolean {
 
 function listRuntimeImportSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
-  const program: Program = {
-    type: "Program",
-    start: 0,
-    end: 0,
-    sourceType: "module",
-    body: [],
-  };
-  const collectCompletedStatements = () => {
-    if (program.body.length === 0) {
-      return;
-    }
-    const stack: unknown[] = program.body.splice(0);
+  visitJavaScriptStatements(source, { sourceType: "module", allowHashBang: true }, (statements) => {
+    const stack: unknown[] = statements;
     while (stack.length > 0) {
       const value = stack.pop();
       if (!value || typeof value !== "object") {
@@ -179,7 +171,9 @@ function listRuntimeImportSpecifiers(source: string): string[] {
           }
         }
       }
-      for (const [key, child] of Object.entries(node)) {
+      // Large worker bundles contain millions of nodes; avoid a pair allocation per property.
+      for (const key of Object.keys(node)) {
+        const child = node[key];
         if (key === "start" || key === "end" || key === "loc" || key === "range") {
           continue;
         }
@@ -188,16 +182,7 @@ function listRuntimeImportSpecifiers(source: string): string[] {
         }
       }
     }
-  };
-  // Acorn appends completed statements while keeping module binding checks in parser scope.
-  parse(source, {
-    ecmaVersion: "latest",
-    sourceType: "module",
-    allowHashBang: true,
-    program,
-    onToken: collectCompletedStatements,
   });
-  collectCompletedStatements();
   return [...new Set(specifiers)].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -282,7 +267,7 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
   const maxBytes =
     params.nativeHookRelayStaticMaxBytes ?? DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES;
   let staticBytes = 0;
-  const errors = walkStaticImportGraph(
+  const errors: Array<string | LimitViolation> = walkStaticImportGraph(
     fsImpl,
     rootDir,
     [entrypoint],
@@ -320,11 +305,17 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
     },
   ).filter(Boolean);
   if (staticBytes > maxBytes) {
-    errors.push(
-      `Native hook relay static graph is ${staticBytes} bytes, above budget ${maxBytes} bytes.`,
-    );
+    errors.push({
+      file: entrypoint,
+      title: "Native hook relay bundle budget",
+      message: `Native hook relay static graph is ${staticBytes} bytes, above budget ${maxBytes} bytes.`,
+    });
   }
-  return errors.toSorted((left, right) => left.localeCompare(right));
+  return errors.toSorted((left, right) =>
+    (typeof left === "string" ? left : left.message).localeCompare(
+      typeof right === "string" ? right : right.message,
+    ),
+  );
 }
 
 /**
@@ -413,7 +404,7 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
     ];
   }
 
-  const errors = [];
+  const errors: Array<string | LimitViolation> = [];
   for (const { filePath, source } of chunks) {
     const relativePath = path.relative(rootDir, filePath) || filePath;
     let size = Buffer.byteLength(source, "utf8");
@@ -423,9 +414,11 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
       // Fall back to source byte length for in-memory test fixtures.
     }
     if (size > maxBytes) {
-      errors.push(
-        `Gateway run chunk ${relativePath} is ${size} bytes, above budget ${maxBytes} bytes.`,
-      );
+      errors.push({
+        file: relativePath,
+        title: "Gateway run chunk budget",
+        message: `Gateway run chunk ${relativePath} is ${size} bytes, above budget ${maxBytes} bytes.`,
+      });
     }
 
     errors.push(
@@ -449,7 +442,11 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
     );
   }
 
-  return errors.toSorted((left, right) => left.localeCompare(right));
+  return errors.toSorted((left, right) =>
+    (typeof left === "string" ? left : left.message).localeCompare(
+      typeof right === "string" ? right : right.message,
+    ),
+  );
 }
 
 /** Collects closure and layout errors for the standalone worker deploy artifact. */
@@ -536,13 +533,17 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
  * Runs the CLI bootstrap import, chunk-budget, and worker deploy checks.
  */
 export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams = {}) {
-  const errors = [
+  const findings = [
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
     ...collectNativeHookRelayBundleErrors(params),
     ...collectWorkerDeployArtifactErrors(params),
   ];
-  if (errors.length === 0) {
+  const errors = findings.filter((finding) => typeof finding === "string");
+  const limitsFailed = reportLimitViolations(
+    findings.filter((finding) => typeof finding !== "string"),
+  );
+  if (errors.length === 0 && !limitsFailed) {
     return;
   }
   const logger = params.logger ?? console;

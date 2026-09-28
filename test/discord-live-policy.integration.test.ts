@@ -28,6 +28,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -70,6 +71,7 @@ describe("Discord admission through Gateway policy publication", () => {
       artifactBasename: "api.js",
     });
     const cfg: OpenClawConfig = {
+      plugins: { allow: ["discord"] },
       channels: { discord: { token: "synthetic-token", groupPolicy: "allowlist", guilds: {} } },
       messages: { inbound: { debounceMs: 0 } },
     };
@@ -188,13 +190,20 @@ describe("Discord admission through Gateway policy publication", () => {
     const send = (id: string) => handler(createRawMessage(id), client);
     const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
+    const scheduler = createTestGatewayScheduler();
     let state: ReturnType<GatewayReloadHandlerParams["getState"]> = {
       hooksConfig: null,
       hookClientIpConfig: { allowRealIpFallback: false },
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
-      cronState: createLazyGatewayCronState({ cfg, deps: {}, broadcast: vi.fn() }),
+      cronState: createLazyGatewayCronState({
+        scheduler,
+        cfg,
+        deps: {},
+        broadcast: vi.fn(),
+      }),
     };
     const { applyHotReload } = createGatewayReloadHandlers({
+      scheduler,
       deps: {},
       broadcast: vi.fn(),
       getPluginRegistry: () => registry,
@@ -235,7 +244,7 @@ describe("Discord admission through Gateway policy publication", () => {
       await waitForFast(() =>
         expect(committed, "policy-only publication must not wait for the active turn").toBe(next),
       );
-      await pendingReload;
+      expect(await pendingReload).toBe("applied");
     };
     const activeTurn = tryBeginGatewayRootWorkAdmission();
     expect(activeTurn).not.toBeNull();

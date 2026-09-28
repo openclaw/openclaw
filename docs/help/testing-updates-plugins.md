@@ -208,10 +208,16 @@ OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 go
 pnpm test:docker:published-upgrade-survivor
 ```
 
+Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
+commit before the update and compare the installed application payload with the
+frozen tarball afterward, before candidate probes. This distinguishes different
+builds with the same version string. npm still owns dependency reification;
+manual tarball runs without a selected source SHA retain their existing contract.
+
 Useful published-upgrade survivor variants:
 
 ```bash
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.4.23 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.1 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=versioned-runtime-deps \
 pnpm test:docker:published-upgrade-survivor
 
@@ -254,7 +260,7 @@ Those default release runs pin this scenario to the published 2026.9.4 driver,
 including when the source candidate still reports version 2026.9.4; other
 scenarios retain their existing baseline selection.
 
-The opt-in `projects-doctor`, `projects-startup-migration`, and `taskflow-restoration` scenarios require the exact
+The opt-in `projects-doctor` and `projects-startup-migration` scenarios require the exact
 published `openclaw@2026.9.4` baseline and a frozen candidate tarball. They use
 isolated state, manual restart, and no live providers or registry companion fixtures;
 none runs through `reported-issues` or `far-reaching`. They verify the original
@@ -283,11 +289,15 @@ candidate `commit`, `agentSchema`, and `operations.prepare`/`operations.open`
 triples of compiled basename, exact export symbol, and SHA-256. The snapshot
 preparer and SQLite opener must match the installed candidate payload; the file
 is mounted read-only. This scenario uses no remote repository or model turn.
-`taskflow-restoration` preserves three terminal tasks and two flows, starts a fresh
-candidate Gateway, exercises awaited task SDK reads through a synthetic local plugin,
-and reads two task pages on the same Gateway connection. Complete task, delivery,
-and flow records are checked again after Gateway shutdown. The taskflow cell covers
-terminal persisted state; it does not exercise active task recovery or provider work.
+The opt-in `channel-owner-policy` scenario uses the same pinned `openclaw@2026.9.4`
+published-driver and candidate-package checks. It seeds an existing
+`operator.channelPolicy` JSON specimen in the published database's machine-state
+table, then runs the installed updater. It requires state schema 19 content,
+preserved role/identity policy and configured owners, and a stable configured-owner
+reference across two candidate Gateway starts. The specimen is synthetic existing
+state, not a claim that the published baseline minted recovery references. This
+cell uses isolated state and manual restart; it does not prove updater-owned
+service restart or older-reader downgrade behavior.
 
 The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
@@ -413,15 +423,15 @@ when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay
-from every published stable release since 2026.4.23, pass
-`baselines=all-since-2026.4.23`:
+from every published stable release since 2026.6.1, pass
+`baselines=all-since-2026.6.1`:
 
 ```bash
 gh workflow run update-migration.yml \
   --ref main \
   -f workflow_ref=main \
   -f package_ref=main \
-  -f baselines=all-since-2026.4.23 \
+  -f baselines=all-since-2026.6.1 \
   -f scenarios=plugin-deps-cleanup
 ```
 
@@ -500,8 +510,13 @@ and also runs on every canonical `main` push that runs CI. Docs-only pushes
 matching `**/*.md` and `docs/**` skip CI; mixed docs and code pushes still run it.
 
 For manual historical coverage, `last-stable-4` selects four recent stable
-npm-published releases. Exact versions, `all-since-2026.4.23`, and
+npm-published releases. Exact versions, `all-since-2026.6.1`, and
 `release-history` remain available through `published_upgrade_survivor_baselines`.
+Current tooling executes baselines from `2026.6.1` onward. `release-history`
+selects the six most recent supported stable releases without adding older
+March or April anchors. To replay pre-June upgrades, select matching historical
+tooling; for an old installation, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+before installing the latest release.
 Use those overrides when replaying migrations outside the bounded supported
 baseline set.
 
@@ -550,18 +565,15 @@ in Testbox unless explicitly doing local proof.
 
 ## Legacy compatibility
 
-Compatibility leniency is narrow and time boxed:
+Package Acceptance applies current metadata and persistence contracts without
+the retired pre-June 2026 warning or skip paths. Reproducing acceptance of those
+historical candidates requires their historical `workflow_ref` tooling.
 
-- Packages through `2026.4.25`, including `2026.4.25-beta.*`, may tolerate
-  already-shipped package metadata gaps in Package Acceptance.
-- The published `2026.4.26` package may warn for local build metadata stamp
-  files already shipped.
-- Later packages must satisfy modern contracts. The same gaps fail instead of
-  warning or skipping.
-
-Do not add new startup migrations for these old shapes. Add or extend a doctor
-repair, then prove it with `upgrade-survivor`, `published-upgrade-survivor`, or
-`update-restart-auth` when the update command owns the restart.
+For retained upgrade contracts, keep migrations in Doctor and prove changes with
+`upgrade-survivor`, `published-upgrade-survivor`, or `update-restart-auth` when the
+update command owns the restart. Pre-June task and flow sidecar imports are
+retired; use the [intermediate upgrade procedure](/install/updating) to preserve
+those records.
 
 ## Adding coverage
 

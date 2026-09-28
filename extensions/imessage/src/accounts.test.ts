@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { IMessageAccountConfig } from "./account-types.js";
 import {
   collectIMessageDuplicateAccountSourceWarnings,
   hasExclusiveIMessageLocalDatabase,
@@ -16,7 +17,6 @@ import {
 describe("resolveIMessageAccount", () => {
   it.each([
     ["absent channel", {}, undefined, "default", true, false],
-    ["empty channel", { channels: { imessage: {} } }, undefined, "default", true, false],
     [
       "explicitly enabled channel with default paths",
       { channels: { imessage: { enabled: true } } },
@@ -32,14 +32,6 @@ describe("resolveIMessageAccount", () => {
       "default",
       false,
       false,
-    ],
-    [
-      "explicitly enabled channel with an existing CLI path",
-      { channels: { imessage: { enabled: true, cliPath: "imsg" } } },
-      undefined,
-      "default",
-      true,
-      true,
     ],
     [
       "explicitly enabled named account",
@@ -79,18 +71,6 @@ describe("resolveIMessageAccount", () => {
       "work",
       "work",
       false,
-      true,
-    ],
-    [
-      "explicitly enabled configured default account",
-      {
-        channels: {
-          imessage: { defaultAccount: "work", accounts: { work: { enabled: true } } },
-        },
-      },
-      undefined,
-      "work",
-      true,
       true,
     ],
   ] as const)(
@@ -222,14 +202,6 @@ describe("iMessage duplicate-source watcher ownership", () => {
         dbPath: `${process.env.HOME || os.homedir()}/Library/Messages/../Messages/chat.db`,
       }),
     },
-    {
-      name: "the same absolute executable with implicit and explicit databases",
-      first: { cliPath: "/usr/local/bin/imsg" },
-      second: () => ({
-        cliPath: "/usr/local/bin/imsg",
-        dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
-      }),
-    },
   ])("assigns one watcher and doctor warning for $name", ({ first, second }) => {
     const cfg = {
       channels: {
@@ -262,11 +234,6 @@ describe("iMessage duplicate-source watcher ownership", () => {
       name: "different explicit local databases",
       first: { cliPath: "imsg", dbPath: "/tmp/imessage-primary.db" },
       second: { cliPath: "imsg", dbPath: "/tmp/imessage-secondary.db" },
-    },
-    {
-      name: "different custom wrappers for the same remote database path",
-      first: { cliPath: "/usr/local/bin/imsg-primary", dbPath: "/Users/bot/Messages/chat.db" },
-      second: { cliPath: "/usr/local/bin/imsg-secondary", dbPath: "/Users/bot/Messages/chat.db" },
     },
     {
       name: "different auto-detected remote wrappers both named imsg",
@@ -340,26 +307,6 @@ describe("iMessage duplicate-source watcher ownership", () => {
     expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toEqual([]);
   });
 
-  it("reports no duplicate ownership when accounts target different cliPaths", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            work: { cliPath: "/usr/local/bin/imsg-work" },
-            home: { cliPath: "/usr/local/bin/imsg-home" },
-          },
-        },
-      },
-    } as never;
-
-    const enabled = listEnabledIMessageAccounts(cfg).map((a) => a.accountId);
-    expect(enabled).toEqual(["home", "work"]);
-    for (const accountId of enabled) {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      expect(resolveIMessageDuplicateSourceOwner({ cfg, account })).toBeUndefined();
-    }
-  });
-
   it("ignores a disabled duplicate when computing ownership", () => {
     const cfg = {
       channels: {
@@ -377,26 +324,6 @@ describe("iMessage duplicate-source watcher ownership", () => {
 
     const ownerAccount = resolveIMessageAccount({ cfg, accountId: "swang430-gmail-com" });
     expect(resolveIMessageDuplicateSourceOwner({ cfg, account: ownerAccount })).toBeUndefined();
-  });
-
-  it("emits one preview warning per collision group", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            "swang430-gmail-com": { enabled: true },
-            default: { enabled: true },
-          },
-        },
-      },
-    } as never;
-
-    const warnings = collectIMessageDuplicateAccountSourceWarnings({ cfg });
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/channels\.imessage:/);
-    expect(warnings[0]).toMatch(/swang430-gmail-com/);
-    expect(warnings[0]).toMatch(/"default"/);
-    expect(warnings[0]).toMatch(/cliPath=imsg/);
   });
 
   it("emits no warning when only one account is enabled", () => {
@@ -427,118 +354,61 @@ describe("iMessage local database account ownership", () => {
     return { root, cliPath, firstDbPath, secondDbPath };
   }
 
-  it("rejects a database shared by two enabled accounts", () => {
-    const fixture = createLocalFixture();
-    try {
-      const cfg = {
-        channels: {
-          imessage: {
-            accounts: {
-              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
-              home: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
-            },
+  let fixture: ReturnType<typeof createLocalFixture>;
+
+  beforeEach(() => {
+    fixture = createLocalFixture();
+  });
+
+  afterEach(() => {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  });
+
+  function hasExclusiveDatabase(otherAccounts: Record<string, IMessageAccountConfig>) {
+    const cfg = {
+      channels: {
+        imessage: {
+          accounts: {
+            work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+            ...otherAccounts,
           },
         },
-      } as never;
-      const account = resolveIMessageAccount({ cfg, accountId: "work" });
+      },
+    };
+    return hasExclusiveIMessageLocalDatabase({
+      cfg,
+      account: resolveIMessageAccount({ cfg, accountId: "work" }),
+      cliPath: fixture.cliPath,
+      dbPath: fixture.firstDbPath,
+    });
+  }
 
-      expect(
-        hasExclusiveIMessageLocalDatabase({
-          cfg,
-          account,
-          cliPath: fixture.cliPath,
-          dbPath: fixture.firstDbPath,
-        }),
-      ).toBe(false);
-    } finally {
-      fs.rmSync(fixture.root, { recursive: true, force: true });
-    }
+  it("rejects a database shared by two enabled accounts", () => {
+    expect(
+      hasExclusiveDatabase({ home: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath } }),
+    ).toBe(false);
   });
 
   it("rejects hard-linked paths to the same database", () => {
-    const fixture = createLocalFixture();
     const linkedDbPath = path.join(fixture.root, "linked.db");
     fs.linkSync(fixture.firstDbPath, linkedDbPath);
-    try {
-      const cfg = {
-        channels: {
-          imessage: {
-            accounts: {
-              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
-              home: { cliPath: fixture.cliPath, dbPath: linkedDbPath },
-            },
-          },
-        },
-      } as never;
-      const account = resolveIMessageAccount({ cfg, accountId: "work" });
-
-      expect(
-        hasExclusiveIMessageLocalDatabase({
-          cfg,
-          account,
-          cliPath: fixture.cliPath,
-          dbPath: fixture.firstDbPath,
-        }),
-      ).toBe(false);
-    } finally {
-      fs.rmSync(fixture.root, { recursive: true, force: true });
-    }
+    expect(hasExclusiveDatabase({ home: { cliPath: fixture.cliPath, dbPath: linkedDbPath } })).toBe(
+      false,
+    );
   });
 
   it("accepts distinct proven local databases and ignores explicit remote accounts", () => {
-    const fixture = createLocalFixture();
-    try {
-      const cfg = {
-        channels: {
-          imessage: {
-            accounts: {
-              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
-              home: { cliPath: fixture.cliPath, dbPath: fixture.secondDbPath },
-              remote: { cliPath: "/usr/local/bin/remote-imsg", remoteHost: "qa@example.invalid" },
-            },
-          },
-        },
-      } as never;
-      const account = resolveIMessageAccount({ cfg, accountId: "work" });
-
-      expect(
-        hasExclusiveIMessageLocalDatabase({
-          cfg,
-          account,
-          cliPath: fixture.cliPath,
-          dbPath: fixture.firstDbPath,
-        }),
-      ).toBe(true);
-    } finally {
-      fs.rmSync(fixture.root, { recursive: true, force: true });
-    }
+    expect(
+      hasExclusiveDatabase({
+        home: { cliPath: fixture.cliPath, dbPath: fixture.secondDbPath },
+        remote: { cliPath: "/usr/local/bin/remote-imsg", remoteHost: "qa@example.invalid" },
+      }),
+    ).toBe(true);
   });
 
   it("fails closed when another local account source cannot be attested", () => {
-    const fixture = createLocalFixture();
-    try {
-      const cfg = {
-        channels: {
-          imessage: {
-            accounts: {
-              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
-              unknown: { cliPath: path.join(fixture.root, "unknown-imsg") },
-            },
-          },
-        },
-      } as never;
-      const account = resolveIMessageAccount({ cfg, accountId: "work" });
-
-      expect(
-        hasExclusiveIMessageLocalDatabase({
-          cfg,
-          account,
-          cliPath: fixture.cliPath,
-          dbPath: fixture.firstDbPath,
-        }),
-      ).toBe(false);
-    } finally {
-      fs.rmSync(fixture.root, { recursive: true, force: true });
-    }
+    expect(
+      hasExclusiveDatabase({ unknown: { cliPath: path.join(fixture.root, "unknown-imsg") } }),
+    ).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../../state/user-profiles.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { usersHandlers } from "./users.js";
 
@@ -42,14 +43,8 @@ it("enumerates protocol profile facts through the real users.list entry without 
         id,
       );
     });
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
     const respond = vi.fn();
     try {
       await usersHandlers["users.list"]!({
@@ -102,7 +97,7 @@ it("enumerates protocol profile facts through the real users.list entry without 
           },
         ],
       });
-      expect(calls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+      calls.expectIdle();
     } finally {
       vi.restoreAllMocks();
     }
@@ -123,14 +118,8 @@ it("observes native first-use role assignment after warming a legacy worker read
     const profile = ensureProfileForEmail("legacy@example.test");
     const version = db.prepare("PRAGMA user_version").get()?.user_version;
     const read = async (expected: unknown) => {
-      const { DatabaseSync, StatementSync } = requireNodeSqlite();
-      const calls = [
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-        vi.spyOn(DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        ),
-      ];
+      requireNodeSqlite();
+      const calls = observeMainThreadSql();
       const respond = vi.fn();
       try {
         await usersHandlers["users.list"]!({
@@ -142,7 +131,7 @@ it("observes native first-use role assignment after warming a legacy worker read
           isWebchatConnect: () => false,
         });
         expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profiles: [expected] });
-        expect(calls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+        calls.expectIdle();
       } finally {
         vi.restoreAllMocks();
       }

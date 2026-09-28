@@ -109,6 +109,19 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Edit",
       detailKeys: ["path"],
     },
+    personal_instructions: {
+      emoji: "📝",
+      title: "Personal Instructions",
+      detailKeys: ["action", "agentId"],
+      actions: {
+        get: displayAction("read", ["agentId"]),
+        set: displayAction("save", ["agentId"]),
+      },
+    },
+    presence: {
+      emoji: "🧩",
+      title: "Presence",
+    },
     attach: {
       emoji: "📎",
       title: "Attach",

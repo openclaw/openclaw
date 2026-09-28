@@ -1,6 +1,5 @@
 // Summarizes heartbeat config for CLI and UI display.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "./heartbeat-config.js";
 import {
   buildHeartbeatSummary,
   enrolledHeartbeatAgentIds,

@@ -50,6 +50,7 @@ private final class PairingGatewayFixture: @unchecked Sendable {
     let silent = LockIsolated(false)
     let additionalPendingRequestIds = LockIsolated<[String]>([])
     let listReads = LockIsolated(0)
+    private let listReadEvents = AsyncStream<Int>.makeStream(bufferingPolicy: .bufferingNewest(1))
     let nextListGate = LockIsolated<PairingListReplyGate?>(nil)
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
@@ -62,6 +63,7 @@ private final class PairingGatewayFixture: @unchecked Sendable {
         let silent = self.silent
         let additionalPendingRequestIds = self.additionalPendingRequestIds
         let listReads = self.listReads
+        let listReadEvents = self.listReadEvents.continuation
         let nextListGate = self.nextListGate
         let session = GatewayTestWebSocketSession {
             let server = revision.value
@@ -86,7 +88,10 @@ private final class PairingGatewayFixture: @unchecked Sendable {
                         server: server, requiresAdmin: requiresAdmin.value, silent: silent.value)] : []) +
                         additionalPendingRequestIds.value.map { Self.pendingRequest(server: server, requestId: $0) }
                     payload = #"{"pending":[\#(requests.joined(separator: ","))],"paired":[]}"#
-                    listReads.withValue { $0 += 1 }
+                    listReads.withValue {
+                        $0 += 1
+                        listReadEvents.yield($0)
+                    }
                     let gate = nextListGate.withValue { value in
                         defer { value = nil }
                         return value
@@ -110,6 +115,28 @@ private final class PairingGatewayFixture: @unchecked Sendable {
             },
             currentEndpointRevision: { revision.value },
             sessionBox: WebSocketSessionBox(session: session))
+    }
+
+    func waitForListReads(_ minimum: Int) async throws {
+        let observed = try await AsyncTimeout.withTimeout(
+            seconds: 3,
+            onTimeout: {
+                NSError(
+                    domain: "PairingGatewayOwnershipTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Pairing list did not reach \(minimum) requests"])
+            },
+            operation: {
+                for await count in self.listReadEvents.stream where count >= minimum {
+                    return true
+                }
+                return false
+            })
+        try #require(observed)
+    }
+
+    func finishListObservation() {
+        self.listReadEvents.continuation.finish()
     }
 
     static func pendingRequest(
@@ -229,8 +256,8 @@ struct PairingGatewayOwnershipTests {
         try await self.withPrompter(kind: .node) { fixture, center, node in
             let gate = PairingListReplyGate()
             defer { gate.resume() }
-            try await self
-                .waitUntil("initial card and periodic list") { center.cards.count == 1 && fixture.listReads.value >= 2 }
+            try await fixture.waitForListReads(2)
+            try #require(center.cards.count == 1)
             let socket = try #require(fixture.session.latestTask())
             fixture.nextListGate.setValue(gate)
             try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
@@ -310,6 +337,7 @@ struct PairingGatewayOwnershipTests {
             }
             _ = NSApplication.shared
             let fixture = PairingGatewayFixture()
+            defer { fixture.finishListObservation() }
             try prepare(fixture)
             let center = PairingApprovalCenter()
             let node = NodePairingApprovalPrompter(gateway: fixture.gateway, center: center)

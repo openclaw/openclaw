@@ -35,6 +35,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
   const providerClosed = createDeferred();
   const firstDelta = createDeferred();
   const terminal = createDeferred();
+  const persistedPartial = createDeferred();
   const requestBodies: string[] = [];
   // Call-through observation exposes the real Gateway-owned buffer and registration.
   const observeSubscriptions = vi.spyOn(subscriptions, "startGatewayEventSubscriptions");
@@ -99,6 +100,8 @@ it("binds a first native chat.send before streaming and persists its stopped par
         const payload = event.payload as
           | {
               runId?: string;
+              sessionKey?: string;
+              message?: { role?: string };
               state?: string;
               stream?: string;
               sessionId?: string;
@@ -107,6 +110,13 @@ it("binds a first native chat.send before streaming and persists its stopped par
           | undefined;
         if (payload?.runId !== runId) {
           return;
+        }
+        if (
+          event.event === "session.message" &&
+          payload.sessionKey === sessionKey &&
+          payload.message?.role === "assistant"
+        ) {
+          persistedPartial.resolve();
         }
         if (event.event === "chat" && payload.state === "delta") {
           firstDelta.resolve();
@@ -243,6 +253,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
         }),
       ),
     );
+    await persistedPartial.promise;
     const events = await loadTranscriptEvents(transcriptScope);
     expect(events).toContainEqual(
       expect.objectContaining({

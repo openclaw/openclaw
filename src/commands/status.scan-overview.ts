@@ -96,18 +96,7 @@ export type StatusScanOverviewResult = {
   tailscaleHttpsUrl: string | null;
   advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
-  gatewaySnapshot: Pick<
-    GatewayProbeSnapshot,
-    | "gatewayConnection"
-    | "remoteUrlMissing"
-    | "gatewayMode"
-    | "gatewayProbeAuth"
-    | "gatewayProbeAuthWarning"
-    | "gatewayProbe"
-    | "gatewayReachable"
-    | "gatewaySelf"
-    | "gatewayCallOverrides"
-  >;
+  gatewaySnapshot: GatewayProbeSnapshot;
   runtimeDegradation:
     | (Pick<
         StatusSummary,
