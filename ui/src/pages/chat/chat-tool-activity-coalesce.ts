@@ -10,7 +10,7 @@ import {
 import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { extractToolBlockCardsCached, extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
@@ -66,12 +66,14 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   if (!message) {
     return [];
   }
+  const originalMessage = message;
   let content = Array.isArray(message.content) ? message.content : [];
   const isToolBlock = (block: unknown) => {
     const type = asRecord(block)?.type;
     return isToolCallContentType(type) || isToolResultContentType(type);
   };
   let blocks = content.filter(isToolBlock);
+  const prepared = new Map<unknown, ToolCard>();
   // Resolve no-id fallback once through the card owner. Keep anonymous pairs
   // in the source while identified siblings still join the invocation registry.
   if (blocks.some((block) => !resolveToolBlockId(asRecord(block)!, message!))) {
@@ -91,10 +93,12 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       }
       const card = pending.splice(cardIndex, 1)[0]!;
       const fields = { id: card.callId, name: card.name, details: card.details };
-      return [
+      const resolved = [
         ...(call ? [{ ...raw, ...fields, arguments: card.args }] : []),
         ...(!call || card.completed || card.outputText !== undefined ? [resultBlock(card)] : []),
       ];
+      resolved.forEach((projection) => prepared.set(projection, card));
+      return resolved;
     });
     message = { ...message, content };
     blocks = content.filter(
@@ -111,6 +115,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       return [];
     }
     blocks = [resultBlock(card)];
+    prepared.set(blocks[0], card);
   }
   const source: Source = {
     item,
@@ -126,7 +131,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
     const id = resolveToolBlockId(raw, message)!;
     const call = isToolCallContentType(raw.type);
     const live = message["__openclawToolStreamLive"] === true;
-    const [card] = extractToolCardsCached({ ...message, content: [raw] });
+    const card = prepared.get(raw) ?? extractToolBlockCardsCached(originalMessage, raw)[0];
     return {
       source,
       id,
@@ -166,8 +171,8 @@ function readProjections(item: MessageItem, index: number): Projection[] {
               },
             }),
         ...(card?.details !== undefined ? { details: card.details } : {}),
-        ...(card?.isError !== undefined ? { isError: card.isError } : {}),
-        ...(card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
+        ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
+        ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
       },
     };
   });
