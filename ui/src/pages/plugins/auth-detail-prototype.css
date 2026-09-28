@@ -3,9 +3,9 @@ openclaw-auth-detail-prototype {
 }
 .auth-detail-alert {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 14px;
-  padding: 20px 22px;
+  padding: 14px 18px;
   margin: 0 0 30px;
   border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
   border-radius: 12px;
@@ -14,7 +14,7 @@ openclaw-auth-detail-prototype {
 .auth-detail-icon {
   color: var(--warn);
   flex: none;
-  padding-top: 2px;
+  display: flex;
 }
 .auth-detail-icon svg {
   width: 20px;
@@ -29,29 +29,6 @@ openclaw-auth-detail-prototype {
   font-size: 15px;
   font-weight: 600;
   line-height: 1.5;
-}
-.auth-detail-copy p {
-  margin: 4px 0 0;
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.auth-detail-status {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 9px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.auth-detail-status button {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--text);
-  font: inherit;
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 .auth-detail-action {
   align-self: center;
@@ -220,16 +197,15 @@ openclaw-auth-detail-prototype {
 }
 @media (max-width: 560px) {
   .auth-detail-alert {
-    padding: 16px;
+    padding: 12px;
     gap: 10px;
-    flex-wrap: wrap;
     margin-bottom: 24px;
   }
-  .auth-detail-copy {
-    flex-basis: calc(100% - 34px);
+  .auth-detail-copy h2 {
+    font-size: 13px;
   }
   .auth-detail-action {
-    margin-left: 30px;
+    padding-inline: 10px;
   }
   .auth-detail-controls {
     width: calc(100vw - 24px);

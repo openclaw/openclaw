@@ -123,13 +123,8 @@ class AuthDetailPrototype extends OpenClawLightDomElement {
       : status === "needs-permission"
         ? "Notion needs additional permissions"
         : this.local
-          ? "Add your Notion integration token"
-          : "Connect your Notion account";
-    const description = !auth
-      ? "Try again to check whether this plugin is ready to use."
-      : this.local
-        ? "The local server is running, but it can’t access your workspace."
-        : "Sign in to let your agent search and update your workspace.";
+          ? "Notion token required"
+          : "Sign in to Notion";
     return html`<section
       class="auth-detail-alert ${auth ? "" : "auth-detail-alert--unavailable"}"
       aria-label="Plugin connection"
@@ -140,13 +135,6 @@ class AuthDetailPrototype extends OpenClawLightDomElement {
       >
       <div class="auth-detail-copy">
         <h2>${title}</h2>
-        <p>${description}</p>
-        <div class="auth-detail-status" role="status">
-          ${this.checking ? "Checking…" : this.observation?.checkedAt ? `Checked at ${new Date(this.observation.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Check unsuccessful"}<span
-            aria-hidden="true"
-            >·</span
-          ><button ?disabled=${this.checking} @click=${() => this.probe()}>Check again</button>
-        </div>
       </div>
       <button
         class="btn oc-action oc-action-secondary auth-detail-action"
