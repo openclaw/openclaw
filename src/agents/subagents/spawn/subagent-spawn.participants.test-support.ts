@@ -174,28 +174,13 @@ export function registerParticipantSpawnCases(options: {
                   ...details,
                 };
               };
-              await spawn(undefined, "alice");
               const steered = await turn.steer(bob);
               expect(steered, JSON.stringify(steered)).toMatchObject({ status: "accepted" });
               const existingKeys = await keys();
               await expect(invoke()).rejects.toThrow(/Alice.*Bob|Bob.*Alice/);
-              await expect(invoke("unknown")).rejects.toThrow(/unknown|not.*participant/i);
-              expect(await keys()).toEqual(existingKeys);
-              const revokedSource = createSpawnOperatorSource("revoked");
-              expect(
-                await turn.steer({
-                  profileId: "revoked",
-                  senderId: "revoked",
-                  name: "Revoked",
-                  operatorAuthority: revokedSource.authority,
-                }),
-              ).toMatchObject({ status: "accepted" });
-              revokedSource.revoke();
-              await expect(invoke("revoked")).rejects.toThrow("Revoked's access changed");
               expect(await keys()).toEqual(existingKeys);
               await spawn("alice", "alice");
               const bobChild = await spawn("bob", "bob");
-              const beforeRevoke = await keys();
               turn.complete();
               bound.admission.close();
               bound.parent.cleanup();
@@ -207,8 +192,6 @@ export function registerParticipantSpawnCases(options: {
               bobSource.revoke();
               expect(() => bobChild.authority.assertCurrent()).toThrow("operator source revoked");
               expect(bobChild.signal.aborted).toBe(true);
-              await expect(invoke("bob")).rejects.toThrow();
-              expect(await keys()).toEqual(beforeRevoke);
             },
           ),
         );

@@ -9,8 +9,7 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
@@ -18,109 +17,195 @@ import {
 } from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import type { CodexDynamicToolSpec } from "./protocol.js";
+import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
+import { prepareCodexAttemptContext } from "./run-attempt-context.js";
+import { prepareCodexAttemptPrompt } from "./run-attempt-prompt.js";
+import { prepareCodexAttemptResources } from "./run-attempt-resources.js";
+import { prepareCodexAttemptRuntime } from "./run-attempt-runtime.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
-  createRuntimeDynamicTool,
   createStartedThreadHarness,
   extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
   runCodexAppServerAttempt,
-  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
-import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
+import {
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
+import { startOrResumeThread } from "./thread-lifecycle.js";
 
-setupRunAttemptTestHooks();
+describe("Codex participant native admission", () => {
+  setupRunAttemptTestHooks({ sessionOwner: null });
+  it.each(["optional", "disabled", "managed-only"] as const)(
+    "prepares participant delegation with %s native admission before a turn starts",
+    async (hooks) => {
+      const params = createParams(
+        path.join(tempDir, "participant-model-hooks.jsonl"),
+        path.join(tempDir, "participant-model-hooks-workspace"),
+      );
+      params.sessionKey = undefined;
+      registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
+      let ambiguous = false;
+      const bindModelExecution = () => ({
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+        release: () => {},
+      });
+      params.hostCapabilities = createCodexTestHostCapabilities({
+        bindModelExecution,
+        retainSourceAuthority: () => ({
+          ...bindModelExecution(),
+          modelPolicyRequired: false,
+          bindModelExecution,
+        }),
+        assertNativeSubagentSpawnAllowed: () => {
+          if (ambiguous) {
+            throw new Error("Several people have steered this turn");
+          }
+        },
+      });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
+        }
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        return undefined;
+      });
+      ownCodexInferenceClient(harness.client);
+      const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: {
+          bindingStore: testCodexAppServerBindingStore,
+          clientFactory: async () => harness.client,
+          nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+        },
+      });
+      try {
+        const runtime = await prepareCodexAttemptRuntime(connection);
+        const tools = await prepareCodexAttemptTools(runtime);
+        try {
+          const context = await prepareCodexAttemptContext(runtime, tools);
+          const prompt = await prepareCodexAttemptPrompt(context);
+          const resources = prepareCodexAttemptResources(prompt);
+          resources.state.client = harness.client;
+          try {
+            const dynamicTools: CodexDynamicToolSpec[] = [
+              {
+                type: "function",
+                name: "sessions_spawn",
+                description: "Create an OpenClaw child session.",
+                inputSchema: { type: "object", properties: {} },
+              },
+            ];
+            const binding = await startOrResumeThread({
+              client: harness.client,
+              bindingStore: connection.bindingStore,
+              params,
+              cwd: connection.effectiveCwd,
+              agentDir: connection.agentDir,
+              appServer: connection.appServer,
+              dynamicTools,
+              userMcpServersEnabled: false,
+              nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
+              nativeModelAdmission: resources.nativeModelAdmission,
+              buildFinalConfigPatch: resources.buildNativeHookRelayFinalConfigPatch,
+            });
+            resources.state.thread = binding;
+            expect(preflight).toHaveBeenCalledWith(
+              expect.objectContaining({
+                nativeModelAdmission: hooks === "disabled" ? "disabled" : "optional",
+              }),
+            );
+            const admission = await preflight.mock.results[0]?.value;
+            expect(admission).toBeDefined();
+            const start = harness.requests.find(({ method }) => method === "thread/start");
+            const route = getCodexInferenceThread(harness.client, binding.threadId);
+            expect(route).toBeDefined();
+            expect(start?.params).toMatchObject({
+              config: { "features.shell_tool": true, openai_base_url: route?.baseUrl },
+              dynamicTools,
+            });
+            expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+            if (hooks === "optional") {
+              expect(admission?.nativeModelInputTools).toContain("spawn_agent");
+              const relayId = extractRelayIdFromThreadRequest(start?.params);
+              const generation = extractGenerationFromThreadRequest(start?.params);
+              const spawn = (toolUseId: string) =>
+                invokeNativeHookRelay({
+                  provider: "codex",
+                  relayId,
+                  generation,
+                  requireGeneration: true,
+                  event: "pre_tool_use",
+                  rawPayload: {
+                    session_id: binding.threadId,
+                    turn_id: "turn-1",
+                    tool_name: "Agent",
+                    tool_use_id: toolUseId,
+                    tool_input: { message: "Inspect the fixture" },
+                  },
+                });
+              await expect(spawn("single-person")).resolves.toMatchObject({
+                stdout: "",
+                exitCode: 0,
+              });
+              ambiguous = true;
+              const response = await spawn("several-people");
+              expect(response.stdout).toContain(
+                "Use sessions_spawn with the requester's requester_profile.id as user",
+              );
+              expect(JSON.parse(response.stdout)).toMatchObject({
+                hookSpecificOutput: { permissionDecision: "deny" },
+              });
+              expect(start?.params).not.toHaveProperty(["config", "agents.enabled"], false);
+            } else {
+              expect(admission?.nativeModelInputTools).toBeUndefined();
+              expect(
+                getCodexInferenceThreadQualification(harness.client, binding.threadId),
+              ).toBeUndefined();
+              expect(start?.params).toMatchObject({
+                config: {
+                  "agents.enabled": false,
+                  "features.multi_agent": false,
+                  "features.multi_agent_v2": false,
+                },
+              });
+              expect(start?.params).not.toHaveProperty(["config", "hooks.PreToolUse", 0]);
+            }
+          } finally {
+            await resources.cleanupBeforeActiveTurn();
+          }
+        } finally {
+          await tools.disposeTools("error");
+        }
+      } finally {
+        connection.cancellation.dispose();
+        connection.releaseModelExecution();
+        harness.close();
+      }
+    },
+  );
+});
 
 describe("Codex native hook Gateway fallback", () => {
-  it("guards native spawn through default optional model admission", async () => {
-    const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
+  setupRunAttemptTestHooks();
+  it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {
     const params = createParams(
-      path.join(tempDir, "optional-participant-hooks.jsonl"),
-      path.join(tempDir, "optional-participant-hooks-workspace"),
+      path.join(tempDir, "retained-model-source.jsonl"),
+      path.join(tempDir, "retained-model-source-workspace"),
     );
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
-      profileId: "unrestricted-native-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-    });
-    let ambiguous = false;
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
-      assertNativeSubagentSpawnAllowed: () => {
-        if (ambiguous) {
-          throw new Error("Several people have steered this turn");
-        }
-      },
-    };
-    const started = createDeferred<void>();
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "account/read") {
-        return { account: { type: "apiKey" } };
-      }
-      if (method === "turn/start") {
-        started.resolve();
-      }
-      return undefined;
-    });
-    ownCodexInferenceClient(harness.client);
-    const abort = new AbortController();
-    params.abortSignal = abort.signal;
-    const run = runCodexAppServerAttempt(params);
-    try {
-      await Promise.race([started.promise, run]);
-      expect(preflight).toHaveBeenCalledWith(
-        expect.objectContaining({ nativeModelAdmission: "optional" }),
-      );
-      const start = harness.requests.find(({ method }) => method === "thread/start");
-      const relayId = extractRelayIdFromThreadRequest(start?.params);
-      const generation = extractGenerationFromThreadRequest(start?.params);
-      const spawn = (toolUseId: string) =>
-        invokeNativeHookRelay({
-          provider: "codex",
-          relayId,
-          generation,
-          requireGeneration: true,
-          event: "pre_tool_use",
-          rawPayload: {
-            session_id: "thread-1",
-            turn_id: "turn-1",
-            tool_name: "Agent",
-            tool_use_id: toolUseId,
-            tool_input: { message: "Inspect the fixture" },
-          },
-        });
-      await expect(spawn("single-person")).resolves.toMatchObject({ stdout: "", exitCode: 0 });
-      ambiguous = true;
-      const response = await spawn("several-people");
-      expect(response.stdout).toContain(
-        "Use sessions_spawn with the requester's requester_profile.id as user",
-      );
-      expect(JSON.parse(response.stdout)).toMatchObject({
-        hookSpecificOutput: { permissionDecision: "deny" },
-      });
-      expect(start?.params).not.toHaveProperty(["config", "agents.enabled"], false);
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-    } finally {
-      abort.abort("test cleanup");
-      await run.catch(() => undefined);
-      closeHost();
-      harness.close();
-    }
-  });
-
-  it("preserves a no-policy operator's disabled hooks until a policy is introduced", async () => {
-    const params = createParams(
-      path.join(tempDir, "optional-model-hooks.jsonl"),
-      path.join(tempDir, "optional-model-hooks-workspace"),
-    );
-    setCodexTestModelSupportsTools(params, true);
-    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("sessions_spawn")]);
     const listeners = new Set<() => void>();
     let policy: NonNullable<
       Parameters<typeof bindProductionHarnessHostCapabilitiesForTest>[1]
@@ -139,36 +224,20 @@ describe("Codex native hook Gateway fallback", () => {
         };
       },
     });
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
-      assertNativeSubagentSpawnAllowed: () => {},
-    };
     const selected = { provider: params.provider, model: params.modelId };
     const permitted = params.hostCapabilities.bindModelExecution?.(selected);
     if (!permitted) {
       throw new Error("Expected a canonical operator model guard");
     }
-    const started = createDeferred<void>();
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "configRequirements/read") {
-        return { requirements: { allowManagedHooksOnly: false } };
-      }
-      if (method === "account/read") {
-        return { account: { type: "apiKey" } };
-      }
-      if (method === "turn/start") {
-        started.resolve();
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "account/read" ? { account: { type: "apiKey" } } : undefined,
+    );
     ownCodexInferenceClient(harness.client);
     const abort = new AbortController();
     params.abortSignal = abort.signal;
-    const run = runCodexAppServerAttempt(params, {
-      nativeHookRelay: { enabled: false },
-    });
+    const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
     try {
-      await Promise.race([started.promise, run]);
+      await run.waitForTurnAccepted();
       const accepted = await codexNativeSubagentMonitorRuntime.captureModelSource({
         client: harness.client,
         threadId: "thread-1",
@@ -176,31 +245,6 @@ describe("Codex native hook Gateway fallback", () => {
       });
       expect(accepted).toBeDefined();
       accepted?.release();
-      const route = getCodexInferenceThread(harness.client, "thread-1");
-      expect(route).toBeDefined();
-      expect(getCodexInferenceThreadQualification(harness.client, "thread-1")).toBeUndefined();
-      const start = harness.requests.find(({ method }) => method === "thread/start");
-      expect(start?.params).toMatchObject({
-        config: {
-          "features.shell_tool": true,
-          openai_base_url: route?.baseUrl,
-          "agents.enabled": false,
-          "features.multi_agent": false,
-          "features.multi_agent_v2": false,
-        },
-      });
-      expect(start?.params).toHaveProperty(
-        "dynamicTools",
-        expect.arrayContaining([
-          expect.objectContaining({ type: "function", name: "sessions_spawn" }),
-        ]),
-      );
-      expect(start?.params).not.toHaveProperty(["config", "hooks.PreToolUse", 0]);
-      const turn = harness.requests.find(({ method }) => method === "turn/start");
-      expect(turn?.params).toHaveProperty(
-        ["responsesapiClientMetadata", CODEX_INFERENCE_GENERATION_KEY],
-        expect.any(String),
-      );
       policy = {
         models: [selected],
         allows: (model) => model.provider === selected.provider && model.model === selected.model,
@@ -208,8 +252,7 @@ describe("Codex native hook Gateway fallback", () => {
       for (const changed of listeners) {
         changed();
       }
-      const result = await run;
-      expect(readAttemptTerminal(result).aborted).toBe(true);
+      expect(readAttemptTerminal(await run).aborted).toBe(true);
       expect(harness.requests).toContainEqual({
         method: "turn/interrupt",
         params: { threadId: "thread-1", turnId: "turn-1" },
@@ -225,7 +268,6 @@ describe("Codex native hook Gateway fallback", () => {
     }
     expect(listeners.size).toBe(0);
   });
-
   it("keeps resumed native hook policy available when the direct listener fails", async () => {
     const sessionFile = path.join(tempDir, "listener-unavailable.jsonl");
     const workspaceDir = path.join(tempDir, "listener-unavailable-workspace");
