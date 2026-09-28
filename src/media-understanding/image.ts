@@ -514,6 +514,10 @@ async function describeImagesWithModelInternal(
     });
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    // One image request keeps one conversation identity across the reasoning-only retry: the
+    // transport derives OpenCode's routing header from it, so re-rolling it per attempt would
+    // split a single image request across two provider conversations.
+    const imageSessionId = params.sessionId ?? randomUUID();
     const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
@@ -524,7 +528,7 @@ async function describeImagesWithModelInternal(
         apiKey,
         maxTokens,
         signal: requestSignal,
-        sessionId: params.sessionId ?? randomUUID(),
+        sessionId: imageSessionId,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(headers ? { headers } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),

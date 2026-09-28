@@ -30,7 +30,7 @@ function stubProviderStream() {
 }
 
 function capturedStreamOptions(streamFn: ReturnType<typeof stubProviderStream>, index: number) {
-  const call = streamFn.mock.calls.at(index);
+  const call = (streamFn.mock.calls as unknown[][]).at(index);
   if (!call) {
     throw new Error(`Expected provider stream call ${index}`);
   }
@@ -84,5 +84,40 @@ describe("describeImageWithModelCore session identity", () => {
     await requestOpenCodeImage({ sessionId: "sess-agent-turn-1" });
 
     expect(capturedStreamOptions(streamFn, 0).sessionId).toBe("sess-agent-turn-1");
+  });
+
+  it("reuses one session id across the reasoning-only retry of a single image request", async () => {
+    const reasoningOnly = {
+      role: "assistant",
+      api: "openai-completions",
+      provider: "opencode",
+      model: "gemini-2.5-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "thinking",
+          thinking: "examining the image",
+          thinkingSignature: "reasoning_content",
+        },
+      ],
+    };
+    const streamResult = {
+      result: vi
+        .fn()
+        .mockResolvedValueOnce(reasoningOnly)
+        .mockResolvedValueOnce(
+          imageCompletion("openai-completions", "opencode", "gemini-2.5-flash", "vision ok"),
+        ),
+    };
+    const streamFn = vi.fn(() => streamResult);
+    registerProviderStreamForModelMock.mockReturnValue(streamFn);
+
+    await requestOpenCodeImage();
+
+    expect(streamFn).toHaveBeenCalledTimes(2);
+    const first = capturedStreamOptions(streamFn, 0).sessionId;
+    expect(first).toEqual(expect.any(String));
+    expect(capturedStreamOptions(streamFn, 1).sessionId).toBe(first);
   });
 });
