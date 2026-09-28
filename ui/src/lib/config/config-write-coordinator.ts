@@ -58,12 +58,9 @@ export function createConfigWriteCoordinator({
   let autoSaveTrailing = false;
   let autoSaveDraftConnection: { client: GatewayBrowserClient; epoch: number } | null = null;
   let autoSaveRequiresExplicitSubmit = false;
-  // Blocks trailing autosaves while a discard drains pending writes; the
-  // drained draft is about to be thrown away, not re-written.
+  // Discard drains writes without resaving the draft it is about to remove.
   let suppressAutoSave = 0;
-  // Wakes drains awaiting a request a connection change just orphaned — that
-  // request may never settle, and a drain stuck on it would wedge the app
-  // updater barrier, applies, and discards until then.
+  // Disconnect must release drains even when the orphaned transport never settles.
   let connectionWake: (() => void) | null = null;
   let connectionWakePromise: Promise<void> = Promise.resolve();
   const armConnectionWake = () => {
@@ -72,8 +69,7 @@ export function createConfigWriteCoordinator({
     });
   };
   armConnectionWake();
-  // App-updater interlock: config writes or gateway restarts mid-update can
-  // corrupt the install, so all writes pause until the updater settles.
+  // Config writes and restarts must wait for the app updater to settle.
   let writesSuspended = false;
   let refreshWriteAdmission: (() => Promise<void>) | undefined;
   let writesResumed: (() => void) | null = null;
@@ -190,8 +186,7 @@ export function createConfigWriteCoordinator({
     flight.promise = submit
       .catch(() => false)
       .then((saved) => {
-        // Disconnect deregisters the flight; its late completion must not steal
-        // the replacement connection's registration or trailing save.
+        // A disconnected flight cannot retire its successor or trail-save over it.
         if (inFlight !== flight) {
           return;
         }
@@ -261,9 +256,7 @@ export function createConfigWriteCoordinator({
     runAutoSave();
   };
   const scheduleAutoSave = () => {
-    // Only form-draft edits auto-save; raw-text drafts stay manual so a
-    // half-typed JSON5 buffer never gets written to disk. Suspended writes
-    // (app updater running) stay dirty and reschedule when suspension lifts.
+    // Raw JSON5 drafts stay manual; suspended form edits resume after the updater.
     if (
       isDisposed() ||
       writesSuspended ||
@@ -283,36 +276,24 @@ export function createConfigWriteCoordinator({
       runAutoSave();
     }, CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
   };
-  // Manual save/apply serialize the current draft themselves; cancel any
-  // dangling debounce and settle an in-flight autosave first so the explicit
-  // write does not race it on the baseHash guard. The submit starts
-  // synchronously when nothing is in flight so it binds to the current
-  // connection epoch.
-  // Drains ALL pending config writes: the autosave chain (a settling flight
-  // can spawn a trailing save) AND any manual Save still in flight.
+  // Drain manual writes and the whole autosave chain before reusing the base hash.
   const drainPendingWrites = async (flushScheduledDraft = false): Promise<void> => {
     while (true) {
       if (flushScheduledDraft) {
-        // A debounce timer is pending persisted intent. Flush it into a tracked
-        // flight before draining so external writers cannot race the draft.
+        // External writers must also wait for edits still in the debounce window.
         flushScheduledAutoSave();
       }
       const flight = inFlight;
       if (!flight) {
         return;
       }
-      // Race the connection wake: a disconnect deregisters in-flight writes,
-      // and a drain already awaiting one resumes from that deregistration
-      // instead of depending on the transport's close-time rejection order.
+      // Deregistration releases the drain independently of transport rejection order.
       await Promise.race([flight.promise, connectionWakePromise]);
       if (isDisposed()) {
         return;
       }
       if (!flushScheduledDraft) {
-        // save/apply submit the latest full draft themselves. Edits made
-        // while the preceding flight settled may have armed a fresh debounce;
-        // cancel it before the explicit write starts or it can race the same
-        // post-flight base hash.
+        // Save/apply include newer edits; cancel their debounce before reusing the hash.
         cancelScheduledAutoSave();
       }
     }
@@ -327,9 +308,7 @@ export function createConfigWriteCoordinator({
       }
     };
   };
-  // Explicit ops (save/apply/patch) also serialize among THEMSELVES: two
-  // callers queued behind the same in-flight write would otherwise both
-  // finish draining and dispatch against the same base hash.
+  // Explicit writes also serialize with each other, not just the autosave chain.
   let explicitOpQueue: Promise<unknown> | null = null;
   const afterPendingWritesSettled = <T>(
     task: (onSubmitted: ConfigSubmissionObserver) => Promise<T>,
@@ -346,8 +325,7 @@ export function createConfigWriteCoordinator({
     } else {
       cancelScheduledAutoSave();
     }
-    // Start synchronously when no explicit op is queued so the submit binds
-    // to the CURRENT connection epoch; only genuine queuing pays the hop.
+    // With no queued write, dispatch synchronously against the captured connection.
     const start = () =>
       run(async () => {
         if (writesSuspended && refreshWriteAdmission && !isDisposed()) {
@@ -361,8 +339,6 @@ export function createConfigWriteCoordinator({
             }
           }
         }
-        // Drain before the explicit op — otherwise an apply could race a
-        // pending config.set on the same base hash into a CAS failure.
         if (inFlight) {
           await drainPendingWrites(options.flushScheduledDraft);
         }
@@ -373,14 +349,12 @@ export function createConfigWriteCoordinator({
         if (reconnectRead) {
           await Promise.race([reconnectRead.completion.promise, reconnectRead.invalidated.promise]);
         }
-        // The updater may have started while we drained; suspension must be a
-        // real barrier or an apply could restart the gateway mid-update.
+        // The updater can claim suspension while the preceding write drains.
         const connected = client && isCurrentConfigConnection(state, client, connectionEpoch);
         if (writesSuspended || isDisposed() || !connected) {
           return unavailable();
         }
-        // Hello method/scope metadata can change while the client and
-        // connection epoch stay stable. Recheck at the dispatch boundary.
+        // Method/scope metadata can change without replacing the connection epoch.
         if (state.configRecoveryError !== null || options.canDispatch?.() === false) {
           return unavailable(state.configRecoveryError ?? undefined);
         }
@@ -426,35 +400,24 @@ export function createConfigWriteCoordinator({
       const draftBelongsToPreviousConnection =
         state.configFormDirty || inFlight !== null || unacknowledged !== null;
       resetLoads();
-      // A dead prior-connection flight must not keep the reconnected owner's
-      // explicit-operation FIFO waiting forever.
+      // A retired flight cannot hold the replacement connection's FIFO.
       explicitOpQueue = null;
-      // A reconnect may reuse the client object. Keep generations monotonic so work
-      // from the previous connection cannot commit into the new connection epoch.
+      // Reconnect can reuse the client object; the epoch must still advance.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       cancelAppliedRefresh();
       if (draftBelongsToPreviousConnection) {
-        // A retained draft belongs to the Gateway connection where the edit
-        // began. Preserve it across replacement, but require an explicit
-        // Save/Apply or reload before the new Gateway may receive it. The
-        // latch must be visible: without a rendered state the form looks
-        // normal while every subsequent edit silently never saves.
+        // Retain the draft, visibly paused until Save/Apply or reload binds it
+        // to the new connection; silent suspension would make later edits look saved.
         pauseAutoSaveDraftConnection();
       }
       if (inFlight !== null || unacknowledged !== null) {
-        // The epoch guard already blocks these flights from mutating state;
-        // deregistering releases drain barriers and the trailing-save chain
-        // promptly instead of waiting on the transport's close-time
-        // rejection (protocol-client flushRequests rejects all pending
-        // requests on socket close, so nothing here can hang forever).
-        // Remember the uncertain submission for reconnect reconciliation.
+        // Retain uncertain receipts while releasing drains before transport settlement.
         reconciliation.interrupt(inFlight?.submission ?? unacknowledged);
         inFlight = null;
         autoSaveTrailing = false;
       }
-      // Re-arm before waking so a resumed drain that loops again races the
-      // fresh (still-pending) signal, not the one just resolved.
+      // Re-arm first so resumed drains wait on a pending signal on their next iteration.
       const wake = connectionWake;
       armConnectionWake();
       wake?.();
@@ -624,11 +587,8 @@ export function createConfigWriteCoordinator({
       scheduleAutoSave();
       return changed;
     },
-    // Patches are config writes too: they must honor updater suspension and
-    // register as a drainable flight, or a patch could overlap update.run.
-    // Unlike save/apply, a patch does not submit the form draft — flush a
-    // scheduled autosave into a flight first (the settle below drains it) and
-    // re-arm the debounce after so a dirty form is never left timer-less.
+    // Patches share suspension/drain ownership but do not submit the form draft;
+    // flush its debounce before patching and re-arm it afterward if still dirty.
     patch: (options) =>
       canDispatchConfigMutation("config.patch") && (options.canDispatch?.() ?? true)
         ? patches.queue(() => ({ options }))
@@ -704,13 +664,10 @@ export function createConfigWriteCoordinator({
       patches.clear();
       writesResumed?.();
       writesResumed = null;
-      // Free any drain awaiting a flight that will never be reconciled now;
-      // the isDisposed() guard exits its loop.
+      // Release pending drains; their disposed guard exits the loop.
       connectionWake?.();
-      // SPA teardown right after an edit must not silently drop it: fire one
-      // last save before timers die, or chain once behind an in-flight save.
-      // Invalidation retires live callbacks; the retained receipt below still
-      // updates the draft, while dispatch keeps its captured admission checks.
+      // Flush once on teardown, chaining behind any flight for its receipt.
+      // Epoch invalidation retires callbacks, not the flush's captured admission checks.
       const client = state.client;
       const canFlush =
         state.connected && client !== null && !writesSuspended && canCallConfigMethod("config.set");

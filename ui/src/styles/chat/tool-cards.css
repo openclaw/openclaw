@@ -19,7 +19,8 @@
   color: var(--muted);
   font: inherit;
   text-align: left;
-  user-select: text;
+  -webkit-user-select: none;
+  user-select: none;
   cursor: var(--cursor-action);
   transition: color 150ms ease-out;
 }

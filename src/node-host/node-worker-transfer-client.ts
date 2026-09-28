@@ -17,7 +17,7 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
+import { decodeWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
@@ -239,7 +239,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     },
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
-  const manifest = await parseWorkspaceManifest(
+  const { manifest } = await decodeWorkspaceManifest(
     raw.toString("utf8"),
     params.transfer.manifestRef,
     params.signal,

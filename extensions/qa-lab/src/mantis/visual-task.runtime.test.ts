@@ -12,7 +12,7 @@ vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) 
     ...actual,
     ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
       binary,
-      version: "0.55.0",
+      version: "999.0.0",
     })),
   };
 });
