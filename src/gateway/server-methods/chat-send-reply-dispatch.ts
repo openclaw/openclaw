@@ -474,7 +474,7 @@ export function createChatSendReplyDispatch(params: {
       rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
         content: ttsSupplementMarker
           ? [
-              { type: "text", text: payload.text ?? "" },
+              ...(payload.text?.trim() ? [{ type: "text", text: payload.text }] : []),
               ...persistedContentForAppend.filter((block) => block.type !== "text"),
             ]
           : persistedContentForAppend,

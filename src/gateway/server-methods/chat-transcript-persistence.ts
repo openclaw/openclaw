@@ -29,6 +29,8 @@ import {
   extractAssistantPhaseText,
   readAssistantTextBlocksForPhase,
 } from "../../shared/chat-message-content.js";
+import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   ABORTED_PARTIAL_PERSISTENCE_WARNING,
   abortedPartialPersistenceError,
@@ -541,6 +543,32 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
   });
 }
 
+function readCleanedTtsAnswer(message: Record<string, unknown>): string {
+  const cleanedText = (content: readonly Record<string, unknown>[]): string => {
+    const source = { ...message, content };
+    const finalBlocks = readAssistantTextBlocksForPhase(source, "final_answer");
+    const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(source);
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    const segments = blocks.map((block) => cleaner.push(block.text)).filter((part) => part.trim());
+    const tail = cleaner.flush();
+    if (tail.trim()) {
+      segments.push(tail);
+    }
+    return sanitizeAssistantDisplayText(segments.join("\n")) ?? "";
+  };
+  const priorDisplay = Array.isArray(message[ASSISTANT_DISPLAY_CONTENT_FIELD])
+    ? cleanedText(readAssistantDisplayContent(message))
+    : "";
+  if (priorDisplay) {
+    return priorDisplay;
+  }
+  const modelBlocks = readAssistantDisplayContent({ content: message.content });
+  return modelBlocks.length
+    ? cleanedText(modelBlocks)
+    : (sanitizeAssistantDisplayText(cleanDeferredFinalText(extractAssistantPhaseText(message))) ??
+        "");
+}
+
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
   idempotencyKey: string;
@@ -562,9 +590,17 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
       if (transcriptEventId(event) !== target.messageId) {
         return event;
       }
+      const isAudioOnlySupplement =
+        params.preserveModelContent &&
+        !params.content.some(
+          (block) => block.type === "text" && typeof block.text === "string" && block.text.trim(),
+        );
+      const visibleText = isAudioOnlySupplement ? readCleanedTtsAnswer(target.message) : "";
       const rewritten = buildAssistantDisplayRewrite({
         message: target.message,
-        displayContent: params.content,
+        displayContent: visibleText
+          ? [{ type: "text", text: visibleText }, ...params.content]
+          : params.content,
         managedMediaUrls: params.managedMediaUrls,
       });
       return Object.assign({}, event as Record<string, unknown>, {
