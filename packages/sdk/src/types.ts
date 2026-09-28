@@ -1,5 +1,5 @@
 // Public SDK data contracts for Gateway transport, runs, sessions, tools,
-// artifacts, tasks, environments, and normalized event streams.
+// artifacts, environments, and normalized event streams.
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type {
   ArtifactSummary as GatewayArtifactSummaryType,
@@ -12,7 +12,6 @@ import type {
   EnvironmentsListResult as GatewayEnvironmentsListResultType,
   SessionsCreateParams as GatewaySessionsCreateParamsType,
   SessionsSendParams as GatewaySessionsSendParamsType,
-  TaskSummary as GatewayTaskSummaryType,
   ToolsInvokeParams as GatewayToolsInvokeParamsType,
   ToolsInvokeResult as GatewayToolsInvokeResultType,
 } from "@openclaw/gateway-protocol";
@@ -27,11 +26,6 @@ export type {
   ArtifactSummary as GatewayArtifactSummary,
   EnvironmentsListResult as GatewayEnvironmentsListResult,
   EnvironmentSummary as GatewayEnvironmentSummary,
-  TaskSummary,
-  TasksCancelResult,
-  TasksGetResult,
-  TasksListParams,
-  TasksListResult,
   ToolsEffectiveParams,
   WorkerEnvironmentMetadata,
   WorkerEnvironmentState,
@@ -154,7 +148,7 @@ export type ApprovalDecisionParams = {
 /** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type RunTimestamp = NonNullable<GatewayTaskSummaryType["createdAt"]>;
+export type RunTimestamp = number | string;
 
 export type SDKMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -195,15 +189,12 @@ export type SDKArtifactSummary = Omit<GatewayArtifactSummaryType, "type" | "titl
 /** Compatibility name retained for the SDK artifact projection. */
 export type ArtifactSummary = SDKArtifactSummary;
 
-type ArtifactScopeKey = "sessionKey" | "runId" | "taskId";
+type ArtifactScopeKey = "sessionKey" | "runId";
 type ScopedArtifactQuery<Key extends ArtifactScopeKey> = Omit<GatewayArtifactsListParamsType, Key> &
   Required<Pick<GatewayArtifactsListParamsType, Key>>;
 
 /** SDK query projection requiring at least one artifact ownership scope. */
-export type ArtifactQuery =
-  | ScopedArtifactQuery<"sessionKey">
-  | ScopedArtifactQuery<"runId">
-  | ScopedArtifactQuery<"taskId">;
+export type ArtifactQuery = ScopedArtifactQuery<"sessionKey"> | ScopedArtifactQuery<"runId">;
 
 export type SDKArtifactsListResult = Omit<GatewayArtifactsListResultType, "artifacts"> & {
   artifacts: SDKArtifactSummary[];
@@ -225,8 +216,6 @@ export type SDKArtifactsDownloadResult = Omit<GatewayArtifactsDownloadResultType
 
 /** Compatibility name retained for the SDK artifact download projection. */
 export type ArtifactsDownloadResult = SDKArtifactsDownloadResult;
-
-export type TaskStatus = GatewayTaskSummaryType["status"];
 
 export type SDKError = {
   code?: string;
@@ -253,7 +242,6 @@ export type RunResult = {
   status: RunStatus;
   sessionId?: string;
   sessionKey?: string;
-  taskId?: string;
   startedAt?: RunTimestamp;
   endedAt?: RunTimestamp;
   output?: {
@@ -296,13 +284,12 @@ export type OpenClawEventType =
   | "session.created"
   | "session.updated"
   | "session.compacted"
-  | "task.updated"
   | "git.branch"
   | "git.diff"
   | "git.pr"
   | "raw";
 
-/** Normalized SDK event with common run/session/task metadata. */
+/** Normalized SDK event with common run/session metadata. */
 export type OpenClawEvent<TData = unknown> = {
   version: 1;
   id: string;
@@ -311,7 +298,6 @@ export type OpenClawEvent<TData = unknown> = {
   runId?: string;
   sessionId?: string;
   sessionKey?: string;
-  taskId?: string;
   agentId?: string;
   data: TData;
   raw?: GatewayEvent;

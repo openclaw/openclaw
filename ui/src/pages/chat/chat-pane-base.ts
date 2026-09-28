@@ -59,6 +59,7 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
@@ -67,7 +68,7 @@ import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import { handleChatScrollTakeover } from "./scroll.ts";
+import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -89,7 +90,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    const liveDraft = getChatComposerState(this.paneId).composerTextarea?.value;
+    const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
     if (draftChanged) {
       // Page suspension can interrupt IME before compositionend; commit the
@@ -137,12 +138,17 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   // Relative labels still need a minute tick; external PR state is server-pushed.
-  readonly minutePoll = new PollController(this, 60_000, () => {
-    this.requestUpdate();
-  });
+  readonly minutePoll = new PollController(
+    this,
+    60_000,
+    () => this.requestUpdate(),
+    true,
+    "visible",
+  );
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ApplicationContext;
   @property({ attribute: false }) paneId = "single";
+  @property({ attribute: false }) paneLabel?: string;
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
   @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;
@@ -344,7 +350,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
     visuallyPresented: () => this.visuallyPresented,
     onViewportResize: () => this.chatState.handleTranscriptResize(),
-    canFollowEnd: () => this.state !== undefined && !this.state.chatFollowLocked,
+    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
   });
   protected readonly progressCard = new SessionProgressCardController(this, {
@@ -497,10 +503,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionSuggestionTargetSignature = "";
   protected sessionSuggestionAddOperation: symbol | undefined;
   protected sessionSuggestionEditOperation: symbol | undefined;
-  protected readonly typingActors = new Map<
-    string,
-    { label: string; expiresAt: number; preview?: string }
-  >();
+  protected readonly typingActors = new Map<string, ChatTypingActorState>();
   protected readonly typingTimers = new Map<string, number>();
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;

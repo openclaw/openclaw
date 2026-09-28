@@ -2,6 +2,7 @@
 export const GATEWAY_SERVER_CAPS = {
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",

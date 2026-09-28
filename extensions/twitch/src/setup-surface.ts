@@ -149,7 +149,7 @@ async function promptRequiredTwitchAccountValue(
   ).trim();
 }
 
-export async function promptUsername(
+async function promptUsername(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {
@@ -160,7 +160,7 @@ export async function promptUsername(
   );
 }
 
-export async function promptClientId(
+async function promptClientId(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
 ): Promise<string> {

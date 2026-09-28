@@ -5,7 +5,10 @@
  */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type {
   MessageReceipt,
   MessageReceiptPartKind,
@@ -72,13 +75,6 @@ export function resolveReceiptSourceId(result: MessageReceiptInputResult): strin
   );
 }
 
-function appendUnique(values: string[], value: string | undefined): void {
-  const normalized = value?.trim();
-  if (normalized && !values.includes(normalized)) {
-    values.push(normalized);
-  }
-}
-
 /** Builds one normalized receipt from platform send results or nested adapter receipts. */
 export function createMessageReceiptFromOutboundResults(params: {
   results: readonly MessageReceiptInputResult[];
@@ -141,20 +137,20 @@ export function createMessageReceiptFromOutboundResults(params: {
       },
     ];
   });
-  const platformMessageIds: string[] = [];
-  for (const result of sentResults) {
-    if (result.receipt) {
-      appendUnique(platformMessageIds, result.receipt.primaryPlatformMessageId);
-      for (const platformMessageId of result.receipt.platformMessageIds) {
-        appendUnique(platformMessageIds, platformMessageId);
-      }
-      for (const part of result.receipt.parts) {
-        appendUnique(platformMessageIds, part.platformMessageId);
-      }
-      continue;
-    }
-    appendUnique(platformMessageIds, resolveReceiptSourceId(result));
-  }
+  const platformMessageIds = uniqueStrings(
+    sentResults
+      .flatMap((result) =>
+        result.receipt
+          ? [
+              result.receipt.primaryPlatformMessageId,
+              ...result.receipt.platformMessageIds,
+              ...result.receipt.parts.map((part) => part.platformMessageId),
+            ]
+          : [resolveReceiptSourceId(result)],
+      )
+      .map(normalizeIdentity)
+      .filter((id): id is string => Boolean(id)),
+  );
   const firstNestedReceipt = sentResults.find((result) => result.receipt)?.receipt;
   return {
     ...(platformMessageIds[0] ? { primaryPlatformMessageId: platformMessageIds[0] } : {}),

@@ -25,7 +25,6 @@ export async function resolveCliPromptBuildHookResult(params: {
   loadMessages: () => Promise<unknown[]>;
   hookCtx: PluginHookAgentContext;
   hookRunner: HookRunner | null | undefined;
-  bootstrapContextRunKind: RunCliAgentParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult | undefined> {
   if (params.skipsTurnPreparation) {
     return undefined;
@@ -37,7 +36,6 @@ export async function resolveCliPromptBuildHookResult(params: {
       messages: await params.loadMessages(),
       hookCtx: params.hookCtx,
       hookRunner: params.hookRunner,
-      bootstrapContextRunKind: params.bootstrapContextRunKind,
     });
   } catch (error) {
     // Deliberately marker-free: this catch also spans pre-dispatch preparation

@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   normalizeRateLimitClientIp,
 } from "../auth-rate-limit.js";
 import { applyHookMappings, HOOK_MAPPING_FAN_OUT_MAX_ITEMS } from "../hooks-mapping.js";
@@ -95,6 +96,7 @@ function resolveMappedHookExternalContentSource(params: { subPath: string; sessi
 
 export function createHooksRequestHandler(
   opts: {
+    scheduler: GatewayScheduler;
     /** Returns the stable resolved object for the current hooks-config generation. */
     getHooksConfig: () => HooksConfigResolved | null;
     bindHost: string;
@@ -108,14 +110,17 @@ export function createHooksRequestHandler(
   const fanoutResponseDeadlineMs =
     opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
-  const hookAuthLimiter = createAuthRateLimiter({
-    maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
-    windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
-    lockoutMs: HOOK_AUTH_FAILURE_WINDOW_MS,
-    exemptLoopback: false,
-    // Handler lifetimes are tied to gateway runtime/tests; skip background timer fanout.
-    pruneIntervalMs: 0,
-  });
+  const hookAuthLimiter = createGatewayAuthRateLimiter(
+    {
+      maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
+      windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
+      lockoutMs: HOOK_AUTH_FAILURE_WINDOW_MS,
+      exemptLoopback: false,
+      // Handler lifetimes are tied to gateway runtime/tests; skip background timer fanout.
+      pruneIntervalMs: 0,
+    },
+    { scheduler: opts.scheduler },
+  );
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
     const attribution = readPreparedGatewayIngressAttribution(req);

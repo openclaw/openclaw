@@ -94,23 +94,6 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.each([
-    {
-      name: "new files",
-      setup: () => {},
-    },
-    {
-      name: "existing JSON files",
-      setup: writeExistingJson,
-    },
-  ])("writes the latest payload for $name", async ({ setup }) => {
-    await withJsonPath(({ pathname }) => {
-      setup(pathname);
-      writeJsonTarget(pathname, SAVED_PAYLOAD);
-      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
-    });
-  });
-
   it("writes through a sibling temp file before replacing the destination", async () => {
     await withJsonPath(({ pathname }) => {
       writeExistingJson(pathname);

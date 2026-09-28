@@ -426,8 +426,7 @@
   .approval-page {
     align-content: start;
     place-items: start center;
-    padding: max(14px, var(--safe-area-top)) max(12px, var(--safe-area-right))
-      max(18px, var(--safe-area-bottom)) max(12px, var(--safe-area-left));
+    padding: 14px 12px 18px;
   }
 
   .approval-page__card {

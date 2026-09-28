@@ -1,6 +1,7 @@
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   DurableComposerDraftAttachment,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
@@ -20,6 +21,7 @@ export type DurableChatComposerSnapshot = {
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   modelSelection?: DurableDraftModelSelection;
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
@@ -36,6 +38,7 @@ type RestoredDraft = {
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   attachments: ChatAttachment[];
 };
 
@@ -68,6 +71,7 @@ export function chatAttachmentDraftSignature(
   attachments: readonly ChatAttachment[],
   goalMode?: ChatGoalDraftMode | null,
   mentions?: readonly HumanMention[],
+  replyTarget?: ChatReplyTarget | null,
 ): string {
   // Admission and recovery mint a new ID for each payload. Preview URLs and
   // moving the same bytes between Blob/data-URL storage do not change that owner.
@@ -75,6 +79,14 @@ export function chatAttachmentDraftSignature(
     text,
     goalMode ?? null,
     mentions ?? [],
+    replyTarget
+      ? [
+          replyTarget.messageId,
+          replyTarget.text,
+          replyTarget.senderLabel ?? null,
+          replyTarget.sourceMessageId ?? null,
+        ]
+      : null,
     attachments.map((attachment) => [
       attachment.id,
       attachment.mimeType,
@@ -163,6 +175,7 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
       text: payloadUnavailable ? "" : snapshot.text,
       ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
+      ...(snapshot.replyTarget ? { replyTarget: snapshot.replyTarget } : {}),
       ...(snapshot.modelSelection ? { modelSelection: snapshot.modelSelection } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
@@ -286,6 +299,9 @@ export class DurableChatComposerPersistence {
         : {}),
       ...(result.status === "found" && result.draft.goalMode
         ? { goalMode: result.draft.goalMode }
+        : {}),
+      ...(result.status === "found" && result.draft.replyTarget
+        ? { replyTarget: result.draft.replyTarget }
         : {}),
       attachments,
     });

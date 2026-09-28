@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Discord plugin module implements agent components.handlers behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveDiscordComponentEntryWithPersistence,
@@ -8,16 +7,20 @@ import {
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 import {
   ackComponentInteraction,
-  type AgentComponentContext,
-  type AgentComponentMessageInteraction,
+  replyUnavailableComponentInteraction,
+} from "./agent-components-context.js";
+import {
   mapSelectValues,
   parseDiscordComponentData,
-  replyUnavailableComponentInteraction,
-  resolveAuthorizedComponentInteraction,
   resolveInteractionCustomId,
-} from "./agent-components-helpers.js";
+} from "./agent-components-data.js";
+import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-auth.js";
 import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
+import type {
+  AgentComponentContext,
+  AgentComponentMessageInteraction,
+} from "./agent-components.types.js";
 import type { DiscordComponentControlHandlers } from "./agent-components.wildcard-controls.js";
 
 const loadComponentsRuntime = createLazyRuntimeModule(() => import("../components.js"));

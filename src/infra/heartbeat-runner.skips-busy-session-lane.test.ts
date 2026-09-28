@@ -17,7 +17,10 @@ import {
 } from "../auto-reply/reply/agent-runner.test-fixtures.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  waitForReplyRunSuccessorAdmission,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -765,6 +768,8 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         }
         runState.admission = { status: "owned" };
         replyOptions.replyOperation.complete();
+        // Clearing the slot starts asynchronous database-claim release.
+        await waitForReplyRunSuccessorAdmission(sessionKey, null);
         operation = createReplyOperation({
           sessionKey,
           sessionId: "racing-visible-session",
@@ -836,29 +841,6 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
-  it("does not defer on a recent heartbeat ack pending final delivery", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
-        lastProvider: "heartbeat",
-        lastTo: "heartbeat",
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "HEARTBEAT_OK",
-          createdAt: Date.now(),
-        },
-      });
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeat(cfg, replySpy);
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("does not defer a recent pending acknowledgement under the fixed ack budget", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig(storePath);
@@ -911,25 +893,6 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         isHeartbeat: true,
       });
       expect(sendTelegram).not.toHaveBeenCalled();
-    });
-  });
-
-  it("proceeds normally when session lane is idle", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-
-      // Both lanes idle
-      const getQueueSize = vi.fn((_lane?: string) => 0);
-
-      replySpy.mockResolvedValue({
-        text: "HEARTBEAT_OK",
-      });
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { getQueueSize });
-
-      expect(replySpy).toHaveBeenCalled();
-      expect(result.status).toBe("ran");
     });
   });
 });

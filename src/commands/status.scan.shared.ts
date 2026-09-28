@@ -204,7 +204,9 @@ export async function resolveGatewayProbeSnapshot(params: {
     config: params.cfg,
     configPath: params.configPath,
   });
-  const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
+  const { gatewayMode, mode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
+  const originScopedDeviceAuth =
+    mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim());
   const shouldResolveAuth =
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.resolveAuthWhenRemoteUrlMissing === true);
@@ -270,6 +272,8 @@ export async function resolveGatewayProbeSnapshot(params: {
                 : probeGateway({
                     url: gatewayConnection.url,
                     config: params.cfg,
+                    originScopedDeviceAuth,
+                    configuredRemote: gatewayConnection.urlSource === "config gateway.remote.url",
                     auth: gatewayProbeAuthResolution.auth,
                     env: params.env,
                     timeoutMs,
@@ -288,6 +292,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     timeoutMs: remainingTimeoutMs(),
     gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
     enabled:
+      !originScopedDeviceAuth &&
       params.opts.localStatusRpcFallback !== false &&
       remainingTimeoutMs() > 0 &&
       (!readiness || canDiagnose),

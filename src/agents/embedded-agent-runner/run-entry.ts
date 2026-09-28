@@ -490,7 +490,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       })
     ) {
       if (originalFallbackResult.result.turnAttempt) {
-        discardContextEngineTurnAttemptIntent({
+        await discardContextEngineTurnAttemptIntent({
           facts: originalFallbackResult.result.turnAttempt,
           lease: contextEngineLogicalTurnLease,
         });
@@ -544,7 +544,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           };
         } else {
           if (targetFallbackResult.result.turnAttempt) {
-            discardContextEngineTurnAttemptIntent({
+            await discardContextEngineTurnAttemptIntent({
               facts: targetFallbackResult.result.turnAttempt,
               lease: contextEngineLogicalTurnLease,
             });
@@ -667,7 +667,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             lease: contextEngineLogicalTurnLease,
           });
         } else {
-          discardContextEngineTurnAttemptIntent({
+          await discardContextEngineTurnAttemptIntent({
             facts: fallbackResult.result.turnAttempt,
             lease: contextEngineLogicalTurnLease,
           });
@@ -697,7 +697,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     return { ...settledResult, terminal, settleSessionOverride };
   } finally {
     if (unsettledContextEngineTurnAttempt) {
-      discardContextEngineTurnAttemptIntent({
+      await discardContextEngineTurnAttemptIntent({
         facts: unsettledContextEngineTurnAttempt,
         lease: contextEngineLogicalTurnLease,
       });

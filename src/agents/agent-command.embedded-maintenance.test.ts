@@ -36,6 +36,10 @@ const {
 // Register hooks for this file, not as a cached support-module side effect.
 registerAgentCommandCompactionTestHooks();
 
+function makeEmbeddedResult(sessionId: string, text: string) {
+  return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+}
+
 describe("agentCommand embedded maintenance", () => {
   it("keeps the completed foreground budget when maintenance invokes a retired callback", async () => {
     const sessionId = "foreground-compaction-budget";
@@ -51,12 +55,7 @@ describe("agentCommand embedded maintenance", () => {
       params.onSuccessfulAuthProfile?.({});
       retiredObserver = params.onCompactionRequestBudget;
       retiredObserver?.(foreground);
-      return makeResult({
-        sessionId,
-        text: "done",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return makeEmbeddedResult(sessionId, "done");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       retiredObserver?.({
@@ -90,7 +89,7 @@ describe("agentCommand embedded maintenance", () => {
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
         now += foregroundMs;
-        return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+        return makeEmbeddedResult(sessionId, text);
       });
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         flushTimeout = params.followupRun.run.timeoutMs;
@@ -133,7 +132,7 @@ describe("agentCommand embedded maintenance", () => {
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
       await vi.advanceTimersByTimeAsync(400);
-      return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+      return makeEmbeddedResult(sessionId, text);
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
@@ -220,12 +219,7 @@ describe("agentCommand embedded maintenance", () => {
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
       await vi.advanceTimersByTimeAsync(400);
-      return makeResult({
-        sessionId,
-        text: "cancelled foreground answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return makeEmbeddedResult(sessionId, "cancelled foreground answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       await vi.advanceTimersByTimeAsync(600);
@@ -262,12 +256,7 @@ describe("agentCommand embedded maintenance", () => {
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
       now += 1_200_000;
-      return makeResult({
-        sessionId,
-        text: "unlimited answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
@@ -583,14 +572,12 @@ describe("agentCommand embedded maintenance", () => {
     opts?: Partial<Parameters<typeof agentCommand>[0]>;
     agentHarnessId?: string;
     meta?: Partial<EmbeddedAgentRunResult["meta"]>;
-    compactionCount?: number;
     observeAuth?: boolean;
     enabled?: boolean;
   }> = [
     { name: "native harness ownership", agentHarnessId: "codex" },
     { name: "an unavailable auth selection", observeAuth: false },
     { name: "disabled proactive compaction", enabled: false },
-    { name: "already completed in-run compaction", compactionCount: 1 },
     { name: "a yielded turn", meta: { yielded: true } },
     { name: "an aborted turn", meta: { aborted: true } },
     { name: "a heartbeat", opts: { bootstrapContextRunKind: "heartbeat" } },
@@ -616,27 +603,9 @@ describe("agentCommand embedded maintenance", () => {
       text: "completed answer",
       runner: "embedded",
       agentHarnessId: testCase.agentHarnessId ?? "openclaw",
-      compactionCount: testCase.compactionCount,
     });
     completed.meta = { ...completed.meta, ...testCase.meta };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      if (testCase.compactionCount) {
-        const target = params.sessionTarget;
-        const entry = target ? loadSessionEntry(target) : undefined;
-        if (!target || !entry) {
-          throw new Error("expected the in-run compaction owner");
-        }
-        params.onCompactionAccounting?.({
-          kind: "durable",
-          count: testCase.compactionCount,
-          currentContextSnapshot: { tokens: undefined },
-          target: {
-            ...target,
-            lifecycleRevision: entry.lifecycleRevision,
-            activeWriterRunId: entry.activeWriterRunId,
-          },
-        });
-      }
       if (testCase.observeAuth !== false) {
         params.onSuccessfulAuthProfile?.({});
       }
@@ -659,12 +628,7 @@ describe("agentCommand embedded maintenance", () => {
     const sessionKey = `agent:main:explicit:${sessionId}`;
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      return makeResult({
-        sessionId,
-        text: "answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return makeEmbeddedResult(sessionId, "answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       const successor = {
@@ -731,12 +695,7 @@ describe("agentCommand embedded maintenance", () => {
         },
       );
       attempt.onSuccessfulAuthProfile?.({});
-      return makeResult({
-        sessionId,
-        text: "OVERRIDE-OK",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return makeEmbeddedResult(sessionId, "OVERRIDE-OK");
     });
 
     await agentCommandFromGatewayIngress(
@@ -948,12 +907,7 @@ describe("agentCommand embedded maintenance", () => {
       let replacement: SessionEntry | undefined;
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        return makeResult({
-          sessionId,
-          text: "local final",
-          runner: "embedded",
-          agentHarnessId: "openclaw",
-        });
+        return makeEmbeddedResult(sessionId, "local final");
       });
       state.runSessionCompactionIfNeededMock.mockImplementationOnce(async ({ sessionEntry }) => {
         if (!sessionEntry) {

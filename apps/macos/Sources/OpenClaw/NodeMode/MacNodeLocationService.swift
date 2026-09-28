@@ -10,7 +10,6 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
     }
 
     private let manager = CLLocationManager()
-    private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
 
     var locationManager: CLLocationManager {
@@ -19,10 +18,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
 
     /// Compatibility witness for the shipped single-waiter protocol; app calls use the
     /// concurrent extension and its per-request continuation dictionary.
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
-        get { self.locationContinuation }
-        set { self.locationContinuation = newValue }
-    }
+    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>?
 
     override init() {
         super.init()
@@ -44,20 +40,11 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
             timeoutMs: timeoutMs,
             request: { try await self.requestLocationOnce() },
             withTimeout: { timeoutMs, operation in
-                try await self.withTimeout(timeoutMs: timeoutMs) {
-                    try await operation()
-                }
+                try await AsyncTimeout.withTimeoutMs(
+                    timeoutMs: timeoutMs,
+                    onTimeout: { Error.timeout },
+                    operation: operation)
             })
-    }
-
-    private func withTimeout<T: Sendable>(
-        timeoutMs: Int,
-        operation: @escaping @Sendable () async throws -> T) async throws -> T
-    {
-        try await AsyncTimeout.withTimeoutMs(
-            timeoutMs: timeoutMs,
-            onTimeout: { Error.timeout },
-            operation: operation)
     }
 
     // MARK: - CLLocationManagerDelegate (nonisolated for Swift 6 compatibility)
@@ -73,9 +60,8 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
-        let errorCopy = error // Capture error for Sendable compliance
         Task { @MainActor in
-            self.completeLocationRequests(with: .failure(errorCopy))
+            self.completeLocationRequests(with: .failure(error))
         }
     }
 }

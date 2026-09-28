@@ -8,7 +8,7 @@
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/workboard-contract": "workspace:*",
     "lit": "3.3.3",
-    "typebox": "1.3.33",
+    "typebox": "1.3.34",
     "zod": "4.6.5"
   },
   "devDependencies": {

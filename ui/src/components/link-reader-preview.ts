@@ -19,21 +19,17 @@ function safePreviewImage(value: string | undefined): string | undefined {
   if (/^data:image\/(?:gif|jpeg|png|webp);base64,/u.test(value)) {
     return value;
   }
-  try {
-    const url = new URL(value);
-    const host = url.hostname.replace(/\.+$/u, "");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.origin !== window.location.origin &&
-      host.includes(".") &&
-      !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
-      !parseCanonicalIpAddress(host)
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  const host = url?.hostname.replace(/\.+$/u, "") ?? "";
+  return url?.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    url.origin !== window.location.origin &&
+    host.includes(".") &&
+    !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
+    !parseCanonicalIpAddress(host)
+    ? url.href
+    : undefined;
 }
 
 export function parsePreviewResponse(

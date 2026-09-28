@@ -37,21 +37,14 @@ export function resolveDiscordSendComponents(params: {
     : params.components;
 }
 
-function normalizeDiscordEmbeds(embeds?: DiscordSendEmbeds): Embed[] | undefined {
-  if (!embeds?.length) {
-    return undefined;
-  }
-  return embeds.map((embed) => (embed instanceof Embed ? embed : new Embed(embed)));
-}
-
 export function resolveDiscordSendEmbeds(params: {
   embeds?: DiscordSendEmbeds;
   isFirst: boolean;
 }): Embed[] | undefined {
-  if (!params.embeds || !params.isFirst) {
+  if (!params.embeds?.length || !params.isFirst) {
     return undefined;
   }
-  return normalizeDiscordEmbeds(params.embeds);
+  return params.embeds.map((embed) => (embed instanceof Embed ? embed : new Embed(embed)));
 }
 
 function buildDiscordMessagePayload(params: {

@@ -255,17 +255,7 @@ public enum DeviceAuthStore {
     }
 
     private static func withStore<Value>(
-        profile: GatewayDeviceIdentityProfile,
-        _ body: (Database) throws -> Value) throws -> Value
-    {
-        try self.withStore(
-            stateDirectoryURL: DeviceIdentityPaths.stateDirURL(),
-            profile: profile,
-            body)
-    }
-
-    private static func withStore<Value>(
-        stateDirectoryURL: URL,
+        stateDirectoryURL: URL = DeviceIdentityPaths.stateDirURL(),
         profile: GatewayDeviceIdentityProfile,
         _ body: (Database) throws -> Value) throws -> Value
     {

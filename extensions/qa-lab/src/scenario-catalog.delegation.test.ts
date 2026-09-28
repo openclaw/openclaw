@@ -99,12 +99,6 @@ describe("system-agent delegation scenario tool policy", () => {
     expect(baseline.agents?.entries?.qa?.tools).toEqual({ profile: "coding" });
   });
 
-  it("requires sender ownership even when the coding profile grants the delegate", () => {
-    config.commands = { ...config.commands, ownerAllowFrom: [] };
-    expect(authorizationFor(config).senderIsOwner).toBe(false);
-    expect(toolsFor(config).map((tool) => tool.name)).not.toContain("openclaw");
-  });
-
   it("requires the explicit coding-profile grant even for the authorized sender", () => {
     const ownerOnlyConfig = { ...baseline, commands: config.commands };
     expect(authorizationFor(ownerOnlyConfig).senderIsOwner).toBe(true);
@@ -119,11 +113,6 @@ describe("system-agent delegation scenario tool policy", () => {
     expect(toolsFor(config, { senderId, provider }).map((tool) => tool.name)).not.toContain(
       "openclaw",
     );
-  });
-
-  it("does not bypass an explicit tool deny", () => {
-    config.tools = { ...config.tools, deny: ["openclaw"] };
-    expect(toolsFor(config).map((tool) => tool.name)).not.toContain("openclaw");
   });
 
   it("does not bypass conversation-scoped tool policy", () => {

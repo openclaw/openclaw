@@ -83,6 +83,7 @@ async function stageNodeTerminalUpload(
   nodeId: string,
   file: TerminalUploadFile,
 ): Promise<TerminalUploadResult> {
+  file.assertCommitAllowed?.();
   const access = authorizeTerminalNodeCommand(context, nodeId, NODE_TERMINAL_UPLOAD_COMMAND);
   if (!access.ok) {
     throw new Error(access.message);
@@ -94,7 +95,11 @@ async function stageNodeTerminalUpload(
       ? { expectedPairingGeneration: access.node.pairingGeneration }
       : {}),
     command: NODE_TERMINAL_UPLOAD_COMMAND,
-    params: file,
+    params: { name: file.name, contentBase64: file.contentBase64 },
+    isDispatchAuthorized: () => {
+      file.assertCommitAllowed?.();
+      return true;
+    },
     timeoutMs: 120_000,
   });
   if (!result.ok) {

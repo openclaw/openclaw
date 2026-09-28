@@ -33,25 +33,12 @@ export function scopedToolAgentMatches(
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }
-  return entry.scope === "global" && !hasScopedToolEvidence(entries, entry.kind, policyAgentId);
+  return entry.scope === "global" && !hasScopedAgentEvidence(entries, entry.kind, policyAgentId);
 }
 
 function hasScopedAgentEvidence(
-  entries: readonly PolicyAgentWorkspaceEvidence[],
-  kind: PolicyAgentWorkspaceEvidence["kind"],
-  policyAgentId: string,
-): boolean {
-  return entries.some(
-    (candidate) =>
-      candidate.scope === "agent" &&
-      candidate.kind === kind &&
-      scopedAgentIdMatches(candidate.agentId, policyAgentId),
-  );
-}
-
-function hasScopedToolEvidence(
-  entries: readonly PolicyToolPostureEvidence[],
-  kind: PolicyToolPostureEvidence["kind"],
+  entries: readonly (PolicyAgentWorkspaceEvidence | PolicyToolPostureEvidence)[],
+  kind: PolicyAgentWorkspaceEvidence["kind"] | PolicyToolPostureEvidence["kind"],
   policyAgentId: string,
 ): boolean {
   return entries.some(
@@ -70,6 +57,10 @@ export function scopedAgentIdMatches(
     evidenceAgentId !== undefined &&
     normalizeAgentId(evidenceAgentId) === normalizeAgentId(policyAgentId)
   );
+}
+
+function hasPolicyPaths(value: unknown, paths: readonly string[]): boolean {
+  return paths.some((path) => getPolicyPath(value, path.split(".")) !== undefined);
 }
 
 function policyOrScopeHasRules(
@@ -98,24 +89,15 @@ function execApprovalsPolicyHasRules(value: unknown): boolean {
 }
 
 export function policyHasSecretRules(policy: unknown): boolean {
-  if (!isRecord(policy) || !isRecord(policy.secrets)) {
-    return false;
-  }
-  return (
-    policy.secrets.requireManagedProviders !== undefined ||
-    policy.secrets.denySources !== undefined ||
-    policy.secrets.allowInsecureProviders !== undefined
-  );
+  return hasPolicyPaths(policy, [
+    "secrets.requireManagedProviders",
+    "secrets.denySources",
+    "secrets.allowInsecureProviders",
+  ]);
 }
 
 export function policyHasAuthProfileRules(policy: unknown): boolean {
-  return (
-    isRecord(policy) &&
-    isRecord(policy.auth) &&
-    isRecord(policy.auth.profiles) &&
-    (policy.auth.profiles.requireMetadata !== undefined ||
-      policy.auth.profiles.allowModes !== undefined)
-  );
+  return hasPolicyPaths(policy, ["auth.profiles.requireMetadata", "auth.profiles.allowModes"]);
 }
 
 export function policyHasIngressRules(policy: unknown): boolean {
@@ -127,38 +109,26 @@ export function policyHasRoutingRules(policy: unknown): boolean {
 }
 
 function ingressPolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const ingress = value;
-  return (
-    (isRecord(ingress.session) && ingress.session.requireDmScope !== undefined) ||
-    (isRecord(ingress.channels) &&
-      (ingress.channels.allowDmPolicies !== undefined ||
-        ingress.channels.denyOpenGroups !== undefined ||
-        ingress.channels.requireMentionInGroups !== undefined))
-  );
+  return hasPolicyPaths(value, [
+    "session.requireDmScope",
+    "channels.allowDmPolicies",
+    "channels.denyOpenGroups",
+    "channels.requireMentionInGroups",
+  ]);
 }
 
 export function policyHasGatewayRules(policy: unknown): boolean {
-  if (!isRecord(policy) || !isRecord(policy.gateway)) {
-    return false;
-  }
-  const gateway = policy.gateway;
-  return (
-    (isRecord(gateway.exposure) &&
-      (gateway.exposure.allowNonLoopbackBind !== undefined ||
-        gateway.exposure.allowTailscaleFunnel !== undefined)) ||
-    (isRecord(gateway.auth) &&
-      (gateway.auth.requireAuth !== undefined ||
-        gateway.auth.requireExplicitRateLimit !== undefined)) ||
-    (isRecord(gateway.controlUi) && gateway.controlUi.allowInsecure !== undefined) ||
-    (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
-    (isRecord(gateway.http) &&
-      (gateway.http.denyEndpoints !== undefined ||
-        gateway.http.requireUrlAllowlists !== undefined)) ||
-    (isRecord(gateway.nodes) && gateway.nodes.denyCommands !== undefined)
-  );
+  return hasPolicyPaths(policy, [
+    "gateway.exposure.allowNonLoopbackBind",
+    "gateway.exposure.allowTailscaleFunnel",
+    "gateway.auth.requireAuth",
+    "gateway.auth.requireExplicitRateLimit",
+    "gateway.controlUi.allowInsecure",
+    "gateway.remote.allow",
+    "gateway.http.denyEndpoints",
+    "gateway.http.requireUrlAllowlists",
+    "gateway.nodes.denyCommands",
+  ]);
 }
 
 export function policyHasAgentWorkspaceRules(policy: unknown): boolean {
@@ -199,19 +169,12 @@ export function policyHasDataHandlingRules(policy: unknown): boolean {
 }
 
 export function dataHandlingPolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const dataHandling = value;
-  return (
-    (isRecord(dataHandling.sensitiveLogging) &&
-      dataHandling.sensitiveLogging.requireRedaction !== undefined) ||
-    (isRecord(dataHandling.telemetry) && dataHandling.telemetry.denyContentCapture !== undefined) ||
-    (isRecord(dataHandling.retention) &&
-      dataHandling.retention.requireSessionMaintenance !== undefined) ||
-    (isRecord(dataHandling.memory) &&
-      dataHandling.memory.denySessionTranscriptIndexing !== undefined)
-  );
+  return hasPolicyPaths(value, [
+    "sensitiveLogging.requireRedaction",
+    "telemetry.denyContentCapture",
+    "retention.requireSessionMaintenance",
+    "memory.denySessionTranscriptIndexing",
+  ]);
 }
 
 export function policyHasToolPostureRules(policy: unknown): boolean {
@@ -223,21 +186,16 @@ function workspacePolicyHasRules(value: unknown): boolean {
 }
 
 function toolPosturePolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const tools = value;
-  return (
-    (isRecord(tools.profiles) && tools.profiles.allow !== undefined) ||
-    (isRecord(tools.fs) && tools.fs.requireWorkspaceOnly !== undefined) ||
-    (isRecord(tools.exec) &&
-      (tools.exec.allowSecurity !== undefined ||
-        tools.exec.requireAsk !== undefined ||
-        tools.exec.allowHosts !== undefined)) ||
-    (isRecord(tools.elevated) && tools.elevated.allow !== undefined) ||
-    (isRecord(tools.alsoAllow) && tools.alsoAllow.expected !== undefined) ||
-    tools.denyTools !== undefined
-  );
+  return hasPolicyPaths(value, [
+    "profiles.allow",
+    "fs.requireWorkspaceOnly",
+    "exec.allowSecurity",
+    "exec.requireAsk",
+    "exec.allowHosts",
+    "elevated.allow",
+    "alsoAllow.expected",
+    "denyTools",
+  ]);
 }
 
 type AgentScopedPolicyTarget = {
@@ -296,7 +254,6 @@ export function channelScopedPolicyTargets(policy: unknown): readonly ChannelSco
 }
 
 type ScopedPolicyField = {
-  readonly fieldPath: string;
   readonly propertyPath: string;
   readonly targetPath: string;
   readonly metadata: PolicyRuleMetadata;
@@ -341,7 +298,6 @@ function duplicateScopedFieldFinding(
   const seen = new Map<
     string,
     {
-      readonly scopeName: string;
       readonly propertyPath: string;
       readonly field: ScopedPolicyField;
     }
@@ -373,12 +329,11 @@ function duplicateScopedFieldFinding(
             `Use an equally or more restrictive scoped value, or remove the scoped override.`,
           );
         }
-        const key = `${selectorValue}\0${field.fieldPath}`;
+        const key = `${selectorValue}\0${field.propertyPath}`;
         const previous = seen.get(key);
         if (previous !== undefined) {
           if (isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)) {
             seen.set(key, {
-              scopeName,
               propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
               field,
             });
@@ -392,7 +347,6 @@ function duplicateScopedFieldFinding(
           );
         }
         seen.set(key, {
-          scopeName,
           propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
           field,
         });
@@ -412,7 +366,6 @@ function scopedPolicyFields(
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
-      fieldPath: rule.policyPath.join("."),
       propertyPath: rule.policyPath.join("."),
       targetPath: `${prefix}/${rule.policyPath.map(ocPathSegment).join("/")}`,
       metadata: rule,

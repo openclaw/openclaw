@@ -76,9 +76,12 @@ Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 directory otherwise. Child processes reuse the same build namespace. Source
 checkouts keep their existing cache-disable policy.
 
-The compile-cache bootstrap owner performs asynchronous, best-effort maintenance
-at startup. It removes superseded build directories as units. At most once an
-hour, or after retiring another build, it removes bytecode older than seven days
+The compile-cache bootstrap owner starts best-effort maintenance in a background
+worker that does not keep CLI commands alive. Node permission mode skips this
+maintenance because workers do not inherit its filesystem restrictions; cache
+entries remain until removed by an unrestricted invocation or by the operator.
+Cleanup stops when the command exits; long-lived processes give it time to
+complete. It removes superseded build directories as units. At most once an hour, or after retiring another build, it removes bytecode older than seven days
 and trims the current cache to 512 MiB, oldest files first. This is a maintenance
 target, not a hard disk quota: concurrent writes and processes that exit before
 cleanup completes can temporarily exceed it. Interrupted maintenance is eligible

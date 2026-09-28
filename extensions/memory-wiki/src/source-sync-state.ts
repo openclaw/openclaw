@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements source sync state behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +8,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
@@ -82,37 +82,40 @@ function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiI
   };
 }
 
-function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return EMPTY_STATE;
+function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceStateEntry | null {
+  const entry = asNullableRecord(value);
+  if (
+    !entry ||
+    (entry.group !== "bridge" && entry.group !== "unsafe-local") ||
+    typeof entry.pagePath !== "string" ||
+    typeof entry.sourcePath !== "string" ||
+    typeof entry.sourceUpdatedAtMs !== "number" ||
+    typeof entry.sourceSize !== "number" ||
+    typeof entry.renderFingerprint !== "string"
+  ) {
+    return null;
   }
-  const parsed = value as Partial<MemoryWikiImportedSourceState>;
-  if (parsed.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
+  return {
+    group: entry.group,
+    pagePath: entry.pagePath,
+    sourcePath: entry.sourcePath,
+    sourceUpdatedAtMs: entry.sourceUpdatedAtMs,
+    sourceSize: entry.sourceSize,
+    renderFingerprint: entry.renderFingerprint,
+  };
+}
+
+function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
+  const parsed = asNullableRecord(value);
+  if (parsed?.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
     return EMPTY_STATE;
   }
   const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
-  for (const [syncKey, entry] of Object.entries(parsed.entries)) {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      (entry.group !== "bridge" && entry.group !== "unsafe-local") ||
-      typeof entry.pagePath !== "string" ||
-      typeof entry.sourcePath !== "string" ||
-      typeof entry.sourceUpdatedAtMs !== "number" ||
-      typeof entry.sourceSize !== "number" ||
-      typeof entry.renderFingerprint !== "string"
-    ) {
-      continue;
+  for (const [syncKey, rawEntry] of Object.entries(parsed.entries)) {
+    const entry = normalizeSourceSyncEntry(rawEntry);
+    if (entry) {
+      entries[syncKey] = entry;
     }
-    entries[syncKey] = {
-      group: entry.group,
-      pagePath: entry.pagePath,
-      sourcePath: entry.sourcePath,
-      sourceUpdatedAtMs: entry.sourceUpdatedAtMs,
-      sourceSize: entry.sourceSize,
-      renderFingerprint: entry.renderFingerprint,
-    };
   }
   return { version: 1, entries };
 }
@@ -177,11 +180,7 @@ export function createMemoryWikiSourceSyncStateStore(
         if (value.vaultRootKey !== vaultRootKey || typeof value.syncKey !== "string") {
           continue;
         }
-        const normalized = normalizeSourceSyncState({
-          version: 1,
-          entries: { [value.syncKey]: value },
-        });
-        const entry = normalized.entries[value.syncKey];
+        const entry = normalizeSourceSyncEntry(value);
         if (entry) {
           entries[value.syncKey] = entry;
         }

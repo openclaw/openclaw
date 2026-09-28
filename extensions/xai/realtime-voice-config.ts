@@ -29,18 +29,11 @@ type XaiRealtimeVoiceProviderConfig = {
   sessionResumption?: boolean;
 };
 
-export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
-  apiKey?: string;
-  baseUrl: string;
-  model?: string;
-  voice?: string;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  reasoningEffort?: XaiRealtimeReasoningEffort;
-  sessionResumption?: boolean;
-  resolveApiKey?: () => Promise<string>;
-};
+export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
+  Omit<XaiRealtimeVoiceProviderConfig, "interruptResponseOnInputAudio"> & {
+    baseUrl: string;
+    resolveApiKey?: () => Promise<string>;
+  };
 
 type XaiRealtimeResponseItem = {
   id?: string;

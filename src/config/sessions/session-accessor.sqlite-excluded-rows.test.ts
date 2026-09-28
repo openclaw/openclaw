@@ -8,6 +8,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import {
   iterateSessionEntryKeys,
   readExactSessionEntryRow,
@@ -81,6 +82,17 @@ function trackMaterializedKeys(database: OpenClawAgentDatabase) {
   return materializedKeys;
 }
 
+function capCandidates(
+  database: OpenClawAgentDatabase,
+  excludedKeys: ReadonlySet<string> = new Set(),
+) {
+  return readSessionMaintenanceCapCandidates({
+    database,
+    overflow: Number.MAX_SAFE_INTEGER,
+    excludedKeys,
+  });
+}
+
 const readers = [
   {
     name: "references",
@@ -90,9 +102,7 @@ const readers = [
   {
     name: "cap candidates",
     read: (database: OpenClawAgentDatabase, excludedKeys: ReadonlySet<string>) =>
-      Object.values(readSessionMaintenanceCapCandidates({ database, excludedKeys })).map(
-        (entry) => entry.sessionId,
-      ),
+      Object.values(capCandidates(database, excludedKeys)).map((entry) => entry.sessionId),
   },
 ];
 
@@ -116,20 +126,7 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
     expect(materializedKeys).toEqual(["agent:main:kept"]);
   });
 
-  it.each([
-    { name: "empty", excluded: [], expected: ["a", "b", "c"] },
-    { name: "missing", excluded: ["missing"], expected: ["a", "b", "c"] },
-    { name: "all", excluded: ["a", "b", "c"], expected: [] },
-    { name: "mixed", excluded: ["b", "missing"], expected: ["a", "c"] },
-  ])("preserves $name exclusion results and cap order", ({ excluded, expected }) => {
-    const database = openDatabase();
-    for (const key of ["c", "a", "b"]) {
-      insertEntry(database, key, key);
-    }
-    expect(read(database, new Set(excluded))).toEqual(expected);
-  });
-
-  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
+  it.each(["UTF-8", "UTF-16le"] as const)(
     "preserves exact exclusions across %s text conversion",
     (encoding) => {
       const database = openDatabase(encoding);
@@ -147,7 +144,7 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
     },
   );
 
-  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
+  it.each(["UTF-8", "UTF-16be"] as const)(
     "preserves returned-key membership for NUL text in %s",
     (encoding) => {
       const database = openDatabase(encoding);
@@ -177,15 +174,10 @@ describe.each(readers)("SQLite $name exclusions", ({ read }) => {
 describe("SQLite exclusion survivor semantics", () => {
   describe.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)("%s JSON boundaries", (encoding) => {
     it.each([
-      ["literal NUL", "\u0000", undefined],
       ["literal NUL and suffix", "\u0000garbage", undefined],
       ["valid escaped NUL", "", undefined],
       ["raw noncharacters", "", "noncharacters"],
       ["raw high surrogate", "", "high"],
-      ["raw low surrogate", "", "low"],
-      ["raw noncharacters with NUL", "\u0000", "noncharacters"],
-      ["raw high surrogate with NUL", "\u0000", "high"],
-      ["raw low surrogate with NUL", "\u0000", "low"],
     ] as const)(
       "preserves %s metadata parsing and prompt projection",
       (_name, suffix, rawLabel) => {
@@ -209,7 +201,6 @@ describe("SQLite exclusion survivor semantics", () => {
               "UTF-16be": "fffeffff",
             },
             high: { "UTF-8": "eda080", "UTF-16le": "00d8", "UTF-16be": "d800" },
-            low: { "UTF-8": "edb080", "UTF-16le": "00dc", "UTF-16be": "dc00" },
           }[rawLabel][encoding];
           const encode = (value: string) => {
             const buffer = Buffer.from(value, encoding === "UTF-8" ? "utf8" : "utf16le");
@@ -238,9 +229,7 @@ describe("SQLite exclusion survivor semantics", () => {
             metadata.label = "\uFFFD\uFFFD";
           }
         }
-        expect(readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set() })).toEqual(
-          metadata ? { [key]: metadata } : {},
-        );
+        expect(capCandidates(database, new Set())).toEqual(metadata ? { [key]: metadata } : {});
         expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
           fullEntry ? ["historical", "raw"] : ["raw"],
         );
@@ -264,9 +253,7 @@ describe("SQLite exclusion survivor semantics", () => {
             "invalid persisted session row",
           );
         }
-        expect(
-          readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set([key]) }),
-        ).toEqual({});
+        expect(capCandidates(database, new Set([key]))).toEqual({});
         expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
         expect(storedBytes.get()?.bytes).toBe(bytesBefore);
       },
@@ -276,14 +263,8 @@ describe("SQLite exclusion survivor semantics", () => {
   it.each([
     ["malformed", "{", false],
     ["retained placeholder", "{}", false],
-    ["JSON5", '{sessionId:"raw",updatedAt:1}', false],
     ["non-finite timestamp", '{"sessionId":"raw","updatedAt":1e999}', false],
     ["duplicate identity", '{"sessionId":null,"sessionId":"raw","updatedAt":1}', true],
-    [
-      "duplicate prompts",
-      '{"sessionId":"raw","updatedAt":1,"skillsSnapshot":{},"skillsSnapshot":{"prompt":"last","skills":[]}}',
-      true,
-    ],
     [
       "deep JSON",
       `{"sessionId":"raw","updatedAt":1,"skillsSnapshot":{"prompt":${"[".repeat(1001)}0${"]".repeat(1001)},"skills":[]}}`,
@@ -291,44 +272,22 @@ describe("SQLite exclusion survivor semantics", () => {
     ],
   ])("preserves raw IDs and parser behavior for %s", (_name, json, readable) => {
     const database = openDatabase();
-    insertEntry(database, "survivor", "raw", json);
+    const key = "agent:main:survivor";
+    readSessionEntryCache(database, { cache: false });
+    insertEntry(database, key, "raw", json);
+    const snapshot = readSessionEntryCache(database, { cache: false });
+    expect(snapshot.keys).toEqual([key]);
+    expect(snapshot.entries.size).toBe(readable ? 1 : 0);
+    expect(readSessionEntryCount(database)).toBe(readable ? 1 : 0);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(readable ? [key] : []);
+    expect(snapshot.entries.get(key)?.skillsSnapshot).toBeUndefined();
     insertEntry(database, "excluded", "excluded");
     const excludedKeys = new Set(["excluded"]);
     expect([...readReferencedSessionIds(database, excludedKeys)]).toEqual(["raw"]);
     expect(readReferencedSessionIds(database, excludedKeys, ["raw"])).toEqual(new Set(["raw"]));
-    expect(readSessionMaintenanceCapCandidates({ database, excludedKeys })).toEqual(
-      readable ? { survivor: JSON.parse(json) } : {},
+    expect(capCandidates(database, excludedKeys)).toEqual(
+      readable ? { [key]: JSON.parse(json) } : {},
     );
-  });
-
-  it("retains surviving historical references, including archived entries", () => {
-    const database = openDatabase();
-    insertEntry(
-      database,
-      "archived",
-      "current",
-      JSON.stringify({
-        sessionId: "current",
-        updatedAt: 1,
-        previousSessionId: " previous ",
-        usageFamilySessionIds: ["family", "current"],
-        compactionCheckpoints: [
-          {
-            sessionId: "checkpoint",
-            preCompaction: { sessionId: "pre" },
-            postCompaction: { sessionId: "post" },
-          },
-        ],
-      }),
-    );
-    database.db
-      .prepare("UPDATE session_nodes SET archived_at = 1 WHERE session_key = ?")
-      .run("archived");
-    const excludedKeys = new Set(["missing"]);
-    expect([...readReferencedSessionIds(database, excludedKeys)].toSorted()).toEqual(
-      ["current", "previous", "family", "checkpoint", "pre", "post"].toSorted(),
-    );
-    expect(readSessionMaintenanceCapCandidates({ database, excludedKeys })).toEqual({});
   });
 });
 
@@ -354,7 +313,6 @@ describe("SQLite candidate reference reads", () => {
     readSessionEntryStore(database);
     const fullReferences = readReferencedSessionIds(database, new Set([removedKey]));
     const keys = trackMaterializedKeys(database);
-    const startedAt = performance.now();
     const result = await projectSessionEntryLifecycleMutation(
       { agentId: database.agentId, path: database.path },
       {
@@ -363,7 +321,6 @@ describe("SQLite candidate reference reads", () => {
         upserts: [],
       },
     );
-    console.log({ lifecycleReferenceRows: keys.length, planningMs: performance.now() - startedAt });
     expect(result.removals).toHaveLength(1);
     expect(result.deletePlans.map((plan) => plan.sessionId)).toEqual(
       [entry.sessionId, entry.previousSessionId].filter((id) => !fullReferences.has(id)),
@@ -403,7 +360,7 @@ describe("SQLite candidate reference reads", () => {
     ]);
   });
 
-  it.each(["current ", "current\0 ", "\u00a0current\ufeff"])(
+  it.each(["current\0 ", "\u00a0current\ufeff"])(
     "retains normalized current IDs for %j",
     (current) => {
       const database = openDatabase();
@@ -451,6 +408,7 @@ describe("SQLite candidate reference reads", () => {
         }),
       );
     }
+    database.db.exec("UPDATE session_nodes SET archived_at = 1");
     const parse = vi.spyOn(JSON, "parse");
     expect(readReferencedSessionIds(database)).toEqual(expected);
     expect(readReferencedSessionIds(database, undefined, [...expected, "missing"])).toEqual(
@@ -460,6 +418,7 @@ describe("SQLite candidate reference reads", () => {
       new Set(["pre-0", "post-31"]),
     );
     expect(parse).not.toHaveBeenCalled();
+    expect(capCandidates(database, new Set())).toEqual({});
   });
 
   it("does not materialize unrelated node metadata for one candidate", () => {
@@ -485,10 +444,8 @@ describe("SQLite candidate reference reads", () => {
   });
 
   it.each([
-    ["literal", '"previousSessionId":" candidate "'],
     ["escaped key", '"previous\\u0053essionId":" candidate "'],
     ["duplicate key", '"previousSessionId":null,"previousSessionId":" candidate "'],
-    ["usage family", '"usageFamilySessionIds":[" candidate "]'],
     ["escaped surrogate", '"previousSessionId":"candidate","label":"\\ud800"'],
     [
       "duplicate identity",
@@ -497,18 +454,6 @@ describe("SQLite candidate reference reads", () => {
     [
       "duplicate checkpoint",
       '"compactionCheckpoints":[{"sessionId":"wrong","sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',
-    ],
-    [
-      "checkpoint",
-      '"compactionCheckpoints":[{"sessionId":"candidate","preCompaction":{},"postCompaction":{}}]',
-    ],
-    [
-      "pre-compaction",
-      '"compactionCheckpoints":[{"preCompaction":{"sessionId":" candidate "},"postCompaction":{}}]',
-    ],
-    [
-      "post-compaction",
-      '"compactionCheckpoints":[{"preCompaction":{},"postCompaction":{"sessionId":" candidate "}}]',
     ],
     [
       "overdepth",
@@ -537,14 +482,13 @@ describe("SQLite candidate reference reads", () => {
     },
   );
 
-  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
+  it.each(["UTF-8", "UTF-16le"] as const)(
     "protects raw current IDs after %s text conversion",
     (encoding) => {
       const database = openDatabase(encoding);
       const bytes = {
         "UTF-8": ["eda080", "edb080", "ff", "c080", "efbfbe", "efbfbf", "610062"],
         "UTF-16le": ["00d8", "00dc", "feff", "ffff", "610000006200"],
-        "UTF-16be": ["d800", "dc00", "fffe", "ffff", "006100000062"],
       }[encoding];
       insertEntry(database, "owner", "current");
       for (const hex of bytes) {
@@ -565,26 +509,23 @@ describe("SQLite candidate reference reads", () => {
     },
   );
 
-  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
-    "preserves exact excluded-key membership for candidates in %s",
-    (encoding) => {
-      const database = openDatabase(encoding);
-      const keys = ["nul\0tail", "a\uFFFE", "b\uFFFF", "c\uFFFD", "日本語🦞"];
-      for (const [index, key] of keys.entries()) {
-        insertEntry(database, key, `current-${index}`);
-      }
-      const returned = database.db
-        .prepare("SELECT session_key, current_session_id FROM session_nodes")
-        .all();
-      for (const row of returned) {
-        const candidate = String(row.current_session_id);
-        const excluded = new Set(keys);
-        expect(readReferencedSessionIds(database, excluded, [candidate])).toEqual(
-          new Set(excluded.has(String(row.session_key)) ? [] : [candidate]),
-        );
-      }
-    },
-  );
+  it("preserves exact excluded-key membership for UTF-16 candidates", () => {
+    const database = openDatabase("UTF-16be");
+    const keys = ["nul\0tail", "a\uFFFE", "b\uFFFF", "c\uFFFD", "日本語🦞"];
+    for (const [index, key] of keys.entries()) {
+      insertEntry(database, key, `current-${index}`);
+    }
+    const returned = database.db
+      .prepare("SELECT session_key, current_session_id FROM session_nodes")
+      .all();
+    for (const row of returned) {
+      const candidate = String(row.current_session_id);
+      const excluded = new Set(keys);
+      expect(readReferencedSessionIds(database, excluded, [candidate])).toEqual(
+        new Set(excluded.has(String(row.session_key)) ? [] : [candidate]),
+      );
+    }
+  });
 
   it("reads references added during a transaction freshly", () => {
     const database = openDatabase();

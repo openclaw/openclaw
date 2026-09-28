@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-utils.js";
+import { getHeader } from "./http-header-value.js";
 import {
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
@@ -84,19 +84,12 @@ function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefin
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
-    // No Origin header → not a browser request. Native MCP clients
-    // (curl, codex CLI, scripted MCP clients) never set Origin; let
-    // them through to the bearer check.
+    // Native MCP clients use bearer authentication without a browser Origin.
     return false;
   }
 
-  // Defer to checkBrowserOrigin. It already treats loopback peers
-  // talking to a loopback Origin as `local-loopback`, which covers
-  // the legitimate `localhost`↔`127.0.0.1` mismatch that browsers
-  // flag as `Sec-Fetch-Site: cross-site` even though both ends are
-  // local. A blanket cross-site early-return here would block that
-  // flow even with a valid bearer; the helper's isLocalClient +
-  // isLoopbackHost gating is the authoritative check.
+  // The origin owner accepts localhost ↔ 127.0.0.1 only for loopback peers,
+  // including when the browser describes those names as cross-site.
   return !checkBrowserOrigin({
     requestHost: getHeader(req, "host"),
     origin,

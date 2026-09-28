@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
@@ -136,8 +137,12 @@ describe("board and progress event session ownership", () => {
         }
         invalidateSessionSharingSnapshot();
         const projection = await createSessionRowProjection({ cfg });
-        const connection = createGatewayConnectionState({ bootId: "board-owner-events", cfg });
-        connection.attachSessionRowProjection(projection);
+        const connection = createGatewayConnectionState({
+          scheduler: createTestGatewayScheduler(),
+          bootId: "board-owner-events",
+          cfg,
+        });
+        const detach = connection.attachSessionRowProjection(projection);
         for (const { client } of peers) {
           connection.clients.add(client);
         }
@@ -281,6 +286,7 @@ describe("board and progress event session ownership", () => {
           });
         } finally {
           await flushPendingSessionsChangedEvents(context);
+          detach();
           projection.dispose();
           connection.mentionInbox.dispose();
         }
@@ -498,11 +504,11 @@ describe("collaboration event scope guards", () => {
         for (const peer of unrelated) {
           expect(frames(peer)).toEqual([]);
         }
-        expect(getSubscribers).toHaveBeenCalledExactlyOnceWith(sessionKey);
         expect(filter).toHaveBeenCalledTimes(2);
 
         await upsertSessionEntryCore(target, { ...entry, ...hidden, updatedAt: 2 });
         invalidateSessionSharingSnapshot(sessionKey);
+        getSubscribers.mockClear();
         filter.mockClear();
         broadcast("chat", payload);
         broadcast("tick", {});
@@ -519,6 +525,8 @@ describe("collaboration event scope guards", () => {
             },
           ]);
         }
+        // Hidden recipients skip narration's intent lookups, isolating admission's shared lookup.
+        expect(getSubscribers).toHaveBeenCalledExactlyOnceWith(sessionKey);
         expect(filter).toHaveBeenCalledTimes(2);
       });
     },
@@ -809,8 +817,12 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       }),
     ).toBe(false);
     const rowProjection = await createSessionRowProjection({ cfg });
-    const connection = createGatewayConnectionState({ bootId: "collector-events", cfg });
-    connection.attachSessionRowProjection(rowProjection);
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "collector-events",
+      cfg,
+    });
+    const detach = connection.attachSessionRowProjection(rowProjection);
     peers.forEach(({ client }) => connection.clients.add(client));
     const { broadcastToConnIds } = connection;
     const publications: Promise<void>[] = [];
@@ -888,6 +900,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
     } finally {
       unsubscribe();
       await Promise.allSettled(publications);
+      detach();
       rowProjection.dispose();
       connection.mentionInbox.dispose();
       clearSubagentRunsReadCacheForTest();

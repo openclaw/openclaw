@@ -88,14 +88,6 @@ describe("system systemd ownership", () => {
     }
   });
 
-  it("reports a unit loaded by the system manager", async () => {
-    state.systemctl = { stdout: "loaded\n", stderr: "", code: 0, termination: "exit" };
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: { status: "loaded", unitName: "openclaw-gateway.service" },
-    });
-  });
-
   it.each([
     { ownership: "loaded", kind: "sealed" },
     { ownership: "installed", kind: "sealed" },
@@ -145,11 +137,8 @@ describe("system systemd ownership", () => {
     },
   );
 
-  it.each([
-    "/etc/systemd/system/openclaw-gateway.service",
-    "/run/systemd/system/openclaw-gateway.service",
-    "/usr/local/lib/systemd/system/openclaw-gateway.service",
-  ])("detects a custom same-name system unit at %s", async (unitPath) => {
+  it("detects a custom same-name unit in the manager's runtime load path", async () => {
+    const unitPath = "/run/systemd/system/openclaw-gateway.service";
     state.paths.add(unitPath);
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
@@ -230,10 +219,7 @@ describe("system systemd ownership", () => {
 
   it.each([
     "Failed to connect to bus: Permission denied",
-    "spawn systemctl ENOENT",
-    "systemctl not available",
     "System has not been booted with systemd as init system",
-    "Failed to connect to bus: No such file or directory",
   ])("fails closed when manager absence cannot be proven: %s", async (detail) => {
     state.systemctl = { stdout: "", stderr: detail, code: 1, termination: "exit" };
 

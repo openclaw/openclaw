@@ -66,6 +66,7 @@ function createLazyMemoryTool(params: {
     name: params.contract.name,
     description: params.contract.describe(initialContext.sources),
     parameters: params.contract.parameters,
+    prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const tool = await loadTool();
       if (!tool) {
@@ -246,8 +247,9 @@ export default definePluginEntry({
       runtime: memoryRuntime,
       publicArtifacts: {
         async listArtifacts(params) {
-          const { listMemoryCorePublicArtifacts } = await import("./src/public-artifacts.js");
-          return await listMemoryCorePublicArtifacts(params);
+          const { listMemoryHostPublicArtifacts } =
+            await import("openclaw/plugin-sdk/memory-host-core");
+          return await listMemoryHostPublicArtifacts(params);
         },
       },
     });

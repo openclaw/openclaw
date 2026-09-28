@@ -65,21 +65,24 @@ describe("desktop panel audio wiring", () => {
     return { panel, handle, connect };
   }
 
-  it.each([false])("offers real click-to-unmute in document mode %s", async (documentMode) => {
-    const { panel } = await setup(true, documentMode);
-    const socket = AudioSocketMock.instances[0]!;
-    expect(AudioContextMock.instances).toHaveLength(0);
-    expect(socket.send).not.toHaveBeenCalled();
-    clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
-    expect(AudioContextMock.instances[0]!.resume).toHaveBeenCalledOnce();
-    await panel.updateComplete;
-    expect(socket.send).toHaveBeenCalledWith('{"action":"start"}');
-    socket.message('{"state":"started"}');
-    await panel.updateComplete;
-    clickPanelButton(panel, "[aria-label='Mute desktop audio']");
-    expect(socket.send).toHaveBeenLastCalledWith('{"action":"stop"}');
-    expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "offers real click-to-unmute in document mode %s",
+    async (documentMode) => {
+      const { panel } = await setup(true, documentMode);
+      const socket = AudioSocketMock.instances[0]!;
+      expect(AudioContextMock.instances).toHaveLength(0);
+      expect(socket.send).not.toHaveBeenCalled();
+      clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
+      expect(AudioContextMock.instances[0]!.resume).toHaveBeenCalledOnce();
+      await panel.updateComplete;
+      expect(socket.send).toHaveBeenCalledWith('{"action":"start"}');
+      socket.message('{"state":"started"}');
+      await panel.updateComplete;
+      clickPanelButton(panel, "[aria-label='Mute desktop audio']");
+      expect(socket.send).toHaveBeenLastCalledWith('{"action":"stop"}');
+      expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("shows unavailable rather than a working toggle when audio is not advertised", async () => {
     const { panel } = await setup(false);
@@ -90,20 +93,28 @@ describe("desktop panel audio wiring", () => {
     expect(panel.renderRoot.textContent).not.toContain("pulseaudio");
   });
 
-  it.each([false])(
-    "shows actionable managed setup failure without audio or RFB teardown (document %s)",
+  it.each([false, true])(
+    "keeps managed setup guidance in a focusable tooltip without audio or RFB teardown (document %s)",
     async (documentMode) => {
       const { panel, handle } = await setup(false, documentMode, true);
       const button = panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-audio-button")!;
-      expect(button.disabled).toBe(true);
-      const notice = () => panel.renderRoot.querySelector("[role='alert']")?.textContent;
-      expect(notice()).toContain("pulseaudio and pulseaudio-utils");
-      expect(notice()).toContain("restart the managed desktop");
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      const tooltip = () =>
+        panel.renderRoot.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
+      expect(tooltip()?.content).toContain("pulseaudio and pulseaudio-utils");
+      expect(tooltip()?.content).toContain("restart the managed desktop");
+      expect(tooltip()?.hasAttribute("open-on-click")).toBe(true);
+      expect(panel.renderRoot.querySelector("[role='alert']")).toBeNull();
+      button.focus();
+      expect(panel.shadowRoot?.activeElement).toBe(button);
+      button.click();
       panel.presented = false;
       await panel.updateComplete;
       panel.presented = true;
       await panel.updateComplete;
-      expect(notice()).toContain("restart the managed desktop");
+      expect(tooltip()?.content).toContain("restart the managed desktop");
+      expect(panel.renderRoot.querySelector("[role='alert']")).toBeNull();
       expect(AudioSocketMock.instances).toHaveLength(0);
       expect(AudioContextMock.instances).toHaveLength(0);
       expect(handle.disconnect).not.toHaveBeenCalled();

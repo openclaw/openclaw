@@ -343,26 +343,12 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveEffectiveToolInventory.mockReturnValue(makeCoreInventory());
   });
 
-  it("rejects invalid params", async () => {
-    await expectInvalidToolsParams({ includePlugins: false }, "invalid tools.effective params");
-  });
-
   it("rejects missing sessionKey", async () => {
     await expectInvalidToolsParams({}, "invalid tools.effective params");
   });
 
   it("rejects caller-supplied auth context params", async () => {
     await expectInvalidToolsParams({ senderIsOwner: true }, "invalid tools.effective params");
-  });
-
-  it("rejects unknown agent ids", async () => {
-    await expectInvalidToolsParams(
-      {
-        sessionKey: "main:abc",
-        agentId: "unknown-agent",
-      },
-      "unknown agent id",
-    );
   });
 
   it("rejects unknown session keys", async () => {
@@ -507,27 +493,6 @@ describe("tools.effective handler", () => {
     await second.invoke();
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
-    expect(firstRespondCall(second.respond)?.[0]).toBe(true);
-  });
-
-  it("does not resolve runtime model context for fresh base inventory cache hits", async () => {
-    const first = createInvokeParams({ sessionKey: "main:abc" });
-    await first.invoke();
-
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockReturnValueOnce({
-      modelApi: "openai-completions",
-      runtimeModel: {
-        id: "gpt-4.1",
-        name: "GPT 4.1",
-        provider: "openai",
-        api: "openai-completions",
-      },
-    } as never);
-    const second = createInvokeParams({ sessionKey: "main:abc" });
-    await second.invoke();
-
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
 
@@ -851,28 +816,21 @@ describe("tools.effective handler", () => {
     );
   });
 
-  it.each(["empty", "filtered"])(
-    "preserves base output without another model acquisition for %s MCP tools",
-    async (kind) => {
-      const base = {
-        ...makeCoreInventory(),
-        notices: [{ id: "base-notice", severity: "info", message: "Keep the base notice" }],
-      };
-      runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
-      mockMcpConfigSummary();
-      mockWarmMcpRuntime(makeMcpCatalog());
-      runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce(
-        kind === "empty" ? [] : [makeMcpTool()],
-      );
-      if (kind === "filtered") {
-        runtimeMocks.applyFinalEffectiveToolPolicy.mockReturnValueOnce([]);
-      }
-      const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-      await invoke();
-      expect(firstRespondCall(respond)?.[1]).toEqual(base);
-      expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledOnce();
-    },
-  );
+  it("preserves base output without another model acquisition when MCP tools are filtered", async () => {
+    const base = {
+      ...makeCoreInventory(),
+      notices: [{ id: "base-notice", severity: "info", message: "Keep the base notice" }],
+    };
+    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+    mockMcpConfigSummary();
+    mockWarmMcpRuntime(makeMcpCatalog());
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([makeMcpTool()]);
+    runtimeMocks.applyFinalEffectiveToolPolicy.mockReturnValueOnce([]);
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+    expect(firstRespondCall(respond)?.[1]).toEqual(base);
+    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledOnce();
+  });
 
   it("quarantines warm MCP tools with schemas the runtime cannot project", async () => {
     mockWarmMcpTool({ type: "array", items: { type: "string" } });

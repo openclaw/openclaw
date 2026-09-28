@@ -82,15 +82,6 @@ public struct OpenClawSystemRunApprovalPolicySnapshot: Codable, Sendable, Equata
             allowlistRules: container.decode([Rule].self, forKey: .allowlistRules))
     }
 
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.security, forKey: .security)
-        try container.encode(self.ask, forKey: .ask)
-        try container.encode(self.askFallback, forKey: .askFallback)
-        try container.encode(self.autoAllowSkills, forKey: .autoAllowSkills)
-        try container.encode(self.allowlistRules, forKey: .allowlistRules)
-    }
-
     private static func rulePrecedes(_ lhs: Rule, _ rhs: Rule) -> Bool {
         let patternOrder = self.compareUTF8(lhs.pattern, rhs.pattern)
         if patternOrder != 0 {

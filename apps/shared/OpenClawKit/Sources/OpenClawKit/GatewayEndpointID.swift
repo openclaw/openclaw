@@ -19,7 +19,6 @@ public enum GatewayEndpointID {
 
     private static func normalizeServiceNameForID(_ rawName: String) -> String {
         let decoded = BonjourEscapes.decode(rawName)
-        let normalized = decoded.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return decoded.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }

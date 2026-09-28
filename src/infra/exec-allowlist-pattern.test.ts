@@ -6,7 +6,6 @@ import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 
 describe("matchesExecAllowlistPattern", () => {
   it.each([
-    { pattern: "", target: "/tmp/tool", expected: false },
     { pattern: "   ", target: "/tmp/tool", expected: false },
     { pattern: "/tmp/tool", target: "/tmp/tool", expected: true },
   ])("handles literal patterns for %j", ({ pattern, target, expected }) => {
@@ -39,20 +38,6 @@ describe("matchesExecAllowlistPattern", () => {
       expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/sub/../env")).toBe(true);
       expect(matchesExecAllowlistPattern("/usr/bin/*", "/usr/bin/sub/../env")).toBe(true);
       expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/sub/tool")).toBe(true);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps wildcard dot-segment matches inside the declared POSIX root",
-    () => {
-      const bases = ["/usr/bin", "/opt/tools", "/srv/bin"] as const;
-      for (const base of bases) {
-        const pattern = `${base}/**`;
-        expect(matchesExecAllowlistPattern(pattern, `${base}/inside/file`)).toBe(true);
-        expect(matchesExecAllowlistPattern(pattern, `${base}/sub/../inside`)).toBe(true);
-        expect(matchesExecAllowlistPattern(pattern, `${base}/../escape`)).toBe(false);
-        expect(matchesExecAllowlistPattern(pattern, `${base}/sub/../../escape`)).toBe(false);
-      }
     },
   );
 

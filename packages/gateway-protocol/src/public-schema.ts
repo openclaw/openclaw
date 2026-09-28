@@ -2,6 +2,7 @@
 export * from "./schema/sessions-goal.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
+export * from "./schema/presence.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
@@ -9,7 +10,6 @@ export * from "./public-schema-environments.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,
-  GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareBusyResultSchema,
   GatewaySuspendPrepareDrainingResultSchema,
@@ -48,6 +48,9 @@ export {
   WorkerSessionsSendResponseFrameSchema,
   WorkerPortalParamsSchema,
   WorkerPortalResponseFrameSchema,
+  WorkerPresenceParamsSchema,
+  WorkerPresenceResponseFrameSchema,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WorkerSessionToolResultSchema,
   WorkerLiveEventSchema,
   WorkerLiveEventErrorDetailsSchema,
@@ -193,6 +196,8 @@ export {
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
   SessionBranchSchema,
+  SessionAncestorRefSchema,
+  SessionEventAncestorsSchema,
   SessionRowSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
@@ -207,6 +212,7 @@ export {
   SESSION_OBSERVER_HEALTH_VALUES,
   SessionCompanionExchangeSchema,
   SessionObserverDigestSchema,
+  SessionNarrationEventSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
   SessionMemberAddParamsSchema,
@@ -326,17 +332,6 @@ export {
   TaskSuggestionsDismissResultSchema,
   TaskSuggestionsListParamsSchema,
   TaskSuggestionsListResultSchema,
-  TaskSummarySchema,
-  TasksListParamsSchema,
-  TasksListResultSchema,
-  TasksGetParamsSchema,
-  TasksGetResultSchema,
-  TasksHistoryParamsSchema,
-  TasksHistoryResultSchema,
-  TasksCancelParamsSchema,
-  TasksCancelResultSchema,
-  TasksRecoveryParamsSchema,
-  TasksRecoveryResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -550,6 +545,8 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronHistoryParamsSchema,
+  CronHistoryResultSchema,
   CronScratchGetParamsSchema,
   CronScratchGetResultSchema,
   CronScratchSetParamsSchema,

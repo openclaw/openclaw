@@ -54,6 +54,28 @@ registration behavior.
 The category does not enable channel docking or restore retired docking commands.
 New definitions should use `"tools"`.
 
+Bundled ACP integrations should await `readAcpSessionEntryAsync` from the local
+`openclaw/plugin-sdk/acp-runtime` facade for session metadata reads. This facade
+remains a JavaScript compatibility export; its declarations are excluded from
+the typed public SDK. File-backed reads run on the SQLite workers and preserve the session lifecycle throughout the
+metadata join. File-backed results are detached snapshots, including when
+`clone: false` is supplied. The returned `storeReadFailed` flag still distinguishes an
+unreadable session store from missing metadata; startup cleanup must keep
+bindings when that flag is set. Unbound legacy ACP metadata can still accompany
+that flag; it does not certify the session row. Source retirement and worker failures reject
+the read and must not be treated as an absent session.
+
+The synchronous `readAcpSessionEntry` and
+`getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
+remain available for existing consumers of that compatibility export. They are
+deprecated for runtime use. Ordinary ACP manager and Gateway callers use
+`readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
+Discord and Telegram startup binding cleanup retain their existing synchronous
+reader until conditional deletion can validate metadata at the mutation owner.
+That cleanup migration remains unfinished. Removing the synchronous contracts
+requires a separately announced breaking SDK release. Incognito reads retain
+their existing native in-memory owner until that owner's worker migration.
+
 ### Why
 
 - **Slow startup** - importing one helper loaded dozens of unrelated modules.
@@ -129,7 +151,6 @@ The anchors from the single-page version still resolve here.
 - <a id="subagent-session-messages-types-renamed"></a>[Subagent session messages types renamed](/plugins/sdk-migration/removed-surfaces#subagent-session-messages-types-renamed)
 - <a id="removed-session-and-transcript-file-apis"></a>[Removed session and transcript file APIs](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis)
 - <a id="agent"></a>[Agent harness attempt params -> V2 host-capability contract](/plugins/sdk-migration/removed-surfaces#agent)
-- <a id="runtime-tasks-flow"></a>[`runtime.tasks.flow` -> `runtime.tasks.managedFlows`](/plugins/sdk-migration/removed-surfaces#runtime-tasks-flow)
 - <a id="embedded"></a>[Embedded extension factories -> agent tool-result middleware](/plugins/sdk-migration/removed-surfaces#embedded)
 - <a id="openclawschematype"></a>[`OpenClawSchemaType` alias -> `OpenClawConfig`](/plugins/sdk-migration/removed-surfaces#openclawschematype)
 
@@ -171,3 +192,7 @@ The anchors from the single-page version still resolve here.
 - [Plugin Internals](/plugins/architecture) - architecture deep dive
 - [Plugin Manifest](/plugins/manifest) - manifest schema reference
 - [Plugin hooks](/plugins/hooks) - typed and custom hook surfaces
+
+<a id="runtime-tasks-flow" />
+
+For the removed Tasks and TaskFlow surfaces, see [Tasks and TaskFlow API removal](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed).

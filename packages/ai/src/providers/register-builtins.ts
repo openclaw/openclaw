@@ -141,6 +141,14 @@ const registerBuiltIns: RegisterBuiltIn[] = [
     (module) => ({ stream: module.streamGoogle, streamSimple: module.streamSimpleGoogle }),
   ),
   createLazyRegistration(
+    "google-interactions",
+    () => import("./google-interactions.js"),
+    (module) => ({
+      stream: module.streamGoogleInteractions,
+      streamSimple: module.streamSimpleGoogleInteractions,
+    }),
+  ),
+  createLazyRegistration(
     "google-vertex",
     () => import("./google-vertex.js"),
     (module) => ({

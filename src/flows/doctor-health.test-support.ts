@@ -82,6 +82,18 @@ vi.mock("../gateway/call.js", async (original) => {
   };
 });
 
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service-process-membership.js")>();
+  return {
+    ...actual,
+    // The in-memory manager models Doctor as an external caller, not a host service member.
+    inspectServiceProcessMembershipSync: (
+      ...args: Parameters<typeof actual.inspectServiceProcessMembershipSync>
+    ) =>
+      mocks.emulateNativeInstall ? "outside" : actual.inspectServiceProcessMembershipSync(...args),
+  };
+});
+
 vi.mock("../daemon/systemd-exec.js", async (original) => {
   const { gatewayMaintenanceSystemdShow } =
     await import("../gateway/health-response.test-support.js");
@@ -197,6 +209,7 @@ vi.mock("../commands/doctor-install.js", () => ({
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
   noteStalePluginRuntimeSymlinks: async () => undefined,
+  removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({

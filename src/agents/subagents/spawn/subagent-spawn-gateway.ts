@@ -249,7 +249,7 @@ export async function callNativeSubagentGateway(
   gatewayContextResolver?: GatewayContextResolver,
 ): Promise<{
   response: SubagentGatewayResponse;
-  taskRowOwnership: "required" | "gateway_best_effort";
+  registrationRequired: boolean;
 }> {
   const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
     agentRunTracking: "native_subagent",
@@ -259,7 +259,7 @@ export async function callNativeSubagentGateway(
     response: result.response,
     // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
     // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-    taskRowOwnership: result.dispatchMode === "in_process" ? "required" : "gateway_best_effort",
+    registrationRequired: result.dispatchMode === "in_process",
   };
 }
 

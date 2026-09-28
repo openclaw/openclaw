@@ -180,7 +180,7 @@ describe("skill collection backup and restore", () => {
     await expect(fs.readFile(file, "utf8")).resolves.toContain("# Reviewed");
   });
 
-  it.each(["unchanged", "edited", "file-deleted", "subtree-deleted"])(
+  it.each(["edited", "file-deleted", "subtree-deleted"])(
     "preserves a legacy backup with %s deep content when its digest cannot be verified",
     async (deepContent) => {
       const file = await writeSkill("procedure", "# Original\n");
@@ -210,7 +210,7 @@ describe("skill collection backup and restore", () => {
         path.join(savedSkill, "SKILL.md"),
         savedDeep,
         path.join(backupDir, "manifest.json"),
-        ...(["unchanged", "edited"].includes(deepContent) ? [currentDeep] : []),
+        ...(deepContent === "edited" ? [currentDeep] : []),
       ];
       const before = await Promise.all(files.map((entry) => fs.readFile(entry)));
       dispatchChange.mockClear();

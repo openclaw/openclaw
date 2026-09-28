@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -54,7 +55,10 @@ function profile() {
     ],
   };
 }
-async function capture(params = {}, signal = new AbortController().signal) {
+async function capture(
+  params: DiagnosticsHeapProfileParams = {},
+  signal = new AbortController().signal,
+) {
   const { captureDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
   return captureDiagnosticHeapProfile({ ...params, signal, hasAuthority: () => true });
 }
@@ -87,6 +91,8 @@ describe("diagnostic heap profile owner", () => {
       result: {
         durationMs: expect.any(Number),
         samplingIntervalBytes: 32768,
+        includeObjectsCollectedByMajorGC: false,
+        includeObjectsCollectedByMinorGC: false,
         heapUsedBefore: expect.any(Number),
         heapUsedAfter: expect.any(Number),
         rssBefore: expect.any(Number),
@@ -140,17 +146,24 @@ describe("diagnostic heap profile owner", () => {
     expect(await capture()).toMatchObject({ status: "unavailable", reason: "invalid-profile" });
   });
 
-  it.each([
+  it.each<[DiagnosticsHeapProfileParams, number, number]>([
     [{}, 5000, 32768],
     [{ durationMs: 90000, samplingIntervalBytes: 1 }, 30000, 4096],
     [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536],
-  ])("applies duration and interval bounds for %j", async (params, duration, interval) => {
-    await capture(params);
+    [{ includeObjectsCollectedByMajorGC: true }, 5000, 32768],
+    [{ includeObjectsCollectedByMinorGC: true }, 5000, 32768],
+  ])("applies sampling options and bounds for %j", async (params, duration, interval) => {
+    const collectionOptions = {
+      includeObjectsCollectedByMajorGC: params.includeObjectsCollectedByMajorGC ?? false,
+      includeObjectsCollectedByMinorGC: params.includeObjectsCollectedByMinorGC ?? false,
+    };
+    expect(await capture(params)).toMatchObject({ status: "complete", result: collectionOptions });
     expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
       signal: expect.any(AbortSignal),
     });
     expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
       samplingInterval: interval,
+      ...collectionOptions,
     });
   });
 
@@ -259,7 +272,7 @@ describe("diagnostic heap profile owner", () => {
   });
 
   it.skipIf(Boolean(process.versions.bun))(
-    "attributes a real in-process allocation workload within the byte cap",
+    "attributes retained allocations and opt-in collected allocations within the byte cap",
     async ({ signal }) => {
       const env: NodeJS.ProcessEnv = {};
       for (const key of ["PATH", "TMPDIR", "TMP", "TEMP"]) {
@@ -275,8 +288,8 @@ describe("diagnostic heap profile owner", () => {
       const source = `
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { registerHooks } from 'node:module';
-import { setTimeout as delay } from 'node:timers/promises';
+import { registerHooks, syncBuiltinESMExports } from 'node:module';
+import timers from 'node:timers/promises';
 import { url } from 'node:inspector/promises';
 import { captureDiagnosticHeapProfile } from ${JSON.stringify(ownerUrl.href)};
 // Preserve the workload's real source location for the owner's attribution policy.
@@ -288,18 +301,14 @@ if (${JSON.stringify(preparedWorkloadUrl.href)} !== ${JSON.stringify(workloadUrl
     return nextLoad(url, context);
   }});
 }
-const { allocateHeapProfileWorkload } = await import(${JSON.stringify(workloadUrl)});
+const { allocateHeapProfileWorkload, allocateDroppedHeapProfileWorkload } = await import(${JSON.stringify(workloadUrl)});
 assert.equal(url(), undefined);
-const pending = captureDiagnosticHeapProfile({ durationMs: 250, samplingIntervalBytes: 4096, signal: new AbortController().signal, hasAuthority: () => true });
-const retained = [];
-let complete = false;
-void pending.finally(() => { complete = true; });
-while (!complete) {
-  await delay(10);
-  retained.push(allocateHeapProfileWorkload());
-  if (retained.length > 8) retained.shift();
-}
-const outcome = await pending;
+// Run each workload at the capture window boundary, without timer sleeps or polling.
+let retained;
+timers.setTimeout = async () => { retained = allocateHeapProfileWorkload(); };
+syncBuiltinESMExports();
+const options = { durationMs: 1, samplingIntervalBytes: 65536, signal: new AbortController().signal, hasAuthority: () => true };
+const outcome = await captureDiagnosticHeapProfile(options);
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
 const result = outcome.result;
 assert.ok(result.profile);
@@ -322,10 +331,43 @@ assert.ok(!JSON.stringify(result).includes(${JSON.stringify(root)}));
 assert.equal(url(), undefined);
 console.log(JSON.stringify({ functionName: 'allocateHeapProfileWorkload', selfBytes, count, resultBytes, durationMs: result.durationMs, samplingIntervalBytes: result.samplingIntervalBytes, heapUsedBefore: result.heapUsedBefore, heapUsedAfter: result.heapUsedAfter, rssBefore: result.rssBefore, rssAfter: result.rssAfter, truncated: result.truncated, unattributedSampleCount: result.unattributedSampleCount, unattributedSampleBytes: result.unattributedSampleBytes, listener: false }));
 assert.ok(retained.length > 0);
+retained = undefined;
+timers.setTimeout = async () => {
+  allocateDroppedHeapProfileWorkload();
+  await globalThis.gc({ type: "major", execution: "async" });
+};
+syncBuiltinESMExports();
+for (const includeCollected of [false, true]) {
+  await globalThis.gc({ type: "major", execution: "async" });
+  const outcome = await captureDiagnosticHeapProfile({
+    ...options,
+    includeObjectsCollectedByMajorGC: includeCollected,
+    includeObjectsCollectedByMinorGC: includeCollected,
+  });
+  assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
+  const result = outcome.result;
+  assert.ok(result.profile);
+  const nodes = [result.profile.head];
+  let selfBytes = 0;
+  for (const node of nodes) {
+    if (node.callFrame.functionName === 'allocateDroppedHeapProfileWorkload') selfBytes += node.selfSize;
+    nodes.push(...node.children);
+  }
+  console.log(JSON.stringify({ includeCollected, allocatedBytes: 200 * 1024 * 1024, selfBytes, durationMs: result.durationMs }));
+  assert.ok(includeCollected ? selfBytes > 190 * 1024 * 1024 : selfBytes === 0, 'collected allocation attribution');
+  if (includeCollected) {
+    assert.equal(result.includeObjectsCollectedByMajorGC, true);
+    assert.equal(result.includeObjectsCollectedByMinorGC, true);
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 1024 * 1024);
+  assert.ok(!JSON.stringify(result).includes(${JSON.stringify(root)}));
+}
+assert.equal(url(), undefined);
 `;
       const result = await runNodeScript(
         [
           ...resolveRuntimeWorkerArgv(ownerUrl, resolveTestNodeExecPath()).slice(0, -1),
+          "--expose-gc",
           "--input-type=module",
           "--eval",
           source,
@@ -335,7 +377,7 @@ assert.ok(retained.length > 0);
         { cwd: root, signal, maxBuffer: 32768, requireProcessTreeExit: true },
       );
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
       console.log("HEAP_PROFILE_NATIVE", result.stdout.trim());
     },
     30000,

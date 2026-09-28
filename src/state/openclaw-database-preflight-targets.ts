@@ -9,7 +9,7 @@ import { createAgentDatabaseDeletionClassifier } from "./agent-deletion-discover
 import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
-} from "./agent-deletion-journal.read.js";
+} from "./agent-deletion-journal.types.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,

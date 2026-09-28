@@ -1,4 +1,4 @@
-// Status, health, sessions, and task/flow command registration.
+// Status, health, and sessions command registration.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -7,7 +7,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
-import { registerTasksCommand } from "./register.tasks.js";
 
 type SessionsListCliOptions = {
   json?: boolean;
@@ -207,7 +206,7 @@ async function runWithVerboseAndTimeout(
   });
 }
 
-/** Register status/health plus persistent session/task inspection command groups. */
+/** Register status/health plus persistent session inspection command groups. */
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
     .command("status")
@@ -507,6 +506,4 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
-
-  registerTasksCommand(program);
 }

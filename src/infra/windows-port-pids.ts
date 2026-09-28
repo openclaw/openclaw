@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
 import { parseWindowsNetstatListeners } from "./ports-netstat.js";
+import type { PortUsageStatus } from "./ports-types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import {
   getWindowsPowerShellExePath,
@@ -82,6 +83,41 @@ export function readWindowsListeningPidsResultSync(
     return { ok: false, permanent: false };
   }
   return { ok: true, pids: parseListeningPidsFromNetstat(netstat.stdout, port) };
+}
+
+/** Read-only bounded listener observation, without PID enrichment or a second budget. */
+export function readWindowsPortUsageSync(port: number, timeoutMs: number): PortUsageStatus {
+  if (
+    process.platform !== "win32" ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65_535 ||
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs < 1
+  ) {
+    return "unknown";
+  }
+  const result = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$ErrorActionPreference = 'Stop'; " +
+        `@(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.LocalPort -eq ${port} -and $_.State -eq 'Listen' }).Count`,
+    ],
+    {
+      env: resolveDiagnosticProcessEnv(),
+      encoding: "utf8",
+      timeout: Math.min(Math.floor(timeoutMs), DEFAULT_TIMEOUT_MS),
+      windowsHide: true,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    return "unknown";
+  }
+  const count = result.stdout.trim();
+  return /^\d+$/.test(count) ? (Number(count) === 0 ? "free" : "busy") : "unknown";
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 
-type PluginUninstallOptions = {
+export type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;

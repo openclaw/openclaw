@@ -1,4 +1,3 @@
-// Migrate Claude plugin module implements memory behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,6 +5,7 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
@@ -13,7 +13,6 @@ import {
   readMemoryDir,
   type ClaudeSource,
 } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
 
@@ -142,7 +141,7 @@ async function assertSafeMemoryDestination(
 
 async function buildAutoMemoryItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
@@ -212,7 +211,7 @@ async function buildAutoMemoryItems(params: {
 
 export async function buildMemoryItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
   includeInstructions?: boolean;
 }): Promise<MigrationItem[]> {

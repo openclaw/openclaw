@@ -1,4 +1,5 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createConditionalWarningCollector,
@@ -10,7 +11,6 @@ import {
   resolveSlackAccountDmPolicy,
   type ResolvedSlackAccount,
 } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { slackIngressIdentity } from "./monitor/ingress-identity.js";
 
 const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount>({

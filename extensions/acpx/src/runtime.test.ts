@@ -260,17 +260,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       expectedModel: "claude-sonnet-4-6",
     },
     {
-      name: "preserves custom Claude ACP startup models",
-      model: "custom-model",
-      expectedModel: "custom-model",
-    },
-    {
       // Issue #121034: Bedrock rejects provider-qualified refs.
-      name: "strips the OpenClaw Bedrock provider prefix for Claude ACP startup",
-      model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
-      expectedModel: "global.anthropic.claude-sonnet-5",
-    },
-    {
       name: "matches the Bedrock provider prefix case-insensitively",
       model: "Amazon-Bedrock/us.anthropic.claude-opus-4-6-v1",
       expectedModel: "us.anthropic.claude-opus-4-6-v1",

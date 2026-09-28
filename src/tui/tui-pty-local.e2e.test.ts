@@ -2750,7 +2750,7 @@ export default {
   );
 
   registerGatewayTest(
-    "collects two TUI-client prompts into one real Gateway followup turn",
+    "preserves separate authorized TUI-client turns in FIFO order under collect mode",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("collect", onTestFinished);
       const queueClient = new GatewayChatClient({
@@ -2759,24 +2759,11 @@ export default {
       });
       try {
         let queueClientConnected = false;
-        const admittedRunIds = new Set<string>();
+        const terminalObserver = createChatTerminalObserver();
         queueClient.onConnected = () => {
           queueClientConnected = true;
         };
-        // Retain admission events that arrive before both chat.send ACKs settle.
-        queueClient.onEvent = ({ event, payload }) => {
-          if (event !== "chat" || !payload || typeof payload !== "object") {
-            return;
-          }
-          const chatEvent = payload as { runId?: unknown; sessionKey?: unknown; state?: unknown };
-          if (
-            chatEvent.state === "final" &&
-            chatEvent.sessionKey === fixture.sessionKey &&
-            typeof chatEvent.runId === "string"
-          ) {
-            admittedRunIds.add(chatEvent.runId);
-          }
-        };
+        queueClient.onEvent = terminalObserver.onEvent;
         queueClient.start();
         await waitFor({
           timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
@@ -2797,34 +2784,38 @@ export default {
                 fixture.run.output(),
             ),
         });
-        const alphaSend = queueClient.sendChat({
-          sessionKey: fixture.sessionKey,
-          message: "collect prompt alpha",
-        });
-        const betaSend = queueClient.sendChat({
-          sessionKey: fixture.sessionKey,
-          message: "collect prompt beta",
-        });
-        const sendResults = await Promise.all([alphaSend, betaSend]);
-        expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
-        const expectedRunIds = sendResults.map(({ runId }) => runId);
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (expectedRunIds.every((runId) => admittedRunIds.has(runId)) ? true : null),
-          onTimeout: () =>
-            new Error(
-              `queued prompts were not admitted: expected ${expectedRunIds.join(", ")}; ` +
-                `observed ${[...admittedRunIds].join(", ")}\n${fixture.gateway.logs()}\n` +
-                fixture.run.output(),
-            ),
-        });
+        // Each authenticated turn retains its own skill-authoring capability.
+        // Admit alpha before submitting beta so the test observes a defined FIFO order.
+        for (const message of ["collect prompt alpha", "collect prompt beta"]) {
+          const result = await queueClient.sendChat({ sessionKey: fixture.sessionKey, message });
+          expect(result.status).toBe("started");
+          await terminalObserver.waitForFinal({
+            runId: result.runId,
+            sessionKey: fixture.sessionKey,
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+            onTimeout: () =>
+              new Error(
+                `queued prompt was not admitted: expected ${result.runId}; ` +
+                  `observed ${JSON.stringify(terminalObserver.readFinals(fixture.sessionKey))}\n${fixture.gateway.logs()}\n` +
+                  fixture.run.output(),
+              ),
+          });
+        }
         fixture.mockModel.releaseFirstResponse();
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          read: () =>
+            fixture.mockModel.requests().length === 3 &&
+            terminalObserver
+              .readFinals(fixture.sessionKey)
+              .filter((terminal) =>
+                extractTextFromMessage(terminal.message).includes("FOLLOWUP_RUN_COMPLETE"),
+              ).length === 2
+              ? true
+              : null,
           onTimeout: () =>
             new Error(
-              `collected prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+              `queued prompts did not both complete\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
         await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
@@ -2839,10 +2830,11 @@ export default {
             null,
             2,
           )}\n${fixture.gateway.logs()}`,
-        ).toHaveLength(2);
-        const collectedBody = JSON.stringify(fixture.mockModel.requests()[1]?.body);
-        expect(collectedBody).toContain("collect prompt alpha");
-        expect(collectedBody).toContain("collect prompt beta");
+        ).toHaveLength(3);
+        const alphaBody = JSON.stringify(requests[1]?.body);
+        expect(alphaBody).toContain("collect prompt alpha");
+        expect(alphaBody).not.toContain("collect prompt beta");
+        expect(JSON.stringify(requests[2]?.body)).toContain("collect prompt beta");
       } finally {
         await queueClient.stop();
         await fixture.cleanup();

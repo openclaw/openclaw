@@ -67,6 +67,8 @@ type AgentToolGatewayRequest = Pick<
 > & {
   agentRunTracking?: GatewayAgentRunTaskOwner;
   agentToolCaller?: TrustedAgentToolCaller;
+  /** Target policy checked at the mutation boundary, not after its own committed change. */
+  sessionMutationCommitGuard?: () => void;
 };
 
 const agentToolGatewayRuntimeIdentities = new WeakMap<object, AgentRuntimeIdentity>();
@@ -224,6 +226,9 @@ async function callAgentToolGatewayRequestBound<T>(
     ? bindInProcessGatewayContext(method, resolveGatewayContext)
     : undefined;
   if (forceTransport || !getInProcessGatewayRequestContext(boundGateway?.resolve)) {
+    if (request.sessionMutationCommitGuard) {
+      throw new Error("Guarded session control requires its admitted in-process Gateway.");
+    }
     if (readInProcessSessionDeliveryGeneration(request.params)) {
       throw new Error("Session-bound delivery requires its admitted in-process Gateway.");
     }
@@ -243,6 +248,7 @@ async function callAgentToolGatewayRequestBound<T>(
     const {
       agentRunTracking: _agentRunTracking,
       agentToolCaller: _agentToolCaller,
+      sessionMutationCommitGuard: _sessionMutationCommitGuard,
       ...wireRequest
     } = request;
     return await runBoundInProcessGatewayCall(
@@ -260,6 +266,13 @@ async function callAgentToolGatewayRequestBound<T>(
     request.timeoutMs === null
       ? undefined
       : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
+  const assertMutationCurrent =
+    assertCurrent || request.sessionMutationCommitGuard
+      ? () => {
+          assertCurrent?.();
+          request.sessionMutationCommitGuard?.();
+        }
+      : undefined;
   const dispatchOptions = {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
@@ -290,7 +303,7 @@ async function callAgentToolGatewayRequestBound<T>(
     ...(request.signal && revalidateOnCompletion && !completion ? { signal: request.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(boundGateway ? { resolveGatewayContext: boundGateway.resolve } : {}),
-    ...(assertCurrent ? { sessionMutationCommitGuard: assertCurrent } : {}),
+    ...(assertMutationCurrent ? { sessionMutationCommitGuard: assertMutationCurrent } : {}),
   };
   return await runBoundInProcessGatewayCall(
     boundGateway,
@@ -465,6 +478,9 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
             ? { completionOwnerSessionKey: trustedCreation.completionOwnerSessionKey }
             : {}),
           inheritedToolPolicy: trustedCreation.inheritedToolPolicy,
+          ...(trustedCreation.inheritedPermissionMode
+            ? { inheritedPermissionMode: trustedCreation.inheritedPermissionMode }
+            : {}),
           ...(trustedCreation.resolvedModel
             ? { resolvedModel: trustedCreation.resolvedModel }
             : {}),
