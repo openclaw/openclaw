@@ -1,4 +1,5 @@
 import type { proto, WAMessageKey } from "baileys";
+import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decodeWhatsAppPollVote,
@@ -441,5 +442,65 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
     });
 
     expect(pollVoteWarningMock).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the current opt-in before dispatching a queued vote", async () => {
+    const initialConfig = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    };
+    let currentConfig: typeof initialConfig = initialConfig;
+    const loadConfig = vi.fn(() => currentConfig);
+    let releaseQueue!: () => void;
+    const queueBlocker = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+
+    for (let index = 0; index < 8; index += 1) {
+      fireAndForgetBoundedHook(
+        () => queueBlocker,
+        "test: hold WhatsApp hook queue",
+        () => {},
+        { maxConcurrency: 8, maxQueue: 128, timeoutMs: 60_000 },
+      );
+    }
+
+    try {
+      const pollMessageId = "POLL-OPT-OUT-QUEUED";
+      const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+        section: "pollCreationMessage",
+        options: ["A", "B"],
+      });
+      const creationKey = creationKeyFor(pollMessageId);
+      const vote = encryptPollVoteForTests({
+        selectedOptionNames: ["A"],
+        pollEncKey,
+        pollCreatorJid: POLL_CREATOR_JID,
+        pollMsgId: pollMessageId,
+        voterJid: VOTER_JID,
+      });
+
+      rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId);
+      maybeEmitWhatsAppPollVoteReceivedHook({
+        cfg: initialConfig as never,
+        loadConfig,
+        accountId: "default",
+        message: buildPollUpdateMessageForTests({ creationKey, vote }),
+        key: voteKeyFor("VOTE-OPT-OUT-QUEUED"),
+        getCachedMessage: () => pollCreationMessage,
+        selfJid: POLL_CREATOR_JID,
+      } as never);
+
+      currentConfig = {
+        channels: { whatsapp: { pluginHooks: { pollVoteReceived: false } } },
+      };
+      releaseQueue();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(loadConfig).toHaveBeenCalled();
+      expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+    } finally {
+      releaseQueue();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
   });
 });

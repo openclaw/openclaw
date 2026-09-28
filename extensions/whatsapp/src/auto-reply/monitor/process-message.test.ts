@@ -1,3 +1,4 @@
+import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 // Whatsapp tests cover process message plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
@@ -263,11 +264,12 @@ function callProcessMessage(
     cfg?: unknown;
     dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
     groupHistories?: Map<string, unknown[]>;
+    loadConfig?: () => unknown;
     msg?: unknown;
     suppressGroupHistoryClear?: boolean;
   } = {},
 ) {
-  return processMessage({
+  const processParams = {
     cfg: (overrides.cfg ?? {}) as never,
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
@@ -285,7 +287,27 @@ function callProcessMessage(
     replyResolver: (async () => undefined) as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
+  };
+  if (overrides.loadConfig) {
+    Object.assign(processParams, { loadConfig: overrides.loadConfig });
+  }
+  return processMessage(processParams as Parameters<typeof processMessage>[0]);
+}
+
+function occupyWhatsAppHookQueue() {
+  let releaseQueue!: () => void;
+  const queueBlocker = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
   });
+  for (let index = 0; index < 8; index += 1) {
+    fireAndForgetBoundedHook(
+      () => queueBlocker,
+      "test: hold WhatsApp hook queue",
+      () => {},
+      { maxConcurrency: 8, maxQueue: 128, timeoutMs: 60_000 },
+    );
+  }
+  return releaseQueue;
 }
 
 function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
@@ -621,6 +643,37 @@ describe("processMessage group system prompt wiring", () => {
     await Promise.resolve();
 
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the current opt-in before dispatching queued message_received hooks", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const initialConfig = {
+      channels: { whatsapp: { pluginHooks: { messageReceived: true } } },
+    };
+    let currentConfig: typeof initialConfig = initialConfig;
+    const loadConfig = vi.fn(() => currentConfig);
+    const releaseQueue = occupyWhatsAppHookQueue();
+
+    try {
+      await callProcessMessage({ cfg: initialConfig, loadConfig });
+      expect(runMessageReceivedMock).not.toHaveBeenCalled();
+      expect(internalReceived).not.toHaveBeenCalled();
+
+      currentConfig = {
+        channels: { whatsapp: { pluginHooks: { messageReceived: false } } },
+      };
+      releaseQueue();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(loadConfig).toHaveBeenCalled();
+      expect(runMessageReceivedMock).not.toHaveBeenCalled();
+      expect(internalReceived).not.toHaveBeenCalled();
+    } finally {
+      releaseQueue();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
   });
 
   it("tracks session metadata writes as connection background tasks", async () => {
