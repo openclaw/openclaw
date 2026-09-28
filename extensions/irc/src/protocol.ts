@@ -1,5 +1,3 @@
-// Irc plugin module implements protocol behavior.
-import { randomUUID } from "node:crypto";
 import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
@@ -154,8 +152,4 @@ export function sanitizeIrcTarget(raw: string): string {
     throw new Error(`Invalid IRC target: ${raw}`);
   }
   return decoded;
-}
-
-export function makeIrcMessageId() {
-  return randomUUID();
 }

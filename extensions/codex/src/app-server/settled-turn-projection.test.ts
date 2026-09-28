@@ -332,6 +332,39 @@ describe("projectSettledCodexMessages", () => {
     expect(() => projectSettledCodexMessages(messages)).toThrowError(CodexHistoryRejection);
   });
 
+  it.each([
+    {
+      name: "unknown role",
+      value: { role: "future-role", content: "unknown" },
+      reason: "unsupported_content",
+    },
+    {
+      name: "custom image evidence",
+      value: {
+        role: "custom",
+        customType: "plugin.note",
+        display: false,
+        content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+        __openclaw: { upstreamUserText: "Cannot replace image evidence." },
+      },
+      reason: "unsupported_user_image",
+    },
+    {
+      name: "unknown custom block",
+      value: {
+        role: "custom",
+        customType: "plugin.note",
+        display: false,
+        content: [{ type: "future-block" }],
+      },
+      reason: "unsupported_content",
+    },
+  ])("rejects $name instead of dropping it during context conversion", ({ value, reason }) => {
+    expect(() => projectSettledCodexMessages([message(value), toolCall(), toolResult()])).toThrow(
+      expect.objectContaining({ reason }),
+    );
+  });
+
   it("preserves valid image tool results as bounded non-vision evidence", () => {
     expect(
       projectSettledCodexMessages([

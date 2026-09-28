@@ -3258,8 +3258,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   padding: 0 8px;
   border: 0;
   border-radius: var(--menu-item-radius);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  color: var(--primary-foreground);
   cursor: var(--cursor-action);
   font: inherit;
   font-size: calc(12px * var(--control-ui-text-scale));
