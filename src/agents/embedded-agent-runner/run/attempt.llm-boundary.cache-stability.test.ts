@@ -208,6 +208,40 @@ describe("prompt-cache boundary regressions", () => {
     }
   });
 
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "keeps the %s provider prefix byte-identical when the current array becomes stored text",
+    async (api) => {
+      const text = "Post-fix cache test ping 1 of 2";
+      const current = await capture(api, [user(text)]);
+      const historical = await capture(api, [
+        { role: "user", content: text, timestamp: TS },
+        answer,
+        user("Post-fix cache test ping 2 of 2", TS + 60000),
+      ]);
+      const currentPrefix = (
+        (api === "openai-completions" ? current.messages : current.input) as unknown[]
+      ).slice(0, 2);
+      const historicalPrefix = (
+        (api === "openai-completions" ? historical.messages : historical.input) as unknown[]
+      ).slice(0, 2);
+      const stamped = `${buildTimestampPrefix(new Date(TS), options)}${text}`;
+      expect(JSON.stringify(currentPrefix)).toBe(JSON.stringify(historicalPrefix));
+      expect(currentPrefix[1]).toEqual(
+        api === "openai-completions"
+          ? { role: "user", content: stamped }
+          : { type: "message", role: "user", content: [{ type: "input_text", text: stamped }] },
+      );
+      const historicalBytes = JSON.stringify(historical);
+      const nextTimestamp = expectDefined(
+        buildTimestampPrefix(new Date(TS + 60000), options),
+        "next turn timestamp",
+      );
+      expect(historicalBytes.indexOf(nextTimestamp)).toBeGreaterThan(
+        historicalBytes.indexOf(stamped),
+      );
+    },
+  );
+
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),

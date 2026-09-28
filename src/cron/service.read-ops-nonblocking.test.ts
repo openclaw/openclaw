@@ -7,6 +7,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, writeCronStoreSnapshot } from "./service.test-harness.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./service/active-run-cancellation.js";
@@ -88,6 +89,23 @@ function createService(storePath: string, deps: Partial<CronServiceDeps> = {}) {
   });
 }
 
+async function readResponsiveCronSnapshot(cron: CronService) {
+  const jobs = await withTimeout(cron.list({ includeDisabled: true }), 300, {
+    message: "cron.list during service work timed out",
+  });
+  expect(jobs).toHaveLength(1);
+  const status = await withTimeout(cron.status(), 300, {
+    message: "cron.status during service work timed out",
+  });
+  expect(status).toMatchObject({ enabled: true, storage: "sqlite", jobs: 1 });
+  expect(status.sqlitePath).toContain("openclaw.sqlite");
+  expect(status.storePath).toBe(status.sqlitePath);
+  if (status.nextWakeAtMs !== null) {
+    expect(status.nextWakeAtMs).toBeTypeOf("number");
+  }
+  return jobs;
+}
+
 function futureJob(id: string, nowMs: number, withNextRun = true): CronJob {
   return {
     id,
@@ -167,12 +185,17 @@ describe("CronService read ops while job is running", () => {
   });
 
   it.each([
-    { mode: "scheduled", status: "skipped", offsets: [300_000] },
-    { mode: "scheduled", status: "error", offsets: [300_000] },
-    { mode: "manual", status: "ok", offsets: [600_000, 1_000] },
+    { mode: "scheduled", status: "ok", offsets: [300_000], deleteAfterRun: true },
+    { mode: "scheduled", status: "ok", offsets: [300_000], deleteAfterRun: false },
+    { mode: "scheduled", status: "skipped", offsets: [300_000], deleteAfterRun: true },
+    { mode: "scheduled", status: "skipped", offsets: [300_000], deleteAfterRun: false },
+    { mode: "scheduled", status: "error", offsets: [300_000], deleteAfterRun: true },
+    { mode: "scheduled", status: "error", offsets: [300_000], deleteAfterRun: false },
+    { mode: "manual", status: "ok", offsets: [600_000, 1_000], deleteAfterRun: true },
+    { mode: "manual", status: "ok", offsets: [600_000, 1_000], deleteAfterRun: false },
   ] as const)(
-    "preserves schedule edits during a $mode $status run across restart",
-    async ({ mode, status, offsets }) => {
+    "keeps reads responsive and schedule edits across restart during a $mode $status run (deleteAfterRun=$deleteAfterRun)",
+    async ({ mode, status, offsets, deleteAfterRun }) => {
       const startedAt = Date.parse("2025-12-13T00:00:01.000Z");
       const clock = createGatewaySchedulerClock(startedAt - 1_000);
       const scheduler = createTestGatewayScheduler(clock.clock);
@@ -188,7 +211,7 @@ describe("CronService read ops while job is running", () => {
         await cron.start();
         const job = await cron.add({
           ...futureJob("edited-one-shot", clock.clock.now()),
-          deleteAfterRun: true,
+          deleteAfterRun,
           schedule: { kind: "at", at: new Date(startedAt).toISOString() },
           delivery: { mode: "none" },
         });
@@ -197,6 +220,9 @@ describe("CronService read ops while job is running", () => {
             ? cron.run(job.id, "force")
             : Promise.resolve(clock.advanceTo(startedAt));
         await isolatedRun.runStarted;
+        expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledOnce();
+        const running = await readResponsiveCronSnapshot(cron);
+        expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
         for (const offset of offsets) {
           await cron.update(job.id, {
             schedule: { kind: "at", at: new Date(startedAt - 1_000 + offset).toISOString() },
@@ -218,7 +244,9 @@ describe("CronService read ops while job is running", () => {
           schedule: { kind: "at", at: new Date(nextRunAtMs).toISOString() },
           state: { lastStatus: status, nextRunAtMs },
         };
-        await expect(cron.list({ includeDisabled: true })).resolves.toMatchObject([expected]);
+        const completed = await cron.list({ includeDisabled: true });
+        expect(completed).toMatchObject([expected]);
+        expect(completed[0]?.state.runningAtMs).toBeUndefined();
         cron.stop();
         restarted = createService(store.storePath, { scheduler });
         await restarted.start();
@@ -231,9 +259,74 @@ describe("CronService read ops while job is running", () => {
       }
     },
   );
+
+  it("keeps list and status responsive after startup defers catch-up runs", async () => {
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const store = await makeStorePath();
+    const isolatedRun = createDeferredIsolatedRun();
+    const cron = createService(store.storePath, {
+      nowMs: () => nowMs,
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
+    });
+    try {
+      await writeCronStoreSnapshot({
+        storePath: store.storePath,
+        jobs: [
+          {
+            ...futureJob("startup-catchup", nowMs - 86_400_000),
+            schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
+            delivery: { mode: "none" },
+            state: { nextRunAtMs: nowMs - 60_000 },
+          },
+        ],
+      });
+      await cron.start();
+      expect(isolatedRun.runIsolatedAgentJob).not.toHaveBeenCalled();
+
+      const jobs = await readResponsiveCronSnapshot(cron);
+
+      expect(jobs[0]?.state.lastStatus).toBeUndefined();
+      expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+      expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
 });
 
 describe("CronService", () => {
+  it("keeps sibling jobs when separately loaded services mutate the same partition", async () => {
+    const store = await makeStorePath();
+    const cronA = createService(store.storePath);
+    const cronB = createService(store.storePath);
+    try {
+      await cronA.status();
+      await cronB.status();
+      const addJob = (service: CronService, id: string) =>
+        service.add({
+          id,
+          name: id,
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: id },
+        });
+      await addJob(cronA, "first-cached-service-job");
+      await addJob(cronB, "second-cached-service-job");
+      expect((await loadCronStore(store.storePath)).jobs.map((job) => job.id)).toEqual([
+        "first-cached-service-job",
+        "second-cached-service-job",
+      ]);
+    } finally {
+      cronA.stop();
+      cronB.stop();
+      await store.cleanup();
+    }
+  });
+
   it("avoids duplicate runs across lexical aliases of one store", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();

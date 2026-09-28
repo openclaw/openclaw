@@ -247,6 +247,50 @@ describe("legacy state migration caller execution", () => {
     ).not.toBeNull();
   });
 
+  it("relocates the legacy state root before running Doctor-owned migrations", async () => {
+    const root = await tempDirs.make("openclaw-doctor-state-root-");
+    const legacyStateDir = path.join(root, ".clawdbot");
+    const stateDir = path.join(root, ".openclaw");
+    fs.mkdirSync(legacyStateDir, { recursive: true });
+    const { execPath } = writeLegacyDoctorSources(legacyStateDir);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    };
+    delete env.OPENCLAW_STATE_DIR;
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env,
+      homedir: () => root,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    expect(result.stepReceipts[0]).toMatchObject({
+      id: "state-dir",
+      source: [{ kind: "path", path: legacyStateDir }],
+      target: [{ kind: "path", path: stateDir }],
+      outcome: "completed",
+    });
+    expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
+    expect(fs.existsSync(execPath)).toBe(false);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+      source: [{ kind: "path", path: path.join(stateDir, "exec-approvals.json") }],
+      outcome: "completed",
+    });
+    expect(
+      readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey(
+          "exec-approvals-json",
+          path.join(stateDir, "exec-approvals.json"),
+        ),
+        { ...env, OPENCLAW_STATE_DIR: stateDir },
+      ),
+    ).not.toBeNull();
+  });
+
   it("plans pending state-root relocation before every copied-state migration", async () => {
     const root = await tempDirs.make("openclaw-doctor-state-root-plan-");
     const legacyStateDir = path.join(root, ".clawdbot");
