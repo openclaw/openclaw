@@ -4,6 +4,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
+import type { SessionEntry } from "./types.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
 export type SessionActor = {
@@ -211,3 +212,14 @@ export type SessionEntryProvenance = {
   /** External hook source that has contributed content to this transcript. */
   hookExternalContentSource?: HookExternalContentSource;
 };
+
+/** Preserve the original parent grant across a child reset, never renew it. */
+export function selectSessionParentProvenance(entry: SessionEntry | undefined) {
+  return {
+    spawnedBy: entry?.spawnedBy,
+    spawnedBySenderIsOwner: entry?.spawnedBySenderIsOwner,
+    parentSessionKey: entry?.parentSessionKey,
+    parentSessionId: entry?.parentSessionId,
+    parentSessionLifecycleRevision: entry?.parentSessionLifecycleRevision,
+  };
+}

@@ -7,7 +7,10 @@ import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  selectSessionParentProvenance,
+} from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { DEFAULT_RESET_TRIGGERS, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -155,11 +158,9 @@ export function initFastReplySessionState(params: {
     ...(resetTriggered && existingEntry
       ? {
           previousSessionId: existingEntry.sessionId,
-          spawnedBy: existingEntry.spawnedBy,
+          ...selectSessionParentProvenance(existingEntry),
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
-          parentSessionKey: existingEntry.parentSessionKey,
-          parentSessionId: existingEntry.parentSessionId,
           forkedFromParent: existingEntry.forkedFromParent,
           forkSource: existingEntry.forkSource,
           createdVia: existingEntry.createdVia,

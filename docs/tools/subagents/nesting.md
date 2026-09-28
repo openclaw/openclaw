@@ -99,3 +99,22 @@ Sub-agent auth is resolved by **agent id**, not by session type:
 The merge is additive, so shared profiles are always available as
 fallbacks. There is no setting that isolates an agent's auth from the shared
 profiles.
+
+### Plugin session authority
+
+OpenClaw `sessions_spawn` records the immediate parent key (`spawnedBy`), exact
+parent session id (`parentSessionId`), parent lifecycle revision
+(`parentSessionLifecycleRevision`), and the spawning invocation's trusted owner
+status (`spawnedBySenderIsOwner`). These are host-owned facts, not tool arguments
+or `sessions.patch` fields. The owner flag is never inferred from a child's
+synthetic launch authority. Missing or false owner status does not grant owner
+access.
+
+Plugins that inherit a parent's scope must validate every parent hop against the
+current parent incarnation and lifecycle, including same-id resets, and apply
+their normal scope restrictions. Child resets preserve the captured parent grant, not a new grant to the reset
+parent generation; legacy children without these stamps do not acquire one.
+
+This contract covers OpenClaw-created child sessions. Native runtime child threads
+also need their runtime's tool bridge to provide a live authorized invocation;
+lineage metadata alone does not add that bridge.

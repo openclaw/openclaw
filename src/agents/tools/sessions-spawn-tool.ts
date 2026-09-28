@@ -59,10 +59,10 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
+import { VISIBLE_SESSIONS_SPAWN_SCHEMA } from "./sessions-spawn-visible-schema.js";
 import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
-  VISIBLE_SESSIONS_SPAWN_SCHEMA,
 } from "./sessions-spawn-visible.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
@@ -304,6 +304,8 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    /** Trusted parent invocation fact, not a model-facing spawn parameter. */
+    senderIsOwner?: boolean;
     requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
@@ -489,15 +491,16 @@ export function createSessionsSpawnTool(
               signal: executionSignal,
             },
           });
-        const visibleResult = opts?.expectedParentSessionId
-          ? await runWithScopedSessionAccess({
-              cfg: effectiveConfig,
-              expectedSessionId: opts.expectedParentSessionId,
-              ...(opts.signal ? { signal: opts.signal } : {}),
-              targetSessionKey: expectedParentSessionKey!,
-              run: spawnVisible,
-            })
-          : await spawnVisible();
+        const visibleResult =
+          params.visible === true && opts?.expectedParentSessionId
+            ? await runWithScopedSessionAccess({
+                cfg: effectiveConfig,
+                expectedSessionId: opts.expectedParentSessionId,
+                ...(opts.signal ? { signal: opts.signal } : {}),
+                targetSessionKey: expectedParentSessionKey!,
+                run: spawnVisible,
+              })
+            : await spawnVisible();
         if (visibleResult) {
           recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
           return jsonResult(
@@ -653,6 +656,8 @@ export function createSessionsSpawnTool(
           withParentExecutionIdentity(
             {
               ...inheritedSpawnContext(),
+              senderIsOwner: opts?.senderIsOwner,
+              expectedParentSessionId: opts?.expectedParentSessionId,
               requesterThinkingLevel: opts?.requesterThinkingLevel,
               requesterModel: opts?.requesterModel,
               currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,

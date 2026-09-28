@@ -389,10 +389,12 @@ describe("openclaw-tools progress_card gating", () => {
   ])("keeps native spawn metadata separate from delivery ($expectedTarget)", (context) => {
     const spawn = vi.spyOn(sessionsSpawnTool, "createSessionsSpawnTool");
     try {
-      createTestOpenClawTools(context);
+      createTestOpenClawTools({ ...context, senderIsOwner: true, sessionId: "exact-parent" });
 
       expect(spawn).toHaveBeenCalledWith(
         expect.objectContaining({
+          senderIsOwner: true,
+          expectedParentSessionId: "exact-parent",
           currentMessagingTarget: context.expectedTarget,
           currentChannelId: context.expectedChannelId,
         }),

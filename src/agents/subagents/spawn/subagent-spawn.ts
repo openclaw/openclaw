@@ -173,6 +173,8 @@ export async function spawnSubagentDirect(
       label: label || undefined,
       incognito,
       requesterInternalKey,
+      senderIsOwner: ctx.senderIsOwner,
+      expectedParentSessionId: ctx.expectedParentSessionId,
       creationPolicy,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,

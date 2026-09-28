@@ -388,10 +388,16 @@ describe("recursive spawn production boundary", () => {
     {
       name: "configured child model",
       configuredChildModel: true,
+      senderIsOwner: true,
       storedParentModel: "test-model",
       requesterModel: { provider: "custom", model: "test-model" },
     },
-    { name: "parent session model", configuredChildModel: false, storedParentModel: "child-model" },
+    {
+      name: "parent session model",
+      configuredChildModel: false,
+      storedParentModel: "child-model",
+      senderIsOwner: false,
+    },
     {
       name: "active parent turn model",
       configuredChildModel: false,
@@ -459,7 +465,18 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     const failures: unknown[] = [];
     try {
-      const result = await createBoundSpawnInvocation(bound, undefined, requesterModel)();
+      // Owner-looking model arguments must not override absent/false host identity.
+      const request = {
+        context: "isolated" as const,
+        senderIsOwner: true,
+        spawnedBySenderIsOwner: true,
+      };
+      const result = await createBoundSpawnInvocation(
+        bound,
+        request,
+        requesterModel,
+        scenario.senderIsOwner,
+      )();
       expect(result.details, JSON.stringify(result)).toMatchObject({
         status: "accepted",
         childSessionKey: expect.any(String),
@@ -500,6 +517,8 @@ describe("recursive spawn production boundary", () => {
         loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
       ).toMatchObject({
         spawnedBy: parentSessionKey,
+        parentSessionId: "parent-session",
+        spawnedBySenderIsOwner: scenario.senderIsOwner === true,
         spawnDepth: 2,
         providerOverride: "custom",
         modelOverride: "child-model",

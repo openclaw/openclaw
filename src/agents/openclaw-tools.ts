@@ -580,6 +580,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
+            senderIsOwner: options?.senderIsOwner,
+            expectedParentSessionId: options?.sessionId,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             requesterTurnRunId: options?.runId,
             requesterThinkingLevel: options?.requesterThinkingLevel,

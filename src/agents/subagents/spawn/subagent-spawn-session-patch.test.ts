@@ -225,3 +225,74 @@ it.each(["creation", "fork"] as const)(
     });
   },
 );
+it("rejects replaced parent incarnations and never retains a reused child grant", async () => {
+  await withOpenClawTestState({ label: "spawn-parent-identity" }, async () => {
+    const sessionKey = "agent:main:parent";
+    const childSessionKey = "agent:main:subagent:child";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const scope = { storePath, sessionKey };
+    const params = {
+      cfg: {},
+      targetAgentId: "main",
+      childSessionKey,
+      incognito: false,
+      requesterInternalKey: sessionKey,
+      creationPolicy: { actor: { type: "agent" as const, id: "main" } },
+      completionOwnerSessionKey: sessionKey,
+      modelPatch: {},
+      collect: false,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "parent-first",
+      lifecycleRevision: "first",
+      updatedAt: 1,
+    });
+    expect(
+      await createInitialSubagentSession({
+        ...params,
+        expectedParentSessionId: "parent-old",
+        senderIsOwner: true,
+      }),
+    ).toMatchObject({ status: "error", error: expect.stringContaining("Parent session changed") });
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
+    expect(
+      await createInitialSubagentSession({
+        ...params,
+        expectedParentSessionId: "parent-first",
+        senderIsOwner: true,
+      }),
+    ).toMatchObject({ status: "ok" });
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+      parentSessionId: "parent-first",
+      parentSessionLifecycleRevision: "first",
+      spawnedBySenderIsOwner: true,
+    });
+    expect(await createInitialSubagentSession({ ...params, senderIsOwner: false })).toMatchObject({
+      status: "ok",
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+      parentSessionId: "parent-first",
+      parentSessionLifecycleRevision: "first",
+      spawnedBySenderIsOwner: false,
+    });
+
+    const originalUpsert = spawnRuntime.upsertSessionEntryCore;
+    const commit = vi
+      .spyOn(spawnRuntime, "upsertSessionEntryCore")
+      .mockImplementationOnce(async (target, patch, options) => {
+        await originalUpsert(scope, { sessionId: "parent-first", lifecycleRevision: "second" });
+        return originalUpsert(target, patch, options);
+      });
+    try {
+      expect(await createInitialSubagentSession({ ...params, senderIsOwner: true })).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Parent session changed"),
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+        spawnedBySenderIsOwner: false,
+      });
+    } finally {
+      commit.mockRestore();
+    }
+  });
+});

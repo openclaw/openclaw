@@ -17,6 +17,8 @@ export type TrustedSessionCreation = {
   requesterSessionKey?: string;
   /** Host-verified human requester; never accepted from model-authored parameters. */
   requesterProfileId?: string;
+  /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
+  requesterSenderIsOwner?: boolean;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
   /** Prepared parent selection; never accepted from public creation parameters. */
@@ -68,6 +70,7 @@ export function resolveOperatorSessionCreation(
               agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey,
           }
         : {}),
+      requesterSenderIsOwner: agentRuntimeIdentity.sessionSpawnContext.requesterSenderIsOwner,
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
       ...(agentRuntimeIdentity.sessionSpawnContext.inheritedPermissionMode
         ? {

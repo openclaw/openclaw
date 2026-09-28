@@ -114,6 +114,8 @@ export async function createInitialSubagentSession(params: {
   label?: string;
   incognito: boolean;
   requesterInternalKey: string;
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   assertActive?: () => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
@@ -174,6 +176,12 @@ export async function createInitialSubagentSession(params: {
       },
     );
     params.assertActive?.();
+    if (
+      params.expectedParentSessionId !== undefined &&
+      parentEntry?.sessionId !== params.expectedParentSessionId
+    ) {
+      throw new Error("Parent session changed before spawn; retry from the current turn.");
+    }
     // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
     // launch so it cannot delete a reset successor that reuses the session id.
     const childSessionIdentity = {
@@ -211,6 +219,11 @@ export async function createInitialSubagentSession(params: {
             }
           : {}),
         ...childSessionIdentity,
+        // Stamp after all request patches so model input cannot create a grant.
+        // Explicit undefined/false also clears metadata if a child key is reused.
+        parentSessionId: parentEntry?.sessionId,
+        parentSessionLifecycleRevision: parentEntry?.lifecycleRevision,
+        spawnedBySenderIsOwner: Boolean(parentEntry && params.senderIsOwner === true),
         ...(parentEntry?.skillLibrarySelections
           ? {
               skillLibrarySelections: parentEntry.skillLibrarySelections.map((selection) => ({
@@ -232,21 +245,23 @@ export async function createInitialSubagentSession(params: {
       {
         assertCommitAllowed: () => {
           params.assertActive?.();
-          if (parentEntry?.skillLibrarySelections) {
-            const latest = loadSessionEntry({
-              storePath: parentStorePath,
-              sessionKey: parentTarget.canonicalKey,
-            });
-            if (
-              latest?.sessionId !== parentEntry.sessionId ||
-              latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
-              JSON.stringify(latest.skillLibrarySelections) !==
-                JSON.stringify(parentEntry.skillLibrarySelections)
-            ) {
-              throw new Error(
-                "Parent skill selection changed before spawn; retry from the current turn.",
-              );
-            }
+          const latest = loadSessionEntry({
+            storePath: parentStorePath,
+            sessionKey: parentTarget.canonicalKey,
+          });
+          if (
+            latest?.sessionId !== parentEntry?.sessionId ||
+            latest?.lifecycleRevision !== parentEntry?.lifecycleRevision
+          ) {
+            throw new Error("Parent session changed before spawn; retry from the current turn.");
+          }
+          if (
+            JSON.stringify(latest?.skillLibrarySelections) !==
+            JSON.stringify(parentEntry?.skillLibrarySelections)
+          ) {
+            throw new Error(
+              "Parent skill selection changed before spawn; retry from the current turn.",
+            );
           }
         },
       },

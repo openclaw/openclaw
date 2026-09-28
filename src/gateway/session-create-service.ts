@@ -79,6 +79,7 @@ import { existingSessionSelectionWouldChange } from "./session-create-existing-s
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
   prepareSessionCreateParent,
+  buildSessionCreateParentEntry,
   resolveSessionCreateInheritance,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
@@ -987,21 +988,19 @@ export async function createGatewaySession(
           // replace it after the canonical patch has validated and stored it.
           delete inheritedSelection.fastMode;
         }
-        const entry: SessionEntry = {
-          ...initializedEntry,
-          ...inheritedSelection,
-          // Main groups dashboard roots; it must not supply their reply-time model.
-          ...(createdNewEntry &&
-          dashboardParentSessionKey &&
-          !explicitParentSessionKey &&
-          !initializedEntry.modelOverride
-            ? { modelOverrideSource: "default" as const }
-            : {}),
-          ...(storedParentSessionKey ? { parentSessionKey: storedParentSessionKey } : {}),
-          ...(canonicalParentSessionKey && currentParentSessionEntry?.sessionId
-            ? { parentSessionId: currentParentSessionEntry.sessionId }
-            : {}),
-        };
+        const entry = buildSessionCreateParentEntry({
+          initializedEntry,
+          inheritedSelection,
+          createdNewEntry,
+          dashboardParentSessionKey,
+          explicitParentSessionKey,
+          storedParentSessionKey,
+          canonicalParentSessionKey,
+          currentParentSessionEntry,
+          captureSpawnAuthority:
+            createdNewEntry && params.creation?.via === "spawn" && Boolean(spawnToolPolicy),
+          requesterSenderIsOwner: params.creation?.requesterSenderIsOwner,
+        });
         let validateAccountModel: (() => ErrorShape | undefined) | undefined;
         if (params.fork !== true) {
           if (createdNewEntry && !entry.authProfileOverride && personalAccountDefaults) {

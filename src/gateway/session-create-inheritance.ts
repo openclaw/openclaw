@@ -125,3 +125,51 @@ export function resolveSessionCreateSpawnPolicy(
     ...(deny.length > 0 ? { inheritedToolDeny: deny } : {}),
   };
 }
+
+/** Apply parent selection and host-owned lineage to the newly prepared child row. */
+export function buildSessionCreateParentEntry(input: {
+  initializedEntry: SessionEntry;
+  inheritedSelection: Partial<SessionEntry>;
+  createdNewEntry: boolean;
+  dashboardParentSessionKey?: string;
+  explicitParentSessionKey?: string;
+  storedParentSessionKey?: string;
+  canonicalParentSessionKey?: string;
+  currentParentSessionEntry?: SessionEntry;
+  captureSpawnAuthority: boolean;
+  requesterSenderIsOwner?: boolean;
+}): SessionEntry {
+  const {
+    initializedEntry,
+    inheritedSelection,
+    createdNewEntry,
+    dashboardParentSessionKey,
+    explicitParentSessionKey,
+    storedParentSessionKey,
+    canonicalParentSessionKey,
+    currentParentSessionEntry,
+  } = input;
+  return {
+    ...initializedEntry,
+    ...inheritedSelection,
+    // Main groups dashboard roots; it must not supply their reply-time model.
+    ...(createdNewEntry &&
+    dashboardParentSessionKey &&
+    !explicitParentSessionKey &&
+    !initializedEntry.modelOverride
+      ? { modelOverrideSource: "default" as const }
+      : {}),
+    ...(storedParentSessionKey ? { parentSessionKey: storedParentSessionKey } : {}),
+    ...(canonicalParentSessionKey && currentParentSessionEntry?.sessionId
+      ? {
+          parentSessionId: currentParentSessionEntry.sessionId,
+          ...(input.captureSpawnAuthority
+            ? {
+                parentSessionLifecycleRevision: currentParentSessionEntry.lifecycleRevision,
+                spawnedBySenderIsOwner: input.requesterSenderIsOwner === true,
+              }
+            : {}),
+        }
+      : {}),
+  };
+}

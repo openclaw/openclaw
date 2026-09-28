@@ -10,7 +10,7 @@ import {
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { enqueueSystemEvent } from "../plugin-sdk/system-event-runtime.js";
@@ -145,6 +145,14 @@ async function expectResetWithConfigSkipsBrowserCleanup(config: ConfigFilePatch)
 
 test("sessions.reset aborts active runs and clears queues", async () => {
   const { storePath } = await seedWaitingActiveMainSession();
+  const parentGrant = {
+    spawnedBy: "agent:main:parent",
+    parentSessionKey: "agent:main:parent",
+    parentSessionId: "parent-id",
+    parentSessionLifecycleRevision: "parent-generation",
+    spawnedBySenderIsOwner: true,
+  };
+  await upsertSessionEntryCore({ storePath, sessionKey: "agent:main:main" }, parentGrant);
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
@@ -165,6 +173,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
       | undefined,
   ).toMatchObject({
     sessionId: "sess-main",
+    ...parentGrant,
     sessionDiffBaselineCapture: {
       version: 1,
       captureId: expect.any(String),

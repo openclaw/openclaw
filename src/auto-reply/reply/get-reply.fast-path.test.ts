@@ -844,6 +844,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       spawnedBy: "agent:main:main",
       parentSessionKey: "agent:main:dashboard:parent",
       parentSessionId: "parent-session",
+      parentSessionLifecycleRevision: "parent-generation",
+      spawnedBySenderIsOwner: true,
       spawnedWorkspaceDir: "/tmp/workspace",
       spawnedCwd: "/tmp/repo",
       forkSource: { sessionKey: "agent:main:main", sessionId: "source-generation" },
