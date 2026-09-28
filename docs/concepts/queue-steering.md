@@ -86,6 +86,10 @@ people have steered the turn, the agent must pass that person's verified
 `requester_profile.id` as `user` to choose whose view or appearance to change,
 and ask if it is unclear. Each authenticated Control UI message includes its
 requester's verified profile id in the agent's user-role conversation context.
+Session tools and `sessions_spawn` also use the requester's verified
+`requester_profile.id` as `user` when several people have steered the turn. Session
+access and spawned-child authority use that person's permissions. Steered turns,
+like later turns in the session, use the session's selected model account.
 Personal instructions and other personal settings without a `user` selector
 cannot be read or changed from a turn several people have steered. The person
 should ask in their own turn with a new Control UI message. For Crabbox open-and-show requests in a

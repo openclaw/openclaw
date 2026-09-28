@@ -127,6 +127,8 @@ export type ReplyTurnParticipant = Readonly<{
   profileId: string;
   senderId: string;
   name: string;
+  /** Host-issued source; independent children acquire their own custody before turn close. */
+  operatorAuthority: AdmittedRunOperatorAuthority;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   assertCurrent: () => void;
 }>;

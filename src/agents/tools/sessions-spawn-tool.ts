@@ -52,7 +52,11 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   recordSessionToolActionFact,
@@ -155,6 +159,12 @@ function createSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
+    user: Type.Optional(
+      Type.String({
+        description:
+          "The person's requester_profile.id, required when several people have steered this turn.",
+      }),
+    ),
     taskName: Type.Optional(
       Type.String({
         description:
@@ -371,13 +381,18 @@ export function createSessionsSpawnTool(
       spawnRestricted: restrictToSpawned,
     }),
     parameters,
-    execute: async (_toolCallId, args, signal) =>
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
+        const operatorSelection = resolveGatewayToolOperatorSelection();
         const executionSignal =
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
-        const assertSourceActive = captureAgentToolSourceExecutionGuard(executionSignal);
+        const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
+        const assertSourceActive = () => {
+          assertSourceExecution();
+          operatorSelection.assertCurrent();
+        };
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -669,6 +684,7 @@ export function createSessionsSpawnTool(
         recordAcceptedSessionSpawn(result, result.context);
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }),
+    ),
   };
   return bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
 }

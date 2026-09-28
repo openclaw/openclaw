@@ -9,6 +9,12 @@ title: "Session tools"
 
 OpenClaw gives agents tools to work across sessions, inspect status, and orchestrate sub-agents.
 
+`sessions_list`, `sessions_history`, `sessions_search`, `session_status`,
+`sessions_send`, `sessions`, and `sessions_spawn` accept optional `user` (the requester's verified `requester_profile.id`).
+It is required when several people have steered the turn. The named person's
+authority determines session access and child execution; unknown or revoked
+participants are rejected. Single-person turns can omit it.
+
 ## Available tools
 
 | Tool                 | What it does                                                                            |

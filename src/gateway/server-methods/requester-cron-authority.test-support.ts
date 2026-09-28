@@ -255,7 +255,7 @@ export async function createCreatorTransportTools(params: {
           }),
           toolsAllow,
           false,
-          resolveAdmittedRunActiveAssertion(admitted),
+          { assertCurrent: resolveAdmittedRunActiveAssertion(admitted) },
         ),
         "prepared CLI grant",
       ),

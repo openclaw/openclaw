@@ -15,7 +15,11 @@ import {
   summarizeSpawnError,
   type SpawnBackendAdapter,
 } from "../../spawn-pipeline.js";
-import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+  withGatewayToolOperatorContinuation,
+} from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
@@ -72,7 +76,8 @@ export async function spawnSubagentDirect(
     gatewayScope?.resolveGatewayContext ??
     gatewayScope?.context?.resolveGatewayContext;
   const operatorAuthority =
-    gatewayCaller?.operatorAuthority ?? gatewayScope?.client?.internal?.operatorRunAuthority;
+    resolveGatewayToolOperatorSelection().operatorAuthority ??
+    gatewayScope?.client?.internal?.operatorRunAuthority;
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
@@ -625,29 +630,31 @@ export async function spawnSubagentDirect(
       const canLaunch = pipelineResult.registrationScope?.canLaunch() !== false;
       if (swarmReservation?.isCurrent() !== false) {
         // The scheduler also settles registrations that have lost launch authority.
-        activateSwarmRun({
-          groupId: swarmSchedulerGroupKey,
-          runId: childRunId,
-          lifecycleOwner: gatewayContextResolver
-            ? getCanonicalGatewayContextResolver(gatewayContextResolver)
-            : undefined,
-          ...createCollectorLaunchCallbacks({
-            childRunId,
-            childSessionKey,
-            requesterSessionKey: requesterInternalKey,
-            gatewayContextResolver,
-            operatorAuthority,
-            releaseOperatorAuthority,
-            cleanupOwner,
-            registrationScope: pipelineResult.registrationScope,
-            preparation: pipelineResult.state.contextEnginePreparation,
-            provisionalSessionIdentity,
-            launchChildRun,
-            recordParticipant: recordRequesterParticipation,
-            emitSpawnLifecycleHooks,
-            cleanupFailedSpawn,
+        withGatewayToolOperatorContinuation(operatorAuthority, () =>
+          activateSwarmRun({
+            groupId: swarmSchedulerGroupKey,
+            runId: childRunId,
+            lifecycleOwner: gatewayContextResolver
+              ? getCanonicalGatewayContextResolver(gatewayContextResolver)
+              : undefined,
+            ...createCollectorLaunchCallbacks({
+              childRunId,
+              childSessionKey,
+              requesterSessionKey: requesterInternalKey,
+              gatewayContextResolver,
+              operatorAuthority,
+              releaseOperatorAuthority,
+              cleanupOwner,
+              registrationScope: pipelineResult.registrationScope,
+              preparation: pipelineResult.state.contextEnginePreparation,
+              provisionalSessionIdentity,
+              launchChildRun,
+              recordParticipant: recordRequesterParticipation,
+              emitSpawnLifecycleHooks,
+              cleanupFailedSpawn,
+            }),
           }),
-        });
+        );
         releaseOperatorAuthority = undefined;
       } else {
         if (canRetireReservation?.() !== false) {
