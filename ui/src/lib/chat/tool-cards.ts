@@ -550,3 +550,25 @@ export function extractToolCardsCached(message: unknown): ToolCard[] {
   toolCardsByMessage.set(message, cards);
   return cards;
 }
+
+const toolCardsByBlock = new WeakMap<object, WeakMap<object, ToolCard[]>>();
+
+// Messages and blocks are immutable snapshots, including live stream updates.
+// Key block projections by their source identities, never a temporary envelope.
+export function extractToolBlockCardsCached(
+  message: Record<string, unknown>,
+  block: Record<string, unknown>,
+): ToolCard[] {
+  let byBlock = toolCardsByBlock.get(message);
+  const cached = byBlock?.get(block);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards({ ...message, content: [block] });
+  if (!byBlock) {
+    byBlock = new WeakMap();
+    toolCardsByBlock.set(message, byBlock);
+  }
+  byBlock.set(block, cards);
+  return cards;
+}

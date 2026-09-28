@@ -424,6 +424,7 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
 export async function readFullSubagentRuns(
   context: OpenClawStateWorkerContext,
   scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] },
+  options: { current?: boolean } = {},
 ) {
   if (scope.kind === "ids" && scope.runIds.length === 0) {
     assertSubagentReadContext(context);
@@ -432,6 +433,7 @@ export async function readFullSubagentRuns(
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "subagents.runs", scope },
+    options.current ? { context, current: true } : undefined,
   );
   assertSubagentReadContext(context);
   if (!reply) {

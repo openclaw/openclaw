@@ -118,13 +118,7 @@ export function applyPromptBuildToolsAllow<
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
   forceToolNames?: readonly string[];
-}): {
-  activeToolNames: string[];
-  callableToolNames: string[];
-  effectiveTools: TEffectiveTool[];
-  uncompactedEffectiveTools: TUncompactedTool[];
-  tools: TTool[];
-} {
+}) {
   const policyInput = {
     toolsAllow: params.toolsAllow,
     forceToolNames: params.forceToolNames,

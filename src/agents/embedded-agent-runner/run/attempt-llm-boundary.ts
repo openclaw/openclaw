@@ -306,34 +306,29 @@ function replaceUserTextPrompt(params: {
     return params.messages;
   }
   const content = (message as { content?: unknown }).content;
+  let nextContent: unknown;
   if (typeof content === "string") {
-    const replacement = params.replace(content);
-    if (replacement === undefined) {
+    nextContent = params.replace(content);
+    if (nextContent === undefined) {
       return params.messages;
     }
-    const next = params.messages.slice();
-    next[userIndex] = { ...message, content: replacement } as AgentMessage;
-    if (params.transcriptText !== undefined) {
-      markTranscriptPromptText(next[userIndex], params.transcriptText);
+  } else if (Array.isArray(content)) {
+    let replaced = false;
+    nextContent = content.map((block) => {
+      if (replaced || !isUserTextBlock(block)) {
+        return block;
+      }
+      const replacement = params.replace(block.text);
+      if (replacement === undefined) {
+        return block;
+      }
+      replaced = true;
+      return Object.assign({}, block, { text: replacement });
+    });
+    if (!replaced) {
+      return params.messages;
     }
-    return next;
-  }
-  if (!Array.isArray(content)) {
-    return params.messages;
-  }
-  let replaced = false;
-  const nextContent = content.map((block) => {
-    if (replaced || !isUserTextBlock(block)) {
-      return block;
-    }
-    const replacement = params.replace(block.text);
-    if (replacement === undefined) {
-      return block;
-    }
-    replaced = true;
-    return Object.assign({}, block, { text: replacement });
-  });
-  if (!replaced) {
+  } else {
     return params.messages;
   }
   const next = params.messages.slice();

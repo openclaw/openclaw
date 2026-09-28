@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -138,7 +137,7 @@ internal fun SkillWorkshopSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Skill Workshop"),
     subtitle = nativeString("Review generated skill proposals before they become live skills."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.SkillWorkshop.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(

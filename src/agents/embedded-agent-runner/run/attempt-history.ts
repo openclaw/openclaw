@@ -1,8 +1,5 @@
-/**
- * Resolves user-message boundaries and transcript policy for an attempt.
- * It may assume normalized attempt and session inputs are ready.
- */
 import { stableStringify } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -14,7 +11,7 @@ import {
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
-import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type UserTranscriptContext = {
   runtimeMessage: AgentMessage;
@@ -238,18 +235,13 @@ function mergeSenderIntoLeadingConversationInfo(
   if (jsonEnd === -1) {
     return undefined;
   }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(body.slice(jsonPrefix.length, jsonEnd));
-  } catch {
-    return undefined;
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  const payload = safeParseJsonRecord(body.slice(jsonPrefix.length, jsonEnd));
+  if (!payload) {
     return undefined;
   }
   const suffix = body.slice(jsonEnd + "\n```".length);
   return `${envelope}${formatContextJsonBlock(CONVERSATION_INFO_LABEL, {
-    ...(payload as Record<string, unknown>),
+    ...payload,
     sender,
   })}${suffix}`;
 }
@@ -365,18 +357,8 @@ function isToolCallAssistantMessage(message: AgentMessage): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  return content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const type = (block as { type?: unknown }).type;
-    return isRunnerToolCallBlockType(type);
-  });
+  return content.some(isRunnerToolCallBlock);
 }
-
-/**
- * Resolves transcript persistence policy for a single embedded-agent attempt.
- */
 
 type AttemptRuntimeModelContext = NonNullable<
   Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]

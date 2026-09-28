@@ -18,7 +18,11 @@ import type {
   UserProfileWriteOperations,
   UserProfileWriteResult,
 } from "./user-profile-writes.worker.js";
-import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
+import {
+  UserProfileMergeError,
+  UserProfileNotFoundError,
+  UserProfileOwnerError,
+} from "./user-profiles-schema.js";
 
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
@@ -30,6 +34,9 @@ function unwrap<T>(result: UserProfileWriteResult<T>): T {
   }
   if (result.kind === "not-found") {
     throw new UserProfileNotFoundError(result.profileId);
+  }
+  if (result.kind === "merge") {
+    throw new UserProfileMergeError(result.message);
   }
   throw new UserProfileOwnerError(result.code);
 }
@@ -200,6 +207,24 @@ export async function linkCanonicalUserProfileEmail(
   options: ProfileWriteOptions = {},
 ) {
   return unwrap(await write("userProfiles.linkEmail", { email, targetProfileId }, options));
+}
+export async function mergeCanonicalUserProfiles(
+  sourceProfileId: string,
+  targetProfileId: string,
+  options: ProfileWriteOptions & { onCommitted?: (profileIds: string[]) => void } = {},
+) {
+  return unwrap(
+    await write(
+      "userProfiles.merge",
+      { sourceProfileId, targetProfileId },
+      options,
+      (publication) => {
+        if (publication.changes.profiles.length) {
+          options.onCommitted?.(publication.changes.profiles);
+        }
+      },
+    ),
+  );
 }
 export async function ensureCanonicalUserProfileForEmail(
   email: string,

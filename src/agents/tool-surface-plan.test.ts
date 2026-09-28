@@ -28,7 +28,7 @@ const basePlanParams: AgentToolSurfacePlanParams = {
 };
 
 describe("resolveAgentToolSurfacePlan", () => {
-  it.each(["tools", "directory", "code"] as const)(
+  it.each(["tools", "directory"] as const)(
     "keeps invocation-restricted tools direct with configured %s search",
     (mode) => {
       const config: OpenClawConfig = { tools: { toolSearch: { enabled: true, mode } } };

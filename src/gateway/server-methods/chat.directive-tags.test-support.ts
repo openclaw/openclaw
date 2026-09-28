@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect } from "vitest";
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
   replaceSessionEntry,
@@ -176,4 +177,41 @@ export function expectClaimOnlyTranscriptMedia(
   for (const value of forbiddenValues) {
     expect(serialized).not.toContain(value);
   }
+}
+
+export function createChatDirectiveReplyBackend(params: {
+  cancel?: ReplyBackendHandle["cancel"];
+  isStopped?: ReplyBackendHandle["isStopped"];
+  isStreaming?: ReplyBackendHandle["isStreaming"];
+  legacy?: boolean;
+  queueMessage: NonNullable<ReplyBackendHandle["queueMessage"]>;
+  runId?: string;
+  supportsQueueMessageImages?: boolean;
+  taskSuggestionDeliveryMode?: "gateway";
+}): ReplyBackendHandle {
+  return {
+    kind: "embedded",
+    cancel: params.cancel ?? (() => {}),
+    runId: params.runId,
+    supportsQueueMessageImages: params.supportsQueueMessageImages,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    ...(params.legacy
+      ? {
+          queueMessage: params.queueMessage,
+          isStopped: params.isStopped,
+          isStreaming: params.isStreaming,
+        }
+      : {
+          // Production steering adapters use V2. The mock queue is this fixture
+          // backend's final handoff, so retain the source guard at that boundary.
+          messageInjectionV2: {
+            version: 2 as const,
+            isAvailable: () => true,
+            queueMessage: (text, options, assertCurrent) => {
+              assertCurrent();
+              return params.queueMessage(text, options);
+            },
+          },
+        }),
+  };
 }

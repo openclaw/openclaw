@@ -44,7 +44,6 @@ import {
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   buildMemoryEmbeddingBatches,
-  buildTextEmbeddingInputs,
   isSplittableMemoryEmbeddingBatchError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -386,19 +385,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
-    const chunks = candidates.map((candidate) => candidate.chunk);
-    if (chunks.length === 0) {
-      return [];
-    }
-    const { embeddings, missing } = this.collectCachedEmbeddings(chunks, generation);
+    const { embeddings, missing, missingCandidates } = this.collectCachedEmbeddings(
+      candidates,
+      generation,
+    );
 
     if (missing.length === 0) {
       return embeddings;
     }
 
-    const missingCandidates = missing.map((item) =>
-      expectDefined(candidates[item.index], "missing memory embedding candidate"),
-    );
     const batches = buildMemoryEmbeddingBatches(
       missingCandidates.map((candidate) => candidate.chunk),
       EMBEDDING_BATCH_MAX_TOKENS,
@@ -406,7 +401,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let cursor = 0;
     for (const batchChunks of batches) {
       const batchCandidates = missingCandidates.slice(cursor, cursor + batchChunks.length);
-      const inputs = buildTextEmbeddingInputs(batchChunks);
+      const inputs = batchChunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
       const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
       const batchEmbeddings = await this.embedBatchWithRetry(
         hasStructuredInputs ? inputs : batchChunks.map((chunk) => chunk.text),
@@ -446,23 +441,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     generation: MemorySemanticProviderGeneration,
     debugContext: Record<string, unknown> = {},
   ): Promise<number[][]> {
-    const chunks = candidates.map((candidate) => candidate.chunk);
     const provider = generation.provider;
     const batchEmbed = generation.runtime?.batchEmbed;
     if (!batchEmbed) {
       return this.embedChunksInBatches(candidates, generation);
     }
-    if (chunks.length === 0) {
-      return [];
-    }
-    const { embeddings, missing } = this.collectCachedEmbeddings(chunks, generation);
+    const { embeddings, missing, missingCandidates } = this.collectCachedEmbeddings(
+      candidates,
+      generation,
+    );
     if (missing.length === 0) {
       return embeddings;
     }
 
-    const missingCandidates = missing.map((item) =>
-      expectDefined(candidates[item.index], "missing memory embedding candidate"),
-    );
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
     const batchResult = await this.runBatchWithFallback({
       provider: provider.id,
@@ -475,7 +466,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           pollIntervalMs: this.batch.pollIntervalMs,
           timeoutMs: this.batch.timeoutMs,
           debug: (message, data) =>
-            log.debug(message, { ...data, source, chunks: chunks.length, ...debugContext }),
+            log.debug(message, { ...data, source, chunks: candidates.length, ...debugContext }),
         }),
       fallback: async () => await this.embedChunksInBatches(missingCandidates, generation),
     });
@@ -486,24 +477,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (batchResult.kind === "batch") {
       await this.persistGeneratedEmbeddings(missingCandidates, batchEmbeddings, generation);
     }
-    for (let index = 0; index < missing.length; index += 1) {
-      const item = missing[index];
-      const embedding = batchEmbeddings[index] ?? [];
-      if (!item) {
-        continue;
-      }
-      embeddings[item.index] = embedding;
+    for (const [index, item] of missing.entries()) {
+      embeddings[item.index] = batchEmbeddings[index] ?? [];
     }
     return embeddings;
   }
 
   private collectCachedEmbeddings(
-    chunks: IndexedMemoryChunk[],
+    candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
-  ): {
-    embeddings: number[][];
-    missing: Array<{ index: number; chunk: IndexedMemoryChunk }>;
-  } {
+  ) {
+    const chunks = candidates.map((candidate) => candidate.chunk);
     const cached = loadMemoryEmbeddingCache({
       db: generation.database.db,
       enabled: this.cache.enabled,
@@ -518,7 +502,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         generation.embeddingDimensions ??= embedding.length;
       }
     }
-    return collectMemoryCachedEmbeddings({ chunks, cached });
+    const result = collectMemoryCachedEmbeddings({ chunks, cached });
+    return {
+      ...result,
+      missingCandidates: result.missing.map((item) =>
+        expectDefined(candidates[item.index], "missing memory embedding candidate"),
+      ),
+    };
   }
 
   protected async embedBatchWithRetry(

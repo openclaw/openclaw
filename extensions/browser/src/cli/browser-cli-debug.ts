@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { BrowserNetworkRequest, BrowserPageError } from "../browser/pw-session-contracts.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   runBrowserCliRequest,
@@ -43,9 +44,7 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored errors after reading", false)
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await runBrowserCliRequest<{
-        errors: Array<{ timestamp: string; name?: string; message: string }>;
-      }>({
+      await runBrowserCliRequest<{ errors: BrowserPageError[] }>({
         parent: parentOpts(cmd),
         method: "GET",
         path: "/errors",
@@ -74,16 +73,7 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored requests after reading", false)
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await runBrowserCliRequest<{
-        requests: Array<{
-          timestamp: string;
-          method: string;
-          status?: number;
-          ok?: boolean;
-          url: string;
-          failureText?: string;
-        }>;
-      }>({
+      await runBrowserCliRequest<{ requests: BrowserNetworkRequest[] }>({
         parent: parentOpts(cmd),
         method: "GET",
         path: "/requests",

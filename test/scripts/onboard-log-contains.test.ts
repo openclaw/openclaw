@@ -49,6 +49,18 @@ describe("onboard log-contains helper", () => {
     expect(logContains(logPath, "boundary prompt")).toBe(true);
   });
 
+  it("ignores Docker TTY line separators inside ANSI sequences", () => {
+    const splitBytes = (value: string) => value.split("").join("\r\n");
+    const prompt = "How should I set things up?";
+    const decoratedPrompt = prompt
+      .split("")
+      .map((character) => `${splitBytes("\u001b[36m")}│${splitBytes("\u001b[39m")} ${character}`)
+      .join("\r\n");
+    const logPath = writeLog(decoratedPrompt);
+
+    expect(logContains(logPath, prompt)).toBe(true);
+  });
+
   it("preserves decoded prompt text across read boundaries", () => {
     const logPath = writeLog(`${"x".repeat(65_535)}Key prompt`);
 

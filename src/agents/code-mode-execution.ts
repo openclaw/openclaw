@@ -45,6 +45,7 @@ import {
   type CodeModeBridgeDispatchState,
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -574,11 +575,16 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     telemetry: telemetry(params.runtime),
   };
   const networkContent = params.runtime.hasNetworkContent();
-  return output.takeResult(metadata, channels, networkContent, (source) =>
+  const delivered = output.takeResult(metadata, channels, networkContent, (source) =>
     params.replaySafe
       ? { reason: "Not retained in restart-safe mode. Return less data." }
       : params.owner.results.retain(source, networkContent),
   );
+  // Automatic retention changes the receipt, not the value the guest returned.
+  return recordCodeModeToolOutcome(delivered, {
+    ...delivered,
+    ...(result.status === "completed" ? { value: result.value } : {}),
+  });
 }
 
 export async function runWait(params: {

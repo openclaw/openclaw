@@ -159,6 +159,10 @@ count.
   delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
   eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
   session deletion invalidates remembered ancestors.
+  Recap-only (`reason: "activity-summary"`) events keep their ancestor payloads,
+  but full rows in those events retire the corresponding reference records:
+  shared rosters may skip recap admission. The next ordinary event supplies full
+  rows again; unchanged references already held by the client remain reusable.
   Older web clients ignore the additive reference field. Because `ancestorSessions`
   contains full rows only, they cannot apply a reference as a partial row and erase
   held fields. Missing ancestor snapshots cause their existing authoritative

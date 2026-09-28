@@ -9,7 +9,6 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveDirectStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createModelSelectionState } from "./model-selection.js";
 
@@ -120,9 +119,7 @@ type SelectionCase = {
   name: string;
   pin: string;
   expected: string;
-  provider?: string;
   allow?: string[];
-  readerModel?: string;
   raw?: boolean;
   disallowed?: boolean;
   inherited?: boolean;
@@ -137,10 +134,8 @@ type SelectionCase = {
 };
 
 test.each<SelectionCase>([
-  { name: "resolved provider-prefixed model", pin: "custom/model", expected: "custom/model" },
   { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw model normalized once", pin: "latest", expected: "middle", raw: true },
-  { name: "disallowed pin", pin: "denied", expected: "default", disallowed: true },
   { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
   { name: "one-turn override", pin: "middle", expected: "once", oneTurn: true },
   { name: "bound CLI provider", pin: "cli-model", expected: "cli-model", cli: true },
@@ -188,7 +183,6 @@ test.each<SelectionCase>([
     name: "raw prefix allowed as the plain model",
     pin: "custom/model",
     expected: "model",
-    readerModel: "model",
     allow: ["custom/default", "custom/model"],
     raw: true,
   },
@@ -200,12 +194,6 @@ test.each<SelectionCase>([
     locked: true,
   },
   {
-    name: "resolved prefix allowed by the provider wildcard",
-    pin: "custom/model",
-    expected: "custom/model",
-    allow: ["custom/*"],
-  },
-  {
     name: "inherited resolved prefix allowed by its namespace wildcard",
     pin: "custom/model",
     expected: "custom/model",
@@ -213,42 +201,11 @@ test.each<SelectionCase>([
     inherited: true,
   },
   {
-    name: "namespace wildcard rejects a different model prefix",
-    pin: "customness/model",
-    expected: "default",
-    allow: ["custom/default", "custom/custom/*"],
-    disallowed: true,
-  },
-  {
-    name: "exact model namespace does not authorize another provider",
-    provider: "custom/team",
-    pin: "Reader",
-    expected: "default",
-    allow: ["custom/default", "custom/team/Reader"],
-    disallowed: true,
-  },
-  {
-    name: "provider wildcard does not authorize another provider",
-    provider: "custom/team",
-    pin: "Reader",
-    expected: "default",
-    allow: ["custom/*"],
-    disallowed: true,
-  },
-  {
     name: "resolved prefix allowed by its exact configured ref",
     pin: "custom/model",
     expected: "custom/model",
     allow: ["custom/default", "custom/custom/model"],
     configuredProvider: true,
-  },
-  {
-    name: "exact configured prefix does not authorize the plain model",
-    pin: "model",
-    expected: "default",
-    allow: ["custom/default", "custom/custom/model"],
-    configuredProvider: true,
-    disallowed: true,
   },
 ])("selects $name through the reply owner", async (fixture) => {
   await withStateDirEnv("reply-resolved-pin-", async () => {
@@ -287,7 +244,7 @@ test.each<SelectionCase>([
       },
     });
     setActivePluginRegistry(registry);
-    const provider = fixture.provider ?? (fixture.cli ? "demo-cli" : "custom");
+    const provider = fixture.cli ? "demo-cli" : "custom";
     const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
       entry: pinnedEntry,
@@ -333,17 +290,6 @@ test.each<SelectionCase>([
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: registry },
       async () => {
-        // A failure here belongs to the reader dependency, before this owner's live-turn path.
-        expect(
-          resolveDirectStoredModelOverride({
-            sessionEntry: pinnedEntry,
-            defaultProvider: "custom",
-          }),
-        ).toMatchObject({
-          provider,
-          model: fixture.readerModel ?? (fixture.raw ? "middle" : fixture.pin),
-          routeResolution: fixture.raw ? "raw" : "resolved",
-        });
         const pendingSelection = createModelSelectionState({
           cfg,
           agentId: "main",

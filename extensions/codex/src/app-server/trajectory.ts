@@ -2,17 +2,16 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
-export type CodexTrajectoryRecorder = {
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-};
+export type CodexTrajectoryRecorder = NonNullable<
+  EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]
+>;
 
 type CodexTrajectoryInit = {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
   developerInstructions?: string;
   prompt?: string;
-  trajectory?: NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]> | null;
+  trajectory?: CodexTrajectoryRecorder | null;
   tools?: CodexDynamicToolSpec[];
 };
 

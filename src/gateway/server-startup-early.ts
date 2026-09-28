@@ -1,5 +1,6 @@
 // Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, and delayed maintenance setup.
+import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
 import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,6 +63,7 @@ export async function startGatewayEarlyRuntime(params: {
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
+  await setSessionMcpRuntimeScheduler(params.scheduler);
   const startSideRuntimes = !params.minimalTestGateway && !params.updateCanary;
   // Startup failure can occur immediately after discovery; publish its owner first.
   params.swapDiscovery(

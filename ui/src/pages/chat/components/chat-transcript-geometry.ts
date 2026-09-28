@@ -203,12 +203,13 @@ export class PositionRailGutterController implements ReactiveController {
     this.viewport = viewport;
     this.innerElement = inner;
     this.region = region;
+    const column = inner.querySelector<HTMLElement>(":scope > .chat-virtual-sizer") ?? inner;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
     this.resizeObserver = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
-        if (entry.target === inner) {
+        if (entry.target === column) {
           const width = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
           changed ||= width !== innerWidth;
           innerWidth = width;
@@ -218,12 +219,13 @@ export class PositionRailGutterController implements ReactiveController {
           regionHeight = height;
         }
       }
-      // Streaming changes the inner height, but only column width affects the gutter.
       if (changed) {
         this.scheduleSync();
       }
     });
-    this.resizeObserver.observe(inner, { box: "border-box" });
+    // The virtual column has no flow height. Observing the owned range instead
+    // feeds row measurements back into shallower ResizeObserver delivery.
+    this.resizeObserver.observe(column, { box: "border-box" });
     this.resizeObserver.observe(region, { box: "border-box" });
     this.scheduleSync();
   }

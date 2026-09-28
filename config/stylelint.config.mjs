@@ -6,13 +6,22 @@ const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
 export default {
   extends: "stylelint-config-recommended",
   rules: {
-    // Measured :has() hazards: universal targets (~9 ms) and ::placeholder (~8 ms)
-    // restyle the whole subtree per insertion with 534 messages; ::part did not.
-    // Skip functional arguments/attributes; split lists to keep safe branches independent.
+    // Chromium builds one invalidation set for every non-subject :has(). A universal
+    // selector or pseudo-element after one widens it to whole subtrees (~9 ms per
+    // insertion with 534 messages), ::placeholder on the :has() compound cost ~8 ms, and
+    // a tick after a sibling-relative :has() restyled every position-rail tick per
+    // transcript row. Style the element directly, or set a state class or custom
+    // property on the :has() subject. Functional arguments and attributes are skipped;
+    // split lists keep safe branches independent.
     "selector-disallowed-list": [
       [
-        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]\\*`, "i"),
+        new RegExp(
+          `:has${selectorFunction}${selectorTail}[\\s>+~](?:${selectorTail}[\\s>+~(])?\\*`,
+          "i",
+        ),
+        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]${selectorTail}::`, "i"),
         new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
+        new RegExp(`:has(?=\\(\\s*[+~])${selectorFunction}${selectorTail}[\\s>+~]`, "i"),
       ],
       { splitList: true },
     ],
@@ -24,15 +33,6 @@ export default {
     // `word-break: break-word` is deprecated but swapping it for overflow-wrap
     // changes min-content sizing in flex/grid text containers.
     "declaration-property-value-keyword-no-deprecated": [true, { ignoreKeywords: ["break-word"] }],
-    // Chromium builds one invalidation set for every non-subject :has(). A
-    // pseudo-element or universal selector after one widens it to whole
-    // subtrees, so each DOM insertion restyled every :has() anchor, the chat
-    // transcript included. Style the element directly, or set a state class
-    // or custom property on the :has() subject.
-    "selector-disallowed-list": [
-      [/:has\((?:[^()]|\([^()]*\))*\)[^\s>+~]*[\s>+~](?:.*::|(?:.*[\s>+~(])?\*)/s],
-      { splitList: true },
-    ],
   },
   overrides: [
     {

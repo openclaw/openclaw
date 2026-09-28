@@ -535,9 +535,12 @@ describe("pending input consumption receipts", () => {
               sessionKey: scope.sessionKey,
             }).aborted,
           ).toBe(true);
+          retained[0]?.finish("cancelled");
           const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
           expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
-          expect(cancelledPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
+          expect(cancelledPage.inputReceipts).toEqual([
+            { runId: "retained-0", state: "pending", cancelled: true },
+          ]);
           const anchor = await call({
             inputRunIds,
             messageId: aggregate.inputId,

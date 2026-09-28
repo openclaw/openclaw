@@ -254,6 +254,7 @@ export async function withUpdateCandidateAdmission<T>(
       return await execute(params.stagedPackage);
     }
     if (
+      target.packageAlreadyCurrent ||
       !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
       target.updateInstallKind !== "package"
     ) {
@@ -313,6 +314,7 @@ export async function withUpdateCandidateAdmission<T>(
       message: error.message,
       nextAction: error.nextAction,
       failureFacts: error.failureFacts,
+      stepResult: error.stepResult,
       recoverySteps: error.recoverySteps,
     });
   }

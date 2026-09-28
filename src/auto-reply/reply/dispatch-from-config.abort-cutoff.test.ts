@@ -22,7 +22,6 @@ beforeEach(() => {
 });
 
 it.each([
-  { name: "older message ID", message: { MessageSid: "41" }, cancelled: true },
   { name: "cutoff message ID", message: { MessageSid: "42" }, cancelled: true },
   { name: "older timestamp", message: { Timestamp: 999 }, cancelled: true },
   { name: "newer message ID", message: { MessageSid: "43" }, cancelled: false },

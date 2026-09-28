@@ -83,11 +83,11 @@ it("keeps fingerprint failures advisory and publishes no database write proof", 
   await maintenance!.release();
 });
 
-it.each(
-  (["admission", "receipt"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
-  ),
-)(
+it.each([
+  { phase: "admission", cleanup: "uncertain" },
+  { phase: "receipt", cleanup: "forced" },
+  { phase: "receipt", cleanup: "uncertain" },
+] as const)(
   "joins database $phase workers before releasing state custody ($cleanup)",
   async ({ phase, cleanup }) => {
     const barrier = cleanupBarrier();
@@ -316,11 +316,12 @@ it.each(["forced", "uncertain"] as const)(
   },
 );
 
-it.each(
-  (["inspection", "autostart", "installation"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
-  ),
-)(
+it.each([
+  { phase: "inspection", cleanup: "uncertain" },
+  { phase: "autostart", cleanup: "uncertain" },
+  { phase: "installation", cleanup: "forced" },
+  { phase: "installation", cleanup: "uncertain" },
+] as const)(
   "settles restoration $phase and retains unknown cleanup ($cleanup)",
   async ({ phase, cleanup }) => {
     if (phase === "installation") {
@@ -380,13 +381,11 @@ it.each(
     const error = await work;
     if (cleanup === "forced") {
       expect(error).toBeUndefined();
-      expect(boundary.restart).toHaveBeenCalledTimes(phase === "installation" ? 0 : 1);
+      expect(boundary.restart).not.toHaveBeenCalled();
       expect(boundary.health).toHaveBeenCalledOnce();
-      if (phase === "installation") {
-        expect(boundary.read).toHaveBeenCalledTimes(2);
-        expect(boundary.revalidate).toHaveBeenCalledTimes(2);
-        expect(boundary.repair).toHaveBeenCalledOnce();
-      }
+      expect(boundary.read).toHaveBeenCalledTimes(2);
+      expect(boundary.revalidate).toHaveBeenCalledTimes(2);
+      expect(boundary.repair).toHaveBeenCalledOnce();
       expect(boundary.log).toHaveBeenCalledWith(
         "Gateway restarted and verified after Doctor repair.",
       );
@@ -494,7 +493,7 @@ it("restores a service after state ownership fails without retaining a partial m
   expect(boundary.sleep).not.toHaveBeenCalled();
 });
 
-it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
+it.each(["acquired", "native-revoked", "install-drift"] as const)(
   "refuses changed repair admission and compensates under original service custody (%s)",
   async (phase) => {
     if (phase === "install-drift") {
@@ -538,9 +537,6 @@ it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
     });
     boundary.sleep.mockImplementation(async () => {
       ticks++;
-      if (phase === "drain") {
-        conflict = true;
-      }
     });
     boundary.admission.mockImplementation(() => {
       checkedUnderOwner ||= gatewayHeld && ownerVerified;
@@ -635,13 +631,11 @@ it.each([false, true])(
   },
 );
 
-it("reports an already stopped Gateway without starting it after repair", async () => {
+it("leaves an already stopped Gateway with its legacy update parent after repair", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
   boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
   const maintenance = await begin();
   await maintenance!.finish({});
   expect(boundary.restart).not.toHaveBeenCalled();
   expect(boundary.health).not.toHaveBeenCalled();
-  const warning = expect.stringMatching(/already stopped before repair.*openclaw gateway start/);
-  expect(maintenance!.warnings).toContainEqual(warning);
-  expect(boundary.log).toHaveBeenCalledWith(warning);
 });

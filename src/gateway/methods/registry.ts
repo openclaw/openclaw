@@ -55,6 +55,7 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
       ? { startup: "unavailable-until-sidecars" }
       : {}),
     ...(input.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
+    ...(input.lifetime === "observation" ? { lifetime: "observation" } : {}),
     ...(input.advertise === false ? { advertise: false } : {}),
   };
 }
@@ -85,6 +86,7 @@ export function createGatewayMethodRegistry(
     getScope: (name) => byName.get(name)?.scope,
     getSessionAccess: (name) => byName.get(name)?.sessionAccess,
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
+    isObservation: (name) => byName.get(name)?.lifetime === "observation",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,
     requiresAuthenticatedProfile: (name) => byName.get(name)?.profileAccess === "required",
     descriptors: () => descriptors,

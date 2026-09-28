@@ -404,7 +404,10 @@ export async function attachAuthenticatedGatewayConnect(
       : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
-    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(context.configSnapshot),
+    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(
+      context.configSnapshot,
+      authenticatedUserId,
+    ),
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
@@ -535,6 +538,20 @@ export async function attachAuthenticatedGatewayConnect(
   handoffReceiver.value();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
+  // Ephemeral clients never page transcripts, so avoid starting an idle history worker for them.
+  if (role === "operator" && !isEphemeralGatewayClient(connectParams.client)) {
+    runDetachedConnectWork(
+      async () => {
+        const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
+        await prewarmGatewaySessionHistory(getRuntimeConfig(), {
+          onlyIfCold: true,
+          isCancelled: () => context.handler.connectionWork.signal.aborted,
+        });
+      },
+      (error) =>
+        logGateway.debug(`connection session history prewarm failed: ${formatForLog(error)}`),
+    );
+  }
   logWs("in", "connect", {
     connId,
     client: connectParams.client.id,

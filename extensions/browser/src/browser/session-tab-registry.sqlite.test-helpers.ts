@@ -5,6 +5,7 @@ import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
+import type { BrowserSessionTabAuthority } from "./session-tab-store.js";
 
 type TabIdentity = {
   sessionKey?: string;
@@ -59,6 +60,12 @@ export type CloseOptions = {
 };
 
 export type RegistryModule = {
+  filterTrackedSessionBrowserTabs<T extends { targetId: string; tabId?: string }>(
+    params: Pick<TabIdentity, "sessionKey" | "route" | "profile"> & {
+      tabs: readonly T[];
+      authority?: BrowserSessionTabAuthority;
+    },
+  ): Promise<T[]>;
   trackSessionBrowserTab(params: TabIdentity & { now?: number }): Promise<DurableTab | undefined>;
   touchSessionBrowserTab(params: TabIdentity & { now?: number }): Promise<void>;
   untrackSessionBrowserTab(params: TabIdentity): Promise<void>;

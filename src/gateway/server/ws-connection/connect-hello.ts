@@ -169,6 +169,11 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        // Configured UI roots may serve an older route contract than this Gateway.
+        ...(controlUiBuildSource === "bundled" &&
+        context.configSnapshot.gateway?.controlUi?.enabled !== false
+          ? [GATEWAY_SERVER_CAPS.CONTROL_UI_BROWSER_FOCUS]
+          : []),
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,

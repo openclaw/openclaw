@@ -151,7 +151,9 @@ OpenClaw asks Codex to interrupt the native turn and keeps the per-thread fence
 until termination is confirmed. It never falls back to a context engine or
 public OpenAI summarizer. If the native Codex thread binding is missing or
 stale, the command fails closed instead of silently switching compaction
-backends.
+backends. A SIWC-backed native thread cannot use manual `/compact`.
+Automatic in-turn compaction remains available; continue the conversation
+or start a new session when you need a fresh context.
 
 Cancellation prevents native requests that have not been submitted, including
 overload retries. After submission, OpenClaw keeps the thread occupied until

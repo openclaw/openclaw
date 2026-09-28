@@ -101,7 +101,7 @@ async function cleanupActiveMemoryRecallSession(params: {
     : new Error(`active-memory recall cleanup failed: ${String(lastError)}`);
 }
 
-async function runRecallSubagent(params: {
+export async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
@@ -381,5 +381,3 @@ async function runRecallSubagent(params: {
     await cleanupRecallResources();
   }
 }
-
-export { runRecallSubagent };

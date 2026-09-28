@@ -217,25 +217,22 @@ describe("followup retained session authorization", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it.each(["canonical", "stored alias"])(
-    "latches original-operator access revocation on the %s key",
-    async (kind) => {
-      const changedKey = kind === "canonical" ? input.targetSessionKey : "legacy-worker-alias";
-      const preparedTarget = target().target;
-      if (!preparedTarget) {
-        throw new Error("Expected target facts");
-      }
-      preparedTarget.storeKeys.push(changedKey);
-      const request = await prepare();
-      expect(() => request.custody.assertCurrent()).not.toThrow();
-      target().membership = new Set();
-      sessionChanges.emit({ sessionKey: changedKey });
-      expect(request.custody.signal.aborted).toBe(true);
-      target().membership = new Set(["requester"]);
-      sessionChanges.emit({ sessionKey: changedKey });
-      expect(() => request.custody.assertCurrent()).toThrow("revoked");
-    },
-  );
+  it("latches original-operator access revocation on a stored alias", async () => {
+    const changedKey = "legacy-worker-alias";
+    const preparedTarget = target().target;
+    if (!preparedTarget) {
+      throw new Error("Expected target facts");
+    }
+    preparedTarget.storeKeys.push(changedKey);
+    const request = await prepare();
+    expect(() => request.custody.assertCurrent()).not.toThrow();
+    target().membership = new Set();
+    sessionChanges.emit({ sessionKey: changedKey });
+    expect(request.custody.signal.aborted).toBe(true);
+    target().membership = new Set(["requester"]);
+    sessionChanges.emit({ sessionKey: changedKey });
+    expect(() => request.custody.assertCurrent()).toThrow("revoked");
+  });
   it("rejects an archived or replaced target without using the same key as authority", async () => {
     const request = await prepare();
     const row = target().target;

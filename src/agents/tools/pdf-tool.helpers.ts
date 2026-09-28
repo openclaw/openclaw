@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   filterStringEntries,
   normalizeUniqueTrimmedStringList,
@@ -128,14 +129,8 @@ export function resolvePdfToolMaxTokens(
   modelMaxTokens: number | undefined,
   requestedMaxTokens = 4096,
 ) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
+  const modelLimit = asPositiveFiniteNumber(modelMaxTokens);
+  return modelLimit === undefined ? requestedMaxTokens : Math.min(requestedMaxTokens, modelLimit);
 }
 
 const CODEX_PDF_INSTRUCTIONS =

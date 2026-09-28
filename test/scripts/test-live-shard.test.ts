@@ -121,6 +121,7 @@ describe("scripts/test-live-shard", () => {
       ],
       "native-live-src-infra": [
         "src/cli/update-cli/update-command-node-runtime.live.test.ts",
+        "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
         "src/infra/fixture.live.test.ts",
       ],
       "native-live-test": ["test/fixture.live.test.ts"],

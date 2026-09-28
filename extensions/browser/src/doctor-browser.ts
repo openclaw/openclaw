@@ -65,14 +65,6 @@ function collectBrowserDoctorProfiles(cfg: OpenClawConfig) {
   };
 }
 
-function resolveManagedBrowserProfileDir(configDir: string, profileName: string): string {
-  return path.join(configDir, "browser", profileName);
-}
-
-function resolveManagedBrowserUserDataDir(configDir: string, profileName: string): string {
-  return path.join(resolveManagedBrowserProfileDir(configDir, profileName), "user-data");
-}
-
 function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: string): boolean {
   const browser = asNullableRecord(cfg.browser);
   if (!browser) {
@@ -105,14 +97,8 @@ export function detectLegacyClawdBrowserProfileResidue(
   deps?: BrowserDoctorFilesystemDeps,
 ): LegacyClawdBrowserProfileResidue | null {
   const configDir = deps?.configDir ?? CONFIG_DIR;
-  const legacyProfileDir = resolveManagedBrowserProfileDir(
-    configDir,
-    LEGACY_CLAWD_BROWSER_PROFILE_NAME,
-  );
-  const legacyUserDataDir = resolveManagedBrowserUserDataDir(
-    configDir,
-    LEGACY_CLAWD_BROWSER_PROFILE_NAME,
-  );
+  const legacyProfileDir = path.join(configDir, "browser", LEGACY_CLAWD_BROWSER_PROFILE_NAME);
+  const legacyUserDataDir = path.join(legacyProfileDir, "user-data");
   const pathExists = deps?.pathExists ?? fs.existsSync;
   if (!pathExists(legacyProfileDir) && !pathExists(legacyUserDataDir)) {
     return null;
@@ -134,9 +120,11 @@ export function detectLegacyClawdBrowserProfileResidue(
   return {
     legacyProfileDir,
     legacyUserDataDir,
-    canonicalUserDataDir: resolveManagedBrowserUserDataDir(
+    canonicalUserDataDir: path.join(
       configDir,
+      "browser",
       DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+      "user-data",
     ),
   };
 }

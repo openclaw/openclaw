@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../types.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
@@ -126,14 +125,28 @@ beforeEach(() => {
   settleRequester.mockReset().mockReturnValue(true);
 });
 
+it("delivers an ordinary terminal failure", async () => {
+  const context = createContext();
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution = {
+    ...context.execution,
+    status: "failed",
+    terminalFailurePayload: markAgentRunFailureReplyPayload({ text: "Terminal failure" }),
+  };
+  const payloads = await prepare("ordinary", context);
+  expect(payloads.map((payload) => payload.text)).toEqual(["Terminal failure"]);
+  expect(payloads[0]?.isError).toBe(true);
+});
+
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
-  it.each(["explicit acknowledgment", "visible final", "terminal failure"])(
+  it.each(["explicit acknowledgment", "visible final"])(
     "preserves %s precedence",
     async (precedence) => {
       const context = createContext();
       const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
       context.opts = { onPendingContinuation };
-      const selected: ReplyPayload = { text: `${precedence} selected` };
+      const selected = { text: `${precedence} selected` };
       if (precedence === "explicit acknowledgment") {
         context.execution.result.meta.yieldAcknowledgment = ` ${selected.text} `;
         context.execution.result.payloads = [{ text: "Private plan", isReasoning: true }];
@@ -142,23 +155,12 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
           context.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
           context.execution.result.payloads.push({ text: "Private partial output" });
         }
-      } else if (precedence === "visible final") {
+      } else {
         context.execution.result.meta.yieldAcknowledgment = "Still waiting.";
         context.execution.result.payloads = [selected];
-      } else {
-        context.execution.result.acceptedSessionSpawns = undefined;
-        context.execution.result.meta = { durationMs: 0 };
-        context.execution = {
-          ...context.execution,
-          status: "failed",
-          terminalFailurePayload: markAgentRunFailureReplyPayload(selected),
-        };
       }
       const payloads = await prepare(lane, context);
       expect(payloads.map((payload) => payload.text)).toEqual([selected.text]);
-      if (selected.isError) {
-        expect(payloads[0]?.isError).toBe(true);
-      }
       if (precedence === "explicit acknowledgment") {
         expect(getReplyPayloadMetadata(payloads[0] ?? {})).toMatchObject({
           continuationStatus: true,

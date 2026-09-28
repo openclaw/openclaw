@@ -24,6 +24,7 @@ import {
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prepareSessionEntryPresenceRead,
+  prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
@@ -69,7 +70,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       override postMessage(...args: Parameters<Worker["postMessage"]>): void {
         const kind = asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind;
         if (
-          (kind === "history-page" || kind === "session-row-presence") &&
+          (kind === "prewarm" || kind === "history-page" || kind === "session-row-presence") &&
           !observed.workers.includes(this)
         ) {
           observed.workers.push(this);
@@ -180,10 +181,13 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
   for (const sessionId of ["first-fixture", "second-fixture"]) {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await seed(state, "main", sessionId);
+      await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
+      const prewarmedWorker = observed.workers.at(-1);
       expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
         `${sessionId}-message`,
       ]);
       const worker = observed.workers.at(-1)!;
+      expect(worker).toBe(prewarmedWorker);
       if (previousWorker) {
         if (process.versions.bun) {
           expect(previousWorker.threadId).toBe(-1);

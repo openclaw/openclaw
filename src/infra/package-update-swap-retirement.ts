@@ -6,6 +6,7 @@ import {
 } from "./package-update-filesystem.js";
 import type { PackageRootIntegrityFingerprint } from "./package-update-integrity.js";
 import type { createNpmPackageRootLinkLifecycle } from "./package-update-npm-root.js";
+import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 /** Called only by the verified, cached transaction completion path. */
@@ -46,6 +47,8 @@ export async function retireVerifiedPackageSwap(params: {
     assertRetirementCurrent();
     return undefined;
   }
+  const cleanupStartedAt = performance.now();
+  const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
   const linkRetention =
     rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
   assertRetirementCurrent();
@@ -58,6 +61,7 @@ export async function retireVerifiedPackageSwap(params: {
       "old package",
       params.globalRoot,
       assertRetirementCurrent,
+      cleanupDeadlineAtMs,
     );
     if (message) {
       messages.push(message);
@@ -67,6 +71,7 @@ export async function retireVerifiedPackageSwap(params: {
     launchers,
     params.globalRoot,
     assertRetirementCurrent,
+    cleanupDeadlineAtMs,
   );
   if (launcherCleanup) {
     messages.push(launcherCleanup);
@@ -78,6 +83,7 @@ export async function retireVerifiedPackageSwap(params: {
     return {
       ...step(1, null, messages.join("\n")),
       name: "package-backup-retention",
+      durationMs: Math.round(performance.now() - cleanupStartedAt),
       // Only this verified obsolete-resource path qualifies the warning.
       // Recovery refusal and unclassified link outcomes remain hard.
       advisory: {

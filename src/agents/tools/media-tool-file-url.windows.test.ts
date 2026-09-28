@@ -127,7 +127,7 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
         ];
         vi.spyOn(
           mediaGenerationToolProviders,
-          "acquireImageGenerationToolProviders",
+          "acquireMediaGenerationToolProviders",
         ).mockResolvedValue({
           providers,
           assertOpen() {},

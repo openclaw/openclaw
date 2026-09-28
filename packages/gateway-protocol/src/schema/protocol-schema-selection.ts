@@ -123,6 +123,8 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "UsersListChannelIdentitiesResultSchema",
   "UsersLinkEmailParamsSchema",
   "UsersLinkEmailResultSchema",
+  "UsersMergeParamsSchema",
+  "UsersMergeResultSchema",
   "UsersListParamsSchema",
   "UsersListResultSchema",
   "UsersPrefsGetParamsSchema",

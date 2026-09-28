@@ -139,6 +139,25 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "prewarm") {
+        await Promise.all([
+          import("../../gateway/session-history-worker-reader.js"),
+          import("../../gateway/server-methods/chat-history-page-kernel.js"),
+          import("../../gateway/session-history-snapshot.js"),
+        ]);
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
+            ...request.database,
+            env: cloneEnvWithPlatformSemantics(request.env),
+          });
+          if (!opened.found && opened.reason !== "database-missing") {
+            throw new Error(`Session history prewarm admission unavailable: ${opened.reason}`);
+          }
+          return { kind: "prewarm" as const };
+        });
+      }
       if (request.kind === "historical-eviction-candidates") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -419,6 +438,23 @@ serveOwnedWorkerTasks(
           );
           return result.found ? result.value : [];
         });
+      }
+      if (request.kind === "session-pending-input-receipts") {
+        const { listSessionPendingInputReceipts } =
+          await import("./session-accessor.sqlite-pending-input-receipts.js");
+        return await withHistoryDatabase(request.database, request.kind, () => ({
+          kind: "session-pending-input-receipts" as const,
+          receipts: listSessionPendingInputReceipts(
+            {
+              agentId: request.agentId,
+              sessionKey: request.sessionKey,
+              sessionId: request.sessionId,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+            { runIds: request.runIds },
+          ),
+        }));
       }
       if (request.kind === "session-progress-card") {
         const { withOpenClawAgentDatabaseReadOnly } =

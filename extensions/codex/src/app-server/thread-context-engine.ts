@@ -2,9 +2,7 @@ import {
   isActiveHarnessContextEngine,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexContextEngineProjectionMaxChars } from "./context-engine-projection.js";
-import type { JsonValue } from "./protocol.js";
 import type {
   CodexAppServerContextEngineBinding,
   CodexAppServerContextEngineProjectionBinding,
@@ -36,24 +34,20 @@ export function buildContextEngineBinding(
       engineVersion: contextEngine.info.version,
       ownsCompaction: contextEngine.info.ownsCompaction === true,
       turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
-      citationsMode: resolveContextEngineCitationsMode(params.config),
+      citationsMode: params.config?.memory?.citations,
       contextTokenBudget: params.contextTokenBudget,
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: params.contextTokenBudget,
       }),
     }),
-    projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,
-  };
-}
-
-function buildContextEngineProjectionBinding(
-  projection: CodexContextEngineThreadBootstrapProjection,
-): CodexAppServerContextEngineProjectionBinding {
-  return {
-    schemaVersion: 1,
-    mode: "thread_bootstrap",
-    epoch: projection.epoch,
-    fingerprint: projection.fingerprint,
+    projection: projection
+      ? {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: projection.epoch,
+          fingerprint: projection.fingerprint,
+        }
+      : undefined,
   };
 }
 
@@ -82,24 +76,4 @@ function areContextEngineProjectionBindingsCompatible(
     previous.epoch === next.epoch &&
     previous.fingerprint === next.fingerprint
   );
-}
-
-function resolveContextEngineCitationsMode(config: unknown): JsonValue | undefined {
-  const rootConfig = isRecord(config) ? config : undefined;
-  const memoryConfig = isRecord(rootConfig?.memory) ? rootConfig.memory : undefined;
-  const citations = memoryConfig?.citations;
-  return isJsonConfigValue(citations) ? citations : undefined;
-}
-
-function isJsonConfigValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return true;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value);
-  }
-  if (Array.isArray(value)) {
-    return value.every(isJsonConfigValue);
-  }
-  return isRecord(value) && Object.values(value).every(isJsonConfigValue);
 }

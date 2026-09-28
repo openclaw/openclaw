@@ -9,7 +9,9 @@ import {
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
 import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import {
+  createExtensionTestTimingKey,
   DATABASE_WORKER_CONFIG,
   DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
   estimateExtensionTestCost,
@@ -26,7 +28,10 @@ import {
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 type CwdOptions = { cwd?: string };
-type ChangedExtensionConfigShard = NodeTestShard & { predictedSeconds: number };
+type ChangedExtensionConfigShard = NodeTestShard & {
+  predictedSeconds: number;
+  predictedTestSeconds: number;
+};
 // Share runner setup while retaining each envelope's process and memory bounds.
 const CHANGED_EXTENSION_JOB_SECONDS = 300;
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
@@ -118,6 +123,22 @@ export function createChangedExtensionConfigShards(
         .filter((files) => files.length > 0)
         .flatMap((files) => splitExtensionTestJobTargets(config, files));
     }
+    if (config === DATABASE_WORKER_CONFIG) {
+      const timings = readCompactGroupTimings("blacksmith");
+      const sharedFileBudget = Math.floor(DATABASE_WORKER_TEST_JOB_FILE_LIMIT / 2);
+      chunks = chunks.flatMap((files) => {
+        if (files.length <= sharedFileBudget || files.some((file) => buildModes.get(file))) {
+          return [files];
+        }
+        const timingKey = createExtensionTestTimingKey(config, files);
+        if (!timingKey || timings[timingKey] !== undefined) {
+          return [files];
+        }
+        // Two unmeasured envelopes can share the file budget; measured walls keep their exact scope.
+        const midpoint = Math.ceil(files.length / 2);
+        return [files.slice(0, midpoint), files.slice(midpoint)];
+      });
+    }
     const partitionSeconds = Math.ceil(
       estimateExtensionTestCost(config, testFiles.length, testFiles) / chunks.length,
     );
@@ -160,6 +181,7 @@ export function createChangedExtensionConfigShards(
         // No plans overlap in this row, so CI can scale the single process's worker budget.
         planConcurrency: 1,
         predictedSeconds,
+        predictedTestSeconds: predictedSeconds,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: `changed-extensions-config${suffix}`,
@@ -249,6 +271,10 @@ export function packChangedExtensionConfigShards(
             })),
             planConcurrency: 1,
             predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
+            predictedTestSeconds: bin.reduce(
+              (seconds, shard) => seconds + shard.predictedTestSeconds,
+              0,
+            ),
             requiresDist: bin[0].requiresDist,
             runner: bin[0].runner,
             shardName: `changed-extensions-bundle-${index + 1}`,

@@ -16,7 +16,6 @@ import {
 import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
-  buildOpenAIResponsesReplayContext,
   buildOpenAIResponsesCompactionReplayPlan,
   isOpenAIResponsesReplayContext,
   isSafeResponsesReplayItemId,
@@ -33,7 +32,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
-import { providerReplayContextMatches } from "./provider-replay-context.js";
+import {
+  buildProviderReplayContext,
+  providerReplayContextMatches,
+} from "./provider-replay-context.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
@@ -256,7 +258,7 @@ function convertResponsesMessagesWithStyle(
   const providerStyle = conversionStyle === "provider";
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
-  const replayContext = buildOpenAIResponsesReplayContext(model, {
+  const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
   });

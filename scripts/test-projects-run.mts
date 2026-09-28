@@ -73,6 +73,7 @@ type VitestRunSpec = BaseVitestRunSpec & {
 };
 type VitestCommandOutcome = {
   code: number;
+  exitedNormally: boolean;
   noOutputTimedOut: boolean;
   signal: NodeJS.Signals | null;
   groupJoined: boolean;
@@ -136,6 +137,7 @@ function runPnpmSpecCommand(
         const exitSignal = getForwardedSignal() ?? signal;
         resolve({
           code: exitSignal ? signalExitCode(exitSignal) : (code ?? 1),
+          exitedNormally: typeof code === "number" && !exitSignal,
           noOutputTimedOut,
           signal: exitSignal,
           groupJoined,
@@ -249,6 +251,7 @@ async function runVitestSpecs(
   reports: VitestReportOwner,
   termination: { signal: NodeJS.Signals | null },
   automatic = false,
+  continueOnFailure = false,
 ) {
   let exitCode = 0;
   let stopScheduling = false;
@@ -279,7 +282,15 @@ async function runVitestSpecs(
       completed += 1;
       if (result.code !== 0) {
         exitCode ||= result.code;
-        if (automatic || (concurrency === 1 && spec.continueOnFailure !== true)) {
+        const continueOrdinaryFailure =
+          continueOnFailure &&
+          result.exitedNormally &&
+          result.groupJoined &&
+          !result.noOutputTimedOut;
+        if (
+          !continueOrdinaryFailure &&
+          (automatic || (concurrency === 1 && spec.continueOnFailure !== true))
+        ) {
           stopScheduling = true;
         }
         failures.push({
@@ -582,6 +593,7 @@ export async function runTestProjects(
       reports,
       termination,
       automatic,
+      baseEnv.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
     );
     if (concurrency === 1 && termination.signal) {
       return;

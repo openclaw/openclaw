@@ -494,10 +494,8 @@ const ToolSearchSchema = z
       .object({
         /** Enable compact search/call cataloging for large tool sets. */
         enabled: z.boolean().optional(),
-        /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
-        mode: z.enum(["code", "tools", "directory"]).optional(),
-        /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
-        codeTimeoutMs: z.number().int().positive().optional(),
+        /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+        mode: z.enum(["tools", "directory"]).optional(),
         /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
         searchDefaultLimit: z.number().int().positive().optional(),
         /** Maximum search result count. Runtime clamps to 1..50. */

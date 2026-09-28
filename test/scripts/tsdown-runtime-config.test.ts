@@ -250,6 +250,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
     ]);
 
     for (const config of configs) {

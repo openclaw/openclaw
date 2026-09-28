@@ -322,8 +322,11 @@ describe("agent database open timings", () => {
       integrityGateMode: "tables",
       integrityTableTimings: expect.arrayContaining([
         { table: "sqlite_schema", check: "integrity_check", elapsedMs: 120 },
-        { table: "transcript_events", check: "quick_check", elapsedMs: 0 },
       ]),
+      integrityTableTotals: {
+        integrity_check: { tableCount: expect.any(Number), elapsedMs: 120 },
+        quick_check: { tableCount: 1, elapsedMs: 0 },
+      },
       integrityCheckSyncMs: 120,
       integrityOutsideCheckMs: 1_000,
       canonicalIndexMs: 0,
@@ -394,10 +397,11 @@ describe("agent database open timings", () => {
         integrityGateOutcome: "healthy",
         integrityGateReason: "revoked",
         integrityGateMode: "tables",
-        integrityTableTimings: expect.arrayContaining([
-          { table: "sqlite_schema", check: "integrity_check", elapsedMs: expect.any(Number) },
-          { table: "transcript_events", check: "quick_check", elapsedMs: expect.any(Number) },
-        ]),
+        integrityTableTimings: expect.any(Array),
+        integrityTableTotals: {
+          integrity_check: { tableCount: expect.any(Number), elapsedMs: expect.any(Number) },
+          quick_check: { tableCount: 1, elapsedMs: expect.any(Number) },
+        },
         integrityWorkerCheckMs: expect.any(Number),
         integrityWorkerLifetimeMs: 0,
         integrityOutsideWorkerMs: 1_000,

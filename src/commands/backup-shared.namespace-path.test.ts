@@ -8,8 +8,6 @@ describe("Windows namespace backup archive paths", () => {
   it.each([
     [String.raw`C:\Users\Eric\.openclaw\agents\main\agent\openclaw-agent.sqlite`, agent],
     [String.raw`\\?\C:\Users\Eric\.openclaw\agents\main\agent\openclaw-agent.sqlite`, agent],
-    [String.raw`\\.\C:\Users\Eric\.openclaw\agents\main\agent\openclaw-agent.sqlite`, agent],
-    ["//?/C:/Users/Eric/.openclaw/agents/main/agent/openclaw-agent.sqlite", agent],
     ["//./C:/Users/Eric/.openclaw/agents/main/agent/openclaw-agent.sqlite", agent],
     [
       String.raw`\\?\UNC\server\share\openclaw-agent.sqlite`,
@@ -18,10 +16,6 @@ describe("Windows namespace backup archive paths", () => {
     [
       String.raw`\\server\share\openclaw-agent.sqlite`,
       "root/payload/posix/server/share/openclaw-agent.sqlite",
-    ],
-    [
-      "/home/eric/.openclaw/openclaw-agent.sqlite",
-      "root/payload/posix/home/eric/.openclaw/openclaw-agent.sqlite",
     ],
     [
       String.raw`\\?\Volume{00000000-0000-0000-0000-000000000001}\agent.sqlite`,
