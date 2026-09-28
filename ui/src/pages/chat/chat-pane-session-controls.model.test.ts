@@ -23,15 +23,11 @@ import { createInitializationContext, createRenderTestChatPane } from "./chat-pa
 import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import {
-  getChatModelObservedRunId,
-  getChatSessionProjection,
-  setChatRunOwner,
-} from "./history-merge.ts";
+import { getChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 describe("chat pane model controls", () => {
-  it("binds model events to the admitted run when session rows omit exact run IDs", async () => {
+  it("keeps the preference visible while admitted-run events update execution history", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:current",
       kind: "direct",
@@ -97,7 +93,7 @@ describe("chat pane model controls", () => {
       steerAck.resolve({});
     });
     const container = document.createElement("div");
-    const draw = (starting = false) => {
+    const draw = () => {
       const controls = renderChatPaneComposerControls({
         state,
         selectedSession: state.sessionsResult?.sessions[0],
@@ -112,8 +108,8 @@ describe("chat pane model controls", () => {
       render(controls.composerControls, container);
       const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
       expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
-      expect(trigger?.getAttribute("aria-busy")).toBe(String(starting));
-      expect(trigger?.querySelector(".btn__spinner") !== null).toBe(starting);
+      expect(trigger?.getAttribute("aria-busy")).toBe("false");
+      expect(trigger?.querySelector(".btn__spinner") !== null).toBe(false);
       return trigger?.textContent;
     };
     state.chatSending = true;
@@ -121,10 +117,10 @@ describe("chat pane model controls", () => {
       sessionKey: state.sessionKey,
       agentId: "main",
     });
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     adoptStartedChatRun(state, "current-run", 2);
     state.chatSending = false;
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     const observe = (
       runId: string,
       model: string | null,
@@ -145,17 +141,21 @@ describe("chat pane model controls", () => {
     observe("current-run", "primary", 3);
     expect(draw()).toContain("Primary");
     observe("current-run", "fallback", 4);
-    expect(draw()).toContain("Fallback");
+    expect(draw()).toContain("Primary");
+    expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
     observe("previous-run", "primary", 1);
-    expect(draw()).toContain("Fallback");
+    expect(draw()).toContain("Primary");
+    expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
     observe("elsewhere-run", "primary", 5, "agent:main:elsewhere");
-    expect(draw()).toContain("Fallback");
+    expect(draw()).toContain("Primary");
+    expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
     observe("current-run", null, 6);
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     observe("current-run", "fallback", 7);
-    expect(draw()).toContain("Fallback");
+    expect(draw()).toContain("Primary");
+    expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
     adoptStartedChatRun(state, "replacement-run", 8);
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     observe("replacement-run", "primary", 9);
     expect(draw()).toContain("Primary");
     state.chatSending = true;
@@ -171,10 +171,11 @@ describe("chat pane model controls", () => {
     observe("next-run", "fallback", 10);
     // A delayed event can carry the latest session projection but an older emitter ID.
     observe("replacement-run", "fallback", 10);
-    expect(draw(true)).toContain("Primary");
+    expect(draw()).toContain("Primary");
     adoptStartedChatRun(state, "next-run", 11);
     state.chatSending = false;
-    expect(draw()).toContain("Fallback");
+    expect(draw()).toContain("Primary");
+    expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
     observe("next-run", "primary", 12);
     expect(draw()).toContain("Primary");
     vi.stubGlobal("sessionStorage", window.sessionStorage);
@@ -214,9 +215,9 @@ describe("chat pane model controls", () => {
     await steering;
     await vi.waitFor(() => expect(state.chatSending).toBe(false));
     expect(state.chatRunId).toBe("next-run");
-    expect(draw()).toContain("Fallback");
+    expect(draw()).toContain("Primary");
+    expect(state.sessionsResult?.sessions[0]?.activeModel).toBe("fallback");
     reconcileChatRunLifecycle(state, { clearLocalRun: true, clearChatStream: true });
-    expect(getChatModelObservedRunId(state, state.sessionsResult?.sessions[0])).toBeUndefined();
   });
 
   it("does not show another session's pending model after switching sessions", () => {

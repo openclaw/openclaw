@@ -167,10 +167,16 @@ plain code without interactive controls.
 
 ## Chat behavior
 
-When you send a message, the model picker keeps your selected model visible with
-a small starting indicator until the Gateway confirms the model handling the turn.
-If a fallback takes over, the label updates to that model without changing your
-saved selection. A turn with no known selection still shows **Model pending**.
+The model picker displays your selected preference, even while a reply is sending,
+preparing, or streaming. You can change the model and reasoning effort without
+interrupting that reply. Successfully saved choices apply to ordinary queued
+messages that have not started; explicit per-message overrides keep their existing
+precedence. The current turn keeps its execution settings, and its recorded model
+(including any fallback) does not replace the picker label.
+
+During a model change, model and effort controls wait for the new model’s supported
+settings. Fast mode and context-window changes remain unavailable during an active
+reply. Read-only, disconnected, and unavailable-backend protections still apply.
 
 New Session shows the agent's known default model while the model catalog loads.
 Model choices are cached in memory for the current connection, agent, session,

@@ -140,6 +140,8 @@ function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
 type ReplyTurnAdmissionParams = {
   runId?: string;
   assertRequestCurrent?: () => void;
+  /** Capture caller-owned selection during admission checks, including the writer-ordered recheck. */
+  captureRunSelection?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   agentId?: string;
   sessionKey: string;
@@ -396,6 +398,7 @@ export async function admitReplyTurn(
                   });
                 }
                 sessionId = currentEntry?.sessionId ?? sessionId;
+                params.captureRunSelection?.();
               },
             })
           : undefined;
@@ -520,6 +523,9 @@ export async function admitReplyTurn(
             // A predecessor can rotate after the final row read but before this handoff.
             // Reacquire the full admission; its session ID alone grants no authority.
             throw new ReplyOperationChangedDuringAdmissionError();
+          }
+          if (!storePath) {
+            params.captureRunSelection?.();
           }
           if (params.adoptOperation) {
             // The dispatch closures own this object's abort/delivery lifecycle,

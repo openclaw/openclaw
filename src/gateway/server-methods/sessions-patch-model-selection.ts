@@ -86,20 +86,27 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  if (!("agentRuntime" in params.patch) && params.patch.model === undefined) {
+  const modelSelectionChanged = "agentRuntime" in params.patch || params.patch.model !== undefined;
+  if (!modelSelectionChanged && params.patch.thinkingLevel === undefined) {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
   const model = resolveSessionModelRef(cfg, entry, agentId);
   refreshQueuedFollowupSession({
     key: sessionKey,
-    nextProvider: model.provider,
-    nextModel: model.model,
-    nextRouteResolution: entry.modelOverrideRouteResolution,
-    nextModelOverrideSource:
-      entry.modelOverrideSource === "default" ? undefined : entry.modelOverrideSource,
-    nextAuthProfileId: entry.authProfileOverride,
-    nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
+    // An effort-only edit must not replace a queued route/account or clear its
+    // fallback provenance. Model changes still retarget waiting work as before.
+    ...(modelSelectionChanged
+      ? {
+          nextProvider: model.provider,
+          nextModel: model.model,
+          nextRouteResolution: entry.modelOverrideRouteResolution,
+          nextModelOverrideSource:
+            entry.modelOverrideSource === "default" ? undefined : entry.modelOverrideSource,
+          nextAuthProfileId: entry.authProfileOverride,
+          nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
+        }
+      : {}),
     nextThinking: {
       level: entry.thinkingLevel,
       catalog: params.catalog,

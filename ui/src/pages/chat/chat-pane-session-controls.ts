@@ -32,7 +32,7 @@ import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
-import { getChatModelObservedRunId, getChatRunOwnerSessionKey } from "./history-merge.ts";
+import { getChatRunOwnerSessionKey } from "./history-merge.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 
 registerModelControlsEnglish();
@@ -269,7 +269,6 @@ export function renderChatPaneComposerControls(params: {
             }),
           activeRunId: state.chatRunId,
           activeRunSessionKey: getChatRunOwnerSessionKey(state),
-          modelObservedRunId: getChatModelObservedRunId(state, selectedSession),
           agentDefaultModel,
           connected: state.connected,
           gatewayAvailable: Boolean(state.client),

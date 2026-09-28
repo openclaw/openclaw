@@ -5805,7 +5805,7 @@ describe("chat model controls", () => {
     expect(trigger.dataset.chatSelectValue).toBe("example/primary");
   });
 
-  it("shows the session's active fallback model without changing its selected preference", () => {
+  it("shows the selected preference without changing the recorded fallback model", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "codex",
@@ -5823,8 +5823,8 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
     const trigger = getChatModelSelect(container);
 
-    expect(trigger.textContent).toContain("Qwen 3.5 9B");
-    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Qwen 3.5 9B");
+    expect(trigger.textContent).toContain("GPT-5.5");
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: GPT-5.5");
     expect(trigger.dataset.chatSelectValue).toBe("codex/gpt-5.5");
     expect(
       container
@@ -5833,7 +5833,7 @@ describe("chat model controls", () => {
     ).toBe("true");
   });
 
-  it("tracks the current run's primary and fallback model without changing its selection", () => {
+  it("keeps the selected preference visible as the current run reports a fallback", () => {
     const { state } = createChatHeaderState({
       model: "primary",
       modelProvider: "example",
@@ -5855,7 +5855,8 @@ describe("chat model controls", () => {
 
     session.activeModel = "fallback";
     renderModelControls(state, {}, container);
-    expect(getChatModelSelect(container).textContent).toContain("Fallback");
+    expect(getChatModelSelect(container).textContent).toContain("Primary");
+    expect(session.activeModel).toBe("fallback");
     expect(getChatModelSelect(container).dataset.chatSelectValue).toBe("example/primary");
     expect(
       container
@@ -5864,7 +5865,7 @@ describe("chat model controls", () => {
     ).toBe("true");
   });
 
-  it("preserves the executing provider when its model id exists in another provider's catalog", () => {
+  it("does not replace the selected provider with a similarly named executing model", () => {
     const { state } = createChatHeaderState({
       model: "shared",
       modelProvider: "example",
@@ -5878,7 +5879,7 @@ describe("chat model controls", () => {
       activeModelProvider: "fallback-provider",
     });
     const trigger = getChatModelSelect(renderModelControls(state));
-    expect(trigger.textContent).toContain("fallback-provider/shared");
+    expect(trigger.textContent).toContain("Configured model");
     expect(trigger.dataset.chatSelectValue).toBe("example/shared");
   });
 
@@ -5925,9 +5926,9 @@ describe("chat model controls", () => {
       activeModelProvider: row.activeModel ? "example" : undefined,
     });
     const trigger = getChatModelSelect(renderModelControls(state));
-    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Primary · Starting…");
-    expect(trigger.getAttribute("aria-busy")).toBe("true");
-    expect(trigger.querySelector(".btn__spinner")).not.toBeNull();
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Primary");
+    expect(trigger.getAttribute("aria-busy")).toBe("false");
+    expect(trigger.querySelector(".btn__spinner")).toBeNull();
     expect(trigger.textContent).toContain("Primary");
     expect(trigger.textContent).not.toContain("Model pending");
     expect(trigger.textContent).not.toContain("Fallback");
@@ -5941,7 +5942,7 @@ describe("chat model controls", () => {
       defaultModel: "example/default",
       locked: false,
       expected: "Primary",
-      starting: true,
+      starting: false,
     },
     {
       name: "inherited default",
@@ -5949,7 +5950,7 @@ describe("chat model controls", () => {
       defaultModel: "example/default",
       locked: false,
       expected: "Default",
-      starting: true,
+      starting: false,
     },
     {
       name: "locked known choice",
@@ -5957,14 +5958,14 @@ describe("chat model controls", () => {
       defaultModel: "example/default",
       locked: true,
       expected: "Primary",
-      starting: true,
+      starting: false,
     },
     {
       name: "locked unknown choice",
       model: null,
       defaultModel: "example/default",
       locked: true,
-      expected: "Model pending",
+      expected: "Session model",
       starting: false,
     },
     {
@@ -5972,7 +5973,7 @@ describe("chat model controls", () => {
       model: null,
       defaultModel: "",
       locked: false,
-      expected: "Model pending",
+      expected: "Default model",
       starting: false,
     },
   ])(
@@ -6004,7 +6005,7 @@ describe("chat model controls", () => {
     },
   );
 
-  it("does not borrow selected-model metadata for an unknown active fallback", () => {
+  it("uses selected-model metadata without changing an unknown active fallback", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "codex",
@@ -6018,9 +6019,10 @@ describe("chat model controls", () => {
 
     const trigger = getChatModelSelect(renderModelControls(state));
 
-    expect(trigger.textContent).toContain("ollama/qwen3.5:9b");
-    expect(trigger.dataset.chatModelTools).toBe("available");
-    expect(trigger.querySelector(".chat-controls__trigger-provider-icon")).toBeNull();
+    expect(trigger.textContent).toContain("GPT-5.5");
+    expect(trigger.dataset.chatModelTools).toBe("unavailable");
+    expect(trigger.querySelector(".chat-controls__trigger-provider-icon")).not.toBeNull();
+    expect(selectedSession.activeModel).toBe("qwen3.5:9b");
   });
 
   it("renders an accessible skeleton and reserves hidden effort geometry before the snapshot", () => {
@@ -6591,21 +6593,6 @@ describe("chat model controls", () => {
       ).toBe("Locked");
     },
   );
-
-  it("ignores model clicks while a run is active", () => {
-    const { state } = createOpenAiHeaderState();
-    state.chatRunId = "run-123";
-    state.chatStream = "Working";
-    const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
-    const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).find((button) => button.getAttribute("aria-selected") === "false");
-    expect(modelOption?.disabled).toBe(true);
-    modelOption?.click();
-
-    expect(onModelSelect).not.toHaveBeenCalled();
-  });
 
   it.each(["native", "aria"])(
     "groups models and preserves ranked keyboard selection through catalog replacement (%s disabled)",

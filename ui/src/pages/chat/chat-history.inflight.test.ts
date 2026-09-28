@@ -17,7 +17,6 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
-  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -88,7 +87,7 @@ function failedHistory(): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
-  it("recovers the observed model from chat.history without a new model event or exact ID set", async () => {
+  it("recovers an active run from chat.history without an exact run ID set", async () => {
     const history = activeHistory("held-fallback");
     history.sessionInfo = {
       key: "main",
@@ -101,7 +100,6 @@ describe("chat history in-flight assistant recovery", () => {
     const state = createState(history);
     await loadChatHistory(state);
     expect(state.chatRunId).toBe("held-fallback");
-    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("held-fallback");
   });
 
   it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
@@ -1035,6 +1033,5 @@ describe("chat history in-flight assistant recovery", () => {
 
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
-    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
   });
 });
