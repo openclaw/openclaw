@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
@@ -128,7 +128,8 @@ describe("sendExecApprovalFollowupResult", () => {
         "Exec finished",
         deps,
       );
-      const call = sendExecApprovalFollowup.mock.calls[0][0];
+      const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+      assert.isDefined(call);
       expect(call).toMatchObject({
         agentId: "research",
         sessionKey,
@@ -186,7 +187,8 @@ describe("sendExecApprovalFollowupResult", () => {
       "Exec denied (gateway id=approval-denied, user-denied): uname -a",
       deps,
     );
-    const call = sendExecApprovalFollowup.mock.calls[0][0];
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+    assert.isDefined(call);
     expect(call).not.toHaveProperty("internalRuntimeHandoffId");
     expect(call).not.toHaveProperty("idempotencyKey");
     expect(call).not.toHaveProperty("bashElevated");
