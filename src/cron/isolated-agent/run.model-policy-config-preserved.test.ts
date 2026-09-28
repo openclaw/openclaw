@@ -139,6 +139,22 @@ describe("resolveCronAgentConfig model policy preservation", () => {
     expect(resolveFastModeState(selection)).toMatchObject({ mode: "auto", fastAutoOnSeconds: 20 });
   });
 
+  it("keeps the inherited default restriction when the per-agent policy is empty", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } },
+        list: [{ id: "worker", modelPolicy: {} }],
+      },
+    };
+
+    const cronCfg = buildCronConfig(cfg, "worker");
+
+    expect(cronCfg.agents?.defaults?.modelPolicy).toEqual({ allow: ["openai/gpt-5.5"] });
+    expect(resolveCronPayloadModel(cronCfg, "openai/gpt-5.6-sol")).toEqual({
+      error: "model not allowed: openai/gpt-5.6-sol",
+    });
+  });
+
   it("applies an explicit per-agent allowlist to cron model resolution", () => {
     const cfg: OpenClawConfig = {
       agents: {

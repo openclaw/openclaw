@@ -54,6 +54,7 @@ async function createDeliveringProjector(
 describe("CodexAppServerEventProjector async delivery", () => {
   it.each([
     { name: "disabled tools", disableTools: true },
+    { name: "a non-message tool allowlist", toolsAllow: ["read"] },
     { name: "the ring-zero system tool", toolsAllow: ["openclaw"] },
   ])("does not expose native async messages through $name", async (restriction) => {
     const onAsyncDelivery = vi.fn().mockResolvedValue("settled");

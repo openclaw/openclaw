@@ -622,7 +622,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
 });
 
 describe("CodexAppServerEventProjector assistant authority", () => {
-  it.each([undefined])(
+  it.each(["final_answer", undefined])(
     "preserves an empty typed %s completion when its raw echo contains hidden markup",
     async (phase) => {
       const onAgentEvent = vi.fn();

@@ -161,6 +161,19 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("removes tool wrappers through the user-facing filter composition", () => {
+    const input = [
+      '[TOOL_CALL]{tool => "read", args => {"path":"secret.md"}}[/TOOL_CALL]',
+      '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]',
+      '[tool:read] {"path":"secret.md"}',
+      '<minimax:tool_call><invoke name="exec"><parameter name="cmd">secret</parameter></invoke></minimax:tool_call>',
+      '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
+      '<function_calls><invoke name="exec">secret</invoke></function_calls><function_response>secret result</function_response>',
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("");
+  });
+
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
     const input = [
       markInboundContextLabel("Conversation info:"),

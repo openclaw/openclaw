@@ -2511,16 +2511,34 @@ describe("chat composer render invalidation", () => {
 });
 
 describe("chat composer IME composition", () => {
-  it("recovers Enter-send after a composition is abandoned via blur", () => {
+  it("leaves active IME keys to the browser and recovers Enter-send after blur", () => {
     // Browsers can drop compositionend (detach/blur mid-IME). The composing
     // flag persists across renders, so without the blur reset Enter, history
     // keys, and command menus stay dead until the Send button is clicked.
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: null,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+    }));
     const onSend = vi.fn();
-    const container = renderChatView({ onSend, draft: "hello" });
+    const container = renderChatView({ onHistoryKeydown, onSend, draft: "hello" });
     const textarea = getComposerTextarea(container);
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    textarea.value = "hello";
+    textarea.value = "dangqian";
+    for (const key of ["Enter", "ArrowUp"]) {
+      expect(keydownComposer(container, key).defaultPrevented).toBe(false);
+    }
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onHistoryKeydown).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("dangqian");
+
     textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
 
     const enterEvent = new KeyboardEvent("keydown", {
@@ -3268,27 +3286,35 @@ describe("chat slash menu accessibility", () => {
     expect(onDraftChange).toHaveBeenCalledTimes(1);
   });
 
-  it("does not overwrite an intervening session draft with a delayed stale replay", () => {
-    const { container, drafts, renderSession } = createSessionDraftHarness("delayed-replay");
+  it.each([false, true])(
+    "keeps a new draft when a delayed stale replay arrives (switch sessions: %s)",
+    (switchSessions) => {
+      const { container, drafts, onDraftChange, renderSession } =
+        createSessionDraftHarness("delayed-replay");
 
-    renderSession("delayed-replay-a");
-    inputDraft(container, "submitted message");
-    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+      renderSession("delayed-replay-a");
+      inputDraft(container, "submitted message");
+      container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+      expect(getComposerTextarea(container).value).toBe("");
 
-    renderSession("delayed-replay-b");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea?.value).toBe("");
+      const sessionKey = switchSessions ? "delayed-replay-b" : "delayed-replay-a";
+      if (switchSessions) {
+        renderSession(sessionKey);
+      }
+      const textarea = getComposerTextarea(container);
+      expect(textarea.value).toBe("");
 
-    replayInput(textarea!, "session b draft", "beforeinput");
-    replayInput(textarea!, "session b draft");
-    expect(textarea?.value).toBe("session b draft");
+      replayInput(textarea, "new draft", "beforeinput");
+      replayInput(textarea, "new draft");
+      expect(textarea.value).toBe("new draft");
 
-    replayInput(textarea!, "submitted message");
+      replayInput(textarea, "submitted message");
 
-    expect(textarea?.value).toBe("session b draft");
-    expect(drafts["delayed-replay-b"]).toBe("session b draft");
-  });
+      expect(textarea.value).toBe("new draft");
+      expect(drafts[sessionKey]).toBe("new draft");
+      expect(onDraftChange).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("requires Ctrl or Meta to send in modifier mode", () => {
     const onDraftChange = vi.fn();

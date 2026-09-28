@@ -417,7 +417,8 @@ describe("processDiscordMessage reply session init conflict retry", () => {
   });
 
   it("rebuilds a released replay without duplicating its pending history", async () => {
-    dispatchInboundMessage.mockRejectedValueOnce(new Error("dispatch failed before completion"));
+    const originalError = new Error("dispatch failed before completion");
+    dispatchInboundMessage.mockRejectedValueOnce(originalError);
     const guildHistories = new Map();
     const createReplayContext = () =>
       createBaseContext({
@@ -426,9 +427,8 @@ describe("processDiscordMessage reply session init conflict retry", () => {
         inboundEventKind: "room_event",
       });
 
-    await expect(runProcessDiscordMessage(await createReplayContext())).rejects.toBeInstanceOf(
-      Error,
-    );
+    await expect(runProcessDiscordMessage(await createReplayContext())).rejects.toBe(originalError);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
     expect(guildHistories.get("c1")).toHaveLength(1);
 
     dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());

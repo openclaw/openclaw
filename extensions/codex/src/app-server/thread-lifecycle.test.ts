@@ -1760,6 +1760,7 @@ describe("Codex thread-effective app attestation", () => {
   );
   it.each([
     { ephemeral: false, cleanupFails: false },
+    { ephemeral: false, cleanupFails: true },
     { ephemeral: true, cleanupFails: true },
   ])(
     "cleans failed app admission (ephemeral=$ephemeral, cleanupFails=$cleanupFails)",

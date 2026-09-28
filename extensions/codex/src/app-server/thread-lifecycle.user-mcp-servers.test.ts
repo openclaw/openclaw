@@ -214,93 +214,99 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
-  it("restarts a doctor-hashed beta5 MCP binding before converging", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const authorization = "Bearer beta5-access-token";
-    const url = await startPolicyHttpServer();
-    const config = {
-      mcp: {
-        servers: {
-          ducktape: {
-            transport: "streamable-http",
-            url,
-            headers: {
-              Authorization: authorization,
-              "x-tenant": "keep",
+  it.each(["raw", "doctor-hashed"] as const)(
+    "restarts a beta5 MCP binding stored as a %s fingerprint before converging",
+    async (legacyForm) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const authorization = "Bearer beta5-access-token";
+      const url = await startPolicyHttpServer();
+      const config = {
+        mcp: {
+          servers: {
+            ducktape: {
+              transport: "streamable-http",
+              url,
+              headers: {
+                Authorization: authorization,
+                "x-tenant": "keep",
+              },
             },
           },
         },
-      },
-    } as unknown as EmbeddedRunAttemptParams["config"];
-    const request = createRequest("thread-beta5", { resumeThreadId: "thread-beta5" });
-    let wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-    });
-    const run = () =>
-      startOrResumeThread({
-        client: wire.client,
-        ...lifecycleOptions(sessionFile, workspaceDir, config),
+      } as unknown as EmbeddedRunAttemptParams["config"];
+      const request = createRequest("thread-beta5", { resumeThreadId: "thread-beta5" });
+      let wire = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: request,
+      });
+      const run = () =>
+        startOrResumeThread({
+          client: wire.client,
+          ...lifecycleOptions(sessionFile, workspaceDir, config),
+        });
+
+      await run();
+      const currentBinding = await readCodexAppServerBinding(sessionFile);
+      expect(currentBinding).toBeDefined();
+
+      const legacyFingerprint = JSON.stringify({
+        mcp_servers: {
+          ducktape: {
+            http_headers: {
+              Authorization: authorization,
+              "x-tenant": "keep",
+            },
+            url,
+          },
+        },
+      });
+      seedCodexTestBinding(sessionFile, {
+        ...currentBinding!,
+        userMcpServersFingerprint:
+          legacyForm === "raw"
+            ? legacyFingerprint
+            : hashCodexAppServerBindingFingerprint(legacyFingerprint),
       });
 
-    await run();
-    const currentBinding = await readCodexAppServerBinding(sessionFile);
-    expect(currentBinding).toBeDefined();
+      request.mockClear();
+      await run();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/start",
+      ]);
+      const convergedBinding = await readCodexAppServerBinding(sessionFile);
+      expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
+      expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
+      expect(convergedBinding?.userMcpServersFingerprint).not.toBe(
+        hashCodexAppServerBindingFingerprint(legacyFingerprint),
+      );
 
-    const legacyFingerprint = JSON.stringify({
-      mcp_servers: {
-        ducktape: {
-          http_headers: {
-            Authorization: authorization,
-            "x-tenant": "keep",
-          },
-          url,
-        },
-      },
-    });
-    seedCodexTestBinding(sessionFile, {
-      ...currentBinding!,
-      userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(legacyFingerprint),
-    });
-
-    request.mockClear();
-    await run();
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-    ]);
-    const convergedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
-    expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
-    expect(convergedBinding?.userMcpServersFingerprint).not.toBe(
-      hashCodexAppServerBindingFingerprint(legacyFingerprint),
-    );
-
-    await wire.client.closeAndWait();
-    wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-      persistedThreads: ["thread-beta5"],
-    });
-    request.mockClear();
-    await run();
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/resume",
-    ]);
-    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-  });
+      await wire.client.closeAndWait();
+      wire = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: request,
+        persistedThreads: ["thread-beta5"],
+      });
+      request.mockClear();
+      await run();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/resume",
+      ]);
+      expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/read",
+        "thread/resume",
+        "thread/inject_items",
+      ]);
+    },
+  );
 
   it.each(["native-tools-disabled", "unknown-search-support"] as const)(
     "preserves MCP-mismatched bindings for transient %s turns",

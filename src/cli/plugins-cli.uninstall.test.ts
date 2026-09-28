@@ -23,6 +23,7 @@ import {
   refreshPluginRegistryMock,
   replaceConfigFileMock,
   resetPluginsCliTestState,
+  restorePersistedInstalledPluginIndexIfCurrentMock,
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
@@ -367,6 +368,37 @@ describe("plugins cli uninstall", () => {
       expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
     },
   );
+
+  it("restores install records when the config write rejects during uninstall", async () => {
+    const { installRecords } = configureAlphaInstall();
+    const previousPersistedIndex = createTestInstalledPluginIndex({
+      policyHash: "previous-policy",
+      installRecords,
+    });
+
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(previousPersistedIndex);
+
+    replaceConfigFileMock.mockRejectedValueOnce(new Error("config changed"));
+
+    await expect(
+      runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]),
+    ).rejects.toThrow("config changed");
+
+    expectInstallRecordsWrittenWithLease(
+      {},
+      { plugins: { entries: { alpha: { enabled: false } } } },
+    );
+    expect(restorePersistedInstalledPluginIndexIfCurrentMock).toHaveBeenCalledWith(
+      previousPersistedIndex,
+      expect.any(Number),
+      expect.objectContaining({
+        filePath: expect.any(String),
+        lease: expect.anything(),
+      }),
+    );
+    expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+  });
 
   it.each(["disable", "delete", "final commit"])(
     "rechecks persistent authority before %s",

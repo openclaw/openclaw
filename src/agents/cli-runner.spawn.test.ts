@@ -490,39 +490,43 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
-  it("keeps the node Claude hard deadline while waiting for approval", async () => {
-    const plan = {
-      argv: ["/trusted/claude", "-p"],
-      commandText: "/trusted/claude -p",
-    };
-    const invokeNode = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: JSON.stringify({
-        approvalRequired: true,
-        systemRunPlan: plan,
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    }));
-    setCliRunnerExecuteTestDeps({
-      invokeNodeClaudeCliRun: invokeNode,
-      registerExecApprovalRequestForHostOrThrow: vi.fn(async () => ({
-        id: "approval-timeout",
-        expiresAtMs: Date.now() + 60_000,
-      })),
-      resolveRegisteredExecApprovalDecision: vi.fn(
-        async () => await new Promise<string | null>(() => {}),
-      ),
-    });
-    const context = buildNodeContext({
-      timeoutMs: 25,
-    });
+  it.each(["registering", "waiting"] as const)(
+    "keeps the node Claude hard deadline while %s for approval",
+    async (phase) => {
+      const plan = {
+        argv: ["/trusted/claude", "-p"],
+        commandText: "/trusted/claude -p",
+      };
+      const invokeNode = vi.fn(async () => ({
+        ok: true,
+        payloadJSON: JSON.stringify({
+          approvalRequired: true,
+          systemRunPlan: plan,
+          security: "allowlist",
+          ask: "on-miss",
+        }),
+      }));
+      const resolveApproval = vi.fn(async () => await new Promise<string | null>(() => {}));
+      setCliRunnerExecuteTestDeps({
+        invokeNodeClaudeCliRun: invokeNode,
+        registerExecApprovalRequestForHostOrThrow: vi.fn(async () =>
+          phase === "registering"
+            ? await new Promise<never>(() => {})
+            : { id: "approval-timeout", expiresAtMs: Date.now() + 60_000 },
+        ),
+        resolveRegisteredExecApprovalDecision: resolveApproval,
+      });
+      const context = buildNodeContext({
+        timeoutMs: 25,
+      });
 
-    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
-      code: "cli_overall_timeout",
-    });
-    expect(invokeNode).toHaveBeenCalledOnce();
-  });
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+        code: "cli_overall_timeout",
+      });
+      expect(invokeNode).toHaveBeenCalledOnce();
+      expect(resolveApproval).toHaveBeenCalledTimes(phase === "registering" ? 0 : 1);
+    },
+  );
 
   it("rejects images before invoking a node-placed Claude session", async () => {
     const invokeNode = vi.fn();
