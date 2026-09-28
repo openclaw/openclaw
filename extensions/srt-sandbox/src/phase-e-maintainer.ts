@@ -16,6 +16,12 @@ export type PhaseEManifest = {
   createdAccounts: readonly { name: string; sid: string }[];
   crc32: string;
 };
+export type PhaseELeaseStore = {
+  version: 1;
+  generation: number;
+  slots: readonly { name: string; sid: string; state: "free" }[];
+  crc32: string;
+};
 export type PhaseEEvidence = {
   schema: "phase-e-evidence/v1";
   mode: PhaseEMode;
@@ -58,6 +64,20 @@ export function rollbackCandidates(manifest: PhaseEManifest, invocationId: strin
   if (manifest.owner !== "srt-phase-e-maintainer" || manifest.invocationId !== invocationId) {
     throw new PhaseEMaintainerError("PHASE_E_MANIFEST_OWNERSHIP_MISMATCH");
   }
+  if (
+    manifest.version !== 1 ||
+    !Number.isSafeInteger(manifest.generation) ||
+    manifest.generation < 1 ||
+    !Array.isArray(manifest.createdAccounts) ||
+    manifest.createdAccounts.some(
+      (account) =>
+        !PHASE_E_POOL.includes(account.name) || typeof account.sid !== "string" || !account.sid,
+    ) ||
+    new Set(manifest.createdAccounts.map((account) => account.name)).size !==
+      manifest.createdAccounts.length
+  ) {
+    throw new PhaseEMaintainerError("PHASE_E_MANIFEST_INVALID");
+  }
   return manifest.createdAccounts.map((account) => account.name);
 }
 
@@ -68,6 +88,49 @@ export function leaseStoreCrc(generation: number, slots: readonly string[]): str
     value = Math.imul(value ^ byte, 0x01000193) >>> 0;
   }
   return value.toString(16).padStart(8, "0");
+}
+
+/** The initial store is valid only when all canonical slots are present and free. */
+export function createInitialLeaseStore(
+  generation: number,
+  accounts: readonly { name: string; sid: string }[],
+): PhaseELeaseStore {
+  if (inspectCanonicalPool(accounts) !== "ready" || generation < 1) {
+    throw new PhaseEMaintainerError("PHASE_E_LEASE_STORE_INVALID");
+  }
+  const slots = PHASE_E_POOL.map((name) => {
+    const account = accounts.find((entry) => entry.name === name);
+    if (!account) throw new PhaseEMaintainerError("PHASE_E_LEASE_STORE_INVALID");
+    return { name, sid: account.sid, state: "free" as const };
+  });
+  return {
+    version: 1,
+    generation,
+    slots,
+    crc32: leaseStoreCrc(
+      generation,
+      slots.map((slot) => slot.sid),
+    ),
+  };
+}
+
+export function verifyInitialLeaseStore(store: PhaseELeaseStore): void {
+  if (
+    store.version !== 1 ||
+    !Number.isSafeInteger(store.generation) ||
+    store.generation < 1 ||
+    store.slots.length !== PHASE_E_POOL.length ||
+    store.slots.some(
+      (slot, index) => slot.name !== PHASE_E_POOL[index] || !slot.sid || slot.state !== "free",
+    ) ||
+    store.crc32 !==
+      leaseStoreCrc(
+        store.generation,
+        store.slots.map((slot) => slot.sid),
+      )
+  ) {
+    throw new PhaseEMaintainerError("PHASE_E_LEASE_STORE_INVALID");
+  }
 }
 
 /** Evidence is schema-checked at its source, never free-form then redacted. */
@@ -159,8 +222,15 @@ export function runPhaseEMaintainer(
   mode: PhaseEMode,
   nativeApi?: PhaseENativeApi,
   platform = process.platform,
+  manifest?: PhaseEManifest,
 ): PhaseEEvidence {
   assertPhaseEPlatform(platform);
   if (!validModes.has(mode)) throw new PhaseEMaintainerError("PHASE_E_INVALID_MODE");
-  return parsePhaseEEvidence((nativeApi ?? loadPhaseENativeApi()).run(mode), mode);
+  if ((mode === "rollback" || mode === "teardown") && !manifest) {
+    throw new PhaseEMaintainerError("PHASE_E_MANIFEST_REQUIRED");
+  }
+  return parsePhaseEEvidence(
+    (nativeApi ?? loadPhaseENativeApi()).run(mode, manifest ? JSON.stringify(manifest) : undefined),
+    mode,
+  );
 }

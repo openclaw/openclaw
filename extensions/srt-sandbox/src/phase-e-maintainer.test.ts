@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertPhaseEPlatform,
+  createInitialLeaseStore,
   inspectCanonicalPool,
   leaseStoreCrc,
   PHASE_E_POOL,
@@ -8,6 +9,7 @@ import {
   redactPhaseEEvidence,
   rollbackCandidates,
   runPhaseEMaintainer,
+  verifyInitialLeaseStore,
 } from "./phase-e-maintainer.js";
 
 describe("Phase E maintainer policy", () => {
@@ -46,6 +48,12 @@ describe("Phase E maintainer policy", () => {
     expect(() => runPhaseEMaintainer("preflight", { run: () => "bad" }, "linux")).toThrow(
       "UNSUPPORTED_PLATFORM",
     );
+  });
+  it("creates a generation-consistent fail-closed initial lease store", () => {
+    const accounts = PHASE_E_POOL.map((name, index) => ({ name, sid: `S-1-5-21-${index}` }));
+    const store = createInitialLeaseStore(1, accounts);
+    verifyInitialLeaseStore(store);
+    expect(() => verifyInitialLeaseStore({ ...store, crc32: "00000000" })).toThrow("LEASE_STORE");
   });
   it("accepts only allowlisted typed evidence", () => {
     const valid = JSON.stringify({
