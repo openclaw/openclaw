@@ -6,7 +6,6 @@ import type {
   QaRuntimeParityReport,
   QaRuntimeParityScenarioReport,
 } from "./agentic-parity-runtime-report-contract.js";
-// Qa Lab plugin module implements agentic parity report behavior.
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
@@ -48,10 +47,6 @@ export type QaParitySuiteSummary = {
 
 type QaRuntimeParitySuiteScenario = QaReportScenario & {
   runtimeParity?: RuntimeParityResult;
-};
-
-export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"> & {
-  scenarios: QaRuntimeParitySuiteScenario[];
 };
 
 type QaAgenticParityMetrics = {
@@ -492,7 +487,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
 }
 
 export function buildQaRuntimeParityReport(params: {
-  summary: QaRuntimeParitySuiteSummary;
+  summary: QaParitySuiteSummary;
   comparedAt?: string;
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);

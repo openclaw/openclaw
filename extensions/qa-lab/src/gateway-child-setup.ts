@@ -285,7 +285,7 @@ export async function prepareQaGatewayChild(
       cfg,
       stateDir,
     });
-    const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+    const mockAuthProviders = resolvedProvider.mockAuthProviders;
     if (mockAuthProviders && mockAuthProviders.length > 0) {
       if (usesPackagedCandidate) {
         cfg = applyQaMockAuthProfileConfig({ cfg, providers: mockAuthProviders });
@@ -435,7 +435,7 @@ export async function prepareQaGatewayChild(
           encoding: "utf8",
           mode: 0o600,
         });
-        const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+        const mockAuthProviders = resolvedProvider.mockAuthProviders;
         if (
           usesPackagedCandidate &&
           gatewayCommand &&

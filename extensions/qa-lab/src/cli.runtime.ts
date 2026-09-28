@@ -11,7 +11,6 @@ import {
   renderQaAgenticParityMarkdownReport,
   renderQaRuntimeParityMarkdownReport,
   type QaParitySuiteSummary,
-  type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
 import type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
@@ -114,12 +113,10 @@ import {
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
-  type TokenEfficiencySuiteSummary,
 } from "./token-efficiency-report.js";
 import {
   buildQaToolCoverageReport,
   renderQaToolCoverageMarkdownReport,
-  type QaToolCoverageSuiteSummary,
 } from "./tool-coverage-report.js";
 
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
@@ -1162,9 +1159,7 @@ export async function runQaParityReportCommand(opts: {
       throw new Error("--runtime-axis requires --summary.");
     }
     const summaryPath = path.resolve(repoRoot, opts.summary);
-    const summary = (await readCompletedQaSuiteSummaryFile(
-      summaryPath,
-    )) as QaRuntimeParitySuiteSummary;
+    const summary = (await readCompletedQaSuiteSummaryFile(summaryPath)) as QaParitySuiteSummary;
     const reportPayload: QaRuntimeParityReport = buildQaRuntimeParityReport({ summary });
     const report = renderQaRuntimeParityMarkdownReport(reportPayload);
     const reportPath = path.join(outputDir, "qa-runtime-parity-report.md");
@@ -1179,7 +1174,7 @@ export async function runQaParityReportCommand(opts: {
     let tokenEfficiencyPass = true;
     if (opts.tokenEfficiency === true) {
       const tokenPayload = buildTokenEfficiencyReport({
-        summary: summary as TokenEfficiencySuiteSummary,
+        summary,
       });
       tokenEfficiencyPass = tokenPayload.pass;
       const tokenReport = renderTokenEfficiencyMarkdownReport(tokenPayload);
@@ -1308,7 +1303,7 @@ export async function runQaCoverageReportCommand(opts: {
     const summary = opts.summary?.trim()
       ? ((await readCompletedQaSuiteSummaryFile(
           path.resolve(repoRoot, opts.summary),
-        )) as QaToolCoverageSuiteSummary)
+        )) as QaParitySuiteSummary)
       : undefined;
     const report = buildQaToolCoverageReport({ scenarios, summary });
     body = opts.json

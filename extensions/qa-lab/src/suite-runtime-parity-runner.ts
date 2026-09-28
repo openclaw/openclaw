@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaLabLatestReport } from "./lab-server.types.js";
+import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import {
   runRuntimeParityScenario,
@@ -20,7 +21,6 @@ import {
 } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
-import { remapModelRefForForcedRuntime } from "./suite-support.js";
 import type {
   QaSuiteRunParams,
   QaSuiteRunner,

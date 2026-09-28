@@ -123,9 +123,7 @@ export type QaSuiteResult = {
 export type QaSuiteRunner = (params?: QaSuiteRunParams) => Promise<QaSuiteResult>;
 export type QaSuiteScenarioRunner = (
   env: QaSuiteEnvironment,
-  scenario: ReturnType<
-    typeof import("./scenario-catalog.js").readQaBootstrapScenarioCatalog
-  >["scenarios"][number],
+  scenario: QaSeedScenarioWithSource,
 ) => Promise<QaSuiteScenarioResult>;
 
 export type QaSuiteResolvedRunContext = {
@@ -133,9 +131,7 @@ export type QaSuiteResolvedRunContext = {
   repoRoot: string;
   outputDir: string;
   transportId: QaTransportId;
-  selectedScenarios: ReturnType<
-    typeof import("./scenario-catalog.js").readQaBootstrapScenarioCatalog
-  >["scenarios"];
+  selectedScenarios: QaSeedScenarioWithSource[];
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;

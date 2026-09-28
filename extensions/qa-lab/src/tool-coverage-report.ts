@@ -3,6 +3,7 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 import { escapeTableCell } from "./report.js";
 import {
   runtimeParityCellStatus,
@@ -19,19 +20,6 @@ import {
   type QaRuntimeToolExpectedLayer,
 } from "./runtime-tool-metadata.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-
-type QaToolCoverageSuiteScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  runtimeParity?: RuntimeParityResult;
-};
-
-export type QaToolCoverageSuiteSummary = {
-  scenarios: QaToolCoverageSuiteScenario[];
-  run?: {
-    runtimePair?: [RuntimeId, RuntimeId] | null;
-  };
-};
 
 type QaToolCoverageStatus = "pass" | "fail" | "skip" | "missing" | "not-run";
 type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
@@ -148,7 +136,7 @@ function readScenarioRuntimeToolName(scenario: QaSeedScenarioWithSource): string
 }
 
 function summaryByScenarioId(
-  summary: QaToolCoverageSuiteSummary | undefined,
+  summary: QaParitySuiteSummary | undefined,
 ): Map<string, RuntimeParityResult> {
   const byScenarioId = new Map<string, RuntimeParityResult>();
   for (const scenario of summary?.scenarios ?? []) {
@@ -256,7 +244,7 @@ function coverageFailureForRow(row: QaToolCoverageRow): string | undefined {
 
 export function buildQaToolCoverageReport(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
-  summary?: QaToolCoverageSuiteSummary;
+  summary?: QaParitySuiteSummary;
   runtimePair?: [RuntimeId, RuntimeId];
   generatedAt?: string;
 }): QaToolCoverageReport {

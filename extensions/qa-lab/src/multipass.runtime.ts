@@ -88,10 +88,6 @@ async function execFileAsync(file: string, args: string[], options: ExecFileOpti
   }
 }
 
-function resolveRealPath(value: string) {
-  return fs.realpathSync.native?.(value) ?? fs.realpathSync(value);
-}
-
 function resolveExistingPath(value: string) {
   let currentPath = value;
   while (!fs.existsSync(currentPath)) {
@@ -119,9 +115,9 @@ function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
     );
   }
 
-  const realRepoRoot = resolveRealPath(repoRoot);
+  const realRepoRoot = fs.realpathSync.native(repoRoot);
   const existingHostPath = resolveExistingPath(hostPath);
-  const realExistingHostPath = resolveRealPath(existingHostPath);
+  const realExistingHostPath = fs.realpathSync.native(existingHostPath);
   if (!isPathInside(realRepoRoot, realExistingHostPath)) {
     throw new Error(
       `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,
