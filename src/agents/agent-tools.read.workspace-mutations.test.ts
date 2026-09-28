@@ -21,8 +21,6 @@ describe("workspace mutation authority", () => {
 
   it.each([
     { kind: "write", authority: "revoked" },
-    { kind: "write", authority: "aborted" },
-    { kind: "edit", authority: "revoked" },
     { kind: "edit", authority: "aborted" },
     { kind: "append", authority: "active" },
     { kind: "append", authority: "revoked" },

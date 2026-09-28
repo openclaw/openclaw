@@ -341,24 +341,29 @@ it("loads one bounded page initially and continues only after explicit expansion
   );
 });
 
-it("replaces a first-page local placeholder with later published metadata", async () => {
-  const placeholder = entry(1);
-  delete placeholder.catalog.family;
-  const published = entry(1);
-  published.catalog.author = "openclaw";
-  published.catalog.official = true;
-  published.catalog.downloads = 10_000;
-  const { controller } = setup([
-    { items: [placeholder], nextCursor: "catalog-page-2" },
-    { items: [published] },
-  ]);
-  controller.category = "tools";
+it.each(["tools", "media"])(
+  "replaces a first-page local placeholder with later published metadata (%s)",
+  async (category) => {
+    const placeholder = entry(1);
+    delete placeholder.catalog.family;
+    const published = entry(1);
+    placeholder.catalog.categories = category === "media" ? ["models", "media"] : ["tools"];
+    published.catalog.categories = [...placeholder.catalog.categories];
+    published.catalog.author = "openclaw";
+    published.catalog.official = true;
+    published.catalog.downloads = 10_000;
+    const { controller } = setup([
+      { items: [placeholder], nextCursor: "catalog-page-2" },
+      { items: [published] },
+    ]);
+    controller.category = category;
 
-  await controller.refresh();
-  await controller.loadMore();
+    await controller.refresh();
+    await controller.loadMore();
 
-  expect(controller.result?.items).toEqual([published]);
-});
+    expect(controller.result?.items).toEqual([published]);
+  },
+);
 
 it("preserves independent Trending rank from the deduplicated overview", async () => {
   const official = entry(1);

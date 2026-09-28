@@ -686,12 +686,10 @@ describe("lmstudio setup", () => {
       customModelId: "qwen3-8b-instruct",
     });
 
-    await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(configureLmstudioNonInteractive(ctx)).rejects.toThrow(
       "LM Studio model qwen3-8b-instruct is installed but not loaded at http://localhost:1234/v1.\nLoad that model in LM Studio, then re-run setup.",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
   });
 

@@ -51,8 +51,8 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // Native conversation boot hooks add 249 B to the paired baseline; retain the fixed allowances.
-  startupJsGzipBytes: 371_005,
+  // Approved measured upload-control baseline; retain the fixed growth and variance allowances.
+  startupJsGzipBytes: 371_771,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,

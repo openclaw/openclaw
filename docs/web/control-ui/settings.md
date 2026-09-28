@@ -173,6 +173,23 @@ Appearance also carries the **Lobster visits** and **Lobster sounds** toggles an
 
 When your connection is bound to an authenticated Gateway profile, theme, theme mode, and accent color are saved to that profile instead of the gateway config. They follow you across devices without changing anyone else's appearance, override gateway-wide `ui.prefs` values, and update your connected clients live. Connections without an authenticated profile continue syncing these preferences through the gateway config exactly as before. Language and chat display preferences remain gateway-config preferences for every connection. Each browser keeps a local mirror for instant boot, and text size remains browser-local. An explicitly read-only connection applies preference changes only in that browser. Changes made while offline remain queued until a later connection can write their applicable preferences; on a read-only reconnect, they continue to behave as browser-local preferences. See [Configuration reference](/gateway/configuration-reference#ui).
 
+## Opening links
+
+Under **Settings → Appearance → Chat**, enable **Open links outside OpenClaw**
+to open web links outside OpenClaw instead of in built-in readers or browser panels.
+In a web browser, links use ordinary browser navigation; in a native app, they open
+in the system's default browser. The switch is off by default, preserving current
+behavior. Turning it off restores built-in readers and any existing **Open links
+in Control UI browser** preference. Browser preview cards also follow this setting
+when you click their image or **Open** button. Their three-dot menu offers
+**Open in OpenClaw** when external opening is enabled, or **Open in new tab**
+when it is disabled. Explicit context-menu choices still work.
+
+This preference is stored only in the current browser or app webview, separately
+for each Gateway. It does not change shared Gateway configuration or sync across
+devices. Clearing site data resets it. Internal OpenClaw navigation and downloads
+are unchanged.
+
 ## Session sources
 
 Open the sidebar's **Filter & sort** menu and choose **Session sources…** to

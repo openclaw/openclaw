@@ -1,3 +1,4 @@
+import type { GatewayClientCap } from "../../packages/gateway-protocol/src/client-info.js";
 import type { LiveTextProjectionText } from "./live-text-continuity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
@@ -11,6 +12,8 @@ export type GatewayBroadcastOpts = {
   /** Agent scope for agent-relative keys such as `global`. */
   agentId?: string;
   dropIfSlow?: boolean;
+  /** Omit a redundant projection for clients that advertise this capability. */
+  excludeClientCapability?: GatewayClientCap;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];
   /** Target recipients were selected from subscriptions at ingress. */

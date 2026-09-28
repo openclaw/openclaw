@@ -135,6 +135,10 @@ const pluginAppPolicyContextSchema = z
     pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
   })
   .strict();
+const legacyAppPolicyEntrySchema = z.union([
+  accountAppPolicyEntrySchema.strip(),
+  pluginAppPolicyEntrySchema.strip(),
+]);
 const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
@@ -633,54 +637,32 @@ export function readPluginAppPolicyContext(
       entry.destructiveApprovalMode,
       bindingSchemaVersion,
     );
-    const mcpServerNames =
-      Array.isArray(entry.mcpServerNames) &&
-      entry.mcpServerNames.every((serverName) => typeof serverName === "string")
-        ? entry.mcpServerNames
-        : undefined;
-    if (
-      "appId" in entry ||
-      typeof entry.allowDestructiveActions !== "boolean" ||
-      (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||
-      destructiveApprovalMode === "invalid" ||
-      !mcpServerNames
-    ) {
+    if ("appId" in entry || destructiveApprovalMode === "invalid") {
       return undefined;
     }
+    const parsed = legacyAppPolicyEntrySchema.safeParse({ ...entry, destructiveApprovalMode });
+    if (!parsed.success) {
+      return undefined;
+    }
+    const validated = parsed.data;
     const policy = {
-      allowDestructiveActions: entry.allowDestructiveActions,
-      ...(typeof entry.allowOpenWorld === "boolean"
-        ? { allowOpenWorld: entry.allowOpenWorld }
+      allowDestructiveActions: validated.allowDestructiveActions,
+      ...(validated.allowOpenWorld !== undefined
+        ? { allowOpenWorld: validated.allowOpenWorld }
         : {}),
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
-      mcpServerNames,
+      mcpServerNames: validated.mcpServerNames,
     };
-    if (entry.source === "account") {
-      if (typeof entry.appName !== "string") {
-        return undefined;
-      }
+    if (validated.source === "account") {
+      parsedApps[appId] = { source: "account", appName: validated.appName, ...policy };
+    } else {
       parsedApps[appId] = {
-        source: "account",
-        appName: entry.appName,
+        configKey: validated.configKey,
+        marketplaceName: validated.marketplaceName,
+        pluginName: validated.pluginName,
         ...policy,
       };
-      continue;
     }
-    if (
-      (entry.source !== undefined && entry.source !== "plugin") ||
-      typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
-      !CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(entry.marketplaceName) ||
-      typeof entry.pluginName !== "string"
-    ) {
-      return undefined;
-    }
-    parsedApps[appId] = {
-      configKey: entry.configKey,
-      marketplaceName: entry.marketplaceName,
-      pluginName: entry.pluginName,
-      ...policy,
-    };
   }
   const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
   if (

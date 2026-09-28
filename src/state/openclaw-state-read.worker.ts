@@ -34,7 +34,10 @@ import {
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
-import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
+import {
+  readWorkerPlacementRecoveryCandidatesInDatabase,
+  readWorkerSessionPlacementProjectionInDatabase,
+} from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import {
   readWorkerEnvironmentFacts,
@@ -541,6 +544,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
+              };
+            }
+            if (command.type === "workers.placementRecoveryCandidates") {
+              return {
+                type: command.type,
+                candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
               };
             }
             if (command.type === "workers.placementProjection") {

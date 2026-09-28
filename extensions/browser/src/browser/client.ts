@@ -1,9 +1,3 @@
-/**
- * Browser control client API.
- *
- * Provides typed helpers for status, profile lifecycle, tabs, and snapshots
- * over the browser-control transport.
- */
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -80,7 +74,6 @@ async function sendTabCloseRequest(
   });
 }
 
-/** Profile status record returned by browser profile listing. */
 export type ProfileStatus = {
   name: string;
   transport?: BrowserTransport;
@@ -96,7 +89,6 @@ export type ProfileStatus = {
   reconcileReason?: string | null;
 };
 
-/** Result returned when a managed browser profile directory is reset. */
 export type BrowserResetProfileResult = {
   ok: true;
   moved: boolean;
@@ -104,7 +96,6 @@ export type BrowserResetProfileResult = {
   to?: string;
 };
 
-/** Snapshot response returned by browserSnapshot. */
 export type SnapshotResult =
   | {
       ok: true;
@@ -145,7 +136,6 @@ export type SnapshotResult =
       browserState?: unknown;
     };
 
-/** Read browser-control status for the selected profile. */
 export async function browserStatus(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
@@ -157,7 +147,6 @@ export async function browserStatus(
   });
 }
 
-/** Run browser doctor checks for the selected profile. */
 export async function browserDoctor(
   baseUrl?: BrowserClientTarget,
   opts?: { profile?: string; deep?: boolean; signal?: AbortSignal },
@@ -174,7 +163,6 @@ export async function browserDoctor(
   });
 }
 
-/** List configured browser profiles and their current status. */
 export async function browserProfiles(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientTimeoutOptions,
@@ -186,7 +174,6 @@ export async function browserProfiles(
   return res.profiles ?? [];
 }
 
-/** List Chrome-family profiles available on the local macOS host. */
 export async function browserSystemProfiles(
   baseUrl?: BrowserClientTarget,
   opts?: { browser?: string; timeoutMs?: number; signal?: AbortSignal },
@@ -203,7 +190,6 @@ export async function browserSystemProfiles(
   return res.systemProfiles ?? [];
 }
 
-/** Import system-profile cookies into a managed browser profile. */
 export async function browserImportProfile(
   baseUrl: BrowserClientTarget,
   opts: {
@@ -228,7 +214,6 @@ export async function browserImportProfile(
   );
 }
 
-/** Start the selected browser profile. */
 export async function browserStart(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
@@ -236,7 +221,6 @@ export async function browserStart(
   await sendProfilePost(baseUrl, "/start", opts, 15000);
 }
 
-/** Stop the selected browser profile. */
 export async function browserStop(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
@@ -244,7 +228,6 @@ export async function browserStop(
   await sendProfilePost(baseUrl, "/stop", opts, 15000);
 }
 
-/** Reset the selected managed browser profile directory. */
 export async function browserResetProfile(
   baseUrl?: BrowserClientTarget,
   opts?: { profile?: string },
@@ -256,7 +239,6 @@ export async function browserResetProfile(
   });
 }
 
-/** Result returned after creating a browser profile. */
 export type BrowserCreateProfileResult = {
   ok: true;
   profile: string;
@@ -268,7 +250,6 @@ export type BrowserCreateProfileResult = {
   isRemote: boolean;
 };
 
-/** Create and persist a browser profile. */
 export async function browserCreateProfile(
   baseUrl: BrowserClientTarget,
   opts: {
@@ -293,14 +274,12 @@ export async function browserCreateProfile(
   );
 }
 
-/** Result returned after deleting a browser profile. */
 export type BrowserDeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
 };
 
-/** Delete a configured browser profile. */
 export async function browserDeleteProfile(
   baseUrl: BrowserClientTarget,
   profile: string,
@@ -338,7 +317,6 @@ export async function browserTabs(
   return normalizeBrowserTabsResult(res);
 }
 
-/** Open a new tab in the selected browser profile. */
 export async function browserOpenTab(
   baseUrl: BrowserClientTarget,
   url: string,
@@ -363,7 +341,6 @@ export async function browserOpenTab(
   );
 }
 
-/** Focus an existing browser tab. */
 export async function browserFocusTab(
   baseUrl: BrowserClientTarget,
   targetId: string,
@@ -378,7 +355,6 @@ export async function browserFocusTab(
   );
 }
 
-/** Close an existing browser tab. */
 export async function browserCloseTab(
   baseUrl: BrowserClientTarget,
   targetId: string,
@@ -416,7 +392,6 @@ export async function browserTabAction(
   );
 }
 
-/** Capture an ARIA or AI snapshot for the selected tab. */
 export async function browserSnapshot(
   baseUrl: BrowserClientTarget,
   opts: {
@@ -488,5 +463,3 @@ export async function browserSnapshot(
     signal: opts.signal,
   });
 }
-
-// Actions beyond the basic read-only commands live in client-actions.ts.

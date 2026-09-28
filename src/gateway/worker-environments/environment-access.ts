@@ -175,7 +175,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             },
           }
         : {}),
-      ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+      ...((record.state === "failed" ||
+        record.state === "orphaned" ||
+        (record.destroyRequestedAtMs !== null && record.state !== "destroyed")) &&
+      record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
       ...(cleanupError ? { error: cleanupError } : {}),

@@ -1,5 +1,6 @@
 // Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, and delayed maintenance setup.
+import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
 import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -56,12 +57,10 @@ export async function startGatewayEarlyRuntime(params: {
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
-  skillsRefreshDelayMs: number;
-  getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
-  setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
+  await setSessionMcpRuntimeScheduler(params.scheduler);
   const startSideRuntimes = !params.minimalTestGateway && !params.updateCanary;
   // Startup failure can occur immediately after discovery; publish its owner first.
   params.swapDiscovery(
@@ -114,6 +113,9 @@ export async function startGatewayEarlyRuntime(params: {
         const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
         const unregister = registerSkillsChangeListener((event) => {
+          if (params.isClosing()) {
+            return;
+          }
           if (event.reason === "watch-available") {
             // Coverage recovery has no new content revision to probe or broadcast.
             return;
@@ -126,25 +128,25 @@ export async function startGatewayEarlyRuntime(params: {
           }
           // Coalesce local skill changes before refreshing connected remote
           // nodes so bulk plugin/skill updates do not stampede node refreshes.
-          const existingTimer = params.getSkillsRefreshTimer();
-          if (existingTimer) {
-            clearTimeout(existingTimer);
-          }
-          const nextTimer = setTimeout(() => {
-            params.setSkillsRefreshTimer(null);
-            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig()).then(
-              () => {
-                params.broadcast("skills.changed", { reason: event.reason });
-              },
-              (error: unknown) => {
+          params.scheduler.schedule({
+            id: "skills.remote-bin-refresh",
+            delayMs: 30_000,
+            run: async () => {
+              if (params.isClosing()) {
+                return;
+              }
+              try {
+                await refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
+              } catch (error) {
                 params.log.warn(
                   `failed to refresh remote bins after skills change: ${String(error)}`,
                 );
+              }
+              if (!params.isClosing()) {
                 params.broadcast("skills.changed", { reason: event.reason });
-              },
-            );
-          }, params.skillsRefreshDelayMs);
-          params.setSkillsRefreshTimer(nextTimer);
+              }
+            },
+          });
         });
         return async () => {
           unregister();

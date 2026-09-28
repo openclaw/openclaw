@@ -207,19 +207,11 @@ function parseShellEnv(stdout: Buffer): Map<string, string> {
     .toString("utf8")
     .split("\0");
   for (const part of parts) {
-    if (!part) {
-      continue;
-    }
     const eq = part.indexOf("=");
     if (eq <= 0) {
       continue;
     }
-    const key = part.slice(0, eq);
-    const value = part.slice(eq + 1);
-    if (!key) {
-      continue;
-    }
-    shellEnv.set(key, value);
+    shellEnv.set(part.slice(0, eq), part.slice(eq + 1));
   }
   return shellEnv;
 }
@@ -228,12 +220,11 @@ function resolveExecCacheId(exec: typeof execFileSync | undefined): string {
   if (!exec) {
     return "default";
   }
-  const key = exec as object;
-  let id = execCacheIds.get(key);
+  let id = execCacheIds.get(exec);
   if (!id) {
     id = nextExecCacheId;
     nextExecCacheId += 1;
-    execCacheIds.set(key, id);
+    execCacheIds.set(exec, id);
   }
   return `exec:${id}`;
 }
@@ -341,10 +332,6 @@ type ShellEnvFallbackOptions = {
   platform?: NodeJS.Platform;
 };
 
-function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
-  return Object.hasOwn(env, key);
-}
-
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
 
@@ -353,9 +340,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
-  const missingExpectedKeys = opts.expectedKeys.filter(
-    (key) => !hasExplicitEnvBinding(opts.env, key),
-  );
+  const missingExpectedKeys = opts.expectedKeys.filter((key) => !Object.hasOwn(opts.env, key));
   if (missingExpectedKeys.length === 0) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
@@ -435,7 +420,7 @@ export function getShellPathFromLoginShell(opts: {
   }
 
   const shellPath = probe.shellEnv.get("PATH")?.trim();
-  cachedShellPath = shellPath && shellPath.length > 0 ? shellPath : null;
+  cachedShellPath = shellPath || null;
   return cachedShellPath;
 }
 

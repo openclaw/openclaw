@@ -22,13 +22,7 @@ const channel = "imessage" as const;
 const imessageDetectedBinaryStatus = createDetectedBinaryStatus({
   channelLabel: "iMessage",
   binaryLabel: "imsg",
-  configuredLabel: imessageSetupStatusBase.configuredLabel,
-  unconfiguredLabel: imessageSetupStatusBase.unconfiguredLabel,
-  configuredHint: imessageSetupStatusBase.configuredHint,
-  unconfiguredHint: imessageSetupStatusBase.unconfiguredHint,
-  configuredScore: imessageSetupStatusBase.configuredScore,
-  unconfiguredScore: imessageSetupStatusBase.unconfiguredScore,
-  resolveConfigured: imessageSetupStatusBase.resolveConfigured,
+  ...imessageSetupStatusBase,
   resolveBinaryPath: ({ cfg, accountId }) =>
     resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
   detectBinary,

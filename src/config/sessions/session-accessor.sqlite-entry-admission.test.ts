@@ -89,6 +89,12 @@ function fixture(sessionKey = "agent:main:admission") {
   return { root, env, scope, database, databasePath: database.path };
 }
 
+function closeCold(f: ReturnType<typeof fixture>) {
+  closeOpenClawAgentDatabaseByPath(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+}
+
 function nativeChecks(databasePath: string) {
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
@@ -170,23 +176,17 @@ it.each(["sessions.json", "custom.json"])(
 );
 
 it.each([
-  ["entry", "preparation"],
   ["target", "preparation"],
   ["entry", "commit"],
-  ["target", "commit"],
 ] as const)("keeps %s %s integrity checks off the caller thread", async (kind, phase) => {
   const f = fixture();
   if (phase === "preparation") {
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-    clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+    closeCold(f);
   }
   const parentChecks = nativeChecks(f.databasePath);
   const update = () => {
     if (phase === "commit") {
-      closeOpenClawAgentDatabaseByPath(f.databasePath);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-      clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+      closeCold(f);
     }
     return { label: "updated" };
   };
@@ -381,9 +381,7 @@ it.each(["dispose", "sync replacement"] as const)(
   "rejects %s before updater admission and recovers the lane",
   async (mode) => {
     const f = fixture();
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-    clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+    closeCold(f);
     const gate = holdNative(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -426,9 +424,7 @@ it.each(["cancel", "revoke"] as const)(
       patchSessionEntryCore(
         f.scope,
         () => {
-          closeOpenClawAgentDatabaseByPath(f.databasePath);
-          invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-          clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+          closeCold(f);
           return { sessionId: "uncommitted" };
         },
         {

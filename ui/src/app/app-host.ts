@@ -19,6 +19,7 @@ import type {
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -32,6 +33,7 @@ import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
+import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
 import {
   equalShellRouteState,
   selectShellRouteState,
@@ -69,7 +71,9 @@ import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import "./router-outlet.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
+import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { setSettingsChangeListener } from "./settings.ts";
+import { ShellLayoutController } from "./shell-layout-traits.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -94,6 +98,8 @@ class OpenClawShell
   @property({ attribute: false }) onboarding = false;
 
   @state() navDrawerOpen = false;
+  @state() navResizing = false;
+  readonly shellLayout = new ShellLayoutController(this);
   @state() desktopNavigationExpanded = false;
   @state() activeSessionKey = "";
   @state() settingsSearchQuery = "";
@@ -568,8 +574,31 @@ class OpenClawShell
     if (deletedSessions.length === 0) {
       return;
     }
+    const { client, assistantAgentId, hello } = context.gateway.snapshot;
+    // Handoffs belong to this synchronous deletion observation, not the later storage import.
+    retireSessionPaneHandoffs(context, deletedSessions);
+    for (const { key, agentId, retireBeforeRevision } of deletedSessions) {
+      context.chatAttachmentHandoff.retireScope(
+        storedChatOutboxScopeKey({ sessionKey: key, agentId }),
+        retireBeforeRevision,
+      );
+    }
+    const gatewayUrl = context.gateway.connection.gatewayUrl;
+    const sameConnection = capturePlacementStartupConnection(context.gateway, {
+      gatewayUrl,
+      recoveryScope: client?.recoveryScope || undefined,
+    });
+    const scope = {
+      client,
+      gatewayUrl,
+      isCurrent: () => context.gateway.snapshot.client === client && sameConnection(),
+      assistantAgentId,
+      hello,
+      agentsList: context.agents.state.agentsList,
+    };
     void import("../lib/chat/composer-draft-retirement.runtime.ts").then(
-      ({ retireDeletedComposerDrafts }) => retireDeletedComposerDrafts(context, deletedSessions),
+      ({ retireDeletedComposerDrafts }) =>
+        retireDeletedComposerDrafts(context, scope, deletedSessions),
       () => showToast({ message: t("sessionsView.draftCleanupFailed") }),
     );
   }

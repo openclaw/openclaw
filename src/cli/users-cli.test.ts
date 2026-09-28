@@ -86,4 +86,56 @@ describe("registerUsersCli", () => {
 
     expect(output).toHaveBeenCalledWith('{\n  "profile": {\n    "id": "p-1"\n  }\n}\n');
   });
+
+  it("merges profiles through the admin RPC and explains the surviving identity", async () => {
+    const { output, program } = createProgram({
+      profile: { id: "p-survivor", displayName: "Ada" },
+      movedAliasKinds: ["channel", "provider"],
+    });
+
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "users",
+      "merge",
+      "p-retired\nforged",
+      "--into",
+      "p-survivor",
+    ]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "users.merge",
+      expect.objectContaining({ into: "p-survivor" }),
+      { sourceProfileId: "p-retired\nforged", targetProfileId: "p-survivor" },
+      { scopes: ["operator.admin"] },
+    );
+    const text = output.mock.calls.map(([chunk]) => chunk).join("");
+    expect(text).toContain("Survivor: p-survivor\n");
+    expect(text).toContain("Retired profile: p-retired\\nforged\n");
+    expect(text).toContain(
+      "History keeps its original attribution; logins, links, and accounts follow the survivor.",
+    );
+  });
+
+  it("preserves the merge RPC result in JSON output", async () => {
+    const result = {
+      profile: { id: "p-survivor", emails: [] },
+      movedAliasKinds: ["channel"],
+    };
+    const { output, program } = createProgram(result);
+
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "users",
+      "merge",
+      "p-retired",
+      "--into",
+      "p-survivor",
+      "--json",
+    ]);
+
+    expect(output).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual(result);
+  });
 });

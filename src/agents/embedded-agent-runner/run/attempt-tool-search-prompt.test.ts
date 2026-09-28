@@ -37,7 +37,7 @@ beforeEach(() => {
 describe("embedded Tool Search prompt parity", () => {
   it.each([
     { mode: "tools" as const, toolsAllow: undefined },
-    ...(["tools", "code", "directory"] as const).flatMap((mode) =>
+    ...(["tools", "directory"] as const).flatMap((mode) =>
       [["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
     ),
   ])(

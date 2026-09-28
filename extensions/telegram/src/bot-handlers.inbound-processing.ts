@@ -60,7 +60,6 @@ type TelegramInboundMessage = {
   msg: Message;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
   threadSpec: TelegramThreadSpec;
   dmPolicy: DmPolicy;
   storeAllowFrom: string[];
@@ -129,7 +128,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       dmPolicy,
       storeAllowFrom,
@@ -191,7 +189,6 @@ export function createTelegramInboundProcessing({
         msg,
         chatId,
         isGroup,
-        isForum,
         threadSpec,
         storeAllowFrom,
         senderId,
@@ -214,7 +211,6 @@ export function createTelegramInboundProcessing({
       msg,
       chatId,
       isGroup,
-      isForum,
       threadSpec,
       senderId,
       effectiveGroupAllow,

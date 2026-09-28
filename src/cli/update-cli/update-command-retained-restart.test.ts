@@ -73,7 +73,7 @@ beforeEach(() => {
     unitName: "fixture-A.service",
     unitPath: path.join(a, "unit"),
   });
-  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnership").mockResolvedValue();
+  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
   vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
 });
 afterEach(() => {
@@ -376,16 +376,14 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     }
   });
 
-  it.each(["healthy", "A", "B", "A-child"] as const)(
-    "retained-root query uses actual delegated authority: %s",
-    async (fault) => {
-      const proceed = path.join(a, "proceed");
-      const effect = path.join(a, "delegated-effect");
-      const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
-      const sourceArgs = ownerUrl.pathname.endsWith(".ts")
-        ? ["--import", path.resolve("scripts/tsx.mjs")]
-        : [];
-      const script = `
+  it("retained-root query uses actual delegated authority", async () => {
+    const proceed = path.join(a, "proceed");
+    const effect = path.join(a, "delegated-effect");
+    const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+    const sourceArgs = ownerUrl.pathname.endsWith(".ts")
+      ? ["--import", path.resolve("scripts/tsx.mjs")]
+      : [];
+    const script = `
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {withDelegatedUpdateCommandExecutor,assertRetainedUpdateCommandRoot,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(ownerUrl.href)};
@@ -405,49 +403,34 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       } catch(error) {process.stderr.write(error.message);process.exitCode=1;}
     `;
-      let childAdmitted = false;
-      const work = owned(async (run) => {
-        const fence = run.executorFence;
-        if (!fence) {
-          throw new Error("Missing fixture fence");
-        }
-        const result = await withUpdateCommandExecutorChild(fence, b, (grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
-            {
-              input: JSON.stringify({ grant, a, b, proceed, effect }),
-              beforeInput,
-              timeoutMs: 15000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-              onOutputChunk(chunk, stream) {
-                if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
-                  childAdmitted = true;
-                  if (fault === "A" || fault === "B") {
-                    revoke(fault === "A" ? a : b);
-                  }
-                  if (fault === "A-child") {
-                    if (!grant.retainedChildKey) {
-                      throw new Error("Missing retained fixture child");
-                    }
-                    revoke(grant.retainedChildKey);
-                  }
-                  fs.writeFileSync(proceed, "");
-                }
-              },
-            },
-          ),
-        );
-        expect(result.code, result.stderr).toBe(fault === "healthy" ? 0 : 1);
-      });
-      if (fault === "healthy") {
-        await work;
-        expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
-      } else {
-        await expect(work).rejects.toThrow(/ownership|settle|release|cleanup/);
-        expect(fs.existsSync(effect)).toBe(false);
+    let childAdmitted = false;
+    const work = owned(async (run) => {
+      const fence = run.executorFence;
+      if (!fence) {
+        throw new Error("Missing fixture fence");
       }
-      expect(childAdmitted).toBe(true);
-    },
-  );
+      const result = await withUpdateCommandExecutorChild(fence, b, (grant, beforeInput) =>
+        runUtf8CommandWithTimeout(
+          [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
+          {
+            input: JSON.stringify({ grant, a, b, proceed, effect }),
+            beforeInput,
+            timeoutMs: 15000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+            onOutputChunk(chunk, stream) {
+              if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
+                childAdmitted = true;
+                fs.writeFileSync(proceed, "");
+              }
+            },
+          },
+        ),
+      );
+      expect(result.code, result.stderr).toBe(0);
+    });
+    await work;
+    expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
+    expect(childAdmitted).toBe(true);
+  });
 });

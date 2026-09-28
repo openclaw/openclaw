@@ -56,7 +56,6 @@ type MediaAuthorization = {
   authorizationCfg: OpenClawConfig;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
   threadSpec: TelegramThreadSpec;
   senderId: string;
   effectiveGroupAllow: NormalizedAllowFrom;

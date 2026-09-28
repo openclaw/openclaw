@@ -43,26 +43,27 @@ function importedSessionCatalogMessage(params: {
           : params.item.type === "other"
             ? "Other\n\n"
             : "";
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: `${prefix}${text}` }],
+  return sessionCatalogAssistantMessage(
+    `${prefix}${text}`,
     timestamp,
-    api: "openai-responses",
-    provider: params.catalogId,
-    model: params.item.model ?? "native-history",
-    usage: makeZeroUsageSnapshot(),
-    stopReason: "stop",
-  };
+    params.catalogId,
+    params.item.model ?? "native-history",
+  );
 }
 
-function sessionCatalogContinuationNotice(text: string, timestamp: number): AgentMessage {
+function sessionCatalogAssistantMessage(
+  text: string,
+  timestamp: number,
+  provider: string,
+  model: string,
+): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     timestamp,
     api: "openai-responses",
-    provider: "openclaw",
-    model: "session-catalog",
+    provider,
+    model,
     usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
   };
@@ -192,7 +193,12 @@ export async function importSessionCatalogHistory(params: {
     if (notice) {
       await transcript.appendMessage({
         message: {
-          ...sessionCatalogContinuationNotice(notice, fallbackTimestamp + items.length),
+          ...sessionCatalogAssistantMessage(
+            notice,
+            fallbackTimestamp + items.length,
+            "openclaw",
+            "session-catalog",
+          ),
           idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:continuation-notice`,
         },
         idempotencyLookup: "scan",

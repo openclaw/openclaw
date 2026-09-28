@@ -213,6 +213,11 @@ async function runQaCli(
       const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
       return new Error(`qa cli failed (${code ?? "unknown"}): ${stderrText}`);
     };
+    const onStdoutData = (chunk: Buffer) => {
+      appendQaChildOutput(stdout, chunk);
+      appendQaChildOutputTail(stdoutTail, chunk);
+    };
+    const onStderrData = (chunk: Buffer) => appendQaChildOutputTail(stderr, chunk);
     if (process.platform !== "win32") {
       createQaPosixCommandSettlement({
         child,
@@ -245,11 +250,8 @@ async function runQaCli(
           }
           resolve();
         },
-        onStderrData: (chunk) => appendQaChildOutputTail(stderr, chunk),
-        onStdoutData: (chunk) => {
-          appendQaChildOutput(stdout, chunk);
-          appendQaChildOutputTail(stdoutTail, chunk);
-        },
+        onStderrData,
+        onStdoutData,
         processGroupId: child.pid,
         verifyAfterMs: 500,
       });
@@ -259,11 +261,8 @@ async function runQaCli(
       killQaCliWindowsProcessTree(child);
       reject(rejectTimeout());
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      appendQaChildOutput(stdout, chunk);
-      appendQaChildOutputTail(stdoutTail, chunk);
-    });
-    child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
+    child.stdout.on("data", onStdoutData);
+    child.stderr.on("data", onStderrData);
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);

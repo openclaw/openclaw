@@ -1588,7 +1588,6 @@ describe("publication dispatch retention", () => {
 
 describe("release preparation recovery", () => {
   it.each([
-    ["alpha-core", "v2026.9.2-alpha.1", "alpha", "v2026.9.2-alpha.1", "core-npm"],
     ["extended-core", "v2026.8.33", "extended-stable", "extended-stable/2026.8.33", "core-npm"],
     [
       "extended-docker",
@@ -1741,7 +1740,6 @@ describe("release preparation recovery", () => {
 
   it.each([
     ["raw-sha", "", "v2026.9.2", "latest", "normal", undefined, true],
-    ["raw-sha-alpha", "", "v2026.9.2-alpha.1", "alpha", "alpha", undefined, true],
     ["wrong-tag", "", "v2026.9.2", "latest", "normal", "v2026.9.3", false],
     ["invalid-explicit", "ordinary-branch", "v2026.9.2", "latest", "normal", undefined, false],
     ["canonical", "release/2026.9.2", "v2026.9.2", "latest", "normal", undefined, true],
@@ -1920,21 +1918,6 @@ process.exitCode = 1;
       }
     },
   );
-
-  it("preserves the validated Tideclaw alpha activation path without Linux carry", () => {
-    const fixture = finalizationFixture();
-    const branch = "tideclaw/alpha/2026-09-13-0100Z";
-    fixture.env.GITHUB_REF_NAME = branch;
-    fixture.env.GITHUB_REF = `refs/heads/${branch}`;
-    const result = fixture.run("parent", "v2026.9.2-alpha.1", "alpha");
-    expect(result.status, result.stderr).toBe(0);
-    expect(fixture.state()).toMatchObject({
-      writes: 1,
-      isDraft: false,
-      isPrerelease: true,
-      isLatest: false,
-    });
-  });
 
   it.each([
     ["", undefined],
@@ -2163,7 +2146,6 @@ describe("prepared Windows handoff", () => {
     ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
     ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
     ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
-    ["alpha", "v2026.9.2-alpha.1", "alpha", "success", true, true, false, false],
     ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
     ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
     ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],

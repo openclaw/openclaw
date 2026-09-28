@@ -226,7 +226,7 @@ export function createPluginNativeAdmission(
     const root = createPluginNativeCaptureRoot();
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
-    const { fact } = capturePluginNativeNamespace({
+    const { fact, changed } = capturePluginNativeNamespace({
       sourceDirectory,
       boundary,
       managed,
@@ -240,6 +240,42 @@ export function createPluginNativeAdmission(
         (file): file is string => Boolean(file),
       ),
     });
+    // Overlapping managed namespaces share inodes; a new hardlink changes earlier captures too.
+    for (const namespace of state.namespaces.values()) {
+      for (const [relative, member] of Object.entries(namespace.members)) {
+        const identity = changed.get(member.source);
+        const sourceChanged =
+          identity !== undefined &&
+          pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity);
+        const captureChanged =
+          identity !== undefined &&
+          pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity);
+        if (!identity || (!sourceChanged && !captureChanged)) {
+          continue;
+        }
+        if (namespace !== previous || !captureChanged) {
+          const capturedHash = hashPluginSourceFile(
+            pluginNativeNamespaceMemberPath(namespace, relative),
+            pluginNativeNamespaceBoundary(namespace),
+          ).contentHash;
+          if (
+            (member.contentHash && capturedHash !== member.contentHash) ||
+            (sourceChanged &&
+              hashPluginSourceFile(member.source, path.dirname(member.source)).contentHash !==
+                capturedHash)
+          ) {
+            throw new Error("Native plugin companion changed during admission");
+          }
+          member.contentHash ??= capturedHash;
+        }
+        if (sourceChanged) {
+          member.sourceIdentity = identity;
+        }
+        if (captureChanged) {
+          member.capturedIdentity = identity;
+        }
+      }
+    }
     state.namespaces.set(root.directory, fact);
     return fact;
   };

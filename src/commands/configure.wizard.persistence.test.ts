@@ -81,7 +81,10 @@ vi.mock("./configure.gateway.js", async (importOriginal) => ({
   promptGatewayConfig: vi.fn(),
 }));
 vi.mock("./health.js", () => ({ healthCommandNonExiting: mocks.healthCommand }));
-vi.mock("./onboard-channels.js", () => ({ setupChannels: vi.fn() }));
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
+  setupChannels: vi.fn(),
+}));
 vi.mock("./onboard-remote.js", () => ({ promptRemoteGatewayConfig: vi.fn() }));
 vi.mock("./onboard-skills.js", () => ({ setupSkills: vi.fn() }));
 

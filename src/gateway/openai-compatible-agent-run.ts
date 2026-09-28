@@ -5,6 +5,7 @@ import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
@@ -13,6 +14,7 @@ import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
 
 export type OpenAiCompatibleHttpOptions<TConfig> = GatewayHttpRequestAuthOptions & {
   config?: TConfig;
@@ -72,11 +74,15 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   operatorScopes: readonly string[];
   abortSignal?: AbortSignal;
   hasCurrentClientAuthority?: () => boolean;
+  hasClientUploads?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }) {
   params.abortSignal?.throwIfAborted();
   let admitted = false;
   const assertSourceCurrent = () => {
+    if (!admitted && params.hasClientUploads && !areGatewayUploadsEnabled(getRuntimeConfig())) {
+      throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
+    }
     if (!admitted && params.hasCurrentClientAuthority?.() === false) {
       throw new ToolAuthorizationError("Gateway requester authority changed");
     }

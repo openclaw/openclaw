@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -8,19 +8,19 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 
 export const IOS_RELEASE_TESTS = [
-  "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayFreshInstallSetupAndRelaunch",
-  "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayChatRoundTripAndControlOverview",
+  "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayPairChatAndRelaunch",
+  "OpenClawUITests/OpenClawSnapshotUITests/testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend",
 ] as const;
 export const MODEL_REF = "openai/ios-e2e";
 export const IOS_RELEASE_CHAT_FAILURE =
-  /IOS_RELEASE_CHAT_FAILURE (seed-[0-2]|final) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
+  /IOS_RELEASE_CHAT_FAILURE (first|second|relaunch) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
 export const IOS_RELEASE_TEST_FAILURE_LOCATION =
   /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 export const SAMPLE_INTERVAL_MS = 1_000;
 export const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
 export type Arm = "stock" | "simslim";
-type TestIdentity = (typeof IOS_RELEASE_TESTS)[number];
+export type TestIdentity = (typeof IOS_RELEASE_TESTS)[number];
 type JsonObject = Record<string, unknown>;
 
 export type Operation =
@@ -32,6 +32,7 @@ export type Operation =
   | "gateway-build"
   | "native-generate"
   | "native-build"
+  | "native-build-reuse"
   | "simulator-create"
   | "simulator-boot"
   | "simulator-ready"
@@ -39,6 +40,7 @@ export type Operation =
   | "simulator-delete"
   | "fixture-server"
   | "gateway-start"
+  | "setup-status"
   | "setup-code"
   | "native-test"
   | "app-diagnostics"
@@ -292,14 +294,14 @@ export function testRunnerEnv(setupCode: string): NodeJS.ProcessEnv {
 
 export type TrialResources = {
   prepare: () => Promise<void>;
-  test: () => Promise<unknown>;
+  test: (test: TestIdentity) => Promise<unknown>;
   measure: () => Promise<unknown>;
   cleanup: () => Promise<void>;
 };
 export type Trial = {
   pair: number;
   arm: Arm;
-  test: TestIdentity;
+  tests: { test: TestIdentity; status: "failed" | "passed"; ms: number }[];
   status: "failed" | "passed";
   errors: string[];
   diagnostics: Diagnostic[];
@@ -309,7 +311,7 @@ export type Trial = {
   measurement?: ReturnType<typeof summarizeMeasurements>;
 };
 export type TrialDependencies = {
-  create: (test: TestIdentity, arm: Arm, index: number) => Promise<TrialResources>;
+  create: (arm: Arm, index: number) => Promise<TrialResources>;
   now: () => number;
   wait: (ms: number, signal: AbortSignal) => Promise<void>;
   signal: AbortSignal;
@@ -324,124 +326,133 @@ export async function runTrials(mode: Mode, deps: TrialDependencies) {
   const arms: { pair: number; arm: Arm; totalMs: number }[] = [];
   for (const planned of armPlan(mode)) {
     const armStarted = deps.now();
-    for (const test of IOS_RELEASE_TESTS) {
-      if (deps.signal.aborted) {
-        return { trials, arms, complete: false };
-      }
-      const started = deps.now();
-      const trial: Trial = {
-        ...planned,
-        test,
-        status: "failed",
-        errors: [],
-        diagnostics: [],
-        preparationMs: 0,
-        testMs: 0,
-        totalMs: 0,
-      };
-      trials.push(trial);
-      let resources: TrialResources | undefined;
-      let testStarted: number | undefined;
-      let collector: Promise<void> | undefined;
-      const stopCollection = new AbortController();
-      const samples: Sample[] = [];
-      let measurementErrors = 0;
-      let cleanupFailed = false;
-      let stage = "preparation";
-      try {
-        resources = await deps.create(test, planned.arm, trials.length);
-        await resources.prepare();
-        trial.preparationMs = deps.now() - started;
-        deps.signal.throwIfAborted();
-        stage = "test";
-        testStarted = deps.now();
-        if (deps.measure) {
-          const measure = async () => {
+    if (deps.signal.aborted) {
+      return { trials, arms, complete: false };
+    }
+    const started = deps.now();
+    const trial: Trial = {
+      ...planned,
+      tests: [],
+      status: "failed",
+      errors: [],
+      diagnostics: [],
+      preparationMs: 0,
+      testMs: 0,
+      totalMs: 0,
+    };
+    trials.push(trial);
+    let resources: TrialResources | undefined;
+    let testStarted: number | undefined;
+    let collector: Promise<void> | undefined;
+    const stopCollection = new AbortController();
+    const samples: Sample[] = [];
+    let measurementErrors = 0;
+    let cleanupFailed = false;
+    let stage = "preparation";
+    try {
+      resources = await deps.create(planned.arm, trials.length);
+      await resources.prepare();
+      trial.preparationMs = deps.now() - started;
+      deps.signal.throwIfAborted();
+      stage = "test";
+      testStarted = deps.now();
+      if (deps.measure) {
+        const measure = async () => {
+          try {
+            const measurement = parseMeasurement(await resources!.measure());
+            samples.push({ ...measurement, atMs: deps.now() - testStarted! });
+          } catch (error) {
+            measurementErrors++;
+            if (error instanceof OperationError && trial.diagnostics.length < 8) {
+              trial.diagnostics.push(error.diagnostic);
+            }
+          }
+        };
+        // Sample serially, only after preparation has completed.
+        await measure();
+        collector = (async () => {
+          let next = testStarted! + SAMPLE_INTERVAL_MS;
+          while (!stopCollection.signal.aborted && !deps.signal.aborted) {
             try {
-              const measurement = parseMeasurement(await resources!.measure());
-              samples.push({ ...measurement, atMs: deps.now() - testStarted! });
-            } catch (error) {
-              measurementErrors++;
-              if (error instanceof OperationError && trial.diagnostics.length < 8) {
-                trial.diagnostics.push(error.diagnostic);
+              await deps.wait(Math.max(0, next - deps.now()), stopCollection.signal);
+            } catch {
+              if (!stopCollection.signal.aborted && !deps.signal.aborted) {
+                measurementErrors++;
               }
+              break;
             }
-          };
-          // Sample serially, only after preparation has completed.
-          await measure();
-          collector = (async () => {
-            let next = testStarted! + SAMPLE_INTERVAL_MS;
-            while (!stopCollection.signal.aborted && !deps.signal.aborted) {
-              try {
-                await deps.wait(Math.max(0, next - deps.now()), stopCollection.signal);
-              } catch {
-                if (!stopCollection.signal.aborted && !deps.signal.aborted) {
-                  measurementErrors++;
-                }
-                break;
-              }
-              if (stopCollection.signal.aborted || deps.signal.aborted) {
-                break;
-              }
-              await measure();
-              next += SAMPLE_INTERVAL_MS;
+            if (stopCollection.signal.aborted || deps.signal.aborted) {
+              break;
             }
-          })();
+            await measure();
+            next += SAMPLE_INTERVAL_MS;
+          }
+        })();
+      }
+      for (const test of IOS_RELEASE_TESTS) {
+        const testResult: Trial["tests"][number] = { test, status: "failed", ms: 0 };
+        trial.tests.push(testResult);
+        const caseStarted = deps.now();
+        try {
+          deps.signal.throwIfAborted();
+          requireExactTestResult(await resources.test(test), test);
+          testResult.status = "passed";
+        } finally {
+          testResult.ms = deps.now() - caseStarted;
         }
-        requireExactTestResult(await resources.test(), test);
+      }
+    } catch (error) {
+      if (error instanceof OperationError) {
+        trial.diagnostics.push(error.diagnostic);
+      }
+      const resultErrors = [
+        "test-skipped",
+        "test-identity-or-result",
+        "failed-test-child",
+        "repeated-test",
+      ];
+      trial.errors.push(
+        deps.signal.aborted
+          ? "cancelled"
+          : (error as { code?: string })?.code === "ETIMEDOUT" ||
+              (error instanceof OperationError && error.diagnostic.code === "timeout")
+            ? `${stage}-timeout`
+            : error instanceof Error && resultErrors.includes(error.message)
+              ? error.message
+              : `${stage}-failed`,
+      );
+    } finally {
+      stopCollection.abort();
+      await collector;
+      if (testStarted !== undefined) {
+        trial.testMs = deps.now() - testStarted;
+        if (deps.measure) {
+          trial.measurement = summarizeMeasurements(samples, measurementErrors, trial.testMs);
+          if (!trial.measurement.complete) {
+            trial.errors.push("incomplete-measurement");
+          }
+        }
+      } else {
+        trial.preparationMs = deps.now() - started;
+      }
+      try {
+        await resources?.cleanup();
       } catch (error) {
         if (error instanceof OperationError) {
           trial.diagnostics.push(error.diagnostic);
         }
-        const resultErrors = [
-          "test-skipped",
-          "test-identity-or-result",
-          "failed-test-child",
-          "repeated-test",
-        ];
-        trial.errors.push(
-          deps.signal.aborted
-            ? "cancelled"
-            : (error as { code?: string })?.code === "ETIMEDOUT" ||
-                (error instanceof OperationError && error.diagnostic.code === "timeout")
-              ? `${stage}-timeout`
-              : error instanceof Error && resultErrors.includes(error.message)
-                ? error.message
-                : `${stage}-failed`,
-        );
-      } finally {
-        stopCollection.abort();
-        await collector;
-        if (testStarted !== undefined) {
-          trial.testMs = deps.now() - testStarted;
-          if (deps.measure) {
-            trial.measurement = summarizeMeasurements(samples, measurementErrors, trial.testMs);
-            if (!trial.measurement.complete) {
-              trial.errors.push("incomplete-measurement");
-            }
-          }
-        } else {
-          trial.preparationMs = deps.now() - started;
-        }
-        try {
-          await resources?.cleanup();
-        } catch (error) {
-          if (error instanceof OperationError) {
-            trial.diagnostics.push(error.diagnostic);
-          }
-          trial.errors.push("cleanup-failed");
-          cleanupFailed = true;
-        }
-        trial.totalMs = deps.now() - started;
-        if (deps.signal.aborted && !trial.errors.includes("cancelled")) {
-          trial.errors.push("cancelled");
-        }
-        trial.status = trial.errors.length === 0 ? "passed" : "failed";
+        trial.errors.push("cleanup-failed");
+        cleanupFailed = true;
       }
-      // Unconfirmed cleanup cannot safely share a host with another trial.
-      if (cleanupFailed) {
-        return { trials, arms, complete: false };
+      trial.totalMs = deps.now() - started;
+      if (deps.signal.aborted && !trial.errors.includes("cancelled")) {
+        trial.errors.push("cancelled");
       }
+      trial.status = trial.errors.length === 0 ? "passed" : "failed";
+    }
+    // Unconfirmed cleanup cannot safely share a host with another trial.
+    if (cleanupFailed) {
+      return { trials, arms, complete: false };
     }
     arms.push({ ...planned, totalMs: deps.now() - armStarted });
   }
@@ -454,12 +465,17 @@ async function main() {
       mode: { type: "string", default: "stock" },
       "target-sha": { type: "string" },
       output: { type: "string" },
+      "build-dir": { type: "string" },
+      "build-only": { type: "boolean", default: false },
+      "gateway-only": { type: "boolean", default: false },
     },
   });
   if (
     (values.mode !== "stock" && values.mode !== "compare") ||
     !/^[a-f0-9]{40}$/u.test(values["target-sha"] ?? "") ||
-    !values.output
+    !values.output ||
+    (values["build-only"] && !values["build-dir"]) ||
+    (values["gateway-only"] && (values["build-only"] || values.mode !== "stock"))
   ) {
     throw new Error("usage: --mode stock|compare --target-sha <full-sha> --output <proof.json>");
   }
@@ -469,10 +485,15 @@ async function main() {
   process.on("SIGINT", cancel);
   process.on("SIGTERM", cancel);
   const proof: Record<string, unknown> = {
-    schema: 1,
+    schema: 2,
     targetSha: values["target-sha"],
     harnessSha: null,
     mode: values.mode,
+    kind: values["gateway-only"]
+      ? "gateway-probe"
+      : values["build-only"]
+        ? "native-build"
+        : "qualification",
     model: MODEL_REF,
     status: "failed",
     trials: [],
@@ -480,6 +501,17 @@ async function main() {
     diagnostics: [],
   };
   let cleanup: (() => Promise<void>) | undefined;
+  await mkdir(path.dirname(values.output), { recursive: true });
+  let pendingWrite = Promise.resolve();
+  const writeProof = () => {
+    const bytes = `${JSON.stringify(proof, null, 2)}\n`;
+    pendingWrite = pendingWrite.then(async () => {
+      const temporary = `${values.output}.tmp`;
+      await writeFile(temporary, bytes, { mode: 0o600 });
+      await rename(temporary, values.output!);
+    });
+    return pendingWrite;
+  };
   try {
     const { createNativeDependencies } = await import("./lib/ios-release-e2e-native.js");
     const native = await createNativeDependencies({
@@ -487,15 +519,34 @@ async function main() {
       targetSha: values["target-sha"]!,
       signal: abort.signal,
       proof,
+      buildDir: values["build-dir"],
+      gatewayOnly: values["gateway-only"],
+      onProgress: writeProof,
     });
     cleanup = native.cleanup;
-    const result = await runTrials(values.mode, native.dependencies);
-    Object.assign(proof, result);
-    proof.status =
-      result.complete && result.trials.every((trial) => trial.status === "passed")
-        ? "passed"
-        : "failed";
+    let status: string;
+    if (values["build-only"]) {
+      status = "built";
+    } else if (values["gateway-only"]) {
+      const fixture = await native.dependencies.create("stock", 1);
+      try {
+        await fixture.prepare();
+        status = "probe-passed";
+      } finally {
+        await fixture.cleanup();
+      }
+    } else {
+      const result = await runTrials(values.mode, native.dependencies);
+      Object.assign(proof, result);
+      status =
+        result.complete && result.trials.every((trial) => trial.status === "passed")
+          ? "passed"
+          : "failed";
+    }
+    await native.assertCurrentSource();
+    proof.status = status;
   } catch (error) {
+    proof.status = "failed";
     if (error instanceof OperationError) {
       (proof.diagnostics as Diagnostic[]).push(error.diagnostic);
     }
@@ -512,12 +563,11 @@ async function main() {
     }
     proof.harnessMs = performance.now() - started;
     proof.overallMs = proof.harnessMs;
-    await mkdir(path.dirname(values.output), { recursive: true });
-    await writeFile(values.output, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
+    await writeProof();
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
   }
-  process.exitCode = proof.status === "passed" ? 0 : 1;
+  process.exitCode = ["passed", "built", "probe-passed"].includes(String(proof.status)) ? 0 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

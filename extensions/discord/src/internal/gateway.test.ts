@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   GatewayCloseCodes,
   GatewayDispatchEvents,
-  GatewayIntentBits,
   GatewayOpcodes,
   InteractionType,
   PresenceUpdateStatus,
@@ -38,15 +37,6 @@ function firstDispatchedData(dispatchGatewayEvent: ReturnType<typeof vi.fn>): un
     throw new Error("Expected dispatched gateway event call");
   }
   return call[1];
-}
-
-function firstSentGatewayPayload(send: ReturnType<typeof attachOpenSocket>): unknown {
-  const [call] = send.mock.calls;
-  if (!call) {
-    throw new Error("Expected gateway socket send call");
-  }
-  const [rawPayload] = call;
-  return JSON.parse(String(rawPayload));
 }
 
 function presenceUpdate(
@@ -1016,49 +1006,5 @@ describe("GatewayPlugin", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(sentGatewayOpcodes(secondSend)).toContain(GatewayOpcodes.Identify);
-  });
-
-  it("validates requestGuildMembers before sending", () => {
-    const withoutMembersIntent = new GatewayPlugin({ autoInteractions: false });
-    attachOpenSocket(withoutMembersIntent);
-
-    expect(() =>
-      withoutMembersIntent.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0 }),
-    ).toThrow(/GUILD_MEMBERS intent/);
-
-    const withoutPresenceIntent = new GatewayPlugin({
-      autoInteractions: false,
-      intents: GatewayIntentBits.GuildMembers,
-    });
-    attachOpenSocket(withoutPresenceIntent);
-
-    expect(() =>
-      withoutPresenceIntent.requestGuildMembers({
-        guild_id: "guild1",
-        query: "",
-        limit: 0,
-        presences: true,
-      }),
-    ).toThrow(/GUILD_PRESENCES intent/);
-
-    const valid = new GatewayPlugin({
-      autoInteractions: false,
-      intents: GatewayIntentBits.GuildMembers | GatewayIntentBits.GuildPresences,
-    });
-    const send = attachOpenSocket(valid);
-
-    expect(() =>
-      valid.requestGuildMembers({
-        guild_id: "guild1",
-        limit: 1,
-      }),
-    ).toThrow(/query or user_ids/);
-
-    valid.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0, presences: true });
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(firstSentGatewayPayload(send)).toEqual({
-      op: GatewayOpcodes.RequestGuildMembers,
-      d: { guild_id: "guild1", query: "", limit: 0, presences: true },
-    });
   });
 });

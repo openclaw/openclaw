@@ -35,13 +35,13 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableOpen?.(tokens, index, options, env, renderer) ?? "<table>\n";
     }
-    return `<div class="markdown-table" data-table-interactions><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div><div class="markdown-table__viewport"><table>`;
+    return '<div class="markdown-table" data-table-interactions><div class="markdown-table__viewport"><table>';
   };
   markdownParser.renderer.rules.table_close = (tokens, index, options, env, renderer) => {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
     }
-    return "</table></div></div>";
+    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
   };
 }
 

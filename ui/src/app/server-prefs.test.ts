@@ -330,6 +330,7 @@ describe("changedServerUiPrefs", () => {
         sidebarLiveActivity: false,
         chatMessageMaxWidth: "82%",
         showAdvancedSettings: true,
+        openLinksExternally: true,
       }),
     ).toBeNull();
   });

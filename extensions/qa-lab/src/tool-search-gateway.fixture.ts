@@ -26,7 +26,7 @@ import {
   throwToolSearchGatewayRequestFailure,
 } from "./tool-search-gateway-request-evidence.js";
 
-type Lane = "normal" | "code" | "tools";
+type Lane = "normal" | "tools";
 
 type LaneResult = {
   lane: Lane;
@@ -119,7 +119,7 @@ function buildFakeTools(count = 36) {
       name: id,
       description: [
         `Fake plugin tool ${index + 1}.`,
-        "Used by the Tool Search gateway E2E to prove a large plugin-owned tool catalog can be hidden from the model prompt and still called through the compact bridge.",
+        "Used by the Tool Search gateway E2E to prove a large plugin-owned tool catalog can be hidden from the model prompt and still called through structured Tool Search.",
         "The description is intentionally non-trivial so prompt-size regression is measurable.",
       ].join(" "),
       parameters: {
@@ -277,17 +277,10 @@ function applyLaneConfig(
       ...new Set([
         ...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []),
         FAKE_PLUGIN_ID,
-        ...(params.lane !== "normal"
-          ? ["tool_search_code", "tool_search", "tool_describe", "tool_call"]
-          : []),
+        ...(params.lane !== "normal" ? ["tool_search", "tool_describe", "tool_call"] : []),
       ]),
     ],
-    toolSearch:
-      params.lane === "code"
-        ? true
-        : params.lane === "tools"
-          ? { enabled: true, mode: "tools" }
-          : false,
+    toolSearch: params.lane === "tools" ? { enabled: true, mode: "tools" } : false,
   };
 
   const gateway = asRecord(cfg.gateway);
@@ -451,7 +444,7 @@ export async function runToolSearchGatewayLane(params: {
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
   // The last provider request contains the terminal target result, while earlier
-  // requests contain discovery results needed to prove the complete bridge flow.
+  // requests contain discovery results needed to prove the complete structured flow.
   const providerToolOutputs = laneRequests
     .map((request) => request.toolOutput)
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -519,17 +512,17 @@ export async function runToolSearchGatewayLane(params: {
 
 export function assertToolSearchLaneResults(params: {
   normal: LaneResultSummary;
-  code: LaneResultSummary;
+  tools: LaneResultSummary;
   targetTool: string;
 }) {
-  const { code, normal, targetTool } = params;
+  const { tools, normal, targetTool } = params;
   const laneDebug = () =>
     JSON.stringify(
       Object.fromEntries(
         (
           [
             ["normal", normal],
-            ["code", code],
+            ["tools", tools],
           ] as const
         ).map(([name, result]) => [
           name,
@@ -555,42 +548,42 @@ export function assertToolSearchLaneResults(params: {
     `normal lane did not call ${targetTool}: ${laneDebug()}`,
   );
   assert(
-    code.providerPlannedTools.includes("tool_search_code") &&
-      code.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      code.gatewayOutputText.includes(targetTool) &&
-      (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
-    `code lane did not bridge-call ${targetTool}: ${laneDebug()}`,
+    tools.providerPlannedTools.includes("tool_call") &&
+      tools.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
+      tools.gatewayOutputText.includes(targetTool) &&
+      (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
+    `structured lane did not call ${targetTool}: ${laneDebug()}`,
   );
   assert(
-    code.providerDirectoryContainsTarget,
-    `code lane did not advertise ${targetTool} in the capability directory: ${laneDebug()}`,
+    tools.providerDirectoryContainsTarget,
+    `structured lane did not advertise ${targetTool} in the capability directory: ${laneDebug()}`,
   );
   assert(
     !normal.providerDirectoryContainsTarget,
     `normal lane unexpectedly advertised a Tool Search capability directory: ${laneDebug()}`,
   );
   assert(
-    !code.providerPlannedTools.includes(targetTool),
-    `code lane exposed direct provider tool ${targetTool}: ${laneDebug()}`,
+    !tools.providerPlannedTools.includes(targetTool),
+    `structured lane exposed direct provider tool ${targetTool}: ${laneDebug()}`,
   );
   assert(
-    normal.providerDeclaredToolCount > code.providerDeclaredToolCount,
-    `expected Tool Search to expose fewer tools to provider: normal=${normal.providerDeclaredToolCount} code=${code.providerDeclaredToolCount}`,
+    normal.providerDeclaredToolCount > tools.providerDeclaredToolCount,
+    `expected Tool Search to expose fewer tools to provider: normal=${normal.providerDeclaredToolCount} tools=${tools.providerDeclaredToolCount}`,
   );
   assert(
-    normal.providerRawBytes > code.providerRawBytes,
-    `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} code=${code.providerRawBytes}`,
+    normal.providerRawBytes > tools.providerRawBytes,
+    `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} tools=${tools.providerRawBytes}`,
   );
   assert(
-    (code.sessionLogToolMentions.tool_search_code ?? 0) > 0 &&
-      (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
-    "code lane session log did not record bridge and target tool mentions",
+    (tools.sessionLogToolMentions.tool_call ?? 0) > 0 &&
+      (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
+    "structured lane session log did not record call and target tool mentions",
   );
   assert(
-    !normal.providerPlannedTools.includes("tool_search_code"),
-    "normal lane unexpectedly used Tool Search bridge",
+    !normal.providerPlannedTools.includes("tool_call"),
+    "normal lane unexpectedly used structured Tool Search",
   );
-  for (const lane of [normal, code]) {
+  for (const lane of [normal, tools]) {
     assert(
       lane.targetToolIdentity.source === "plugin" &&
         lane.targetToolIdentity.pluginId === FAKE_PLUGIN_ID,

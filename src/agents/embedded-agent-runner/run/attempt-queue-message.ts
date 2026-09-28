@@ -1,6 +1,3 @@
-/**
- * Steers active embedded sessions and waits for transcript commits when needed.
- */
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
@@ -25,10 +22,6 @@ import type {
   EmbeddedAgentQueueMessageResult,
 } from "../run-state.js";
 
-/**
- * Minimal active-session surface needed to steer a running attempt and observe
- * whether the queued user message reached the transcript.
- */
 type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: {
     cancelSteeringMessage?: (
@@ -39,7 +32,6 @@ type EmbeddedAgentActiveSessionSteerTarget = {
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
-/** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
@@ -140,14 +132,15 @@ async function cancelQueuedSteeringMessage(
 }
 
 /**
- * Sends a steering message and resolves only after the matching user
- * `message_end` event appears. If the run ends or times out first, the pending
- * queue entry is removed so an abandoned steer does not leak into a later turn.
+ * Tracks one steer until commit or terminal cleanup. Admission-only receipts
+ * resolve after enqueue, but retain exact-message cleanup until the run ends.
+ * Commit-waiting callers also retain their delivery deadline.
  */
-async function steerAndWaitForTranscriptCommit(
+async function steerWithTranscriptLifecycle(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,
+  waitForTranscriptCommit: boolean,
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   images?: ImageContent[],
   media?: MediaFact[],
@@ -275,6 +268,14 @@ async function steerAndWaitForTranscriptCommit(
         reportAcceptance(true);
         if (abortRequested) {
           rejectAfterCancellation("queued steering message was cancelled before delivery");
+        } else if (!waitForTranscriptCommit && acceptanceOpen) {
+          // The caller now owns an admission receipt. Only the receiving run
+          // owns later consumption or withdrawal; do not retain a global failure
+          // listener or the completed caller's abort signal after this point.
+          clearTimeout(timer);
+          unsubscribePersistenceFailure();
+          abortSignal?.removeEventListener("abort", onAbort);
+          resolve();
         }
       },
       (err: unknown) => {
@@ -313,10 +314,6 @@ function resolveQuestionAuthority(
   );
 }
 
-/**
- * Steers the active session directly or waits for transcript commitment when a
- * caller needs delivery proof before returning.
- */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -354,7 +351,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options?.onQueueAccepted?.(true);
     return;
   }
-  if (options?.waitForTranscriptCommit !== true) {
+  if (options?.waitForTranscriptCommit === undefined) {
     try {
       await steerActiveSession(
         activeSession,
@@ -375,10 +372,11 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   try {
-    await steerAndWaitForTranscriptCommit(
+    await steerWithTranscriptLifecycle(
       activeSession,
       text,
       options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+      options.waitForTranscriptCommit,
       options.userTurnTranscriptRecorder,
       options.images,
       options.media,

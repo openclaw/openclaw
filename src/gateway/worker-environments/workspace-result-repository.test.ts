@@ -247,6 +247,9 @@ describe("repository workspace result ownership", () => {
         publishAcceptedWorkspace,
       });
     const environments: WorkerDispatchEnvironmentService = {
+      fenceWorkerTurnForRecovery: () => {
+        throw new Error("Repository result fixture does not synthesize startup claims");
+      },
       prepareProjectIntent: async () => {
         throw new Error("unexpected local-project preparation");
       },
@@ -687,7 +690,7 @@ describe("repository workspace result ownership", () => {
           workspaceOperations: f.workspaceOperations,
           ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace: f.resolveWorkspace }),
         },
-        false,
+        await placements.readProjection([SESSION_ID], { current: true }),
       );
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
@@ -983,7 +986,7 @@ describe("repository workspace result ownership", () => {
             reportFailure: reportWorkspaceResultRecoveryFailure,
           }),
         },
-        true,
+        await restarted.readProjection([SESSION_ID], { current: true }),
       );
       expect(reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
       expect(restarted.listPendingWorkspaceResults()).toEqual([]);

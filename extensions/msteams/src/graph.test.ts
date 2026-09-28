@@ -4,7 +4,6 @@ const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
   fetchWithSsrFGuardMock,
-  readAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
@@ -17,7 +16,6 @@ const {
         release: async () => undefined,
       }),
     ),
-    readAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
 });
@@ -25,10 +23,6 @@ const {
 vi.mock("./sdk.js", () => ({
   loadMSTeamsSdkWithAuth: loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProvider: createMSTeamsTokenProviderMock,
-}));
-
-vi.mock("./token-response.js", () => ({
-  readAccessToken: readAccessTokenMock,
 }));
 
 vi.mock("./token.js", () => ({
@@ -174,18 +168,11 @@ async function expectRejectsToThrow(promise: Promise<unknown>, message: string) 
   await expect(promise).rejects.toThrow(message);
 }
 
-function mockGraphTokenResolution(options?: {
-  rawToken?: string | null;
-  resolvedToken?: string | null;
-}) {
-  const rawToken = options && "rawToken" in options ? options.rawToken : "raw-graph-token";
-  const resolvedToken =
-    options && "resolvedToken" in options ? options.resolvedToken : "resolved-token";
-  const getAccessToken = vi.fn(async () => rawToken);
+function mockGraphTokenResolution(token = "resolved-token") {
+  const getAccessToken = vi.fn(async () => token);
   loadMSTeamsSdkWithAuthMock.mockResolvedValue({ app: mockApp });
   createMSTeamsTokenProviderMock.mockReturnValue({ getAccessToken });
   resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
-  readAccessTokenMock.mockReturnValue(resolvedToken);
   return { getAccessToken };
 }
 
@@ -469,7 +456,7 @@ describe("msteams graph helpers", () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
     await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");
 
-    mockGraphTokenResolution({ rawToken: null, resolvedToken: null });
+    mockGraphTokenResolution("");
 
     await expectRejectsToThrow(
       resolveGraphToken({ channels: { msteams: {} } }),

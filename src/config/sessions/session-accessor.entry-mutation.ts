@@ -443,11 +443,15 @@ export async function createSessionEntryWithTranscript<TError = string>(
           await runExclusiveSqliteSessionWrite(
             transcriptScope,
             async () => {
-              runOpenClawAgentWriteTransaction((database) => {
-                commitGuard?.();
-                assertSourceCurrent?.();
-                ensureTranscriptHeader(database, transcriptScope, cwd);
-              }, toDatabaseOptions(transcriptScope));
+              runOpenClawAgentWriteTransaction(
+                (database) => {
+                  commitGuard?.();
+                  assertSourceCurrent?.();
+                  ensureTranscriptHeader(database, transcriptScope, cwd);
+                },
+                toDatabaseOptions(transcriptScope),
+                { operationLabel: "session.entry.create-transcript" },
+              );
             },
             "session.entry.create-with-transcript",
           );

@@ -453,6 +453,7 @@ describe("subagent registry lifecycle error grace", () => {
       endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "child complete" },
     });
+    await waitForAgentCallCount(1);
     await waitForDeliveredCleanup(runId, { allowPendingRequesterSettleWake: true });
 
     const completed = mod
@@ -867,6 +868,7 @@ describe("subagent registry lifecycle error grace", () => {
       },
     });
     await flushAsync();
+    await waitForAgentCallCount(1);
     await waitForCleanupHandledFalse("run-refresh-silent");
     await waitForFrozenResultText("run-refresh-silent", "All work complete, final summary");
 

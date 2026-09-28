@@ -1,5 +1,6 @@
 // Splits oxlint into resource-aware shards with heartbeat and timeout handling.
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,7 +39,7 @@ const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
 
-type OxlintShard = { name: string; args: string[] };
+type OxlintShard = { name: string; args: string[]; canonicalTargets?: readonly string[] };
 type ShardStripe = { index: number; total: number };
 type HostResources = {
   logicalCpuCount: number;
@@ -58,8 +59,12 @@ type RunnerOptions = {
   extraArgs: string[];
   runner: string;
 };
-type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard };
-type ShardBatchOptions = RunnerOptions & { concurrency: number; entries: OxlintShard[] };
+type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
+type ShardBatchOptions = RunnerOptions & {
+  concurrency: number;
+  entries: OxlintShard[];
+  evidenceId?: string;
+};
 type ActiveShardChild = { child: ChildProcess; killGraceMs: number };
 
 const ACTIVE_SHARD_CHILDREN = new Set<ActiveShardChild>();
@@ -84,103 +89,43 @@ const SCRIPTS_SHARD = {
   args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
 };
 
-async function lintWorkspacePackages(cwd: string): Promise<string[] | undefined> {
-  const { parse: parseYaml } = await import("yaml");
-  const workspace: unknown = parseYaml(
-    fs.readFileSync(path.join(cwd, "pnpm-workspace.yaml"), "utf8"),
+const LINT_SOURCE_PATH = /^(?:src|ui|packages|extensions|scripts)\/.+\.[cm]?[jt]sx?$/u;
+
+export function isOxlintSourcePath(file: string, cwd: string) {
+  return (
+    file === file.trim() &&
+    !file.split("/").includes("..") &&
+    LINT_SOURCE_PATH.test(file) &&
+    !/\.d\.[cm]?ts$/u.test(file) &&
+    fs.existsSync(path.join(cwd, file))
   );
+}
+
+/** Filtering follows canonical stripe assignment, so a narrowed row cannot steal another row's files. */
+export function createOxlintFileScope(files: readonly string[], cwd = process.cwd()) {
   if (
-    !workspace ||
-    typeof workspace !== "object" ||
-    !("packages" in workspace) ||
-    !Array.isArray(workspace.packages) ||
-    !workspace.packages.every((entry) => typeof entry === "string" && !entry.startsWith("!"))
+    new Set(files).size !== files.length ||
+    !files.every((file) => isOxlintSourcePath(file, cwd))
   ) {
-    return undefined;
+    throw new Error("Oxlint file selection requires unique, present canonical source paths");
   }
-  const roots = [
-    ...new Set(
-      workspace.packages.flatMap((pattern: string) =>
-        (pattern === "." ? ["."] : [...fs.globSync(pattern, { cwd })])
-          .filter((root) => fs.existsSync(path.join(cwd, root, "package.json")))
-          .map((root) => root.replaceAll(path.sep, "/")),
-      ),
-    ),
-  ];
-  return roots.includes(".")
-    ? roots.toSorted((left, right) => right.length - left.length)
-    : undefined;
-}
-
-/** Workspace metadata owns package boundaries; test/ remains outside full semantic lint. */
-export async function resolveChangedOxlintPackageScope(
-  files: readonly string[],
-  cwd = process.cwd(),
-) {
-  const roots = await lintWorkspacePackages(cwd);
-  if (!roots) {
-    return undefined;
-  }
-  const selected = new Set<string>();
-  for (const file of files) {
-    if (
-      path.isAbsolute(file) ||
-      file !== file.trim() ||
-      file.split("/").includes("..") ||
-      !OXLINT_SOURCE_FILE_PATTERN.test(file) ||
-      /\.d\.[cm]?ts$/u.test(file) ||
-      !fs.existsSync(path.join(cwd, file))
-    ) {
-      return undefined;
-    }
-    const owner = roots.find((root) => root !== "." && file.startsWith(`${root}/`)) ?? ".";
-    selected.add(owner);
-  }
-  return prepareOxlintPackageScope(roots, [...selected].toSorted(), cwd);
-}
-
-/** Filter after stripe assignment so package scope never changes execution ownership. */
-export async function createOxlintPackageScope(packages: readonly string[], cwd = process.cwd()) {
-  const roots = await lintWorkspacePackages(cwd);
-  if (!roots) {
-    throw new Error("Oxlint package selection requires canonical workspace roots");
-  }
-  return prepareOxlintPackageScope(roots, packages, cwd);
-}
-
-function prepareOxlintPackageScope(
-  roots: readonly string[],
-  packages: readonly string[],
-  cwd: string,
-) {
-  const selected = new Set(packages);
-  if (selected.size !== packages.length || packages.some((root) => !roots.includes(root))) {
-    throw new Error("Oxlint package selection must name unique canonical workspace roots");
-  }
-  const project = (target: string): string[] => {
-    const owner =
-      roots.find((root) => root !== "." && (target === root || target.startsWith(`${root}/`))) ??
-      ".";
-    const nested = roots.filter((root) => root !== "." && root.startsWith(`${target}/`));
-    if (!selected.has(owner)) {
-      return nested.filter((root) => selected.has(root));
-    }
-    if (nested.length === 0) {
-      return fs.statSync(path.join(cwd, target)).isDirectory() ||
-        OXLINT_SOURCE_FILE_PATTERN.test(target)
-        ? [target]
-        : [];
-    }
-    // A canonical container such as packages/ can contain both workspace
-    // packages and root-owned files. Split only along declared package roots.
-    return fs.readdirSync(path.join(cwd, target)).flatMap((entry) => project(`${target}/${entry}`));
-  };
+  const selected = files.toSorted((left, right) => left.localeCompare(right));
   return {
-    packages: [...selected].toSorted(),
+    files: selected,
     selectShards(shards: readonly OxlintShard[]) {
       return shards.flatMap((shard) => {
-        const targets = [...new Set(shard.args.slice(2).flatMap(project))];
-        return targets.length ? [{ ...shard, args: [...shard.args.slice(0, 2), ...targets] }] : [];
+        const targets = selected.filter((file) =>
+          shard.args.slice(2).some((root) => file === root || file.startsWith(`${root}/`)),
+        );
+        return targets.length
+          ? [
+              {
+                ...shard,
+                args: [...shard.args.slice(0, 2), ...targets],
+                canonicalTargets: shard.canonicalTargets ?? shard.args.slice(2),
+              },
+            ]
+          : [];
       });
     },
   };
@@ -390,14 +335,16 @@ export async function main(
     }),
     shardArgs.extensionStripe,
   );
-  const selectedShards = shardArgs.packages
-    ? (await createOxlintPackageScope(shardArgs.packages)).selectShards(stripedShards)
+  const selectedShards = shardArgs.files
+    ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
     : stripedShards;
 
   const needsArtifacts = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
     selectedShards,
     shardArgs.oxlintArgs,
   );
+  const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" ? randomUUID() : undefined;
+  let completed = 0;
   const run = async () => {
     if (needsArtifacts) {
       const code = await runManagedCommand({
@@ -432,10 +379,24 @@ export async function main(
       env,
       extraArgs: shardArgs.oxlintArgs,
       runner,
+      evidenceId,
     });
-    return results.find((status) => status !== 0) ?? 0;
+    completed = results.completed;
+    return results.statuses.find((status) => status !== 0) ?? 0;
   };
-  return needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  const status = needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
+    console.log(
+      `[ci-static:oxlint:completion] ${JSON.stringify({
+        version: 1,
+        id: evidenceId,
+        planned: selectedShards.length,
+        completed,
+        leaves: selectedShards.map((_, index) => `${evidenceId}:${index}`),
+      })}`,
+    );
+  }
+  return status;
 }
 
 if (import.meta.main) {
@@ -464,23 +425,23 @@ export function parseShardRunnerArgs(args: string[]) {
   let coreStripe: ShardStripe | undefined;
   let extensionStripe: ShardStripe | undefined;
   let splitCore = false;
-  let packages: string[] | undefined;
+  let files: string[] | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) {
       break;
     }
-    if (arg === "--packages-json") {
+    if (arg === "--files-json") {
       const value: unknown = JSON.parse(args[index + 1] ?? "null");
       if (
         !Array.isArray(value) ||
         value.length === 0 ||
         !value.every((root) => typeof root === "string")
       ) {
-        throw new Error("--packages-json requires a nonempty JSON string array");
+        throw new Error("--files-json requires a nonempty JSON string array");
       }
-      packages = value;
+      files = value;
       index += 1;
       continue;
     }
@@ -530,7 +491,7 @@ export function parseShardRunnerArgs(args: string[]) {
     only,
     oxlintArgs,
     splitCore,
-    ...(packages ? { packages } : {}),
+    ...(files ? { files } : {}),
   };
 }
 
@@ -671,24 +632,57 @@ export function resolveOxlintShardConcurrency({
   );
 }
 
-async function runShards({ concurrency, entries, env, extraArgs, runner }: ShardBatchOptions) {
+async function runShards({
+  concurrency,
+  entries,
+  env,
+  extraArgs,
+  runner,
+  evidenceId,
+}: ShardBatchOptions) {
   // Dependency-less worktrees establish their primary-checkout toolchain link
   // before this lazy import, avoiding a top-level package-resolution failure.
   const { default: pMap } = await import("p-map");
+  let completed = 0;
   const results = await pMap(
     entries,
-    async (shard) => {
+    async (shard, index) => {
       if (isParentTerminationRequested()) {
         return undefined;
       }
-      return await runShard({ env, extraArgs, runner, shard });
+      // File projection must retain the measured parent Program's resource bounds.
+      const targets = shard.canonicalTargets ?? shard.args.slice(2);
+      const boundedTargets =
+        (shard.name.startsWith("core:") &&
+          (targets.length === 1 ||
+            targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
+        (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
+      const boundedArgs =
+        boundedTargets &&
+        extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
+      return await runShard({
+        env: {
+          ...env,
+          ...(evidenceId ? { OPENCLAW_CI_STATIC_EVIDENCE_ID: `${evidenceId}:${index}` } : {}),
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: String(concurrency),
+          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
+            ? JSON.stringify([...shard.args, ...extraArgs])
+            : "",
+        },
+        extraArgs,
+        runner,
+        shard,
+        onCompleted: () => {
+          completed++;
+        },
+      });
     },
     { concurrency, stopOnError: false },
   );
-  return results.filter((status) => status !== undefined);
+  return { statuses: results.filter((status) => status !== undefined), completed };
 }
 
-export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOptions) {
+export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
@@ -716,7 +710,28 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       OPENCLAW_OXLINT_SKIP_PREPARE: "1",
     },
   });
-  child.stdout.pipe(process.stdout, { end: false });
+  const collectEvidence = env.OPENCLAW_CI_STATIC_EVIDENCE === "1";
+  let output = "";
+  let outputOverflow = false;
+  if (collectEvidence) {
+    // Concurrent shards must publish each native JSON report and receipt together.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (!outputOverflow && output.length + chunk.length > 16 * 1024 * 1024) {
+        outputOverflow = true;
+        process.stdout.write(output);
+        output = "";
+        console.error(`[oxlint:${shard.name}] evidence output exceeded its limit`);
+      }
+      if (outputOverflow) {
+        process.stdout.write(chunk);
+      } else {
+        output += chunk;
+      }
+    });
+  } else {
+    child.stdout.pipe(process.stdout, { end: false });
+  }
   child.stderr.pipe(process.stderr, { end: false });
   const unregisterShardChild = registerShardChild({ child, killGraceMs });
 
@@ -771,6 +786,10 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       }
       forceKillAt = null;
       unregisterShardChild();
+      if (collectEvidence && output) {
+        process.stdout.write(output);
+        output = "";
+      }
       console.error(
         `[oxlint:${shard.name}] ${status === 0 ? "passed" : `failed (exit ${status})`}`,
       );
@@ -807,7 +826,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       console.error(error);
       finish(1);
     });
-    child.once("close", (status) => {
+    child.once("close", (status, signal) => {
       const exitStatus = parentTerminationSignal
         ? getSignalExitCode(parentTerminationSignal)
         : timedOut
@@ -816,6 +835,15 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       if (isChildProcessGroupAlive(child)) {
         void finishAfterForcedTeardown(exitStatus);
         return;
+      }
+      if (
+        !parentTerminationSignal &&
+        !timedOut &&
+        !signal &&
+        !outputOverflow &&
+        (status === 0 || status === 1)
+      ) {
+        onCompleted?.();
       }
       finish(exitStatus);
     });

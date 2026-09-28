@@ -1,7 +1,4 @@
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
-/**
- * Shared parameter types for embedded-agent run orchestration.
- */
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
@@ -285,27 +282,15 @@ export type RunEmbeddedAgentParams = {
   terminalReplyExpectation?: ReplyExpectation;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
-   * One-shot helper runs may opt in to executing through the provider's CLI
-   * backend instead of the direct-API passthrough when the run targets a CLI
-   * runtime provider whose passthrough credentials are subscription-scoped.
-   * Anthropic routes direct anthropic-messages calls on subscription OAuth to
-   * metered extra-usage billing: without extra-usage balance the passthrough
-   * fails closed with a billing error, and with it the run silently draws
-   * paid usage instead of plan limits. The CLI backend is the plan-limits
-   * path for those credentials. CLI dispatch translates `toolsAllow` into the
-   * selectable-backend surface (no native tools, allowlisted loopback MCP
-   * tools); the same list bounds the loopback MCP grant server-side, so tools
-   * outside it — including the message tool, matching `disableMessageTool`
-   * intent — can be neither listed nor called. Leave unset to keep the
-   * direct-API passthrough.
+   * Use the provider's subscription CLI for one-shot helpers within plan limits.
+   * Direct Anthropic OAuth passthrough uses metered extra usage and fails without balance.
+   * `toolsAllow` bounds both backend-visible tools and server-side loopback MCP grants;
+   * native and non-allowlisted tools, including a disabled message tool, stay unavailable.
+   * Unset retains direct-API passthrough.
    */
   cliBackendDispatch?: "subscription-auth";
   /**
-   * Allow a single run attempt even when all auth profiles are in cooldown,
-   * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
-   *
-   * This is used by model fallback when trying sibling models on providers
-   * where transient service pressure is often model-scoped.
+   * Probe one transiently cooled profile when sibling models may still be available.
    */
   allowTransientCooldownProbe?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;

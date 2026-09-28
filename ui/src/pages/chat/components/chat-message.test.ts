@@ -1532,13 +1532,14 @@ describe("grouped chat rendering", () => {
       );
       const summary = container.querySelector<HTMLElement>(".msg-meta__summary")!;
       summary.click();
+      const metadata = summary.closest("openclaw-tooltip")!;
+      expect(metadata.hasAttribute("open")).toBe(true);
       const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
       reply.focus();
       const replyTooltip = reply.closest("openclaw-tooltip")!;
-      await Promise.resolve();
-      expect(replyTooltip.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(true);
-      const metadata = summary.closest("openclaw-tooltip")!;
-      expect(metadata.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(false);
+      // The wrapper owns visibility even while the optional popup is upgrading.
+      expect(replyTooltip.hasAttribute("open")).toBe(true);
+      expect(metadata.hasAttribute("open")).toBe(false);
     } finally {
       provider.remove();
     }
@@ -4104,7 +4105,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
     player.onExpand(kind === "video" ? source : undefined);
     if (kind === "video") {
-      expect(onOpenImage).toHaveBeenCalledWith({
+      expect(onOpenImage.mock.lastCall?.[0]).toMatchObject({
         kind: "video",
         originalSrc: source,
         src: source,

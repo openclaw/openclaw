@@ -50,11 +50,6 @@ export function observeGatewayReconnects(
   };
 }
 
-/** Internal connection provenance; raw event objects and payloads remain unchanged. */
-export function readGatewayEventConnectionEpoch(event: GatewayEvent): object | undefined {
-  return eventReceipts.get(event)?.epoch;
-}
-
 export function readGatewayEventReceipt(event: GatewayEvent): GatewayEventReceipt | undefined {
   return eventReceipts.get(event);
 }

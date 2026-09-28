@@ -45,7 +45,7 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
-// job leaves the queue. Mirrors the OpenAI Sora surface (extensions/openai).
+// job succeeds or fails, then the result contains downloadable video URLs.
 type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
 
 type DeepInfraVideoJob = {

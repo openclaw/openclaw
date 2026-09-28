@@ -838,6 +838,7 @@ check_gateway_status() { :; }
 update_candidate() {
   [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = file:/tmp/future-package.tgz ] && [ "$3" = 2100.1.0 ]
 }
+assert_managed_membership_warning() { :; }
 assert_survival() { :; }
 repair_update_restart_auth
 `,
@@ -854,6 +855,7 @@ repair_update_restart_auth
         "prepare-recovery-service",
         "prepared-gateway-auth",
         "recovery-update-restart",
+        "recovery-membership-warning",
       ]);
     },
   );

@@ -121,12 +121,18 @@ export class UpdatePreMutationError<Reason extends string = string> extends Erro
   readonly nextAction?: string;
   readonly recoverySteps?: readonly UpdateRecoveryStep[];
   readonly failureFacts: UpdateFailureFact[];
+  readonly #stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
+
+  get stepResult(): Pick<UpdateRunResult, "steps" | "failedStep"> | undefined {
+    return this.#stepResult;
+  }
 
   constructor(
     readonly reason: Reason,
     message: string,
     options?: ErrorOptions & {
       failureFacts?: readonly UpdateFailureFact[];
+      stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
       recoverySteps?: readonly UpdateRecoveryStep[];
       origin?: "candidate-admission";
       nextAction?: string;
@@ -137,6 +143,10 @@ export class UpdatePreMutationError<Reason extends string = string> extends Erro
     this.origin = options?.origin;
     this.nextAction = options?.nextAction;
     this.recoverySteps = options?.recoverySteps;
+    // Completed attempts are diagnostics, never recovery authority or enumerable error output.
+    this.#stepResult = options?.stepResult
+      ? { steps: options.stepResult.steps, failedStep: options.stepResult.failedStep }
+      : undefined;
     this.failureFacts = normalizeUpdateFailureFacts(
       options?.failureFacts ?? [{ check: reason, code: reason, message }],
     );
@@ -371,9 +381,6 @@ async function cloneGitCheckoutTransactionally(params: {
           published = true;
           return targetDir;
         }
-      }
-
-      if (!preserveDir) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );

@@ -7,10 +7,6 @@ const KEY_HEX_PATTERN = /^[0-9a-f]{64}$/u;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
 type BrowserRelayProofKind = "server" | "client" | "accept";
-type BrowserRelayRole = "extension" | "cdp";
-type BrowserRelayTransport = "websocket" | "connection";
-type BrowserRelayMethod = "GET" | "SEQUENCE";
-type BrowserRelayFlow = "extension" | "cdp" | "json-list" | "owner";
 
 export type BrowserRelayProofFields = {
   keyId: string;
@@ -20,11 +16,11 @@ export type BrowserRelayProofFields = {
   serverNonce: string;
   issuedAtMs: number;
   expiresAtMs: number;
-  role: BrowserRelayRole;
-  transport: BrowserRelayTransport;
-  method: BrowserRelayMethod;
+  role: "extension" | "cdp";
+  transport: "websocket" | "connection";
+  method: "GET" | "SEQUENCE";
   resource: string;
-  flow: BrowserRelayFlow;
+  flow: "extension" | "cdp" | "json-list" | "owner";
 };
 
 export type BrowserRelayAuthChallenge = BrowserRelayProofFields & {

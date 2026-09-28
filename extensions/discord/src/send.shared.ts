@@ -7,7 +7,6 @@ import {
   extensionForMime,
   normalizePollDurationHours,
   normalizePollInput,
-  type OutboundMediaAccess,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -24,7 +23,7 @@ import {
   getChannel,
   RequestClient,
 } from "./internal/discord.js";
-import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { parseAndResolveRecipient, type DiscordRecipient } from "./recipient-resolution.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
 import {
@@ -36,7 +35,7 @@ import {
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
 import { fetchChannelPermissionsDiscord } from "./send.permissions.js";
-import { DiscordSendError } from "./send.types.js";
+import { DiscordSendError, type DiscordOutboundMediaOpts } from "./send.types.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
@@ -70,16 +69,6 @@ export {
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
-type DiscordRecipient =
-  | {
-      kind: "user";
-      id: string;
-    }
-  | {
-      kind: "channel";
-      id: string;
-    };
-
 function normalizeReactionEmoji(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -414,14 +403,12 @@ async function sendDiscordText(params: DiscordTextSendParams) {
   return sendDiscordChunks(params);
 }
 
-type DiscordMediaSendParams = DiscordTextSendParams & {
-  mediaUrl: string;
-  filename?: string;
-  mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  maxBytes?: number;
-};
+type DiscordMediaSendParams = DiscordTextSendParams &
+  DiscordOutboundMediaOpts & {
+    mediaUrl: string;
+    filename?: string;
+    maxBytes?: number;
+  };
 
 async function sendDiscordMedia(params: DiscordMediaSendParams) {
   const media = await loadWebMedia(

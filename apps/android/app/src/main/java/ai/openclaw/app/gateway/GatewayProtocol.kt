@@ -975,6 +975,9 @@ enum class GatewayMethod(
   CronHistory("cron.history"),
   PresenceActivity("presence.activity"),
   PresenceQuery("presence.query"),
+  UsersMerge("users.merge"),
+  GatewayStopRequest("gateway.stop.request"),
+  DiagnosticsHeapSnapshot("diagnostics.heapSnapshot"),
 }
 
 enum class GatewayEvent(
@@ -988,6 +991,7 @@ enum class GatewayEvent(
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionNarration("session.narration"),
   SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionSharing("session.sharing"),

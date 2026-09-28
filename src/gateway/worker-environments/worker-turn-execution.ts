@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import {
   loadManifestModelCatalog,
@@ -42,7 +43,6 @@ import {
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import {
   assertSupportedTurn,
-  assistantText,
   buildWorkerTurnResult,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -175,12 +175,17 @@ export async function executeWorkerTurn(
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
 
   assertContextCurrent();
-  const credential = await params.environments.acquireTurnCredential(params.turnClaim);
+  const credential = await waitForTurnOperation({
+    start: () => params.environments.acquireTurnCredential(params.turnClaim),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
   const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    }),
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: placement.environmentId,
+        ownerEpoch: placement.activeOwnerEpoch,
+      }),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
@@ -225,6 +230,10 @@ export async function executeWorkerTurn(
       placements: params.placements,
       sessionKey: placement.sessionKey,
       sessionTarget: transcriptTarget,
+      promptCacheContext: {
+        boundaryCount: manager.getBoundaryCount(),
+        promptCacheKey: turn.promptCacheKey,
+      },
       assertSourceCurrent,
       turn,
       turnClaim: params.turnClaim,
@@ -557,7 +566,7 @@ export async function executeWorkerTurn(
     if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
       throw new Error("Cloud worker completed without a terminal assistant transcript message");
     }
-    const text = assistantText(terminal.message);
+    const text = collectTextContentBlocks(terminal.message.content).join("");
     const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
     const workerMessages = completed
       .getBranch()
