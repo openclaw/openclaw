@@ -2895,10 +2895,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     [workflowGuards, "setup-node-env-dependency-fingerprint"],
   ],
   [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
-  [
-    ".github/actions/setup-node-env/prepare-semantic-checks.sh",
-    ["setup-node-env-semantic-memory", "openclaw-performance-workflow"],
-  ],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
   ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],

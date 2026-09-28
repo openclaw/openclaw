@@ -1335,16 +1335,6 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes semantic containment setup to its action and performance consumers", () => {
-    expectChangedTargets(
-      [".github/actions/setup-node-env/prepare-semantic-checks.sh"],
-      [
-        "test/scripts/setup-node-env-semantic-memory.test.ts",
-        "test/scripts/openclaw-performance-workflow.test.ts",
-      ],
-    );
-  });
-
   it("routes ClawHub publication through lifecycle and release workflow proof", () => {
     expect(
       resolveChangedTestTargetPlan([".github/workflows/plugin-clawhub-release.yml"]).targets,
