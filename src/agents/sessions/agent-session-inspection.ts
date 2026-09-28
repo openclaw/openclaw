@@ -3,7 +3,6 @@ import { dirname, resolve } from "node:path";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { calculateContextTokens, estimateContextTokens } from "../runtime/index.js";
 import { AgentSessionModels } from "./agent-session-models.js";
-import type { SessionStats } from "./agent-session-types.js";
 import {
   estimateMessagesFromContent,
   extractTextContent,
@@ -23,54 +22,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
   setSessionName(name: string): void {
     this.sessionManager.appendSessionInfo(name);
     this.emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
-  }
-
-  /**
-   * Get session statistics.
-   */
-  getSessionStats(): SessionStats {
-    const state = this.state;
-    const userMessages = state.messages.filter((m) => m.role === "user").length;
-    const assistantMessages = state.messages.filter((m) => m.role === "assistant").length;
-    const toolResults = state.messages.filter((m) => m.role === "toolResult").length;
-
-    let toolCalls = 0;
-    let totalInput = 0;
-    let totalOutput = 0;
-    let totalCacheRead = 0;
-    let totalCacheWrite = 0;
-    let totalCost = 0;
-
-    for (const message of state.messages) {
-      if (message.role === "assistant") {
-        const assistantMsg = message;
-        toolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
-        totalInput += assistantMsg.usage.input;
-        totalOutput += assistantMsg.usage.output;
-        totalCacheRead += assistantMsg.usage.cacheRead;
-        totalCacheWrite += assistantMsg.usage.cacheWrite;
-        totalCost += assistantMsg.usage.cost.total;
-      }
-    }
-
-    return {
-      sessionFile: this.sessionFile,
-      sessionId: this.sessionId,
-      userMessages,
-      assistantMessages,
-      toolCalls,
-      toolResults,
-      totalMessages: state.messages.length,
-      tokens: {
-        input: totalInput,
-        output: totalOutput,
-        cacheRead: totalCacheRead,
-        cacheWrite: totalCacheWrite,
-        total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
-      },
-      cost: totalCost,
-      contextUsage: this.getContextUsage(),
-    };
   }
 
   getContextUsage(): ContextUsage | undefined {

@@ -21,7 +21,7 @@ type QuickstartForegroundGatewayDeps = {
 
 /** Start the foreground Gateway with fresh plugin facts after onboarding installs. */
 export async function runQuickstartForegroundGateway(
-  params: { runtime: RuntimeEnv; suppressTokenOutput?: boolean },
+  params: { runtime: RuntimeEnv; suppressTokenOutput?: boolean; agentId?: string },
   deps: QuickstartForegroundGatewayDeps = {},
 ): Promise<void> {
   return await withPluginCache(createPluginCache(), async () => {
@@ -63,6 +63,7 @@ export async function runQuickstartForegroundGateway(
           config,
           prompter: createQuickstartNotePrompter(runtime),
           suppressTokenOutput: params.suppressTokenOutput,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
         }).catch(() => ({ handedOff: false })),
       ]);
       if (!handoff) {
@@ -74,10 +75,32 @@ export async function runQuickstartForegroundGateway(
     } else {
       runtime.log(t("wizard.guided.quickstartGatewayPending"));
     }
-    runtime.log(t("wizard.guided.quickstartDashboard", { url: links.httpUrl }));
+    const dashboardUrl = new URL(links.httpUrl);
+    const [{ resolveConfiguredSetupModelForAgent }, { resolveSystemAgentOnboardingTarget }] =
+      await Promise.all([
+        import("../agents/utility-model.js"),
+        import("./onboard-agent-target.js"),
+      ]);
+    const setupOnly =
+      resolveConfiguredSetupModelForAgent({
+        cfg: config,
+        agentId: params.agentId ?? resolveSystemAgentOnboardingTarget(config).agentId,
+      })?.modelTarget === "utility";
+    if (setupOnly) {
+      dashboardUrl.pathname = `${dashboardUrl.pathname.replace(/\/$/, "")}/custodian`;
+      dashboardUrl.searchParams.set("onboarding", "1");
+    } else if (params.agentId) {
+      dashboardUrl.searchParams.set("session", `agent:${params.agentId}:main`);
+    }
+    runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
     runtime.log(t("wizard.guided.quickstartForeground"));
     runtime.log(t("wizard.guided.quickstartBackground"));
     runtime.log(t("wizard.guided.quickstartReopen"));
+    if (setupOnly) {
+      runtime.log(
+        "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+      );
+    }
     await gateway;
   });
 }

@@ -1,4 +1,13 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type {
@@ -144,6 +153,20 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
       });
     });
 
+    const authoredConfigPath = join(lane.stateDir, "openclaw.json");
+    const nestedPluginPath = "~/.openclaw/wiki";
+    await runTimedLanePhase(lane, "seed-nested-plugin-path", async () => {
+      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+      config.plugins ??= {};
+      config.plugins.entries ??= {};
+      // A disabled entry exercises generic path expansion without changing provider setup.
+      config.plugins.entries.wiki = {
+        enabled: false,
+        config: { store: { path: nestedPluginPath } },
+      };
+      writeFileSync(authoredConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    });
+
     const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
       await gatewayPortReservation.release();
       return startGateway({
@@ -163,6 +186,13 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
         gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
         logPath: join(params.logsDir, "fresh-gateway-status.log"),
       });
+    });
+
+    await runTimedLanePhase(lane, "verify-nested-plugin-path", async () => {
+      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+      if (config.plugins?.entries?.wiki?.config?.store?.path !== nestedPluginPath) {
+        throw new Error("Fresh Gateway startup changed the authored nested plugin path.");
+      }
     });
 
     await runTimedLanePhase(lane, "dashboard", async () => {
@@ -925,7 +955,7 @@ function buildLaneEnv(
 ): NodeJS.ProcessEnv {
   ensureLocalNpmShim(lane);
   return {
-    ...process.env,
+    ...inheritLaneEnv(),
     HOME: lane.homeDir,
     USERPROFILE: lane.homeDir,
     APPDATA: lane.appDataDir,
@@ -941,6 +971,21 @@ function buildLaneEnv(
   };
 }
 
+function inheritLaneEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.platform === "win32") {
+    // Published updaters cannot be patched: use long paths for their handoff
+    // receipts while keeping the runner's existing physical temp directories.
+    for (const key of Object.keys(env)) {
+      const value = env[key];
+      if (["TEMP", "TMP", "TMPDIR"].includes(key.toUpperCase()) && value) {
+        env[key] = realpathSync.native(value);
+      }
+    }
+  }
+  return env;
+}
+
 function buildInstallerEnv(
   lane: LaneState,
   providerMeta: ProviderConfig,
@@ -949,7 +994,7 @@ function buildInstallerEnv(
   const localAppData = join(lane.homeDir, "AppData", "Local");
   mkdirSync(localAppData, { recursive: true });
   return {
-    ...process.env,
+    ...inheritLaneEnv(),
     HOME: lane.homeDir,
     USERPROFILE: lane.homeDir,
     APPDATA: lane.appDataDir,

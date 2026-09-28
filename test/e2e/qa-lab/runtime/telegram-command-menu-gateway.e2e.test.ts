@@ -10,6 +10,7 @@ import {
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 type BotCommand = { command: string; description: string };
 type Body = { commands?: BotCommand[]; language_code?: string; scope?: { type?: string } };
 const LOCALIZED_PLUGIN_ID = "telegram-menu-localization-e2e";
@@ -184,7 +185,7 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
           mock = await startQaMockOpenAiServer();
           await gatewayOwner.start({
             repoRoot,
-            useRepoCli: true,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${mock.baseUrl}/v1`,
             transportBaseUrl: apiRoot,
             transport: {

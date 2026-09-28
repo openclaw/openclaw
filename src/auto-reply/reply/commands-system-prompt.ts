@@ -87,17 +87,24 @@ async function resolveCommandSkillsPrompt(params: {
 }): Promise<string> {
   let skillsSnapshot: SkillSnapshot;
   try {
-    skillsSnapshot = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
-      executionWorkspaceDir: params.executionWorkspaceDir,
-      config: params.config,
-      agentId: params.agentId,
-      eligibility: params.eligibility,
-      existingSnapshot: params.skillsSnapshot,
-      skillFilter: params.skillsSnapshot?.skillFilter,
-      skillOverrides: params.skillsSnapshot?.skillOverrides,
-      watch: false,
-    }).snapshot;
+    skillsSnapshot = (
+      await resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
+        executionWorkspaceDir: params.executionWorkspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        resolveEligibility: () => ({
+          ...params.eligibility,
+          remote: getRemoteSkillEligibility({
+            advertiseExecNode: params.eligibility?.nodeSkills?.canExec ?? false,
+          }),
+        }),
+        existingSnapshot: params.skillsSnapshot,
+        skillFilter: params.skillsSnapshot?.skillFilter,
+        skillOverrides: params.skillsSnapshot?.skillOverrides,
+        watch: false,
+      })
+    ).snapshot;
   } catch {
     return "";
   }
@@ -143,7 +150,7 @@ async function resolveCommandSkillsPrompt(params: {
           skillsSnapshot,
         });
         const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
-          resolveEmbeddedRunSkillEntries({
+          await resolveEmbeddedRunSkillEntries({
             workspaceDir: skillsWorkspaceDir,
             config: params.config,
             agentId: params.agentId,
@@ -156,7 +163,7 @@ async function resolveCommandSkillsPrompt(params: {
           skillsWorkspaceDir,
           skillsPromptWorkspaceDir,
         });
-        return resolveSkillsPrompt({
+        return await resolveSkillsPrompt({
           skillsSnapshot: skillsSnapshotForRun,
           entries: promptSkillEntries,
           config: params.config,
@@ -286,8 +293,16 @@ export async function resolveCommandsSystemPromptBundle(
         },
       }
     : { enabled: false };
+  const { getPreparedModelCatalogOwnerSnapshot } =
+    await import("../../agents/prepared-model-catalog.js");
+  const preparedModelRuntime = getPreparedModelCatalogOwnerSnapshot({
+    config: params.cfg,
+    agentId: sessionAgentId,
+    workspaceDir,
+  });
   const systemPrompt = buildConfiguredAgentSystemPrompt({
     config: params.cfg,
+    preparedModelRuntime,
     agentId: sessionAgentId,
     workspaceDir,
     reasoningLevel: params.resolvedReasoningLevel,

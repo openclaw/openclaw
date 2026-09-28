@@ -1,8 +1,10 @@
-// Provides fixtures for plugin auto-enable config tests.
 import path from "node:path";
+import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+// Provides fixtures for plugin auto-enable config tests.
+import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
@@ -10,6 +12,22 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const tempDirs: string[] = [];
+
+export function makeBundledChannelCandidate(params: {
+  pluginId: string;
+  channelId: string;
+}): PluginCandidate {
+  return {
+    idHint: params.pluginId,
+    source: `/fake/${params.pluginId}/index.js`,
+    rootDir: `/fake/${params.pluginId}`,
+    origin: "bundled",
+    packageManifest: {
+      plugin: { id: params.pluginId },
+      channel: { id: params.channelId },
+    },
+  };
+}
 
 /** Clears auto-enable plugin caches and temp dirs between tests. */
 export function resetPluginAutoEnableTestState(): void {
@@ -42,6 +60,7 @@ export function makeRegistry(
     contracts?: {
       speechProviders?: string[];
       workerProviders?: string[];
+      decisionProviders?: string[];
       webSearchProviders?: string[];
       webFetchProviders?: string[];
       tools?: string[];
@@ -117,6 +136,8 @@ export function createPluginMetadataSnapshot(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: buildPluginMetadataProviderFacts(params.manifestRegistry.plugins)
+        .providerAuthContributions,
       modelIdNormalizationPolicies: new Map(),
     },
     metrics: {

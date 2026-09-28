@@ -6,7 +6,10 @@ import {
   requireFirstPostJsonRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { DEEPINFRA_VIDEO_FALLBACK_MODELS } from "./media-models.js";
+import { MP4_VIDEO } from "./video-generation.test-support.js";
 
 const {
   postJsonRequestMock,
@@ -24,11 +27,18 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+const deepInfraVideoRequest = {
+  provider: "deepinfra",
+  model: DEEPINFRA_VIDEO_FALLBACK_MODELS[0],
+  prompt: "A generated DeepInfra video",
+  cfg: {},
+} satisfies VideoGenerationRequest;
+
 function mockSubmit(job: unknown, release = vi.fn(async () => {})): typeof release {
-  postJsonRequestMock.mockResolvedValue({
-    response: { json: async () => job },
+  postJsonRequestMock.mockImplementation(async () => ({
+    response: Response.json(job),
     release,
-  });
+  }));
   return release;
 }
 
@@ -49,100 +59,110 @@ describe("deepinfra video generation provider", () => {
   });
 
   it("submits an OpenAI video job, polls until succeeded, and returns the hosted output URL", async () => {
-    const release = mockSubmit({ id: "videos_abc", status: "queued" });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({ id: "videos_abc", status: "processing" }),
-    });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
-        id: "videos_abc",
-        status: "succeeded",
-        model: "Pixverse/Pixverse-T2V",
-        data: [{ url: "/generated/video.mp4" }],
-      }),
-    });
+    vi.useFakeTimers();
+    try {
+      const release = mockSubmit({ id: "videos_abc", status: "queued" });
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        Response.json({ id: "videos_abc", status: "processing" }),
+      );
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        Response.json({
+          id: "videos_abc",
+          status: "succeeded",
+          model: "Pixverse/Pixverse-T2V",
+          data: [{ url: "/generated/video.mp4" }],
+        }),
+      );
 
-    const provider = buildDeepInfraVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "deepinfra",
-      model: "deepinfra/Pixverse/Pixverse-T2V",
-      prompt: "A bicycle weaving through a rainy neon street",
-      cfg: {},
-      aspectRatio: "16:9",
-      durationSeconds: 8,
-      providerOptions: {
-        seed: 42,
-        negative_prompt: "blur",
-        style: "anime",
-      },
-    });
-
-    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultHeaders: {
-            Authorization: "Bearer provider-key",
-            "Content-Type": "application/json",
-          },
-          provider: "deepinfra",
-          capability: "video",
-          transport: "http",
-          request: undefined,
-        },
-      ],
-    ]);
-
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest(
-      postJsonRequestMock,
-      "DeepInfra video submit request",
-    );
-    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
-    expect(postRequestHeaders).toBeInstanceOf(Headers);
-    expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
-      authorization: "Bearer provider-key",
-      "content-type": "application/json",
-    });
-    expect(postRequest).toEqual({
-      url: "https://api.deepinfra.com/v1/openai/videos",
-      headers: postRequestHeaders,
-      body: {
-        model: "Pixverse/Pixverse-T2V",
+      const provider = buildDeepInfraVideoGenerationProvider();
+      const pending = provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
         prompt: "A bicycle weaving through a rainy neon street",
-        aspect_ratio: "16:9",
-        seconds: 8,
-        seed: 42,
-        negative_prompt: "blur",
-        style: "anime",
-      },
-      timeoutMs: 60_000,
-      fetchFn: fetch,
-      allowPrivateNetwork: false,
-      dispatcherPolicy: undefined,
-    });
+        cfg: {},
+        aspectRatio: "16:9",
+        durationSeconds: 8,
+        providerOptions: {
+          seed: 42,
+          negative_prompt: "blur",
+          style: "anime",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
 
-    expect(pollProviderOperationJsonMock).toHaveBeenCalledOnce();
-    const pollUrls = fetchWithTimeoutMock.mock.calls.map((call) => call[0]);
-    expect(pollUrls).toEqual([
-      "https://api.deepinfra.com/v1/openai/videos/videos_abc",
-      "https://api.deepinfra.com/v1/openai/videos/videos_abc",
-    ]);
+      expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
+        [
+          {
+            baseUrl: "https://api.deepinfra.com/v1/openai",
+            defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+            defaultHeaders: {
+              Authorization: "Bearer provider-key",
+              "Content-Type": "application/json",
+            },
+            provider: "deepinfra",
+            capability: "video",
+            transport: "http",
+            request: undefined,
+          },
+        ],
+      ]);
 
-    expect(result.videos).toEqual([
-      {
-        url: "https://api.deepinfra.com/generated/video.mp4",
-        mimeType: "video/mp4",
-        fileName: "video-1.mp4",
-      },
-    ]);
-    expect(result.model).toBe("Pixverse/Pixverse-T2V");
-    expect(result.metadata).toEqual({
-      jobId: "videos_abc",
-      status: "succeeded",
-    });
-    expect(release).toHaveBeenCalledOnce();
+      expect(postJsonRequestMock).toHaveBeenCalledOnce();
+      const postRequest = requireFirstPostJsonRequest(
+        postJsonRequestMock,
+        "DeepInfra video submit request",
+      );
+      const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
+      expect(postRequestHeaders).toBeInstanceOf(Headers);
+      expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
+        authorization: "Bearer provider-key",
+        "content-type": "application/json",
+      });
+      expect(postRequest).toEqual({
+        url: "https://api.deepinfra.com/v1/openai/videos",
+        headers: postRequestHeaders,
+        body: {
+          model: "Pixverse/Pixverse-T2V",
+          prompt: "A bicycle weaving through a rainy neon street",
+          aspect_ratio: "16:9",
+          seconds: 8,
+          seed: 42,
+          negative_prompt: "blur",
+          style: "anime",
+        },
+        timeoutMs: 60_000,
+        fetchFn: fetch,
+        allowPrivateNetwork: false,
+        dispatcherPolicy: undefined,
+      });
+
+      expect(pollProviderOperationJsonMock).toHaveBeenCalledOnce();
+      const pollUrls = fetchWithTimeoutMock.mock.calls.map((call) => call[0]);
+      expect(pollUrls).toEqual([
+        "https://api.deepinfra.com/v1/openai/videos/videos_abc",
+        "https://api.deepinfra.com/v1/openai/videos/videos_abc",
+      ]);
+
+      expect(result.videos).toEqual([
+        {
+          url: "https://api.deepinfra.com/generated/video.mp4",
+          mimeType: "video/mp4",
+          fileName: "video-1.mp4",
+        },
+      ]);
+      expect(result.model).toBe("Pixverse/Pixverse-T2V");
+      expect(result.metadata).toEqual({
+        jobId: "videos_abc",
+        status: "succeeded",
+      });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies configured request policy to OpenAI-compatible video requests", async () => {
@@ -307,8 +327,7 @@ describe("deepinfra video generation provider", () => {
           models: {
             providers: {
               deepinfra: {
-                // Assembled from pieces so TruffleHog's URI detector
-                // (security-fast CI gate) does not flag the fixture.
+                // Assemble the fixture URL at runtime to avoid scanner false positives.
                 baseUrl: ["https://user", "password@gw.example.com/v1/inference?token=secret"].join(
                   ":",
                 ),
@@ -356,38 +375,132 @@ describe("deepinfra video generation provider", () => {
     expect(Reflect.get(Reflect.get(postRequest ?? {}, "body") ?? {}, "seed")).toBeUndefined();
   });
 
-  it("decodes base64 data URL video outputs from the MIME type", async () => {
+  it.each([
+    { label: "HTML", url: "data:text/html;base64,PGh0bWw+" },
+    { label: "JSON", url: "data:application/json;base64,e30=" },
+    { label: "problem JSON", url: "data:application/problem+json;base64,e30=" },
+    { label: "image", url: "data:image/png;base64,YQ==" },
+    { label: "audio", url: "data:audio/mpeg;base64,YQ==" },
+    { label: "empty video", url: "data:video/mp4;base64," },
+    { label: "missing MIME type", url: "data:;base64,YQ==" },
+    { label: "unexpected parameters", url: "data:video/mp4;charset=utf-8;base64,YQ==" },
+  ])("rejects $label data URLs as malformed video outputs", async ({ url }) => {
     mockSubmit({
-      id: "videos_webm",
+      id: "videos_invalid_media",
       status: "succeeded",
-      data: [{ url: `data:video/webm;base64,${Buffer.from("webm-data").toString("base64")}` }],
+      data: [{ url }],
     });
 
-    const provider = buildDeepInfraVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "deepinfra",
-      model: "deepinfra/Pixverse/Pixverse-T2V",
-      prompt: "A WebM data URL",
-      cfg: {},
-    });
+    await expect(
+      buildDeepInfraVideoGenerationProvider().generateVideo({
+        ...deepInfraVideoRequest,
+        prompt: "A response that is not a video",
+      }),
+    ).rejects.toThrow("DeepInfra video response: malformed video response");
+  });
 
-    expect(result.videos).toHaveLength(1);
-    const [video] = result.videos;
-    if (!video) {
-      throw new Error("Expected generated DeepInfra video");
+  it("rejects oversized inline videos before decoding their base64", async () => {
+    mockSubmit({
+      id: "videos_too_large",
+      status: "succeeded",
+      data: [{ url: "data:video/mp4;base64,YWI=" }],
+    });
+    const decodeSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      await expect(
+        buildDeepInfraVideoGenerationProvider().generateVideo({
+          ...deepInfraVideoRequest,
+          prompt: "A video larger than the configured media limit",
+          cfg: { agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } },
+        }),
+      ).rejects.toThrow("DeepInfra generated video exceeds 1 bytes");
+      const decodeCalls: ReadonlyArray<ReadonlyArray<unknown>> = decodeSpy.mock.calls;
+      expect(decodeCalls.some((call) => call[1] === "base64")).toBe(false);
+    } finally {
+      decodeSpy.mockRestore();
     }
-    expect(video).toEqual({
-      buffer: Buffer.from("webm-data"),
-      mimeType: "video/webm",
-      fileName: "video-1.webm",
+  });
+
+  it.each([
+    { label: "video", mime: "video/mp4" },
+    { label: "generic binary", mime: "application/octet-stream" },
+    { label: "incorrect video container", mime: "video/webm" },
+  ])("detects an exact-limit MP4 with a $label label after polling", async ({ mime }) => {
+    const release = mockSubmit({ id: "videos_at_limit", status: "processing" });
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
+        id: "videos_at_limit",
+        status: "succeeded",
+        data: [{ url: `data:${mime};base64,${MP4_VIDEO.toString("base64")}` }],
+      }),
+    );
+    const result = await buildDeepInfraVideoGenerationProvider().generateVideo({
+      ...deepInfraVideoRequest,
+      cfg: { agents: { defaults: { mediaMaxMb: MP4_VIDEO.length / (1024 * 1024) } } },
     });
+    expect(result.videos[0]).toEqual({
+      buffer: MP4_VIDEO,
+      mimeType: "video/mp4",
+      fileName: "video-1.mp4",
+    });
+    expect(result.metadata).toEqual({ jobId: "videos_at_limit", status: "succeeded" });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: "whitespace and newline",
+      value: MP4_VIDEO.toString("base64").replace(/(.{40})/g, "$1\n "),
+    },
+    { label: "unpadded", value: MP4_VIDEO.toString("base64").replace(/=+$/, "") },
+  ])("accepts valid $label base64 video outputs", async ({ value }) => {
+    mockSubmit({
+      id: "videos_normalized_base64",
+      status: "succeeded",
+      data: [{ url: `data:video/mp4;base64,${value}` }],
+    });
+    const result =
+      await buildDeepInfraVideoGenerationProvider().generateVideo(deepInfraVideoRequest);
+    expect(result.videos[0]?.buffer).toEqual(MP4_VIDEO);
+  });
+
+  it.each([
+    { label: "unknown bytes", bytes: Buffer.from("binary"), mime: "application/octet-stream" },
+    { label: "unknown bytes labeled video", bytes: Buffer.from("binary"), mime: "video/mp4" },
+    {
+      label: "image bytes labeled video",
+      bytes: Buffer.from(
+        "47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b",
+        "hex",
+      ),
+      mime: "video/mp4",
+    },
+    {
+      label: "audio container labeled video",
+      bytes: Buffer.from("00000018667479704d344220000000004d34422000000000", "hex"),
+      mime: "video/mp4",
+    },
+  ])("rejects $label after polling", async ({ bytes, mime }) => {
+    const release = mockSubmit({ id: "videos_bad_bytes", status: "queued" });
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
+        id: "videos_bad_bytes",
+        status: "succeeded",
+        data: [{ url: `data:${mime};base64,${bytes.toString("base64")}` }],
+      }),
+    );
+    await expect(
+      buildDeepInfraVideoGenerationProvider().generateVideo(deepInfraVideoRequest),
+    ).rejects.toThrow("DeepInfra video response: malformed video response");
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("throws the job error when the video generation fails", async () => {
     mockSubmit({ id: "videos_fail", status: "queued" });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({ id: "videos_fail", status: "failed", error: "model overloaded" }),
-    });
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({ id: "videos_fail", status: "failed", error: "model overloaded" }),
+    );
 
     const provider = buildDeepInfraVideoGenerationProvider();
     await expect(
@@ -402,14 +515,10 @@ describe("deepinfra video generation provider", () => {
 
   it("reports malformed submit JSON as a provider error", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token");
-        },
-      },
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: new Response("{", { headers: { "content-type": "application/json" } }),
       release,
-    });
+    }));
 
     const provider = buildDeepInfraVideoGenerationProvider();
     await expect(

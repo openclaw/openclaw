@@ -1,12 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { requireTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
   nodeHostGatewaysShareOrigin,
 } from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
-import { parsePort } from "../daemon-cli/shared.js";
 
 type NodeGatewayOptions = {
   host?: string;
@@ -23,6 +23,7 @@ type NodePairGatewayOptions = {
   tls: boolean;
   tlsFingerprint?: string;
   bootstrapToken: string;
+  expiresAtMs?: number;
   candidates: NodeHostGatewayConfig[];
 };
 
@@ -40,8 +41,11 @@ function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGat
   };
 }
 
-export function resolveNodePairGatewayOptions(input: string): NodePairGatewayOptions {
-  return resolveNodePairGatewayPayload(decodePairingSetupCode(input));
+export function resolveNodePairGatewayOptions(
+  input: string,
+  options: { allowExpired?: boolean } = {},
+): NodePairGatewayOptions {
+  return resolveNodePairGatewayPayload(decodePairingSetupCode(input, options));
 }
 
 /** Project a validated pairing payload into the canonical node-host candidate list. */
@@ -59,6 +63,7 @@ export function resolveNodePairGatewayPayload(
     tls: primary.tls ?? false,
     ...(primary.tlsFingerprint ? { tlsFingerprint: primary.tlsFingerprint } : {}),
     bootstrapToken: payload.bootstrapToken,
+    ...(payload.expiresAtMs !== undefined ? { expiresAtMs: payload.expiresAtMs } : {}),
     candidates,
   };
 }
@@ -72,7 +77,7 @@ export function resolveNodeGatewayOptions(
   const baselineHost = pair?.host ?? config?.gateway?.host ?? "127.0.0.1";
   const baselinePort = pair?.port ?? config?.gateway?.port ?? 18789;
   const host = normalizeOptionalString(options.host) || baselineHost;
-  const port = options.port === undefined ? baselinePort : parsePort(options.port);
+  const port = options.port === undefined ? baselinePort : parseTcpPort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
   const selectedTlsFingerprint =

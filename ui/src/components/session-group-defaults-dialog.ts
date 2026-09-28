@@ -5,6 +5,7 @@ import type {
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
 import { folderDisplayName } from "../pages/new-session/path.ts";
@@ -13,8 +14,10 @@ import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { syncPopoverLabel } from "./web-awesome-popover.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
-import "./web-awesome-popover.ts";
+
+registerNewSessionSetupEnglish();
 
 export type SessionGroupDefaults = { cwd: string; worktree: boolean };
 
@@ -133,25 +136,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       selectWorktree(value === "worktree");
     };
 
-    const focusSelectedMode = (event: Event) => {
-      if (!(event.currentTarget instanceof HTMLElement)) {
-        return;
-      }
-      const items = Array.from(
-        event.currentTarget.querySelectorAll<HTMLElement & { active: boolean }>(
-          "wa-dropdown-item[data-environment-mode]",
-        ),
-      );
-      const selected = items.find((item) => item.hasAttribute("data-selected")) ?? items[0];
-      if (!selected) {
-        return;
-      }
-      for (const item of items) {
-        item.active = item === selected;
-      }
-      selected.focus({ preventScroll: true });
-    };
-
     const handleModeKeydown = (event: KeyboardEvent) => {
       if (!(event.currentTarget instanceof HTMLElement)) {
         return;
@@ -241,6 +225,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     >
                   </button>
                   <wa-popover
+                    ${ref(syncPopoverLabel)}
                     class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
                     for="session-group-defaults-folder-trigger"
                     placement="bottom-start"
@@ -306,7 +291,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                               placement="bottom-start"
                               aria-label=${t("sessionsView.groupDefaultsMode")}
                               @wa-select=${handleModeSelect}
-                              @wa-after-show=${focusSelectedMode}
                               @keydown=${handleModeKeydown}
                             >
                               <button
@@ -341,6 +325,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                                     type="checkbox"
                                     .checked=${selected}
                                     ?disabled=${submitting}
+                                    ?autofocus=${selected && !submitting}
                                     ${ref((element) => syncDropdownItemRadio(element, selected))}
                                   >
                                     <span

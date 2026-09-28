@@ -8,6 +8,7 @@ import {
 } from "../../../packages/tool-call-repair/src/grammar.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
+import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
@@ -116,38 +117,13 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
 }
 
 function findTagCloseIndex(text: string, start: number): number {
-  let quoteChar: "'" | '"' | null = null;
-  let isEscaped = false;
-
+  const isInsideQuote = createQuotedStringScanner(text, start);
   for (let idx = start; idx < text.length; idx += 1) {
     const char = text[idx];
-    if (quoteChar !== null) {
-      if (isEscaped) {
-        isEscaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        isEscaped = true;
-        continue;
-      }
-      if (char === quoteChar) {
-        quoteChar = null;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quoteChar = char;
-      continue;
-    }
-    if (char === "<") {
-      return -1;
-    }
-    if (char === ">") {
-      return idx;
+    if ((char === "<" || char === ">") && !isInsideQuote(idx)) {
+      return char === ">" ? idx : -1;
     }
   }
-
   return -1;
 }
 
@@ -511,24 +487,62 @@ export function stripToolCallXmlTags(
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls.
  */
-export function stripMinimaxToolCallXml(text: string): string {
-  if (!text || !/minimax:tool_call/i.test(text)) {
+function stripMinimaxToolCallXml(text: string): string {
+  const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
+  const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
+  const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
+  if (!text || (!/minimax:tool_call/i.test(text) && !encodedToolCallOpenRe.test(text))) {
     return text;
   }
+  encodedToolCallOpenRe.lastIndex = 0;
 
-  const codeRegions = findCodeRegions(text);
+  const sourceCodeRegions = findCodeRegions(text);
+  let normalized = "";
+  let envelopeCursor = 0;
+  for (const openMatch of text.matchAll(encodedToolCallOpenRe)) {
+    const start = openMatch.index;
+    if (start < envelopeCursor || isInsideCode(start, sourceCodeRegions)) {
+      continue;
+    }
+
+    encodedToolCallCloseRe.lastIndex = start + openMatch[0].length;
+    let closeMatch = encodedToolCallCloseRe.exec(text);
+    while (closeMatch && isInsideCode(closeMatch.index, sourceCodeRegions)) {
+      closeMatch = encodedToolCallCloseRe.exec(text);
+    }
+    if (!closeMatch) {
+      // A later opening cannot find a closing marker once this search reaches the end.
+      break;
+    }
+
+    const end = closeMatch.index + closeMatch[0].length;
+    normalized += text.slice(envelopeCursor, start);
+    if (sourceCodeRegions.some((region) => region.start >= start && region.end <= end)) {
+      envelopeCursor = end;
+      continue;
+    }
+    normalized += text.slice(start, end).replace(encodedTransportBoundaryRe, "");
+    envelopeCursor = end;
+  }
+  normalized += text.slice(envelopeCursor);
+
+  if (!/minimax:tool_call/i.test(normalized)) {
+    return normalized;
+  }
+
+  const codeRegions = findCodeRegions(normalized);
   const minimaxToolXmlRe = /<invoke\b[^>]*>[\s\S]*?<\/invoke>|<\/?minimax:tool_call>/gi;
   let result = "";
   let cursor = 0;
-  for (const match of text.matchAll(minimaxToolXmlRe)) {
+  for (const match of normalized.matchAll(minimaxToolXmlRe)) {
     const start = match.index ?? 0;
     if (isInsideCode(start, codeRegions)) {
       continue;
     }
-    result += text.slice(cursor, start);
+    result += normalized.slice(cursor, start);
     cursor = start + match[0].length;
   }
-  result += text.slice(cursor);
+  result += normalized.slice(cursor);
   return result;
 }
 
@@ -582,103 +596,6 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
     }
   }
   return result + text.slice(cursor);
-}
-
-function consumeJsonish(input: string, start: number): number | null {
-  let index = start;
-  while (index < input.length && /[ \t\r\n]/.test(input[index] ?? "")) {
-    index += 1;
-  }
-  const opening = input[index];
-  if (opening === undefined) {
-    return null;
-  }
-  if (opening !== "{" && opening !== "[" && opening !== '"') {
-    while (index < input.length && input[index] !== "\n" && input[index] !== "\r") {
-      index += 1;
-    }
-    return index;
-  }
-
-  // Downgraded history accepts quoted scalars and mixed container balance without JSON validation.
-  let depth = opening === '"' ? 0 : 1;
-  let inString = opening === '"';
-  let escaped = false;
-  for (index += 1; index < input.length; index += 1) {
-    const char = input[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-    } else if (char === '"') {
-      inString = true;
-    } else if (char === "{" || char === "[") {
-      depth += 1;
-    } else if (char === "}" || char === "]") {
-      depth -= 1;
-    }
-    if (!inString && depth === 0) {
-      return index + 1;
-    }
-  }
-  return null;
-}
-
-function stripDowngradedToolCalls(input: string): string {
-  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
-  let result = "";
-  let cursor = 0;
-  for (const match of input.matchAll(/\[Tool Call:[^\]]*\]/gi)) {
-    const start = match.index;
-    if (start < cursor || isInsideCode(start, (codeRegions ??= findCodeRegions(input)))) {
-      continue;
-    }
-    result += input.slice(cursor, start);
-    let index = skipHorizontalWhitespace(input, start + match[0].length);
-    index = skipHorizontalWhitespace(input, consumeLineBreak(input, index) ?? index);
-    if (normalizeLowercaseStringOrEmpty(input.slice(index, index + 9)) === "arguments") {
-      index += 9;
-      if (input[index] === ":") {
-        index += 1;
-      }
-      if (input[index] === " ") {
-        index += 1;
-      }
-      index = consumeJsonish(input, index) ?? index;
-    }
-    if (!result || result.endsWith("\n") || result.endsWith("\r")) {
-      index = consumeLineBreak(input, index) ?? index;
-    }
-    cursor = index;
-  }
-  return result + input.slice(cursor);
-}
-
-/**
- * Strip downgraded tool call text representations that leak into user-visible
- * text content when replaying history across providers.
- */
-export function stripDowngradedToolCallText(text: string): string {
-  if (!text || (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text))) {
-    return text;
-  }
-  let cleaned = stripDowngradedToolCalls(text);
-  for (const pattern of [
-    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
-    /\[Historical context:[^\]]*\]\n?/gi,
-  ]) {
-    const input = cleaned;
-    // An earlier removal can change Markdown ownership for the next marker family.
-    let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
-    cleaned = input.replace(pattern, (match, offset: number) =>
-      isInsideCode(offset, (codeRegions ??= findCodeRegions(input))) ? match : "",
-    );
-  }
-  return cleaned.trim();
 }
 
 function stripRelevantMemoriesTags(text: string): string {
@@ -746,55 +663,82 @@ const profileFilters = new Map<string, readonly TextFilter[]>();
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
   streaming = false,
+  options?: { preserveTrailingWhitespace?: boolean },
 ): readonly TextFilter[] {
-  const key = `${profile}:${streaming}`;
+  const key = `${profile}:${streaming}:${Boolean(options?.preserveTrailingWhitespace)}`;
   const cached = profileFilters.get(key);
   if (cached) {
     return cached;
   }
   const preserve = profile === "internal-scaffolding";
-  const trim = preserve || profile === "history" ? "none" : "both";
+  const preserveCodeIndentation = profile === "delivery" || profile === "final-answer-delivery";
+  const trim =
+    preserve || profile === "history"
+      ? "none"
+      : options?.preserveTrailingWhitespace
+        ? "start"
+        : "both";
   const reasoning: TextFilter = {
     activationTokens: ["<"],
     transform: (text) =>
       stripReasoningTagsFromText(text, {
         mode: preserve ? "preserve" : "strict",
         scope: profile === "final-answer-delivery" ? "leading" : "all",
-        trim,
+        trim: preserveCodeIndentation ? "none" : trim,
         // An unfinished stream cannot use terminal malformed-output recovery.
         recoverUnclosed: !streaming,
       }),
   };
   const filters: TextFilter[] = [
-    ...(!preserve ? [{ transform: stripMinimaxToolCallXml, activationTokens: ["<"] }] : []),
-    { transform: stripModelSpecialTokens, activationTokens: ["<"] },
-    { transform: stripRelevantMemoriesTags, activationTokens: ["<"] },
+    ...(!preserve ? [minimaxToolCallTextFilter] : []),
+    { transform: stripModelSpecialTokens, activationTokens: ["<|", "<｜"] },
     {
-      activationTokens: ["<"],
-      transform: (text) =>
-        stripToolCallXmlTags(text, {
-          stripFunctionCallsXmlPayloads: profile === "tool-progress",
-          stripFunctionResponseAfterPluralToolCalls:
-            profile === "delivery" || profile === "final-answer-delivery",
-        }),
+      transform: stripRelevantMemoriesTags,
+      activationTokens: ["relevant-memories", "relevant_memories"],
     },
+    toolCallXmlTextFilter({
+      stripFunctionCallsXmlPayloads: profile === "tool-progress",
+      stripFunctionResponseAfterPluralToolCalls:
+        profile === "delivery" || profile === "final-answer-delivery",
+    }),
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
-    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
-    ...(!preserve ? [{ transform: stripDowngradedToolCallText, activationTokens: ["["] }] : []),
+    ...(!preserve ? [downgradedToolCallTextFilter(options)] : []),
   ];
   if (preserve) {
     filters.unshift(reasoning);
   } else {
     filters.push(reasoning);
   }
-  filters.push(preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim));
+  filters.push(
+    preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
+  );
   profileFilters.set(key, filters);
   return filters;
 }
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
+export const minimaxToolCallTextFilter: TextFilter = {
+  transform: stripMinimaxToolCallXml,
+  activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+};
+
+export function toolCallXmlTextFilter(
+  options: Parameters<typeof stripToolCallXmlTags>[1] = {},
+): TextFilter {
+  return {
+    transform: (text) => stripToolCallXmlTags(text, options),
+    activationTokens: ["<"],
+  };
+}
+
+export const legacyBracketToolCallTextFilter: TextFilter = {
+  transform: stripLegacyBracketToolCallBlocks,
+  activationTokens: ["TOOL_CALL", "TOOL_RESULT"],
+};
+
 export const assistantTraceTextFilter: TextFilter = {
   transform: stripAssistantInternalTraceLines,
   activationTokens: ["tool", "function", "📊", "🛠", "📖", "📝", "🔍", "🔎", "⚙"],
@@ -803,7 +747,7 @@ export const assistantTraceTextFilter: TextFilter = {
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  activationTokens: ["[", "<", "to="],
+  activationTokens: ["[", "<function=", "to="],
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(
@@ -842,4 +786,3 @@ export function sanitizeAssistantVisibleTextWithOptions(
   const profile = options?.trim === "none" ? "history" : "delivery";
   return sanitizeAssistantVisibleTextWithProfile(text, profile);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

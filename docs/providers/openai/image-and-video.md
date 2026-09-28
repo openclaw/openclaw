@@ -1,18 +1,20 @@
 ---
-summary: "Generate and edit images with gpt-image, and generate video with Sora"
+summary: "Generate and edit images with OpenAI gpt-image"
 read_when:
   - You are generating or editing images through the openai provider
   - You need transparent-background image output
-  - You are generating video with the video_generate tool
-title: "OpenAI image and video generation"
-sidebarTitle: "Image and video"
+title: "OpenAI image generation"
+sidebarTitle: "Image generation"
 ---
 
 ## Image generation
 
 The bundled `openai` plugin registers image generation through the
 `image_generate` tool. It supports both OpenAI API-key and Codex OAuth image
-generation through the same `openai/gpt-image-2` model ref.
+generation through the same `openai/gpt-image-2` model ref. Sign in with
+ChatGPT (SIWC) cannot authorize this tool. Codex OAuth here means an OpenClaw
+model auth profile; signing in only to a native Codex user home does not supply
+`image_generate` with a credential.
 
 | Capability                | OpenAI API key                     | Codex OAuth                          |
 | ------------------------- | ---------------------------------- | ------------------------------------ |
@@ -45,6 +47,55 @@ editing. `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` remain usable
 as explicit model overrides. Use `openai/gpt-image-1.5` for
 transparent-background PNG/WebP output; the current `gpt-image-2` API rejects
 `background: "transparent"`.
+
+### GPT Image 2.5
+
+Select `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst` explicitly.
+Both support generation and edits through the direct Images API.
+The default remains `openai/gpt-image-2`.
+
+Export `OPENAI_API_KEY` and select API-key authentication:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        auth: "api-key",
+        models: [],
+      },
+    },
+  },
+}
+```
+
+This explicit selection matters when an OpenAI OAuth profile also exists.
+Exporting the environment variable alone does not override that profile.
+GPT Image 2.5 subscription access is not established by this API-key setup.
+
+Both variants accept `low`, `medium`, `high`, `xhigh`, `max`, or `auto` quality.
+Use PNG or WebP for transparent backgrounds. Edits accept up to 5 reference
+images through OpenClaw.
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-2.5-flare \
+  --prompt "A simple red circle sticker on a transparent background" \
+  --quality low --output-format webp --background transparent --json
+
+openclaw infer image edit \
+  --model openai/gpt-image-2.5-sunburst \
+  --file /path/to/reference.png \
+  --prompt "Keep the shape and change the color to blue" \
+  --quality low --size auto --json
+```
+
+`size` accepts `auto` or `WIDTHxHEIGHT`. Dimensions must be divisible by 16,
+with no edge above 3840 pixels and total pixels between 655,360 and 8,294,400.
+The aspect ratio must be between 1:3 and 3:1.
+
+### Other Image Models
 
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
@@ -103,42 +154,4 @@ Edit:
 /tool image_generate model=openai/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
 ```
 
-## Video generation
-
-The bundled `openai` plugin registers video generation through the
-`video_generate` tool.
-
-| Capability       | Value                                                                              |
-| ---------------- | ---------------------------------------------------------------------------------- |
-| Default model    | `openai/sora-2`                                                                    |
-| Modes            | Text-to-video, image-to-video, single-video edit                                   |
-| Reference inputs | 1 image or 1 video                                                                 |
-| Size overrides   | Supported for text-to-video and image-to-video                                     |
-| Aspect ratio     | Converted to the closest supported size, not forwarded raw                         |
-| Other overrides  | `resolution`, `audio`, `watermark` are unsupported and dropped with a tool warning |
-
-OpenAI image-to-video requests use `POST /v1/videos` with an image
-`input_reference`. Single-video edits use `POST /v1/videos/edits` with the
-uploaded video in the `video` field.
-
-```json5
-{
-  agents: {
-    defaults: {
-      mediaModels: { video: { primary: "openai/sora-2" } },
-    },
-  },
-}
-```
-
-<Note>
-See [Video Generation](/tools/video-generation) for shared tool parameters,
-provider selection, and failover behavior.
-
-The OpenAI provider declares `supportsSize` but not `supportsAspectRatio` or
-`supportsResolution`. OpenClaw's shared normalization layer converts a
-requested `aspectRatio` into the closest matching OpenAI `size` before the
-request reaches the provider, so aspect-ratio requests generally still work.
-`resolution` has no size fallback and is dropped, surfaced to the caller as
-`Ignored unsupported overrides for openai/<model>: resolution=<value>`.
-</Note>
+OpenAI retired its Sora video API on 2026-09-24; see [Video generation](/tools/video-generation) for supported providers.

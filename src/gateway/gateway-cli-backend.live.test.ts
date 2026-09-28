@@ -667,13 +667,6 @@ describeLive("gateway live (cli backend)", () => {
           }
         }
 
-        await verifyCliBackendAnnounceOrdering({
-          client: activeClient,
-          announceBarrier,
-          requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
-          logStep: logCliBackendLiveStep,
-        });
-
         if (modelSwitchTarget) {
           const switchNonce = randomBytes(3).toString("hex").toUpperCase();
           logCliBackendLiveStep("agent-switch:start", {
@@ -979,6 +972,16 @@ describeLive("gateway live (cli backend)", () => {
             logCliBackendLiveStep("cron-mcp-probe:done");
           }
         }
+
+        // The announce probe spawns a separate CLI-backed session and can change the
+        // process-wide MCP/tool topology. Keep it after continuity and cache assertions
+        // so those probes measure consecutive turns in their owning native session.
+        await verifyCliBackendAnnounceOrdering({
+          client: activeClient,
+          announceBarrier,
+          requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
+          logStep: logCliBackendLiveStep,
+        });
       } finally {
         try {
           logCliBackendLiveStep("cleanup:start");

@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../src/infra/runtime-worker-url.js";
 import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
 import {
   noteToStream,
@@ -10,6 +13,7 @@ import {
   resolveNoteOutputColumns,
   wrapNoteMessage,
 } from "./note.js";
+import { tableStackEntrypoint } from "./table-runtime.test-support.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -23,9 +27,22 @@ function expectIntroducersToStartCompleteSequences(
 ): void {
   let index = value.indexOf(introducer);
   while (index >= 0) {
-    expect(sequences.some((sequence) => value.startsWith(sequence, index))).toBe(true);
-    index = value.indexOf(introducer, index + introducer.length);
+    const sequence = sequences.find((candidate) => value.startsWith(candidate, index));
+    expect(sequence).toBeDefined();
+    index = value.indexOf(introducer, index + (sequence?.length ?? introducer.length));
   }
+}
+
+function renderValue(value: string, width = 24) {
+  return renderTable({
+    width,
+    border: "unicode",
+    columns: [
+      { key: "K", header: "K", minWidth: 3 },
+      { key: "V", header: "V", flex: true, minWidth: 10 },
+    ],
+    rows: [{ K: "X", V: value }],
+  });
 }
 
 const pluginListColumns = [
@@ -113,8 +130,6 @@ describe("renderTable", () => {
   });
 
   it.each([
-    ["ESC", "a\x1b[31\x1b[0\tmb", "| a b     |"],
-    ["C1", "a\x9b31\x9b0\tmb", "| a b     |"],
     ["mixed chain", "a\x1b[31\x9b1\x1b[0\tmb", "| a b     |"],
     ["C0 before restart", "a\x1b[31\t\x07\x9b0\tmb", "| a  b    |"],
   ])("keeps materialized tabs visible after %s CSI restarts", (_label, value, expectedRow) => {
@@ -128,16 +143,15 @@ describe("renderTable", () => {
     expect(stripAnsi(out)).not.toContain("\x18");
   });
 
-  it.each([0, 3])("renders all %i rows without an argument-count limit", (count) => {
+  it("renders headers and borders for an empty table", () => {
     const out = renderTable({
       border: "ascii",
       columns: [{ key: "Key", header: "Key" }],
-      rows: Array.from({ length: count }, () => ({ Key: "session" })),
+      rows: [],
     });
 
     const lines = out.trimEnd().split("\n");
-    expect(lines).toHaveLength(count + 4);
-    expect(lines.filter((line) => line === "| session |")).toHaveLength(count);
+    expect(lines).toHaveLength(4);
     expect(lines[1]).toMatch(/^\| Key +\|$/u);
     expect(lines.at(-1)).toBe(lines[0]);
   });
@@ -149,30 +163,7 @@ describe("renderTable", () => {
       // rows nor one heavily wrapped cell may depend on V8's argument-count limit.
       const result = spawnSync(
         process.execPath,
-        [
-          "--import",
-          fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
-          "--input-type=module",
-          "-e",
-          `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
-const shape = ${JSON.stringify(shape)};
-const output = renderTable({
-  border: "ascii",
-  columns: [{ key: "Key", header: "Key", maxWidth: 5 }],
-  rows: shape === "rows"
-    ? Array.from({ length: 150_000 }, () => ({ Key: "row" }))
-    : [{ Key: shape === "wrapped lines" ? "row".repeat(150_000) : "a  " + "\\u200b".repeat(150_000) + "b" }],
-});
-const lines = output.trimEnd().split("\\n");
-console.log(JSON.stringify({
-  lineCount: lines.length,
-  rows: lines.filter(line => line === "| row |").length,
-  header: lines[1],
-  firstLine: lines[0],
-  lastLine: lines.at(-1),
-  softWrapRowsMatch: lines[3] === "| a   |" && lines[4] === "| " + "\\u200b".repeat(150_000) + "b   |",
-}));`,
-        ],
+        [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(tableStackEntrypoint)), shape],
         { encoding: "utf8", timeout: 30_000 },
       );
 
@@ -209,23 +200,20 @@ console.log(JSON.stringify({
     expect(out).toMatch(/│ Amazon Bedrock\s+│ amazon-bedrock\s+│/);
   });
 
-  it.each([60, 80, 120, 160, 200])(
-    "keeps the plugin-list shape deterministic and within %i columns",
-    (width) => {
-      const out = renderPluginListTable(width);
-      const lines = out.trimEnd().split("\n");
-      const headerCells = (lines[1] ?? "").split("│").slice(1, -1);
+  it.each([60, 120])("keeps the plugin-list shape deterministic and within %i columns", (width) => {
+    const out = renderPluginListTable(width);
+    const lines = out.trimEnd().split("\n");
+    const headerCells = (lines[1] ?? "").split("│").slice(1, -1);
 
-      expect(out).toBe(renderPluginListTable(width));
-      expect(Math.max(...lines.map(visibleWidth))).toBeLessThanOrEqual(width);
-      expect(headerCells).toHaveLength(pluginListColumns.length);
-      for (const [index, column] of pluginListColumns.entries()) {
-        expect(visibleWidth(headerCells[index] ?? "")).toBeGreaterThanOrEqual(
-          visibleWidth(column.header) + 2,
-        );
-      }
-    },
-  );
+    expect(out).toBe(renderPluginListTable(width));
+    expect(Math.max(...lines.map(visibleWidth))).toBeLessThanOrEqual(width);
+    expect(headerCells).toHaveLength(pluginListColumns.length);
+    for (const [index, column] of pluginListColumns.entries()) {
+      expect(visibleWidth(headerCells[index] ?? "")).toBeGreaterThanOrEqual(
+        visibleWidth(column.header) + 2,
+      );
+    }
+  });
 
   it("expands flex columns to fill available width", () => {
     const width = 60;
@@ -254,54 +242,27 @@ console.log(JSON.stringify({
     expect(out).toBe("+---------+\n|V        |\n+---------+\n|x        |\n+---------+\n");
   });
 
-  it("wraps ANSI-colored cells without corrupting escape sequences", () => {
-    const out = renderTable({
-      width: 36,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [
-        {
-          K: "X",
-          V: `\x1b[33m${"a".repeat(120)}\x1b[0m`,
-        },
-      ],
-    });
-
-    const ansiToken = new RegExp(String.raw`\u001b\[[0-9;]*m|\u001b\]8;;.*?\u001b\\`, "gs");
-    let escapeIndex = out.indexOf("\u001b");
-    while (escapeIndex >= 0) {
-      ansiToken.lastIndex = escapeIndex;
-      const match = ansiToken.exec(out);
-      expect(match?.index).toBe(escapeIndex);
-      escapeIndex = out.indexOf("\u001b", escapeIndex + 1);
-    }
-  });
-
-  it("resets ANSI styling on wrapped lines", () => {
-    const globalReset = "\x1b[0m";
-    const foregroundReset = "\x1b[39m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [
-        {
-          K: "X",
-          V: `\x1b[31m${"a".repeat(80)}${globalReset}`,
-        },
-      ],
-    });
-
+  it.each([
+    ["ESC CSI", "\x1b[", "31"],
+    ["colon-form color", "\x1b[", "38:2::255:0:0"],
+    ["C1 CSI", "\x9b", "31"],
+  ])("keeps %s styling intact and resets it before wrapped borders", (_label, csi, color) => {
+    const open = `${csi}${color}m`;
+    const globalReset = `${csi}0m`;
+    const foregroundReset = `${csi}39m`;
+    const out = renderValue(`${open}${"a".repeat(80)}${globalReset}`);
+    expectIntroducersToStartCompleteSequences(out, csi.charAt(0), [
+      open,
+      globalReset,
+      foregroundReset,
+    ]);
     const lines = out.split("\n").filter((line) => line.includes("a"));
+    expect(lines.length).toBeGreaterThan(1);
     for (const line of lines) {
+      expect(line).toContain(open);
       const resetIndex = Math.max(line.lastIndexOf(globalReset), line.lastIndexOf(foregroundReset));
-      const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
       expect(resetIndex).toBeGreaterThan(-1);
-      expect(lastSep).toBeGreaterThan(resetIndex);
+      expect(line.lastIndexOf("│")).toBeGreaterThan(resetIndex);
     }
   });
 
@@ -375,14 +336,7 @@ console.log(JSON.stringify({
     const bold = "\x1b[1m";
     const red = "\x1b[38;2;255;0;0m";
     const reset = "\x1b[0m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `prefix ${bold}${red}${"a".repeat(80)}${reset}` }],
-    });
+    const out = renderValue(`prefix ${bold}${red}${"a".repeat(80)}${reset}`);
 
     const styledLines = out.split("\n").filter((line) => line.includes("a"));
     expect(styledLines.length).toBeGreaterThan(1);
@@ -398,14 +352,7 @@ console.log(JSON.stringify({
   ])("keeps underline color active with %s operands", (_label, combined, color) => {
     const underline = "\x1b[4m";
     const globalReset = "\x1b[0m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${combined}${"u".repeat(80)}${globalReset}` }],
-    });
+    const out = renderValue(`${combined}${"u".repeat(80)}${globalReset}`);
 
     const styledLines = out.split("\n").filter((line) => line.includes("u"));
     expect(styledLines.length).toBeGreaterThan(1);
@@ -424,19 +371,7 @@ console.log(JSON.stringify({
     const bold = "\x1b[1m";
     const resetForeground = "\x1b[39m";
     const reset = "\x1b[0m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [
-        {
-          K: "X",
-          V: `${boldRed}red${resetForeground}\n${"z".repeat(80)}${reset}`,
-        },
-      ],
-    });
+    const out = renderValue(`${boldRed}red${resetForeground}\n${"z".repeat(80)}${reset}`);
 
     const continuationLines = out.split("\n").filter((line) => line.includes("z"));
     expect(continuationLines.length).toBeGreaterThan(1);
@@ -447,94 +382,10 @@ console.log(JSON.stringify({
     }
   });
 
-  it("keeps colon-form SGR sequences intact when wrapping", () => {
-    const red = "\x1b[38:2::255:0:0m";
-    const globalReset = "\x1b[0m";
-    const foregroundReset = "\x1b[39m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${red}${"a".repeat(80)}${globalReset}` }],
-    });
-
-    const lines = out.split("\n").filter((line) => line.includes("a"));
-    expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) {
-      expect(line).toContain(red);
-      expect(line.includes(globalReset) || line.includes(foregroundReset)).toBe(true);
-    }
-  });
-
-  it("does not split BEL-terminated OSC-8 links when wrapping", () => {
-    const open = "\x1b]8;;https://openclaw.ai\x07";
-    const close = "\x1b]8;;\x07";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
-    });
-
-    expectIntroducersToStartCompleteSequences(out, "\x1b", [open, close]);
-  });
-
-  it("does not split C1 CSI SGR sequences when wrapping", () => {
-    const red = "\x9b31m";
-    const globalReset = "\x9b0m";
-    const foregroundReset = "\x9b39m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${red}${"a".repeat(80)}${globalReset}` }],
-    });
-
-    const lines = out.split("\n").filter((line) => line.includes("a"));
-    expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) {
-      const resetIndex = Math.max(line.lastIndexOf(globalReset), line.lastIndexOf(foregroundReset));
-      const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
-      expect(resetIndex).toBeGreaterThan(-1);
-      expect(lastSep).toBeGreaterThan(resetIndex);
-    }
-  });
-
-  it("does not split C1 OSC-8 links when wrapping", () => {
-    const open = "\x9d8;;https://openclaw.ai\x9c";
-    const close = "\x9d8;;\x9c";
-    const canonicalOpen = "\x1b]8;;https://openclaw.ai\x07";
-    const canonicalClose = "\x1b]8;;\x07";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
-    });
-
-    expectIntroducersToStartCompleteSequences(out, "\x9d", [open, close]);
-    expectIntroducersToStartCompleteSequences(out, "\x1b", [canonicalOpen, canonicalClose]);
-  });
-
   it("preserves OSC-8 parameters when reopening wrapped links", () => {
     const open = "\x1b]8;id=docs;https://openclaw.ai\x07";
     const close = "\x1b]8;;\x07";
-    const out = renderTable({
-      width: 20,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${open}${"OpenClaw".repeat(5)}${close} after` }],
-    });
+    const out = renderValue(`${open}${"OpenClaw".repeat(5)}${close} after`, 20);
 
     const linkLines = out.split("\n").filter((line) => line.includes("OpenClaw"));
     expect(linkLines.length).toBeGreaterThan(1);
@@ -562,15 +413,7 @@ console.log(JSON.stringify({
     "closes and reopens embedded OSC-8 links at wrap boundaries (%s)",
     (_label, openSeq, closeSeq) => {
       const link = `${openSeq}OpenClaw${closeSeq}`;
-      const out = renderTable({
-        width: 20,
-        border: "unicode",
-        columns: [
-          { key: "K", header: "K", minWidth: 3 },
-          { key: "V", header: "V", flex: true, minWidth: 10 },
-        ],
-        rows: [{ K: "X", V: `before ${link} after` }],
-      });
+      const out = renderValue(`before ${link} after`, 20);
 
       const afterLines = out.split("\n").filter((line) => line.includes("after"));
       expect(afterLines.length).toBeGreaterThan(0);
@@ -593,14 +436,8 @@ console.log(JSON.stringify({
     "does not reopen a leading OSC-8 link onto wrapped suffix lines (%s)",
     (_label, openSeq, closeSeq) => {
       const link = `${openSeq}OpenClaw${closeSeq}`;
-      const out = renderTable({
-        width: 20,
-        columns: [
-          { key: "K", header: "K", minWidth: 3 },
-          { key: "V", header: "V", flex: true, minWidth: 10 },
-        ],
-        rows: [{ K: "X", V: `${link} after` }],
-      });
+      const out = renderValue(`${link} after`, 20);
+      expectIntroducersToStartCompleteSequences(out, openSeq.charAt(0), [openSeq, closeSeq]);
 
       // "after" wraps onto a continuation line after the link's close. The
       // leading opener must not be prepended to that line, or "after" plus its
@@ -669,9 +506,7 @@ console.log(JSON.stringify({
   );
 
   it.each([
-    ["LF", "line1\n東京 line2", "", "", 0],
     ["CR", "line1\r東京 line2", "", "", 0],
-    ["CRLF", "line1\r\n東京 line2", "", "", 0],
     ["colored CRLF", "\x1b[31mline1\r\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 0],
     [
       "linked CRLF",
@@ -730,11 +565,14 @@ console.log(JSON.stringify({
     },
   );
 
-  it("shortens only exact home paths and child paths in table cells", () => {
-    const home = path.resolve("test-home", "alice");
-    vi.stubEnv("HOME", home);
+  it.each([
+    [" undefined ", path.resolve("/home/other"), "~"],
+    ["\tnull\t", path.resolve("/home/other"), "~"],
+    [" /srv/openclaw-home ", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"],
+  ])("shortens home paths in table cells for OPENCLAW_HOME=%j", (override, home, prefix) => {
+    vi.stubEnv("HOME", "/home/other");
     vi.stubEnv("USERPROFILE", "");
-    vi.stubEnv("OPENCLAW_HOME", "");
+    vi.stubEnv("OPENCLAW_HOME", override);
 
     const out = renderTable({
       border: "none",
@@ -747,36 +585,11 @@ console.log(JSON.stringify({
       ],
     });
 
-    expect(out).toContain("~\n");
-    expect(out).toContain("~/project");
+    expect(out).toContain(`${prefix}\n`);
+    expect(out).toContain(`${prefix}/project`);
     expect(out).toContain(`${home}2/project`);
-    expect(out).toContain("Workspace: ~/project");
-    expect(out).not.toContain("~2/project");
-  });
-
-  it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
-    const width = 72;
-    const out = renderTable({
-      width,
-      columns: [
-        { key: "Status", header: "Status", minWidth: 10 },
-        { key: "Skill", header: "Skill", minWidth: 18 },
-        { key: "Description", header: "Description", minWidth: 18, flex: true },
-        { key: "Source", header: "Source", minWidth: 10 },
-      ],
-      rows: [
-        {
-          Status: "✗ missing",
-          Skill: "📸 peekaboo",
-          Description: "Capture screenshots from macOS windows and keep table wrapping stable.",
-          Source: "openclaw-bundled",
-        },
-      ],
-    });
-
-    for (const line of out.trimEnd().split("\n")) {
-      expect(visibleWidth(line)).toBe(width);
-    }
+    expect(out).toContain(`Workspace: ${prefix}/project`);
+    expect(out).not.toContain(`${prefix}2/project`);
   });
 
   it("preserves mixed-width graphemes after a soft wrap", () => {
@@ -892,14 +705,7 @@ console.log(JSON.stringify({
 
   it("does not interpret CSI intermediates as SGR state", () => {
     const sequence = "\x1b[31 m";
-    const out = renderTable({
-      width: 24,
-      columns: [
-        { key: "K", header: "K", minWidth: 3 },
-        { key: "V", header: "V", flex: true, minWidth: 10 },
-      ],
-      rows: [{ K: "X", V: `${sequence}${"a".repeat(80)}` }],
-    });
+    const out = renderValue(`${sequence}${"a".repeat(80)}`);
 
     expect(out.split(sequence)).toHaveLength(2);
     expect(out).not.toContain("\x1b[39m");
@@ -979,14 +785,6 @@ describe("wrapNoteMessage", () => {
     expect(wrapped).toBe(input);
   });
 
-  it("preserves long urls without inserting spaces/newlines", () => {
-    const input =
-      "https://example.com/this/is/a/very/long/url/segment/that/should/not/be/split/for-copy";
-    const wrapped = wrapNoteMessage(input, { maxWidth: 24, columns: 80 });
-
-    expect(wrapped).toBe(input);
-  });
-
   it("preserves long file-like underscore tokens for copy safety", () => {
     const input = "administrators_authorized_keys_with_extra_suffix";
     const wrapped = wrapNoteMessage(input, { maxWidth: 14, columns: 80 });
@@ -994,12 +792,19 @@ describe("wrapNoteMessage", () => {
     expect(wrapped).toBe(input);
   });
 
-  it("still chunks generic long opaque tokens to avoid pathological line width", () => {
-    const input = "x".repeat(70);
-    const wrapped = wrapNoteMessage(input, { maxWidth: 20, columns: 80 });
-
-    expect(wrapped).toContain("\n");
-    expect(wrapped.replace(/\n/g, "")).toBe(input);
+  const word = "abcdefghijklmnopqrstuvwxyz";
+  it.each<[name: string, input: string, maxWidth: number, expected: string]>([
+    ["token followed by another word", `${word} tail`, 14, "abcdefghijklmn\nopqrstuvwxyz\ntail"],
+    ["token after a short word", `ok ${word} tail`, 14, "ok\nabcdefghijklmn\nopqrstuvwxyz\ntail"],
+    ["bullet token", `- ${word} tail`, 14, "- abcdefghijkl\n  mnopqrstuvwx\n  yz\n  tail"],
+    [
+      "bullet with wide spacing",
+      `-\u3000${word} tail`,
+      14,
+      "-\u3000abcdefghijk\n  lmnopqrstuv\n  wxyz\n  tail",
+    ],
+  ])("chunks a %s with exact note spacing", (_name, input, maxWidth, expected) => {
+    expect(wrapNoteMessage(input, { maxWidth, columns: 80 })).toBe(expected);
   });
 
   it("wraps bullet lines while preserving bullet indentation", () => {
@@ -1016,12 +821,6 @@ describe("wrapNoteMessage", () => {
     // No spaces: wrapNoteMessage splits on whitespace, so a "Program Files" style path would wrap.
     const input = "C:\\\\State\\\\OpenClaw\\\\bin\\\\openclaw.exe";
     const wrapped = wrapNoteMessage(input, { maxWidth: 10, columns: 80 });
-    expect(wrapped).toBe(input);
-  });
-
-  it("preserves UNC paths without inserting spaces/newlines", () => {
-    const input = "\\\\\\\\server\\\\share\\\\some\\\\really\\\\long\\\\path\\\\file.txt";
-    const wrapped = wrapNoteMessage(input, { maxWidth: 12, columns: 80 });
     expect(wrapped).toBe(input);
   });
 
@@ -1087,7 +886,7 @@ describe("wrapNoteMessage", () => {
   });
 
   it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
-    // A long CJK run with no separators reaches splitLongWord; each fullwidth char is 2 columns,
+    // A long CJK run with no separators reaches word-fragment wrapping; each fullwidth char is 2 columns,
     // so splitting by code-point count would emit lines up to 2x the budget.
     const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
     const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");

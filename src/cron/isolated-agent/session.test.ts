@@ -1,5 +1,5 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
@@ -17,20 +17,6 @@ vi.mock("../../config/sessions/reset-policy.js", () => ({
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
-vi.mock("../../agents/bootstrap-cache.js", () => ({
-  clearBootstrapSnapshot: vi.fn(),
-  clearBootstrapSnapshotOnSessionBoundary: vi.fn(({ sessionKey, boundaryAppended }) => {
-    if (sessionKey && boundaryAppended) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
-  clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
-    if (sessionKey && previousSessionId) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
-}));
-
 vi.mock("../../agents/sessions/reset-boundary.js", () => ({
   appendSessionResetBoundary: vi.fn(() => ({
     boundaryEntryId: "cron-reset-boundary",
@@ -38,7 +24,6 @@ vi.mock("../../agents/sessions/reset-boundary.js", () => ({
   })),
 }));
 
-import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
 import { resolveCronSession } from "./session.js";
 
@@ -82,6 +67,7 @@ function resolveWithStoredEntry(params?: {
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
     store,
+    lifecycleTimestamps: {},
   });
   return {
     ...result,
@@ -93,10 +79,6 @@ function resolveWithStoredEntry(params?: {
 }
 
 describe("resolveCronSession", () => {
-  beforeEach(() => {
-    vi.mocked(clearBootstrapSnapshot).mockReset();
-  });
-
   it("preserves modelOverride and providerOverride from existing session entry", () => {
     const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:test-job",
@@ -131,6 +113,25 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBeUndefined();
   });
 
+  it("preserves an explicit configured-default selection", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:cron:test-job",
+      forceNew: true,
+      entry: {
+        sessionId: "old-session-id",
+        updatedAt: 1000,
+        modelOverrideSource: "default",
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-5.4",
+      },
+    });
+
+    expect(result.sessionEntry.modelOverrideSource).toBe("default");
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("handles no existing session entry", () => {
     const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:new-job",
@@ -163,7 +164,6 @@ describe("resolveCronSession", () => {
         forceNew: true,
       }),
     ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
-    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   it("rolls an archived isolated heartbeat session into a fresh run", () => {
@@ -201,7 +201,6 @@ describe("resolveCronSession", () => {
     ).toThrow(
       'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
     );
-    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps an archived isolated heartbeat read-only without forceNew", () => {
@@ -239,7 +238,6 @@ describe("resolveCronSession", () => {
       expect(result.isNewSession).toBe(false);
       expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(true);
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("appends a boundary without changing sessionId when session is stale", () => {
@@ -271,7 +269,6 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sendPolicy).toBe("allow");
       expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -317,7 +314,6 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
     it("preserves pin state when rolling to a fresh session", () => {

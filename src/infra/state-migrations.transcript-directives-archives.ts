@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -13,12 +13,12 @@ import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import { sha256Hex } from "./crypto-digest.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
 
@@ -30,6 +30,19 @@ type TranscriptArchiveMigrationDatabase = Pick<
 >;
 
 type ArchiveCursor = { generation: string; sessionId: string };
+
+type ArchiveContentTransform = (
+  content: string,
+  owner: string,
+) => { changed: boolean; content: string };
+
+type ArchiveMigrationOptions = {
+  agentId: string;
+  database: DatabaseSync;
+  pathname: string;
+  start: ArchiveCursor;
+  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
+};
 
 type ArchiveRowPlan = {
   archiveName: string;
@@ -102,7 +115,11 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
   throw new Error(`${owner} has unsupported transcript archive encoding ${value}`);
 }
 
-function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): ArchiveRowPlan[] {
+function listArchiveBatch(
+  database: DatabaseSync,
+  cursor: ArchiveCursor,
+  transformContent: ArchiveContentTransform = transformArchiveContent,
+): ArchiveRowPlan[] {
   // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
   const hasArchiveTable = database
     .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -126,22 +143,24 @@ function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): Archiv
     .orderBy("generation", "asc")
     .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
   if (cursor.sessionId) {
+    // Seek the composite key; OR branches rescan the visited prefix on every page.
     query = query.where((eb) =>
-      eb.or([
-        eb("session_id", ">", cursor.sessionId),
-        eb.and([eb("session_id", "=", cursor.sessionId), eb("generation", ">", cursor.generation)]),
-      ]),
+      eb(
+        eb.refTuple("session_id", "generation"),
+        ">",
+        eb.tuple(cursor.sessionId, cursor.generation),
+      ),
     );
   }
   return executeSqliteQuerySync(database, query).rows.map((row) => {
     const owner = `${row.session_id}:${row.generation}`;
     const encoding = readArchiveEncoding(row.encoding, owner);
     const bytes = Buffer.from(row.archive_blob);
-    if (createHash("sha256").update(bytes).digest("hex") !== row.archive_sha256) {
+    if (sha256Hex(bytes) !== row.archive_sha256) {
       throw new Error(`Canonical SQLite transcript archive is corrupt for ${row.session_id}`);
     }
     const content = decodeSessionArchiveBytes(bytes, encoding === "zstd");
-    const transformed = transformArchiveContent(content, owner);
+    const transformed = transformContent(content, owner);
     const nextBytes = transformed.changed
       ? encodeArchiveContent(transformed.content, encoding, owner)
       : bytes;
@@ -153,7 +172,7 @@ function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): Archiv
       encoding,
       generation: row.generation,
       nextBytes,
-      nextSha256: createHash("sha256").update(nextBytes).digest("hex"),
+      nextSha256: sha256Hex(nextBytes),
       publishedAt: row.published_at,
       sessionId: row.session_id,
     };
@@ -167,15 +186,12 @@ export function transcriptDirectiveArchivesNeedMigration(
   let cursor = start;
   while (true) {
     const batch = listArchiveBatch(database, cursor);
-    if (batch.length === 0) {
+    const last = batch.at(-1);
+    if (!last) {
       return false;
     }
     if (batch.some((planned) => planned.changed)) {
       return true;
-    }
-    const last = batch.at(-1);
-    if (!last) {
-      return false;
     }
     cursor = { generation: last.generation, sessionId: last.sessionId };
   }
@@ -249,16 +265,13 @@ function repairPublishedArchiveFile(params: {
   if (!fs.existsSync(archivePath)) {
     return false;
   }
-  if (
-    createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex") ===
-    params.planned.nextSha256
-  ) {
+  if (sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256) {
     return true;
   }
   assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
     beforeRename: ({ tempPath }) => {
-      const stagedHash = createHash("sha256").update(fs.readFileSync(tempPath)).digest("hex");
+      const stagedHash = sha256Hex(fs.readFileSync(tempPath));
       if (stagedHash !== params.planned.nextSha256) {
         throw new Error(`Transcript archive staging verification failed for ${archivePath}`);
       }
@@ -273,10 +286,7 @@ function repairPublishedArchiveFile(params: {
     syncTempFile: true,
     tempPrefix: `${path.basename(archivePath)}.directive-migration`,
   });
-  if (
-    createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex") !==
-    params.planned.nextSha256
-  ) {
+  if (sha256Hex(fs.readFileSync(archivePath)) !== params.planned.nextSha256) {
     throw new Error(`Transcript archive verification failed for ${archivePath}`);
   }
   return true;
@@ -324,13 +334,13 @@ function finalizeArchiveCursor(params: {
   });
 }
 
-export async function migrateTranscriptDirectiveArchives(params: {
-  agentId: string;
-  database: DatabaseSync;
-  pathname: string;
-  start: ArchiveCursor;
-  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
-}): Promise<number> {
+/** Repairs canonical blobs before their reconstructible files under maintenance authority. */
+export async function migrateCanonicalTranscriptArchives(
+  params: ArchiveMigrationOptions & {
+    onArchive?: (archivePath: string) => void;
+    transformContent: ArchiveContentTransform;
+  },
+): Promise<number> {
   let rewrittenArchives = 0;
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
@@ -338,16 +348,24 @@ export async function migrateTranscriptDirectiveArchives(params: {
     path: params.pathname,
   });
   while (true) {
-    const batch = listArchiveBatch(params.database, cursor);
+    const batch = listArchiveBatch(params.database, cursor, params.transformContent);
     if (batch.length === 0) {
-      runSqliteImmediateTransactionSync(params.database, () => {
-        assertAgentDatabaseMaintenanceAuthority();
-        params.writeCursor({ phase: "complete" });
-        assertAgentDatabaseMaintenanceAuthority();
-      });
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          params.writeCursor({ phase: "complete" });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-archive.complete",
+        },
+      );
       return rewrittenArchives;
     }
     for (const planned of batch) {
+      params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
       const rowPresent = runSqliteImmediateTransactionSync(
         params.database,
         () => {
@@ -392,4 +410,13 @@ export async function migrateTranscriptDirectiveArchives(params: {
       setImmediate(resolve);
     });
   }
+}
+
+export function migrateTranscriptDirectiveArchives(
+  params: ArchiveMigrationOptions,
+): Promise<number> {
+  return migrateCanonicalTranscriptArchives({
+    ...params,
+    transformContent: transformArchiveContent,
+  });
 }

@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
+import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
@@ -31,6 +33,7 @@ type ActiveReplySteerParams = {
   followupRun: RunReplyAgentParams["followupRun"];
   opts: RunReplyAgentParams["opts"];
   providedReplyOperation: ReplyOperation | undefined;
+  automaticFallbackRoute?: ReplyOperation["automaticFallbackRoute"];
   queueKey: string;
   releaseAdmissionTicket: () => void;
   replyOperationRunState: ReplyOperationRunState | undefined;
@@ -39,6 +42,8 @@ type ActiveReplySteerParams = {
   runFollowup: (run: FollowupRun) => Promise<void>;
   sessionCtx: RunReplyAgentParams["sessionCtx"];
   sessionKey: string | undefined;
+  sessionEntry?: RunReplyAgentParams["sessionEntry"];
+  storePath?: string;
   touchActiveSessionEntry: () => Promise<void>;
   typing: RunReplyAgentParams["typing"];
   typingSignals: TypingSignaler;
@@ -88,17 +93,14 @@ export async function runActiveReplySteer(
   // command continuation whose slot adoption was skipped (#104844) still
   // carries a source-keyed reservation; steering by its stale sessionId
   // would miss the live target run.
-  const registeredReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
-  const activeReplyOperation =
-    params.providedReplyOperation?.key === sessionKey
-      ? params.providedReplyOperation
-      : (registeredReplyOperation ?? params.providedReplyOperation);
+  const activeReplyOperation = params.providedReplyOperation;
   const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   // Capture exact injection authority before parking or awaiting admission.
   // A same-key successor must never inherit this turn's steer or abort.
-  const injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(
-    activeReplyOperation?.key ?? queueKey,
-  );
+  const injectionTarget =
+    activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
+      ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
+      : undefined;
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     releaseAdmissionTicket();
@@ -121,7 +123,13 @@ export async function runActiveReplySteer(
   releaseAdmissionTicket();
   const fallback = async (reason?: string): Promise<"handled"> => {
     parked.fallback();
-    if (replyOperationRunState) {
+    if (
+      replyOperationRunState &&
+      !(
+        replyOperationRunState.admission?.status === "skipped" &&
+        replyOperationRunState.admission.reason === "queue-cap"
+      )
+    ) {
       replyOperationRunState.admission = { status: "accepted", mode: "followup" };
     }
     if (reason) {
@@ -144,9 +152,57 @@ export async function runActiveReplySteer(
     if (!injectionTarget) {
       return await fallback("no injectable reply operation");
     }
+    // A predecessor's admission may wait past this run's terminal delivery.
+    // Keep the parked input in the ordered queue if its target is no longer eligible.
+    let entry = params.sessionEntry;
+    if (sessionKey && params.storePath) {
+      try {
+        entry =
+          loadSessionEntry({
+            sessionKey,
+            storePath: params.storePath,
+            readConsistency: "latest",
+          }) ?? entry;
+      } catch (error) {
+        return await fallback(`session entry unavailable: ${formatErrorMessage(error)}`);
+      }
+    }
+    const blockReason = resolveRestartRecoverySteeringBlockReason(
+      entry,
+      steerSessionId,
+      injectionTarget.sourceTurnId ??
+        normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ??
+        "",
+    );
+    if (blockReason) {
+      return await fallback(`terminal source-reply delivery is closed (${blockReason})`);
+    }
+    const automaticFallbackRoute = params.automaticFallbackRoute;
+    const isCurrentFallback = () =>
+      !automaticFallbackRoute ||
+      (activeReplyOperation?.automaticFallbackRoute === automaticFallbackRoute &&
+        activeReplyOperation.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
+        activeReplyOperation.toolAuthorityRoute.model === automaticFallbackRoute.model);
+    if (!isCurrentFallback()) {
+      return await fallback("automatic model fallback changed during steering admission");
+    }
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
+      currentInboundContext: followupRun.currentInboundContext,
+      inboundAudio: followupRun.currentInboundAudio === true,
+      assertCurrent: automaticFallbackRoute
+        ? () => {
+            followupRun.operatorAuthority?.assertCurrent();
+            if (!isCurrentFallback()) {
+              throw new Error("Automatic model fallback changed during steering admission");
+            }
+          }
+        : followupRun.operatorAuthority?.assertCurrent,
       steeringMode: "all",
-      isInboundUserMessage: true,
+      isInboundUserMessage:
+        followupRun.currentInboundEventKind !== "room_event" &&
+        (followupRun.run.inputProvenance?.kind === undefined ||
+          followupRun.run.inputProvenance.kind === "external_user"),
+      terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       ...(params.pendingInputAuthorityFingerprint
         ? { pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint }

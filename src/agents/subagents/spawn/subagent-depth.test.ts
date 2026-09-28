@@ -1,14 +1,23 @@
 // Subagent depth tests cover depth recovery from persisted session metadata and
 // timer-safe timeout normalization for spawned agent runs.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -93,7 +102,7 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("resolves prefixed store keys when caller key omits the agent prefix", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-"));
+    const tmpDir = tempDirs.make("openclaw-subagent-depth-");
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const prefixedKey = "agent:main:subagent:flat";
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
@@ -121,100 +130,88 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("reads a bare fixed-store key through its persisted owner", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-shared-"));
-    try {
-      const storePath = path.join(tmpDir, "sessions.sqlite");
-      await replaceSessionEntry(
-        { agentId: "ops", storePath, sessionKey: "global" },
-        {
-          sessionId: "global-session",
-          updatedAt: Date.now(),
-          spawnDepth: 2,
-        },
-      );
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { scope: "global", store: storePath },
-      } satisfies OpenClawConfig;
+    const tmpDir = tempDirs.make("openclaw-subagent-depth-shared-");
+    const storePath = path.join(tmpDir, "sessions.sqlite");
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      {
+        sessionId: "global-session",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
+      },
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
 
-      expect(getSubagentDepthFromSessionStore("global", { cfg })).toBe(2);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    expect(getSubagentDepthFromSessionStore("global", { cfg })).toBe(2);
   });
 
   it("resolves a cross-agent parent outside the supplied child store", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-cross-agent-"));
-    try {
-      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-      const parentKey = "agent:main:dashboard:parent";
-      await replaceSessionEntry(
-        {
-          agentId: "main",
-          storePath: storeTemplate.replaceAll("{agentId}", "main"),
-          sessionKey: parentKey,
-        },
-        {
-          sessionId: "parent",
-          updatedAt: Date.now(),
-          spawnDepth: 2,
-        },
-      );
+    const tmpDir = tempDirs.make("openclaw-subagent-depth-cross-agent-");
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const parentKey = "agent:main:dashboard:parent";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        storePath: storeTemplate.replaceAll("{agentId}", "main"),
+        sessionKey: parentKey,
+      },
+      {
+        sessionId: "parent",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
+      },
+    );
 
-      const depth = getSubagentDepthFromSessionStore("agent:work:dashboard:child", {
-        cfg: { session: { store: storeTemplate } },
-        store: {
-          "agent:work:dashboard:child": {
-            sessionId: "child",
-            spawnedBy: parentKey,
-          },
+    const depth = getSubagentDepthFromSessionStore("agent:work:dashboard:child", {
+      cfg: { session: { store: storeTemplate } },
+      store: {
+        "agent:work:dashboard:child": {
+          sessionId: "child",
+          spawnedBy: parentKey,
         },
-      });
+      },
+    });
 
-      expect(depth).toBe(3);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    expect(depth).toBe(3);
   });
 
   it("keeps agent-scoped views separate for a fixed shared store", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-fixed-"));
-    try {
-      const storePath = path.join(tmpDir, "sessions.sqlite");
-      const childKey = "agent:ops:dashboard:child";
-      const parentKey = "agent:research:dashboard:parent";
-      await replaceSessionEntry(
-        { agentId: "ops", storePath, sessionKey: childKey },
-        {
-          sessionId: "child",
-          updatedAt: Date.now(),
-          spawnedBy: parentKey,
-        },
-      );
-      await replaceSessionEntry(
-        { agentId: "research", storePath, sessionKey: parentKey },
-        {
-          sessionId: "parent",
-          updatedAt: Date.now(),
-          spawnDepth: 2,
-        },
-      );
+    const tmpDir = tempDirs.make("openclaw-subagent-depth-fixed-");
+    const storePath = path.join(tmpDir, "sessions.sqlite");
+    const childKey = "agent:ops:dashboard:child";
+    const parentKey = "agent:research:dashboard:parent";
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: childKey },
+      {
+        sessionId: "child",
+        updatedAt: Date.now(),
+        spawnedBy: parentKey,
+      },
+    );
+    await replaceSessionEntry(
+      { agentId: "research", storePath, sessionKey: parentKey },
+      {
+        sessionId: "parent",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
+      },
+    );
 
-      expect(
-        getSubagentDepthFromSessionStore(childKey, {
-          cfg: {
-            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-            session: { store: storePath },
-          },
-        }),
-      ).toBe(3);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    expect(
+      getSubagentDepthFromSessionStore(childKey, {
+        cfg: {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          session: { store: storePath },
+        },
+      }),
+    ).toBe(3);
   });
 
   it("falls back to session-key segment counting when metadata is missing", () => {

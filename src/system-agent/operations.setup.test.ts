@@ -198,86 +198,100 @@ describe("parseSystemAgentOperation", () => {
     vi.unstubAllEnvs();
   });
 
-  it("runs setup bootstrap only after approval and audits it", async () => {
-    const tempDir = opTempDirs.make("openclaw-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        entries: { main: { default: true } },
-      },
-    });
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
-      configHashBefore: "mock-hash-0",
-      configHashAfter: "mock-hash-1",
-      bootstrapPending: true,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/work"],
-    }));
-    const deps = {
-      applySetup,
-      loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-      verifyInferenceConfig: vi.fn(async () => ({
-        ok: true as const,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 12,
-      })),
-    };
+  it.each(["default", "setup"] as const)(
+    "runs %s-model setup only after approval and audits it",
+    async (modelRole) => {
+      const tempDir = opTempDirs.make("openclaw-setup-");
+      setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      mockConfig.setConfig({
+        meta: { migrations: { utilityModelSeparation: true } },
+        agents: {
+          defaults:
+            modelRole === "default"
+              ? { model: { primary: "openai/gpt-5.5" } }
+              : { utilityModel: "openai/gpt-5.5" },
+          entries: { main: { default: true } },
+        },
+      });
+      const applySetup = vi.fn(async () => ({
+        configPath: path.join(tempDir, "openclaw.json"),
+        configHashBefore: "mock-hash-0",
+        configHashAfter: "mock-hash-1",
+        bootstrapPending: true,
+        workspaceReady: true,
+        gateway: { status: "ready" as const, action: "reused" as const },
+        lines: ["Workspace: /tmp/work"],
+      }));
+      const deps = {
+        applySetup,
+        loadOverview: async () =>
+          (modelRole === "default"
+            ? { defaultModel: "openai/gpt-5.5" }
+            : { setupModel: "openai/gpt-5.5" }) as never,
+        verifyInferenceConfig: vi.fn(async () => ({
+          ok: true as const,
+          modelRef: "openai/gpt-5.5",
+          latencyMs: 12,
+        })),
+      };
 
-    const plan = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      { deps },
-    );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
-      applied: false,
-    });
-    expect(lines.join("\n")).toContain("Model choice: keep verified default openai/gpt-5.5.");
-    expect(applySetup).not.toHaveBeenCalled();
-
-    const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
-      runtime,
-      {
-        approved: true,
-        auditDetails: { rescue: true },
-        deps,
-      },
-    );
-    expect(result.applied).toBe(true);
-    expect(result.bootstrapPending).toBe(true);
-
-    expect(lines.join("\n")).toContain("[openclaw] done: openclaw.setup");
-    expect(applySetup).toHaveBeenCalledWith(
-      {
-        workspace: "/tmp/work",
-        firstAgent: { name: "robby" },
-        expectedInferenceRoute: expect.any(Object),
-        surface: "cli",
+      const plan = await executeSystemAgentOperation(
+        { kind: "setup", workspace: "/tmp/work" },
         runtime,
-      },
-      { beforePersistentApply: undefined },
-    );
-    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
-    const audit = readLastAuditEntry();
-    expectAuditRecord(
-      audit,
-      {
-        operation: "openclaw.setup",
-        summary: "Bootstrapped setup workspace",
-      },
-      {
-        rescue: true,
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-        modelSource: "live-verified default model",
-        inferenceLatencyMs: 12,
-      },
-    );
-  });
+        { deps },
+      );
+      expectRecordFields(plan as unknown as Record<string, unknown>, {
+        applied: false,
+      });
+      expect(lines.join("\n")).toContain(
+        `Model choice: keep verified ${modelRole} openai/gpt-5.5.`,
+      );
+      expect(applySetup).not.toHaveBeenCalled();
+
+      const result = await executeSystemAgentOperation(
+        { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
+        runtime,
+        {
+          approved: true,
+          auditDetails: { rescue: true },
+          deps,
+        },
+      );
+      expect(result.applied).toBe(true);
+      expect(result.bootstrapPending).toBe(true);
+
+      expect(lines.join("\n")).toContain("[openclaw] done: openclaw.setup");
+      expect(applySetup).toHaveBeenCalledWith(
+        {
+          workspace: "/tmp/work",
+          firstAgent: { name: "robby" },
+          expectedInferenceRoute: expect.any(Object),
+          surface: "cli",
+          runtime,
+        },
+        { beforePersistentApply: undefined },
+      );
+      expect(lines.join("\n")).toContain(
+        `${modelRole === "default" ? "Default" : "Setup"} model: openai/gpt-5.5 (verified and kept)`,
+      );
+      const audit = readLastAuditEntry();
+      expectAuditRecord(
+        audit,
+        {
+          operation: "openclaw.setup",
+          summary: "Bootstrapped setup workspace",
+        },
+        {
+          rescue: true,
+          workspace: "/tmp/work",
+          model: "openai/gpt-5.5",
+          modelSource: `live-verified ${modelRole} model`,
+          inferenceLatencyMs: 12,
+        },
+      );
+    },
+  );
 
   it("rejects setup without a default model before any workspace or Gateway write", async () => {
     const tempDir = opTempDirs.make("openclaw-no-inference-setup-");
@@ -567,7 +581,7 @@ describe("parseSystemAgentOperation", () => {
           channels: { telegram: { enabled: true } },
         });
       } else {
-        onVerifiedExecution?.({} as never, reboundBinding);
+        onVerifiedExecution?.(reboundBinding);
       }
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
     });

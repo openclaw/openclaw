@@ -5,6 +5,7 @@ import {
   closeSlot,
   ensureSidebarConversation,
   fitSidebarLayout,
+  initializeBrowserSidebarWidth,
   isSidebarSlotVisible,
   normalizeSidebarLayout,
   openSlot,
@@ -13,6 +14,7 @@ import {
   resizeSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
+  toggleSidebarPanelExpanded,
   setSidebarOpen,
   sidebarActivePanel,
   sidebarMainPanel,
@@ -25,6 +27,53 @@ function openAll(): SidebarLayout {
 }
 
 describe("sidebar layout", () => {
+  it.each(["left", "right", "bottom"] as const)(
+    "restores the original %s split after focusing the side in place",
+    (dock) => {
+      const split = normalizeSidebarLayout(
+        ensureSidebarConversation(setSidebarDock(activatePanel(openAll(), "dashboard"), dock)),
+      );
+      const focused = toggleSidebarPanelExpanded(split, "dashboard");
+      expect(sidebarMainPanel(focused)).toEqual(sidebarMainPanel(split));
+      expect(focused.columns).toEqual(split.columns);
+      expect(isSidebarSlotVisible(focused, "dashboard")).toBe(true);
+      expect(isSidebarSlotVisible(focused, "conversation")).toBe(false);
+      expect(toggleSidebarPanelExpanded(normalizeSidebarLayout(focused), "dashboard")).toEqual(
+        split,
+      );
+      const closed = setSidebarOpen(focused, false);
+      expect(isSidebarSlotVisible(closed, "conversation")).toBe(true);
+      expect(isSidebarSlotVisible(closed, "dashboard")).toBe(false);
+      expect(setSidebarOpen(closed, true)).toEqual(split);
+    },
+  );
+
+  it("expands inactive tabs and exits side focus on normal activation or closing its tab", () => {
+    const split = normalizeSidebarLayout(ensureSidebarConversation(openAll()));
+    const focused = toggleSidebarPanelExpanded(split, "dashboard");
+    expect(sidebarActivePanel(focused)?.slot).toBe("dashboard");
+    expect(sidebarMainPanel(focused)).toEqual(sidebarMainPanel(split));
+    expect(activatePanel(focused, "detail")).toEqual(split);
+    expect(isSidebarSlotVisible(openSlot(focused, "conversation"), "conversation")).toBe(true);
+    const closed = closeSlot(focused, "dashboard");
+    expect(closed.expanded).toBe(false);
+    expect(isSidebarSlotVisible(closed, "conversation")).toBe(true);
+    expect(isSidebarSlotVisible(closed, "detail")).toBe(true);
+    expect(toggleSidebarPanelExpanded(split, "missing")).toEqual(split);
+    expect(toggleSidebarPanelExpanded(split, split.mainPanelId!)).toEqual(split);
+  });
+
+  it("does not hide the main view when stored side focus has no surviving side panel", () => {
+    const layout = normalizeSidebarLayout({
+      columns: [],
+      expanded: true,
+      expandedSide: true,
+      open: true,
+    });
+    expect(isSidebarSlotVisible(layout, "conversation")).toBe(true);
+    expect(layout.expandedSide).toBeUndefined();
+  });
+
   it("opens every slot as a tab in one right-side column", () => {
     const layout = openAll();
     expect(layout.columns).toHaveLength(1);
@@ -82,6 +131,7 @@ describe("sidebar layout", () => {
     expect(closed).toEqual({
       columns: [
         {
+          browserWidthPending: true,
           id: "side-panel-column",
           side: "right",
           panels: [],
@@ -224,6 +274,35 @@ describe("sidebar layout", () => {
       fitSidebarLayout(resizeSidebarPanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width,
     ).toBe(720);
     expect(fitSidebarLayout(layout, 560)).toBeNull();
+  });
+
+  it.each([
+    [1_800, 804, 990],
+    [1_400, 804, 694],
+    [1_000, 964, 494],
+    [800, 600, 480],
+    [2_800, 804, 1_200],
+  ])("sizes a new browser in a %ipx pane around the chat column", (paneWidth, chatWidth, width) => {
+    const layout = openSlot({ columns: [] }, "browser");
+    const opened = initializeBrowserSidebarWidth(layout, paneWidth, chatWidth);
+    expect(opened.columns[0]?.width).toBe(width);
+    expect(initializeBrowserSidebarWidth(opened, 2_000, 600)).toEqual(opened);
+  });
+
+  it("defers browser sizing in narrow and bottom layouts and preserves manual or legacy widths", () => {
+    const layout = normalizeSidebarLayout(openSlot({ columns: [] }, "browser"));
+    expect(initializeBrowserSidebarWidth(layout, 500, 464)).toEqual(layout);
+    const bottom = setSidebarDock(layout, "bottom");
+    expect(initializeBrowserSidebarWidth(bottom, 1_800, 804)).toEqual(bottom);
+    const resized = normalizeSidebarLayout(resizeSidebarPanel(layout, layout.columns[0]!.id, 480));
+    expect(initializeBrowserSidebarWidth(resized, 1_800, 804)).toEqual(resized);
+    const legacy = normalizeSidebarLayout({
+      columns: [
+        { id: "side", side: "right", panels: [{ id: "browser", slot: "browser" }], width: 480 },
+      ],
+    });
+    expect(initializeBrowserSidebarWidth(legacy, 1_800, 804)).toEqual(legacy);
+    expect(initializeBrowserSidebarWidth(layout, 1_800, 804).columns[0]?.width).toBe(990);
   });
 
   it("persists and resizes the same panel at the bottom", () => {

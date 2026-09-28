@@ -19,11 +19,14 @@ import {
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "./facade-activation-contract.js";
 import {
   resolveBundledMetadataManifestRecord,
   resolveRegistryPluginModuleLocationFromRecords,
+  type BundledPluginPublicSurfaceParams,
   type FacadeModuleLocationLike,
   type FacadePluginManifestLike,
 } from "./facade-resolution-shared.js";
@@ -91,11 +94,9 @@ function getFacadeManifestRegistry(params: {
 }
 
 /** Resolves the concrete plugin module location recorded in the manifest registry. */
-export function resolveRegistryPluginModuleLocation(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): FacadeModuleLocationLike | null {
+export function resolveRegistryPluginModuleLocation(
+  params: BundledPluginPublicSurfaceParams,
+): FacadeModuleLocationLike | null {
   const registry = getFacadeManifestRegistry(params.env ? { env: params.env } : {});
   return resolveRegistryPluginModuleLocationFromRecords({
     registry,
@@ -113,7 +114,7 @@ function resolveBundledPluginManifestRecord(
   }
 
   const registry = getFacadeManifestRegistry(params.env ? { env: params.env } : {});
-  const resolved =
+  return (
     (params.location
       ? registry.find((plugin) => {
           const normalizedRootDir = path.resolve(plugin.rootDir);
@@ -127,8 +128,8 @@ function resolveBundledPluginManifestRecord(
     registry.find((plugin) => plugin.id === params.dirName) ??
     registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ??
     registry.find((plugin) => plugin.channels.includes(params.dirName)) ??
-    null;
-  return resolved;
+    null
+  );
 }
 
 /** Resolves the stable plugin id used for telemetry and error reporting. */
@@ -137,11 +138,9 @@ export function resolveTrackedFacadePluginId(params: FacadeActivationCheckParams
 }
 
 /** Evaluates whether a bundled plugin's api/runtime-api facade is currently enabled. */
-export function resolveBundledPluginPublicSurfaceAccess(params: FacadeActivationCheckParams): {
-  allowed: boolean;
-  pluginId?: string;
-  reason?: string;
-} {
+export function resolveBundledPluginPublicSurfaceAccess(
+  params: FacadeActivationCheckParams,
+): ReturnType<typeof evaluateBundledPluginPublicSurfaceAccess> {
   if (
     params.artifactBasename === "runtime-api.js" &&
     ALWAYS_ALLOWED_RUNTIME_DIR_NAME_SET.has(params.dirName)
@@ -157,6 +156,18 @@ export function resolveBundledPluginPublicSurfaceAccess(params: FacadeActivation
     return {
       allowed: false,
       reason: `no bundled plugin manifest found for ${params.dirName}`,
+    };
+  }
+  const state = getPluginRegistryState();
+  const runtimeRegistry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    (state?.runtimeSubagentMode === "gateway-bindable" ? state.activeRegistry : undefined);
+  if (runtimeRegistry) {
+    const record = runtimeRegistry.plugins.find((entry) => entry.id === manifestRecord.id);
+    return {
+      allowed: record?.status === "loaded",
+      pluginId: manifestRecord.id,
+      ...(record?.status === "loaded" ? {} : { reason: "plugin runtime is not active" }),
     };
   }
   const { config, normalizedPluginsConfig, activationSource, autoEnabledReasons } =

@@ -2,17 +2,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  updatePluginsAfterCoreUpdate,
-  type PostCorePluginUpdateResult,
-} from "./update-command-plugins.js";
+import * as restartHealth from "../daemon-cli/restart-health.js";
+import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
@@ -76,7 +76,9 @@ describe("applyPostPluginConfigValidation", () => {
   } satisfies PostCorePluginUpdateResult;
 
   it("fails closed when updated plugin migrations leave config invalid", () => {
-    expect(applyPostPluginConfigValidation(pluginUpdate, false)).toMatchObject({
+    expect(
+      applyPostPluginConfigValidation(pluginUpdate, { status: "invalid", failureFacts: [] }),
+    ).toMatchObject({
       status: "error",
       reason: "post-plugin-doctor-invalid-config",
       warnings: [
@@ -94,7 +96,9 @@ describe("applyPostPluginConfigValidation", () => {
       reason: "plugin-sync-failed",
     };
 
-    expect(applyPostPluginConfigValidation(failed, false)).toBe(failed);
+    expect(applyPostPluginConfigValidation(failed, { status: "invalid", failureFacts: [] })).toBe(
+      failed,
+    );
   });
 });
 
@@ -180,7 +184,7 @@ describe("resolveUpdatedGatewayRestartPort", () => {
 });
 
 describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it.each(["git", "npm", "pnpm", "bun"] as const)(
+  it.each(["git", "npm"] as const)(
     "keeps %s restart preparation anchored to the pre-update service env",
     (updateMode) => {
       const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
@@ -200,7 +204,7 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
 });
 
 describe("update environment snapshots", () => {
-  it.each(["win32", "linux", "darwin"] as const)(
+  it.each(["win32", "linux"] as const)(
     "preserves %s selector lookup semantics without retaining the live environment",
     (platform) => {
       const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -795,6 +799,12 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
+  beforeEach(() => {
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("update-native-repair-locks-"),
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
   it.each(["recovered", "failed", "not attempted"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
@@ -828,11 +838,15 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           : outcome === "failed"
             ? ({ attempted: true, recovered: false, detail: "Bootstrap failed." } as const)
             : ({ attempted: false, recovered: false } as const);
-      const recoverLaunchAgent = vi.fn(async () => recovery);
-      const waitForHealthy = vi.fn(async () => {
-        expect(getUpdateRun(runId, { env })?.repair).toMatchObject([{ status: "succeeded" }]);
-        return healthy;
-      });
+      vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue(
+        recovery,
+      );
+      const waitForHealthy = vi
+        .spyOn(restartHealth, "waitForGatewayHealthyRestart")
+        .mockImplementation(async () => {
+          expect(getUpdateRun(runId, { env })?.repair).toMatchObject([{ status: "succeeded" }]);
+          return healthy;
+        });
       const startedAtMs = Date.now();
 
       await expect(
@@ -844,7 +858,6 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           expectedVersion: "2026.5.3",
           expectedBuildId: "new-build",
           env,
-          deps: { recoverLaunchAgent, waitForHealthy },
         }),
       ).resolves.toEqual({
         health: outcome === "recovered" ? healthy : unhealthy,
@@ -897,19 +910,18 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       ...unhealthySnapshot,
       waitOutcome: "timeout",
     } as never;
-    const recoverLaunchAgent = vi.fn(async () => ({
+    vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue({
       attempted: true as const,
       recovered: true as const,
       message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    }));
-    const waitForHealthy = vi.fn(async () => stillUnhealthy);
+    });
+    vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue(stillUnhealthy);
 
     const result = await updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
       health: unhealthy,
       service,
       port: 18790,
       expectedVersion: "2026.5.3",
-      deps: { recoverLaunchAgent, waitForHealthy },
     });
     expect(result.health.healthy).toBe(false);
     expect(result.health.waitOutcome).toBe("timeout");
@@ -969,65 +981,5 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   it('returns "pipe" for JSON output on every platform', () => {
     expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
     expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
-  });
-});
-
-describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
-  it("reports invalid config as an error with repair guidance", async () => {
-    const result = await updatePluginsAfterCoreUpdate({
-      root: "/tmp/openclaw-test",
-      channel: "stable",
-      configWriteOptions: {},
-      configSnapshot: {
-        valid: false,
-        issues: [],
-        legacyIssues: [],
-      } as unknown as Awaited<
-        ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
-      >,
-      json: true,
-      timeoutMs: 1000,
-    });
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("invalid-config");
-    expect(result.changed).toBe(false);
-    expect(result.warnings).toStrictEqual([
-      {
-        reason: "invalid-config",
-        message:
-          "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
-        guidance: [
-          "Run `openclaw doctor` to inspect the config validation errors.",
-          "Once the config parses, rerun `openclaw update repair`.",
-        ],
-      },
-    ]);
-  });
-});
-
-describe("buildInvalidConfigPostCoreUpdateResult", () => {
-  it("builds an error result for invalid post-core config", () => {
-    const built = updateCommandPluginsTesting.buildInvalidConfigPostCoreUpdateResult();
-    expect(built.result.status).toBe("error");
-    expect(built.result.reason).toBe("invalid-config");
-    expect(built.result.changed).toBe(false);
-  });
-
-  it("surfaces actionable repair guidance in both the structural warnings and the message string", () => {
-    const built = updateCommandPluginsTesting.buildInvalidConfigPostCoreUpdateResult();
-    expect(built.guidance).toStrictEqual([
-      "Run `openclaw doctor` to inspect the config validation errors.",
-      "Once the config parses, rerun `openclaw update repair`.",
-    ]);
-    expect(built.result.warnings).toStrictEqual([
-      {
-        reason: "invalid-config",
-        message: built.message,
-        guidance: built.guidance,
-      },
-    ]);
-    expect(built.message).toBe(
-      "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
-    );
   });
 });

@@ -1,8 +1,9 @@
 // Node proxy agent helpers adapt env or explicit proxy settings for libraries
 // that need node:http Agent instances.
 import type { Agent as HttpAgent, AgentOptions as HttpAgentOptions } from "node:http";
-import type { AgentOptions as HttpsAgentOptions } from "node:https";
+import type { Agent as HttpsAgent, AgentOptions as HttpsAgentOptions } from "node:https";
 import { createRequire } from "node:module";
+import { isIPv6 } from "node:net";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-proxy-tls.js";
 
@@ -12,9 +13,11 @@ const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
 type NodeProxyProtocol = "http" | "https";
 type ProxylineCreateAmbientNodeProxyAgent =
   typeof import("@openclaw/proxyline").createAmbientNodeProxyAgent;
+type ProxylineNodeAgent = NonNullable<ReturnType<ProxylineCreateAmbientNodeProxyAgent>>;
 type ProxylineAgentOptions = NonNullable<Parameters<ProxylineCreateAmbientNodeProxyAgent>[0]>;
 type ProxylineEnvSnapshot = NonNullable<ProxylineAgentOptions["env"]>;
 type ProxylineTlsOptions = ProxylineAgentOptions["proxyTls"];
+type ProxylineProxyConnectOptions = import("@openclaw/proxyline").ProxyConnectOptions;
 type NodeProxyAgentOptions = HttpAgentOptions & HttpsAgentOptions;
 type NodeProxyAgentWithOptions = HttpAgent & {
   keepAlive: boolean;
@@ -33,15 +36,18 @@ const require = createRequire(import.meta.url);
 export type CreateNodeProxyAgentOptions =
   | {
       mode: "env";
-      targetUrl: string | URL;
+      /** Omit when the library selects destinations; NO_PROXY is checked per request. */
+      targetUrl?: string | URL;
       protocol?: NodeProxyProtocol;
       agentOptions?: NodeProxyAgentOptions;
+      proxyConnect?: ProxylineProxyConnectOptions;
     }
   | {
       mode: "explicit";
       proxyUrl: string | URL;
       protocol?: NodeProxyProtocol;
       agentOptions?: NodeProxyAgentOptions;
+      proxyConnect?: ProxylineProxyConnectOptions;
     };
 
 function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol): URL {
@@ -49,11 +55,9 @@ function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol
   let parsed: URL;
   try {
     parsed = new URL(withScheme);
-  } catch (error) {
-    throw new Error(
-      `Invalid proxy URL ${JSON.stringify(proxyUrl)}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+  } catch {
+    // URL parse errors retain the input, which can contain proxy credentials.
+    throw new Error("Invalid proxy URL. Use an HTTP or HTTPS proxy URL.");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsed.protocol}`);
@@ -77,9 +81,8 @@ function fixedProxyEnv(proxyUrl: URL): ProxylineEnvSnapshot {
   };
 }
 
-function loadCreateAmbientNodeProxyAgent(): ProxylineCreateAmbientNodeProxyAgent {
-  return (require("@openclaw/proxyline") as typeof import("@openclaw/proxyline"))
-    .createAmbientNodeProxyAgent;
+function loadProxyline(): typeof import("@openclaw/proxyline") {
+  return require("@openclaw/proxyline") as typeof import("@openclaw/proxyline");
 }
 
 function applyNodeAgentOptions(agent: HttpAgent, options: NodeProxyAgentOptions | undefined): void {
@@ -163,53 +166,111 @@ function createFixedNodeProxyAgent(
     protocol?: NodeProxyProtocol;
     proxyTls?: ProxylineTlsOptions;
     agentOptions?: NodeProxyAgentOptions;
+    proxyConnect?: ProxylineProxyConnectOptions;
   } = {},
-): HttpAgent {
+): ProxylineNodeAgent {
   const parsedProxyUrl =
     proxyUrl instanceof URL
       ? proxyUrl
       : proxyUrlWithDefaultScheme(proxyUrl, options.protocol ?? "https");
-  const agent = loadCreateAmbientNodeProxyAgent()({
+  const proxyConnect = options.proxyConnect;
+  const agent = loadProxyline().createAmbientNodeProxyAgent({
     env: fixedProxyEnv(parsedProxyUrl),
     protocol: options.protocol ?? "https",
     ...(options.proxyTls !== undefined ? { proxyTls: options.proxyTls } : {}),
+    ...(proxyConnect !== undefined ? { resolveProxyConnectOptions: () => proxyConnect } : {}),
   });
   if (agent === undefined) {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsedProxyUrl.protocol}`);
   }
-  applyNodeAgentOptions(agent as HttpAgent, options.agentOptions);
-  return agent as HttpAgent;
+  applyNodeAgentOptions(agent, options.agentOptions);
+  return agent;
+}
+
+function createPerRequestEnvProxyAgent(
+  options: Extract<CreateNodeProxyAgentOptions, { mode: "env" }>,
+): HttpsAgent | undefined {
+  const env = { ...process.env };
+  const proxies = resolveEnvHttpProxyAgentOptions(env);
+  if (!proxies) {
+    return undefined;
+  }
+  const routes = new Map<NodeProxyProtocol, ProxylineNodeAgent["addRequest"]>();
+  const agents: ProxylineNodeAgent[] = [];
+  for (const protocol of ["http", "https"] as const) {
+    const value = protocol === "http" ? proxies.httpProxy : proxies.httpsProxy;
+    if (!value) {
+      continue;
+    }
+    try {
+      const proxyUrl = proxyUrlWithDefaultScheme(value, protocol);
+      const agent = createFixedNodeProxyAgent(proxyUrl, {
+        protocol: options.protocol,
+        proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href, env }),
+        agentOptions: options.agentOptions,
+        proxyConnect: options.proxyConnect,
+      });
+      routes.set(protocol, agent.addRequest.bind(agent));
+      agents.push(agent);
+    } catch (error) {
+      // An invalid route must fail when selected, without disabling the other
+      // protocol or turning a configured proxy request into a direct request.
+      routes.set(protocol, () => {
+        throw error;
+      });
+    }
+  }
+  const { ProxylineNodeProxyAgent } = loadProxyline();
+  const router = new ProxylineNodeProxyAgent({
+    ...options.agentOptions,
+    defaultProtocol: options.protocol ?? "https",
+    getProxyForUrl: () => "",
+  });
+  const directRequest = router.addRequest.bind(router);
+  router.addRequest = (request, requestOptions) => {
+    const protocol = request.protocol === "https:" ? "https" : "http";
+    const host = isIPv6(request.host) ? `[${request.host}]` : request.host;
+    const target = new URL(`${request.protocol}//${host}`);
+    if (requestOptions.port) {
+      target.port = String(requestOptions.port);
+    }
+    const route = matchesNoProxy(target, env) ? undefined : routes.get(protocol);
+    if (route) {
+      route(request, requestOptions);
+    } else {
+      directRequest(request, requestOptions);
+    }
+  };
+  const destroyRouter = router.destroy.bind(router);
+  router.destroy = () => {
+    for (const agent of agents) {
+      agent.destroy();
+    }
+    destroyRouter();
+  };
+  return router;
 }
 
 /** Creates a Node HTTP(S) agent for explicit proxy URLs; unsupported protocols throw. */
 export function createNodeProxyAgent(
   options: Extract<CreateNodeProxyAgentOptions, { mode: "explicit" }>,
-): HttpAgent;
+): HttpsAgent;
 /** Creates a Node HTTP(S) agent from env proxy settings, or undefined when bypassed. */
 export function createNodeProxyAgent(
   options: Extract<CreateNodeProxyAgentOptions, { mode: "env" }>,
-): HttpAgent | undefined;
-export function createNodeProxyAgent(options: CreateNodeProxyAgentOptions): HttpAgent | undefined {
+): HttpsAgent | undefined;
+export function createNodeProxyAgent(options: CreateNodeProxyAgentOptions): HttpsAgent | undefined {
   if (options.mode === "explicit") {
     return createFixedNodeProxyAgent(options.proxyUrl, {
       protocol: options.protocol,
       agentOptions: options.agentOptions,
+      proxyConnect: options.proxyConnect,
     });
   }
-  return createEnvNodeProxyAgentForTarget(options.targetUrl, {
-    protocol: options.protocol,
-    agentOptions: options.agentOptions,
-  });
-}
-
-function createEnvNodeProxyAgentForTarget(
-  targetUrl: string | URL,
-  options: {
-    protocol?: NodeProxyProtocol;
-    agentOptions?: NodeProxyAgentOptions;
-  } = {},
-): HttpAgent | undefined {
-  const target = resolveEnvNodeProxyTarget(targetUrl);
+  if (options.targetUrl === undefined) {
+    return createPerRequestEnvProxyAgent(options);
+  }
+  const target = resolveEnvNodeProxyTarget(options.targetUrl);
   if (target === undefined) {
     return undefined;
   }
@@ -217,6 +278,7 @@ function createEnvNodeProxyAgentForTarget(
     protocol: options.protocol ?? target.protocol,
     proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: target.proxyUrl.href }),
     agentOptions: options.agentOptions,
+    proxyConnect: options.proxyConnect,
   });
 }
 

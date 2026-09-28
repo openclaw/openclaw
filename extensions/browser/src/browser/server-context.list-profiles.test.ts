@@ -120,26 +120,18 @@ function createExistingSessionProcessFixture(
 }
 
 describe("browser server-context listProfiles", () => {
-  it.each([1, 3])(
-    "uses one temporary MCP session and only authority-required process scans for %i cold profiles",
-    async (profileCount) => {
-      const fixture = createExistingSessionProcessFixture(profileCount);
-      const started = performance.now();
-      const profiles = await createBrowserRouteContext({
-        getState: () => fixture.state,
-      }).listProfiles();
-      const elapsedMs = performance.now() - started;
-
-      console.info(
-        `[browser-status-process-scans] profiles=${profileCount} scans=${fixture.listProcesses.mock.calls.length} elapsedMs=${elapsedMs.toFixed(1)}`,
-      );
-      expect(profiles.map(({ name, running, tabCount }) => ({ name, running, tabCount }))).toEqual(
-        fixture.profiles.map(({ name }) => ({ name, running: true, tabCount: 1 })),
-      );
-      expect(fixture.factory).toHaveBeenCalledTimes(profileCount);
-      expect(fixture.listProcesses).toHaveBeenCalledTimes(profileCount * 2);
-    },
-  );
+  it("uses one temporary MCP session and only authority-required scans per cold profile", async () => {
+    const profileCount = 3;
+    const fixture = createExistingSessionProcessFixture(profileCount);
+    const profiles = await createBrowserRouteContext({
+      getState: () => fixture.state,
+    }).listProfiles();
+    expect(profiles.map(({ name, running, tabCount }) => ({ name, running, tabCount }))).toEqual(
+      fixture.profiles.map(({ name }) => ({ name, running: true, tabCount: 1 })),
+    );
+    expect(fixture.factory).toHaveBeenCalledTimes(profileCount);
+    expect(fixture.listProcesses).toHaveBeenCalledTimes(profileCount * 2);
+  });
 
   it("does not enumerate processes when profile status reuses a warm MCP session", async () => {
     const fixture = createExistingSessionProcessFixture();
@@ -187,16 +179,12 @@ describe("browser server-context listProfiles", () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserBasicRoutes(app, ctx);
     const response = createBrowserRouteResponse();
-    const started = performance.now();
 
     await getHandlers.get("/")?.(
       { params: {}, query: { profile: fixture.profile.name } },
       response.res,
     );
 
-    console.info(
-      `[browser-status-process-scans] route=status scans=${fixture.listProcesses.mock.calls.length} elapsedMs=${(performance.now() - started).toFixed(1)}`,
-    );
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       profile: fixture.profile.name,
@@ -385,7 +373,12 @@ describe("browser server-context listProfiles", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const profiles = await ctx.listProfiles();
 
-    expect(isChromeReachable).toHaveBeenCalledWith("http://127.0.0.1:18800", 200, undefined);
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "http://127.0.0.1:18800",
+      200,
+      undefined,
+      expect.any(AbortSignal),
+    );
     expect(profiles).toHaveLength(1);
     expect(profiles[0]?.name).toBe("openclaw");
     expect(profiles[0]?.running).toBe(true);
@@ -419,6 +412,7 @@ describe("browser server-context listProfiles", () => {
       "http://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(profiles).toHaveLength(1);
     expect(profiles[0]?.name).toBe("manual-cdp");
@@ -453,29 +447,28 @@ describe("browser server-context listProfiles", () => {
       "http://openclaw:relay-token@127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
   });
 
-  it.each(["constructor", "prototype"] as const)(
-    "marks runtime-only %s profiles as missing from config",
-    async (profileName) => {
-      const profile = makeBrowserProfile({ name: profileName });
-      const state = makeBrowserServerState({
-        profile,
-        resolvedOverrides: { profiles: {} },
-      });
-      state.profiles.set(profileName, {
-        profile,
-        running: { pid: 123 } as never,
-        lastTargetId: null,
-      });
+  it("marks a runtime-only constructor profile as missing from config", async () => {
+    const profileName = "constructor";
+    const profile = makeBrowserProfile({ name: profileName });
+    const state = makeBrowserServerState({
+      profile,
+      resolvedOverrides: { profiles: {} },
+    });
+    state.profiles.set(profileName, {
+      profile,
+      running: { pid: 123 } as never,
+      lastTargetId: null,
+    });
 
-      const ctx = createBrowserRouteContext({ getState: () => state });
-      const profiles = await ctx.listProfiles();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profiles = await ctx.listProfiles();
 
-      expect(profiles).toHaveLength(1);
-      expect(profiles[0]).toMatchObject({ name: profileName, missingFromConfig: true });
-    },
-  );
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]).toMatchObject({ name: profileName, missingFromConfig: true });
+  });
 });

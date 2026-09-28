@@ -1,10 +1,11 @@
-/** Platform-specific doctor notes for macOS gateway launchd state and startup tuning. */
+/** Platform-specific doctor notes for gateway service state and startup tuning. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import {
@@ -119,15 +120,12 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
 }
 
 function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
-  const localPassword = cfg.gateway?.auth?.password;
-  const remoteToken = cfg.gateway?.remote?.token;
-  const remotePassword = cfg.gateway?.remote?.password;
-  return (
-    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults) ||
-    hasConfiguredSecretInput(localPassword, cfg.secrets?.defaults) ||
-    hasConfiguredSecretInput(remoteToken, cfg.secrets?.defaults) ||
-    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults)
-  );
+  return [
+    cfg.gateway?.auth?.token,
+    cfg.gateway?.auth?.password,
+    cfg.gateway?.remote?.token,
+    cfg.gateway?.remote?.password,
+  ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults));
 }
 
 /** Returns a warning for host-wide launchctl gateway auth env overrides. */
@@ -184,24 +182,39 @@ async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.Proces
     : baseEnv;
 }
 
-/** Collects all macOS gateway platform warnings without emitting notes. */
-export async function collectMacGatewayPlatformWarnings(
+/** Collects gateway platform warnings without emitting notes or repairing services. */
+export async function collectGatewayPlatformWarnings(
   cfg: OpenClawConfig,
 ): Promise<readonly string[]> {
-  const warnings: string[] = [];
-  const launchAgentWarning = collectMacLaunchAgentOverrideWarning();
-  if (launchAgentWarning) {
-    warnings.push(launchAgentWarning);
+  if (process.platform === "linux") {
+    if (cfg.gateway?.mode === "remote" || resolveIsNixMode()) {
+      return [];
+    }
+    const { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } =
+      await import("../daemon/service-audit.js");
+    // Unit-only audit keeps effective settings and file fallback at their owner;
+    // no executable or Gateway credentials need to be resolved for this check.
+    const audit = await auditGatewayServiceConfig({ env: process.env, command: null });
+    return audit.issues
+      .filter(
+        (issue) =>
+          issue.code === SERVICE_AUDIT_CODES.systemdKillModeControlGroup ||
+          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      )
+      .map((issue) =>
+        [
+          issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
+          // Structured Doctor keeps this second line in fixHint, so triage
+          // message truncation cannot discard the supported repair command.
+          `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
+        ].join("\n"),
+      );
   }
-  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
-  if (staleUpdateWarning) {
-    warnings.push(staleUpdateWarning);
-  }
-  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
-  if (launchctlWarning) {
-    warnings.push(launchctlWarning);
-  }
-  return warnings;
+  return [
+    collectMacLaunchAgentOverrideWarning(),
+    await collectMacStaleOpenClawUpdateLaunchdJobsWarning(),
+    await collectMacLaunchctlGatewayEnvOverrideWarning(cfg),
+  ].filter((warning): warning is string => Boolean(warning));
 }
 
 function isTmpCompileCachePath(cachePath: string): boolean {

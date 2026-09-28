@@ -23,7 +23,11 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
-import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
+import {
+  createInferenceReadyClientHarness,
+  createCodexInferenceReadResponses,
+  waitForHarnessRequest,
+} from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -38,11 +42,16 @@ async function stopTaskOwnedProcess(pid: number): Promise<void> {
   await expect.poll(() => isPidAlive(pid), { timeout: 2_000 }).toBe(false);
 }
 
-function runOneShot(client: CodexAppServerClient, abortSignal?: AbortSignal) {
+function runOneShot(
+  client: CodexAppServerClient,
+  abortSignal?: AbortSignal,
+  onExecutionPhase?: ReturnType<typeof createParams>["onExecutionPhase"],
+) {
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
   params.oneShotCliRun = true;
   params.cleanupBundleMcpOnRunEnd = true;
+  params.onExecutionPhase = onExecutionPhase;
   if (abortSignal) {
     params.abortSignal = abortSignal;
   }
@@ -63,13 +72,16 @@ describe("Codex one-shot cleanup receipts", () => {
   it.each(["completed", "cancelled"] as const)(
     "preserves a %s one-shot outcome while native terminal cleanup remains uncertain",
     async (completion) => {
+      // Cold startup must not consume the unrelated attempt deadline in this cleanup fixture.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const turnAccepted = createDeferred<void>();
       let terminalTerminated = false;
       const results: Record<string, unknown> = {
         initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
         "thread/start": threadStartResult(),
         "turn/start": turnStartResult(),
       };
-      const harness = createClientHarness({
+      const harness = createInferenceReadyClientHarness({
         onWrite: (line, send) => {
           const request = JSON.parse(line) as { id?: number; method: string };
           if (request.id === undefined) {
@@ -86,26 +98,38 @@ describe("Codex one-shot cleanup receipts", () => {
           if (request.method === "turn/interrupt") {
             send({
               method: "turn/completed",
-              params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "interrupted", items: [] },
+              },
             });
           }
         },
       });
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       const abort = new AbortController();
-      const run = runOneShot(harness.client, abort.signal);
+      const run = runOneShot(harness.client, abort.signal, ({ phase }) => {
+        if (phase === "turn_accepted") {
+          turnAccepted.resolve();
+        }
+      });
       try {
-        await waitForHarnessRequest(harness, "turn/start");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await Promise.race([
+          turnAccepted.promise,
+          run.then(() => {
+            throw new Error("One-shot fixture attempt ended before turn acceptance");
+          }),
+        ]);
         if (completion === "cancelled") {
           abort.abort("cancelled");
           expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
         } else {
           harness.send({
             method: "turn/completed",
-            params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+            params: {
+              threadId: "thread-1",
+              turn: { id: "turn-1", status: "completed", items: [] },
+            },
           });
           expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
         }
@@ -123,7 +147,7 @@ describe("Codex one-shot cleanup receipts", () => {
   it.each(["active lease", "missing entry"] as const)(
     "records uncertain one-shot cleanup when shared retirement is refused: %s",
     async (reason) => {
-      const harness = createClientHarness();
+      const harness = createInferenceReadyClientHarness();
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       let releasePeer: (() => void) | undefined;
       const run = runOneShot(harness.client);
@@ -143,7 +167,7 @@ describe("Codex one-shot cleanup receipts", () => {
         }
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
         });
         const terminals = await waitForHarnessRequest(harness, "thread/backgroundTerminals/list");
         harness.send({ id: terminals.id, result: { data: [], nextCursor: null } });
@@ -202,7 +226,7 @@ ${shutdown === "retired-command" ? 'await new Promise(resolve => descendant.once
 descendant.unref();
 const results = ${JSON.stringify({
           initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
-          "config/read": { config: {}, origins: {}, layers: [] },
+          ...createCodexInferenceReadResponses(),
           "configRequirements/read": { requirements: null },
           "thread/start": threadStartResult(),
           "turn/start": turnStartResult(),
@@ -213,7 +237,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   if (request.method === "test/complete") {
     ${shutdown === "retired-command" ? 'send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "retired-command", command: "fixture", cwd: process.cwd(), status: "completed", exitCode: 0, aggregatedOutput: "" } } });' : ""}
-    send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } });
+    send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } } });
   } else if (request.id !== undefined) {
     send({ id: request.id, result: results[request.method] ?? {} });
     if (request.method === "turn/start") {

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import { normalizeMemoryCoreWorkspaceKey } from "../dreaming-state.js";
 // Doctor enumeration cold-loads this closure; memory-host-events pulls the
 // event-store/kysely graph, so the path resolver loads lazily in async bodies.
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
@@ -29,15 +30,10 @@ export type ReadyLegacyMemoryHostEventSource = Extract<
   { kind: "ready" }
 >;
 
-function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 export function memoryHostWorkspacePrefix(workspaceDir: string): string {
   return crypto
     .createHash("sha256")
-    .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
+    .update(normalizeMemoryCoreWorkspaceKey(workspaceDir))
     .digest("hex")
     .slice(0, 24);
 }
@@ -68,19 +64,14 @@ export async function collectLegacyMemoryHostEventSources(
       filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
       const relativePath = path.relative(canonicalWorkspaceDir, filePath);
       const directoryRelativePath = path.dirname(relativePath);
-      if (!(await workspaceRoot.exists(directoryRelativePath))) {
-        continue;
-      }
-      const directoryStat = await workspaceRoot.stat(directoryRelativePath);
-      if (!directoryStat.isDirectory) {
-        continue;
-      }
       const baseName = path.basename(relativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       const archivePattern = new RegExp(`^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?$`, "u");
       const claimPattern = new RegExp(
         `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
         "u",
       );
+      // Discover names before containment checks: shared notes without legacy
+      // events need no repair. Each actual source still goes through guarded stat/read.
       const entries = await fs.readdir(path.join(workspaceRoot.rootReal, directoryRelativePath));
       const candidates: Array<{
         entry: string;

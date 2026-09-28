@@ -29,8 +29,8 @@ export type RuntimeAuthProfileStoreMutationOwner =
 
 // Runtime snapshots are keyed by the canonical database path so default-agent
 // and per-agent stores do not overwrite each other.
-export function resolveRuntimeStoreKey(agentDir?: string): string {
-  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
+export function resolveRuntimeStoreKey(agentDir?: string, env?: NodeJS.ProcessEnv): string {
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
 function maxMutationRevision(record: PersistedMutationRecord): number {
@@ -100,6 +100,18 @@ function setProfileMutationRevision(
 
 function getPersistedMutationRecord(ownerKey: string): PersistedMutationRecord | undefined {
   return persistedMutationRecords.get(ownerKey);
+}
+
+/** All persisted rows, including usage state, follow their exact owner's write generation. */
+export function getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
+  ownerKey: string,
+  scope: "rows" | "credentials" = "rows",
+): number {
+  const record = getPersistedMutationRecord(ownerKey);
+  if (record && scope === "credentials") {
+    return Math.max(record.credentialRevision, record.profileSetRevision, record.mutationFloor);
+  }
+  return record ? maxMutationRevision(record) : evictedOwnerMutationFloor;
 }
 
 export function recordRuntimeAuthProfileStorePersistedMutation(

@@ -102,9 +102,61 @@ pnpm qa:lab:up
 
 Builds the QA site, starts the Docker-backed gateway + QA Lab stack, and prints the QA Lab URL. From there you can pick scenarios, choose the model lane, launch individual runs, and watch results live. The QA Lab debugger is separate from the shipped Control UI bundle.
 
+## Installed-candidate fixtures
+
+Private QA plugins remain excluded from the public OpenClaw package. To exercise
+an installed candidate, build their Gateway-only artifacts in a separate fixture
+workspace. The fixture profile keeps QA Lab's Gateway hooks, tools and providers,
+but leaves its scenario runner and CLI in the tooling checkout. QA Channel carries
+its pure bus protocol implementation; public SDK imports still belong to the
+installed candidate.
+
+From a complete, dependency-ready tooling checkout at the committed revision
+being tested:
+
+```bash
+fixture_root="$(mktemp -d)"
+git archive HEAD extensions/qa-lab extensions/qa-channel | tar -x -C "$fixture_root"
+mkdir "$fixture_root/artifacts"
+
+for plugin in qa-lab qa-channel; do
+  node scripts/lib/plugin-npm-runtime-build.mjs \
+    "$fixture_root/extensions/$plugin" --qa-gateway-fixture
+  OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+    node scripts/lib/plugin-npm-package-manifest.mjs \
+    --run "$fixture_root/extensions/$plugin" --qa-gateway-fixture -- \
+    npm pack --pack-destination "$fixture_root/artifacts"
+done
+```
+
+The builder writes only the copied packages' `dist` directories. The manifest
+owner restores their source metadata after packing and includes the canonical
+QA Channel config schema. Dependency bundling is required for this portable
+fixture recipe: the profile alone does not install or bundle `typebox` and `zod`.
+Do not copy checkout `node_modules` links or overwrite another run's generated
+plugin output.
+
+Use the existing `runQaSuite` API with the tooling checkout as `repoRoot` and an
+explicit `sutOpenClawCommand` pointing to the installed candidate's runtime and
+`dist/index.js`, with `usePackagedPlugins: true`. Extract the reviewed artifacts
+into an isolated fixture directory and add those package paths through the API's
+`mutateConfig` callback to `plugins.load.paths`, preserving the other config
+fields. That callback runs for each fresh child before the candidate performs
+its own auth bootstrap and update repair. Local origin and capability-consent
+rules still apply; fixtures do not acquire official package trust.
+
+Keep the installed package unchanged. Do not set `OPENCLAW_DEV_SOURCE_ROOT` or
+replace its bundled plugin/SDK roots with the tooling checkout. Record both
+revisions and verify fixture peer/API requirements and emitted host imports
+against the **installed candidate**, not just the tooling version. Required
+proof includes actual candidate Gateway/CLI images, candidate-owned SDK
+resolution, the unchanged scenario results and complete child cleanup. A source
+QA pass alone does not establish installed-package compatibility.
+
 ## Related
 
 - [QA overview](/concepts/qa-e2e-automation) - overall stack, transport adapters, the Matrix live lane, and scenario authoring
+- [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack) - the scenario pack that runs on this channel
 - [Pairing](/channels/pairing)
 - [Groups](/channels/groups)
 - [Channels overview](/channels)

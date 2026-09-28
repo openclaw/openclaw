@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
   terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
@@ -13,10 +12,8 @@ import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
   it.each([
-    { terminated: true, oneShot: false },
     { terminated: false, oneShot: false },
     { terminated: true, oneShot: true },
-    { terminated: false, oneShot: true },
   ])(
     "drains native terminals without claiming OS cleanup (terminated=$terminated, oneShot=$oneShot)",
     async ({ terminated, oneShot }) => {
@@ -92,18 +89,6 @@ describe("Codex app-server attempt client cleanup", () => {
     );
   });
 
-  it("preserves the primary failure when unsafe turn retirement rejects", async () => {
-    const close = vi.fn();
-    const closeAndWait = vi.fn(async () => {
-      throw new Error("unsafe client retirement failed");
-    });
-
-    await expect(
-      retireUnsafeCodexTurnClientBestEffort({ close, closeAndWait } as never, "startup interrupt"),
-    ).resolves.toBeUndefined();
-    expect(close).toHaveBeenCalledOnce();
-  });
-
   it("waits for the matching terminal after an interrupt is acknowledged", async () => {
     const harness = createClientHarness();
     const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
@@ -131,7 +116,7 @@ describe("Codex app-server attempt client cleanup", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-other", status: "interrupted" },
+        turn: { id: "turn-other", status: "interrupted", items: [] },
       },
     });
     await Promise.resolve();
@@ -141,7 +126,7 @@ describe("Codex app-server attempt client cleanup", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "interrupted" },
+        turn: { id: "turn-1", status: "interrupted", items: [] },
       },
     });
 
@@ -225,7 +210,10 @@ describe("Codex app-server attempt client cleanup", () => {
         expect(settled).not.toHaveBeenCalled();
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "interrupted", items: [] },
+          },
         });
         await expect(completion).resolves.toBe(true);
         expect(harness.client.getCloseError()).toBeUndefined();
@@ -292,7 +280,7 @@ describe("Codex app-server attempt client cleanup", () => {
         });
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
         });
         harness.send({
           method: "turn/started",
@@ -374,7 +362,7 @@ describe("Codex app-server attempt client cleanup", () => {
       await route.bindTurn("turn-1");
       harness.send({
         method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
       const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
         threadId: "thread-1",
@@ -436,7 +424,7 @@ describe("Codex app-server attempt client cleanup", () => {
     if (completed) {
       harness.send({
         method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
     }
 

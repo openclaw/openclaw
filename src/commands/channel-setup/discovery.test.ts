@@ -1,13 +1,16 @@
 // Channel setup discovery tests cover visible setup choices from bundled, installed, and trusted catalog sources.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
+import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 
 const listPluginContributionIds = vi.hoisted(() =>
   vi.fn((_index?: unknown, _contribution?: unknown, _options?: unknown): string[] => []),
 );
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
-const listChatChannels = vi.hoisted(() => vi.fn((): Array<Record<string, string>> => []));
+const listChatChannels = vi.hoisted(() =>
+  vi.fn<typeof import("../../channels/chat-meta.js").listChatChannels>(() => []),
+);
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn<(args: { config: unknown; env?: NodeJS.ProcessEnv }) => PluginAutoEnableResult>(
     ({ config }) => ({
@@ -34,6 +37,10 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 
 vi.mock("../../channels/chat-meta.js", () => ({
   listChatChannels: () => listChatChannels(),
+}));
+
+vi.mock("../../secrets/channel-env-vars.js", () => ({
+  getChannelEnvVars: () => [],
 }));
 
 import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./discovery.js";
@@ -130,29 +137,41 @@ describe("listManifestInstalledChannelIds", () => {
     expect(resolved.entries.map((entry) => entry.id)).toEqual(["telegram"]);
   });
 
-  it("preserves bundled channel display metadata when installed setup plugins omit it", () => {
+  it("preserves source precedence and catalog metadata across setup views", () => {
     listChatChannels.mockReturnValue([
-      {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "bot token",
-      },
+      makeMeta("telegram", "Telegram", { blurb: "bot token" }),
+      makeMeta("matrix", "Matrix"),
+    ]);
+    const bundledCatalog = makeCatalogEntry("matrix", "Catalog Matrix");
+    const installedCatalog = makeCatalogEntry("installed-chat", "Installed Chat", {
+      meta: makeMeta("installed-chat", "Installed Chat", {
+        aliases: ["installed"],
+        detailLabel: "Installed Chat Bot",
+        selectionDocsPrefix: "",
+      }),
+    });
+    const installableCatalog = makeCatalogEntry("installable-chat", "Installable Chat");
+    listPluginContributionIds.mockReturnValue(["matrix", "installed-chat"]);
+    listChannelPluginCatalogEntries.mockReturnValue([
+      makeCatalogEntry("telegram", "Catalog Telegram"),
+      bundledCatalog,
+      installedCatalog,
+      installableCatalog,
     ]);
 
     const resolved = resolveChannelSetupEntries({
-      cfg: {} as never,
+      cfg: {},
       installedPlugins: [
         {
           id: "telegram",
           meta: {
             id: "telegram",
+            selectionLabel: "Telegram setup",
           },
         } as never,
       ],
       workspaceDir: "/tmp/workspace",
-      env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
+      env: { OPENCLAW_HOME: "/tmp/home" },
     });
 
     expect(resolved).toStrictEqual({
@@ -162,16 +181,22 @@ describe("listManifestInstalledChannelIds", () => {
           meta: {
             id: "telegram",
             label: "Telegram",
-            selectionLabel: "Telegram",
+            selectionLabel: "Telegram setup",
             blurb: "bot token",
             docsPath: "/channels/telegram",
           },
         },
+        { id: "matrix", meta: makeMeta("matrix", "Matrix") },
+        { id: "installed-chat", meta: installedCatalog.meta },
+        { id: "installable-chat", meta: installableCatalog.meta },
       ],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
+      installedCatalogEntries: [bundledCatalog, installedCatalog],
+      installableCatalogEntries: [installableCatalog],
+      installedCatalogById: new Map([
+        ["matrix", bundledCatalog],
+        ["installed-chat", installedCatalog],
+      ]),
+      installableCatalogById: new Map([["installable-chat", installableCatalog]]),
     });
   });
 });

@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import {
   AgentSharedStoreOwnerError,
   assertAgentSessionStoreDeletionSafe,
@@ -42,8 +41,13 @@ import {
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
-import { filterReferencedCleanup, projectClawPackageRemovePlan } from "./package-remove-plan.js";
-import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
+import { applyClawPackageRemovalPhase } from "./package-remove-phase.js";
+import {
+  filterReferencedCleanup,
+  projectClawPackageRemovePlan,
+  digestClawRemovalState,
+} from "./package-remove-plan.js";
+import { planClawPackageRemovals } from "./package-remove.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
 export { ClawRemoveError } from "./lifecycle-delete-support.js";
@@ -408,9 +412,7 @@ export async function buildClawRemovePlan(
     stability: CLAW_OUTPUT_STABILITY,
     dryRun: true,
     mutationAllowed: false,
-    planIntegrity: `sha256:${createHash("sha256")
-      .update(stableStringify(planIdentity))
-      .digest("hex")}`,
+    planIntegrity: digestClawRemovalState(planIdentity),
     target,
     ...(record ? { agentId: record.install.agentId } : {}),
     actions,
@@ -617,18 +619,19 @@ export async function applyClawRemovePlan(
           "Session cleanup failed; correct the reported error and retry Claw removal.",
         );
       }
-      result.packages = await applyClawPackageRemovals(
-        packageDecisions.toSorted(
-          (left, right) =>
-            Number(left.packageRef.relationship === "referenced") -
-            Number(right.packageRef.relationship === "referenced"),
-        ),
-        {
+      try {
+        const removed = await applyClawPackageRemovalPhase(packageDecisions, {
           ...options,
-          deps: options.packageDeps,
+          agentId,
+          operationId: configRemoval.operationId,
           assertCurrent,
-        },
-      );
+        });
+        result.packages = removed.packages;
+        result.pluginRuntime = removed.application;
+        result.warnings = removed.warnings;
+      } catch (error) {
+        return partial("package_cleanup_failed", coerceErrorMessage(error));
+      }
       assertCurrent();
       const packageErrors = result.packages.filter((pkg) => pkg.action === "error");
       if (packageErrors.length > 0) {

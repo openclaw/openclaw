@@ -1,4 +1,3 @@
-// Feishu plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -42,15 +41,7 @@ function resolveFeishuRequesterConversation(params: {
   if (requesterSessionKey) {
     const existingBindings = manager.listBySessionKey(requesterSessionKey);
     if (existingBindings.length === 1) {
-      const existing = existingBindings.at(0);
-      if (existing === undefined) {
-        return null;
-      }
-      return {
-        accountId: existing.accountId,
-        conversationId: existing.conversationId,
-        parentConversationId: existing.parentConversationId,
-      };
+      return existingBindings[0]!;
     }
     if (existingBindings.length > 1) {
       if (rawTo && normalizedTarget && !threadId && !isChatTarget) {
@@ -61,15 +52,7 @@ function resolveFeishuRequesterConversation(params: {
             !entry.parentConversationId,
         );
         if (directMatches.length === 1) {
-          const existing = directMatches.at(0);
-          if (existing === undefined) {
-            return null;
-          }
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
+          return directMatches[0]!;
         }
         return null;
       }
@@ -85,46 +68,14 @@ function resolveFeishuRequesterConversation(params: {
           );
         });
         if (matchingTopicBindings.length === 1) {
-          const existing = matchingTopicBindings.at(0);
-          if (existing === undefined) {
-            return null;
-          }
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
-        }
-        const senderScopedTopicBindings = matchingTopicBindings.filter((entry) => {
-          const parsed = parseFeishuConversationId({
-            conversationId: entry.conversationId,
-            parentConversationId: entry.parentConversationId,
-          });
-          return parsed?.scope === "group_topic_sender";
-        });
-        if (
-          senderScopedTopicBindings.length === 1 &&
-          matchingTopicBindings.length === senderScopedTopicBindings.length
-        ) {
-          const existing = senderScopedTopicBindings.at(0);
-          if (existing === undefined) {
-            return null;
-          }
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
+          return matchingTopicBindings[0]!;
         }
         return null;
       }
     }
   }
 
-  if (!rawTo) {
-    return null;
-  }
-  if (!normalizedTarget) {
+  if (!rawTo || !normalizedTarget) {
     return null;
   }
 
@@ -287,13 +238,7 @@ export function handleFeishuSubagentDeliveryTarget(
   }
 
   return {
-    origin: resolveFeishuDeliveryOrigin({
-      conversationId: binding.conversationId,
-      parentConversationId: binding.parentConversationId,
-      accountId: binding.accountId,
-      deliveryTo: binding.deliveryTo,
-      deliveryThreadId: binding.deliveryThreadId,
-    }),
+    origin: resolveFeishuDeliveryOrigin(binding),
   };
 }
 

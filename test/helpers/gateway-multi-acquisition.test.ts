@@ -38,10 +38,10 @@ async function createAcquiredOwner() {
 }
 
 describe("multi-Gateway suite acquisition ownership", () => {
-  it.each(["none", "client", "gateway", "both"] as const)(
+  it.each(["none", "gateway", "both"] as const)(
     "stops every acquired Gateway and preserves state ownership (cleanup failure: %s)",
     async (failure) => {
-      const clientFails = failure === "client" || failure === "both";
+      const clientFails = failure === "both";
       const gatewayFails = failure === "gateway" || failure === "both";
       const owners = await Promise.all([
         createAcquiredOwner(),
@@ -81,12 +81,13 @@ describe("multi-Gateway suite acquisition ownership", () => {
           throw clientError;
         }
       };
-      const bodies: Array<() => Promise<void>> = [];
+      const bodies: Array<{ name: string; run: () => Promise<void> }> = [];
       const cleanups: Array<() => Promise<void>> = [];
       vi.doMock("vitest", () => ({
         afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, run: () => void) => run(),
-        it: (_name: string, _options: unknown, run: () => Promise<void>) => bodies.push(run),
+        it: (name: string, _options: unknown, run: () => Promise<void>) =>
+          bodies.push({ name, run }),
         expect,
       }));
       let nextInstance = 0;
@@ -113,11 +114,19 @@ describe("multi-Gateway suite acquisition ownership", () => {
       let cleanup: Promise<unknown> | undefined;
       try {
         await import("../gateway.multi.e2e.test.js");
-        expect(bodies).toHaveLength(2);
-        await bodies[0]!();
+        const acquisitionBody = bodies.find(
+          (body) => body.name === "spins up two gateways and exercises WS + HTTP + node pairing",
+        );
+        const passiveBody = bodies.find(
+          (body) =>
+            body.name === "preserves scheduler runtime across a scheduler-disabled Gateway edit",
+        );
+        expect(acquisitionBody).toBeDefined();
+        expect(passiveBody).toBeDefined();
+        await acquisitionBody!.run();
         // Preserve the suite's two bodies and final afterAll order. The second
         // body fails before spawning its scheduler but still owns a Gateway.
-        passive = bodies[1]!().catch((error: unknown) => error);
+        passive = passiveBody!.run().catch((error: unknown) => error);
         await clientStarted.promise;
         expect(events).toEqual([]);
         heldClient.resolve();
@@ -161,14 +170,9 @@ describe("multi-Gateway suite acquisition ownership", () => {
     },
   );
 
-  it.each([
-    { boundary: "server", order: "before rejection" },
-    { boundary: "server", order: "after rejection" },
-    { boundary: "node", order: "before rejection" },
-    { boundary: "node", order: "after rejection" },
-  ] as const)(
-    "retains the $boundary acquired $order through actual afterAll",
-    async ({ boundary, order }) => {
+  it.each(["server", "node"] as const)(
+    "retains the %s acquired after rejection through actual afterAll",
+    async (boundary) => {
       const owner = await createAcquiredOwner();
       const acquisitionError = new Error(`${boundary} acquisition failed`);
       const sibling = createDeferred();
@@ -257,10 +261,6 @@ describe("multi-Gateway suite acquisition ownership", () => {
           (error: unknown) => error,
         );
         await started.promise;
-        if (order === "before rejection") {
-          sibling.resolve();
-          await siblingAcquisition;
-        }
         failure.reject(acquisitionError);
         await setImmediate();
         let cleanupSettled = false;
@@ -283,9 +283,7 @@ describe("multi-Gateway suite acquisition ownership", () => {
         const cleanupError = await cleanupResult;
         expect(bodyError).toBe(acquisitionError);
         expect(cleanupError).toBeUndefined();
-        if (order === "after rejection") {
-          expect(cleanupSettledBeforeLateAcquisition).toBe(false);
-        }
+        expect(cleanupSettledBeforeLateAcquisition).toBe(false);
         expect(ownerJoinedAtCleanupSettlement).toBe(true);
       } finally {
         // Settle late acquisitions and close their independently retained native

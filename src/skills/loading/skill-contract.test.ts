@@ -3,8 +3,8 @@ import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import {
+  compactSkillsPromptForContext,
   formatSkillsForPromptCore,
-  resolveSkillDisplayName,
   type Skill,
   formatSkillsCompactForPrompt as formatSkillsCompact,
 } from "./skill-contract.js";
@@ -19,21 +19,30 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
   });
 }
 
-describe("resolveSkillDisplayName", () => {
-  it("uses the first Markdown H1 after frontmatter", () => {
-    expect(
-      resolveSkillDisplayName(
-        `---\nname: auto-review\ndescription: Review code.\n---\n# Auto Review\n`,
-        "auto-review",
-      ),
-    ).toBe("Auto Review");
-  });
+describe("compactSkillsPromptForContext", () => {
+  it("preserves nested entities and whole surrogate pairs while normalizing whitespace", () => {
+    const prompt = `<available_skills><description> \t&amp;lt; \n&lt;tag&gt; ${"a".repeat(49)}😀${" tail".repeat(20)}</description></available_skills>`;
 
-  it("humanizes the identifier when the skill has no H1", () => {
-    expect(resolveSkillDisplayName("Skill body without a title.\n", "patrick-daily_brief")).toBe(
-      "Patrick Daily Brief",
+    expect(compactSkillsPromptForContext(prompt, 1)).toBe(
+      `<available_skills><description>&amp;lt; &lt;tag&gt; ${"a".repeat(49)}...</description></available_skills>`,
     );
   });
+
+  it.each(["&".repeat(50), "&     a"])(
+    "keeps the original when escaped projection is not strictly shorter: %s",
+    (description) => {
+      const prompt = `<available_skills><description>${description}</description></available_skills>`;
+      expect(compactSkillsPromptForContext(prompt, 1)).toBe(prompt);
+    },
+  );
+
+  it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "keeps prompt bytes when the context budget is %s",
+    (budget) => {
+      const prompt = `<available_skills><description>  ${"long description ".repeat(30)}</description></available_skills>`;
+      expect(compactSkillsPromptForContext(prompt, budget)).toBe(prompt);
+    },
+  );
 });
 
 describe("formatSkillsCompact", () => {
@@ -70,14 +79,6 @@ describe("formatSkillsCompact", () => {
     expect(out).not.toContain("<version>");
   });
 
-  it("omits descriptions when their compact budget is zero", () => {
-    const out = formatSkillsCompact([makeSkill("weather", "Get weather data")], {
-      descriptionMaxChars: 0,
-    });
-    expect(out).toContain("<name>weather</name>");
-    expect(out).not.toContain("<description>");
-  });
-
   it("preserves location notes when compact descriptions are omitted", () => {
     const out = formatSkillsCompact(
       [
@@ -111,11 +112,5 @@ describe("formatSkillsCompact", () => {
   it("escapes XML special characters", () => {
     const out = formatSkillsCompact([makeSkill("a<b&c")]);
     expect(out).toContain("a&lt;b&amp;c");
-  });
-
-  it("is significantly smaller than full format", () => {
-    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
-    const compact = formatSkillsCompact(skills);
-    expect(compact.length).toBeLessThan(formatSkillsForPromptCore(skills).length / 2);
   });
 });

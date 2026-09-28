@@ -5,10 +5,14 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   API_KEY_FIELD,
   SET_RUNTIME_API_KEY_FIELD,
   imageRuntimeMocks,
+  imageRequestDefaults,
+  mockImageModel,
+  imageCompletion,
   imageTestFetchWithSsrFGuardMock,
   installImageRuntimeTestHooks,
   preparedAuthStorage,
@@ -57,15 +61,10 @@ describe("describeImageWithModelCore", () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const authStore = { version: 1, profiles: {} };
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "minimax-portal",
       model: "MiniMax-VL-01",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
       authStore,
     });
 
@@ -147,14 +146,9 @@ describe("describeImageWithModelCore", () => {
     });
 
     await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "minimax-portal",
       model: "MiniMax-VL-01",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      timeoutMs: 1000,
     });
 
     const guardedOptions = requireRecord(
@@ -177,14 +171,9 @@ describe("describeImageWithModelCore", () => {
     unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("test-token");
 
     await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "minimax-portal",
       model: "MiniMax-VL-01",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      timeoutMs: 1000,
     });
 
     expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
@@ -199,34 +188,20 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "minimax-portal",
-        id: "custom-vision",
-        input: ["text", "image"],
-        baseUrl: "https://api.minimax.io/anthropic",
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "anthropic-messages",
+    mockImageModel({
       provider: "minimax-portal",
-      model: "custom-vision",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "generic ok" }],
+      id: "custom-vision",
+      baseUrl: "https://api.minimax.io/anthropic",
     });
+    completeMock.mockResolvedValue(
+      imageCompletion("anthropic-messages", "minimax-portal", "custom-vision", "generic ok"),
+    );
 
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "minimax-portal",
       model: "custom-vision",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
@@ -269,35 +244,26 @@ describe("describeImageWithModelCore", () => {
       }
       return key;
     });
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "amazon-bedrock",
-        id: "us.anthropic.claude-sonnet-4-6-v1",
-        input: ["text", "image"],
-        api: "bedrock-converse-stream",
-        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "bedrock-converse-stream",
+    mockImageModel({
       provider: "amazon-bedrock",
-      model: "us.anthropic.claude-sonnet-4-6-v1",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "an orange tabby cat" }],
+      id: "us.anthropic.claude-sonnet-4-6-v1",
+      api: "bedrock-converse-stream",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
     });
+    completeMock.mockResolvedValue(
+      imageCompletion(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "us.anthropic.claude-sonnet-4-6-v1",
+        "an orange tabby cat",
+      ),
+    );
 
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "amazon-bedrock",
       model: "us.anthropic.claude-sonnet-4-6-v1",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
@@ -325,16 +291,11 @@ describe("describeImageWithModelCore", () => {
 
     await expect(
       describeImageWithModelCore({
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+        ...imageRequestDefaults(),
         workspaceDir: "/tmp/openclaw-workspace",
         provider: "minimax-portal",
         model: "MiniMax-VL-01",
-        buffer: Buffer.from("png-bytes"),
-        fileName: "image.png",
-        mime: "image/png",
         prompt: "Describe the image.",
-        timeoutMs: 1000,
       }),
     ).resolves.toEqual({
       text: "portal ok",
@@ -363,6 +324,7 @@ describe("describeImageWithModelCore", () => {
 
     await expect(
       describeImageWithModelCore({
+        ...imageRequestDefaults(),
         cfg: {
           models: {
             providers: {
@@ -374,14 +336,9 @@ describe("describeImageWithModelCore", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         provider: "minimax-cn",
         model: "MiniMax-VL-01",
-        buffer: Buffer.from("png-bytes"),
-        fileName: "image.png",
-        mime: "image/png",
         prompt: "Describe the image.",
-        timeoutMs: 1000,
       }),
     ).resolves.toEqual({
       text: "portal ok",
@@ -409,6 +366,7 @@ describe("describeImageWithModelCore", () => {
 
     await expect(
       describeImageWithModelCore({
+        ...imageRequestDefaults(),
         cfg: {
           models: {
             providers: {
@@ -424,14 +382,9 @@ describe("describeImageWithModelCore", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         provider: "minimax-cn",
         model: "MiniMax-VL-01",
-        buffer: Buffer.from("png-bytes"),
-        fileName: "image.png",
-        mime: "image/png",
         prompt: "Describe the image.",
-        timeoutMs: 1000,
       }),
     ).resolves.toEqual({
       text: "portal ok",
@@ -459,6 +412,7 @@ describe("describeImageWithModelCore", () => {
 
     await expect(
       describeImageWithModelCore({
+        ...imageRequestDefaults(),
         cfg: {
           models: {
             providers: {
@@ -466,14 +420,9 @@ describe("describeImageWithModelCore", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         provider: "minimax-cn",
         model: "MiniMax-VL-01",
-        buffer: Buffer.from("png-bytes"),
-        fileName: "image.png",
-        mime: "image/png",
         prompt: "Describe the image.",
-        timeoutMs: 1000,
       }),
     ).resolves.toEqual({
       text: "portal ok",
@@ -485,37 +434,31 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("carries workspaceDir through image model and stream resolution", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "google",
-        id: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        input: ["text", "image"],
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
+    mockImageModel({
+      provider: "google",
+      id: "gemini-2.5-flash",
       api: "google-generative-ai",
-      provider: "google",
-      model: "gemini-2.5-flash",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "workspace ok" }],
     });
+    completeMock.mockResolvedValue(
+      imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "workspace ok"),
+    );
 
-    const result = await describeImageWithModelCore({
-      cfg: {},
-      agentId: "vision-agent",
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/openclaw-workspace",
-      provider: "google",
-      model: "gemini-2.5-flash",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Describe the image.",
-      timeoutMs: 1000,
-    });
+    const owner = new AsyncWorkScope();
+    let result: Awaited<ReturnType<typeof describeImageWithModelCore>>;
+    try {
+      result = await owner.track(() =>
+        describeImageWithModelCore({
+          ...imageRequestDefaults(),
+          agentId: "vision-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
+          provider: "google",
+          model: "gemini-2.5-flash",
+          prompt: "Describe the image.",
+        }),
+      );
+    } finally {
+      await owner.drain();
+    }
 
     expect(result.text).toBe("workspace ok");
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
@@ -525,7 +468,7 @@ describe("describeImageWithModelCore", () => {
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
-      { catalogMode: "static", abortSignal: expect.any(AbortSignal) },
+      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
     );
     expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
@@ -534,6 +477,8 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        abortSignal: expect.any(AbortSignal),
+        modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
@@ -574,26 +519,15 @@ describe("describeImageWithModelCore", () => {
         },
       }),
     );
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.4",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "normalized ok" }],
-    });
+    completeMock.mockResolvedValue(
+      imageCompletion("openai-responses", "openai", "gpt-5.4", "normalized ok"),
+    );
 
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "openai",
       model: "gpt-5.4",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
@@ -607,6 +541,8 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        abortSignal: expect.any(AbortSignal),
+        modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
@@ -619,38 +555,24 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("uses plugin stream hooks when available for image models", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "ollama",
-        id: "llava:latest",
-        api: "ollama",
-        input: ["text", "image"],
-      })),
+    mockImageModel({
+      provider: "ollama",
+      id: "llava:latest",
+      api: "ollama",
     });
     const streamResult = {
-      result: vi.fn(async () => ({
-        role: "assistant",
-        api: "ollama",
-        provider: "ollama",
-        model: "llava:latest",
-        stopReason: "stop",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "plugin vision ok" }],
-      })),
+      result: vi.fn(async () =>
+        imageCompletion("ollama", "ollama", "llava:latest", "plugin vision ok"),
+      ),
     };
     const streamFn = vi.fn(() => streamResult);
     registerProviderStreamForModelMock.mockReturnValueOnce(streamFn);
 
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "ollama",
       model: "llava:latest",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
@@ -684,17 +606,12 @@ describe("describeImageWithModelCore", () => {
         baseUrl: "http://127.0.0.1:1234",
       }),
     );
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "anthropic-messages",
-      provider: "lmstudio",
-      model: "google/gemma-4-e2b",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "local vision ok" }],
-    });
+    completeMock.mockResolvedValue(
+      imageCompletion("anthropic-messages", "lmstudio", "google/gemma-4-e2b", "local vision ok"),
+    );
 
     const result = await describeImageWithModelCore({
+      ...imageRequestDefaults(),
       cfg: {
         models: {
           providers: {
@@ -716,14 +633,9 @@ describe("describeImageWithModelCore", () => {
           },
         },
       },
-      agentDir: "/tmp/openclaw-agent",
       provider: "lmstudio",
       model: "google/gemma-4-e2b",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({

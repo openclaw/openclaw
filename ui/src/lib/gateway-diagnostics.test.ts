@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { loadGatewayDiagnostics } from "./gateway-diagnostics.ts";
 
 describe("loadGatewayDiagnostics", () => {
-  it("reads the published default view during automatic diagnostics", async () => {
+  it("reads the published default view with caller cancellation", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "models.list") {
         return { models: [] };
@@ -14,9 +14,18 @@ describe("loadGatewayDiagnostics", () => {
       return {};
     });
 
-    await loadGatewayDiagnostics({ request } as unknown as GatewayBrowserClient, "writer");
+    const controller = new AbortController();
+    await loadGatewayDiagnostics(
+      { request } as unknown as GatewayBrowserClient,
+      "writer",
+      controller.signal,
+    );
 
-    expect(request).toHaveBeenCalledWith("models.list", { view: "default", agentId: "writer" });
+    expect(request).toHaveBeenCalledWith(
+      "models.list",
+      { view: "default", agentId: "writer" },
+      { signal: controller.signal },
+    );
   });
 
   it("keeps diagnostics available without requesting models before agent selection", async () => {

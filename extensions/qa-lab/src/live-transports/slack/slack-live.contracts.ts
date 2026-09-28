@@ -1,5 +1,5 @@
-// QA Lab Slack live domain contracts and wire schemas.
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
@@ -14,21 +14,12 @@ export type SlackQaFetchFunction = NonNullable<
 >;
 type WebClient = SlackQaWebClient;
 
-export type SlackQaRuntimeEnv = {
-  channelId: string;
-  driverBotToken: string;
-  sutBotToken: string;
-  sutAppToken: string;
-};
+export type SlackQaRuntimeEnv = z.infer<typeof slackQaCredentialPayloadSchema>;
 
-export type SlackChannelStatus = {
-  connected?: boolean;
-  lastConnectedAt?: number;
-  lastDisconnect?: unknown;
-  lastError?: string | null;
-  restartPending?: boolean;
-  running?: boolean;
-};
+export type SlackChannelStatus = Pick<
+  ChannelAccountSnapshot,
+  "connected" | "lastConnectedAt" | "lastDisconnect" | "lastError" | "restartPending" | "running"
+>;
 
 export type SlackChannelReadinessMode = "connected" | "started";
 
@@ -124,6 +115,8 @@ export type SlackQaMessageScenarioRun = {
   expectReply: boolean;
   input: string;
   matchText: string;
+  /** Observation window for negative scenarios; must stay below the enclosing flow deadline. */
+  noReplyObservationMs?: number;
   preserveGatewayDebug?: boolean;
   settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
@@ -291,13 +284,6 @@ export const SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV = "OPENCLAW_QA_SLACK_APPROVAL_
 export const SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV =
   "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS";
 export const SLACK_QA_WEB_API_TIMEOUT_MS = 45_000;
-export const SLACK_QA_ENV_KEYS = [
-  "OPENCLAW_QA_SLACK_CHANNEL_ID",
-  "OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN",
-  "OPENCLAW_QA_SLACK_SUT_BOT_TOKEN",
-  "OPENCLAW_QA_SLACK_SUT_APP_TOKEN",
-] as const;
-
 export const slackQaCredentialPayloadSchema = z.object({
   channelId: z.string().trim().min(1),
   driverBotToken: z.string().trim().min(1),
@@ -321,6 +307,24 @@ export const slackPostMessageSchema = z.object({
 const slackHistoryMessageSchema = z.object({
   bot_id: z.string().optional(),
   blocks: z.array(z.unknown()).optional(),
+  files: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().optional(),
+        mimetype: z.string().optional(),
+      }),
+    )
+    .optional(),
+  reactions: z
+    .array(
+      z.object({
+        name: z.string(),
+        users: z.array(z.string()).optional(),
+        count: z.number().optional(),
+      }),
+    )
+    .optional(),
   text: z.string().optional(),
   thread_ts: z.string().optional(),
   ts: z.string().min(1),
@@ -332,6 +336,7 @@ export type SlackMessage = Omit<z.infer<typeof slackHistoryMessageSchema>, "ts">
 export const slackHistorySchema = z.object({
   ok: z.boolean().optional(),
   messages: z.array(slackHistoryMessageSchema).optional(),
+  response_metadata: z.object({ next_cursor: z.string().optional() }).optional(),
 });
 
 export const slackRepliesSchema = z.object({

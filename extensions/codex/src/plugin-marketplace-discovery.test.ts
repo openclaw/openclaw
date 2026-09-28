@@ -19,7 +19,11 @@ function catalog(name: string, pluginName: string, path?: string): v2.PluginList
             enabled: false,
             installPolicy: "AVAILABLE",
             authPolicy: "ON_USE",
-            interface: { shortDescription: "Summarize\nsource code" },
+            interface: {
+              displayName: "Security\nReview",
+              developerName: "Example\u0000Labs",
+              shortDescription: "Summarize\nsource code",
+            },
           },
         ],
       },
@@ -53,7 +57,11 @@ describe("Codex marketplace plugin discovery", () => {
       "security-review@company-tools",
       "workspace-review@workspace-directory",
     ]);
-    expect(result.plugins[0]?.description).toBe("Summarize source code");
+    expect(result.plugins[0]).toMatchObject({
+      displayName: "Security Review",
+      developerName: "Example Labs",
+      description: "Summarize source code",
+    });
   });
 
   it("preserves authorized workspace catalogs when another supplemental category fails", async () => {
@@ -91,9 +99,23 @@ describe("Codex marketplace plugin discovery", () => {
       pluginName: "review",
       marketplaceName: "company-tools",
     });
-    expect(parseCodexPluginMarketplaceId("../review@company-tools")).toBeUndefined();
-    expect(parseCodexPluginMarketplaceId("review@../company-tools")).toBeUndefined();
-    expect(parseCodexPluginMarketplaceId("review@company@tools")).toBeUndefined();
+    expect(parseCodexPluginMarketplaceId("review.v2@company-tools")).toEqual({
+      pluginName: "review.v2",
+      marketplaceName: "company-tools",
+    });
+    for (const invalid of [
+      "../review@company-tools",
+      "review@../company-tools",
+      "review@company@tools",
+      ".@company-tools",
+      "..@company-tools",
+      ".review@company-tools",
+      "review.@company-tools",
+      "review..v2@company-tools",
+      "review@company.tools",
+    ]) {
+      expect(parseCodexPluginMarketplaceId(invalid), invalid).toBeUndefined();
+    }
   });
 
   it("derives a stable slug from summary identities when a remote display name contains spaces", async () => {
@@ -119,20 +141,23 @@ describe("Codex marketplace plugin discovery", () => {
     expect(result.warnings[0]).toContain("requires a unique identity");
   });
 
-  it("deduplicates qualified and unqualified summaries for the same trusted marketplace source", async () => {
-    const request = vi.fn(async (params: v2.PluginListParams) => {
-      const listed = catalog("company-tools", "security-review", "/repo/marketplace.json");
-      if (!params.marketplaceKinds) {
-        listed.marketplaces[0]!.plugins[0]!.id = "security-review";
-      }
-      return listed;
-    });
+  it.each(["security-review", "security-review.v2"])(
+    "deduplicates qualified and unqualified %s summaries for the same trusted marketplace source",
+    async (pluginName) => {
+      const request = vi.fn(async (params: v2.PluginListParams) => {
+        const listed = catalog("company-tools", pluginName, "/repo/marketplace.json");
+        if (!params.marketplaceKinds) {
+          listed.marketplaces[0]!.plugins[0]!.id = pluginName;
+        }
+        return listed;
+      });
 
-    const result = await discoverCodexMarketplacePlugins({ request, workspaceDir: "/repo" });
+      const result = await discoverCodexMarketplacePlugins({ request, workspaceDir: "/repo" });
 
-    expect(result.plugins.map((plugin) => plugin.id)).toEqual(["security-review@company-tools"]);
-    expect(result.warnings).toEqual([]);
-  });
+      expect(result.plugins.map((plugin) => plugin.id)).toEqual([`${pluginName}@company-tools`]);
+      expect(result.warnings).toEqual([]);
+    },
+  );
 
   it.each([
     { availability: "DISABLED_BY_ADMIN", installPolicy: "AVAILABLE" },

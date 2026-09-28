@@ -48,7 +48,7 @@ describe("runtime context prompt submission", () => {
     ).toEqual({ prompt: "[OpenClaw heartbeat poll]", modelPrompt: "Check the deployment." });
   });
 
-  it("requires producer context for runtime-only system context", () => {
+  it("requires producer context for the runtime-only continuation prompt", () => {
     const fragments = [
       { kind: "runtime-instruction" as const, text: "Continue the background task." },
     ];

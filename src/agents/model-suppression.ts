@@ -25,17 +25,6 @@ export function resolveBuiltInModelSuppressionFromManifest(params: {
   })(params);
 }
 
-/** Return true when plugin manifest metadata suppresses a built-in model entry. */
-export function shouldSuppressBuiltInModelCore(params: {
-  provider?: string | null;
-  id?: string | null;
-  baseUrl?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}) {
-  return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
-}
-
 /**
  * Return true only for unconditional manifest suppressions.
  * Inline model entries may override conditional suppressions, but not absolute

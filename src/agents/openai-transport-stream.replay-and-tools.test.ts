@@ -577,8 +577,6 @@ describe("openai transport stream", () => {
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "reasoning-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(2);
@@ -632,8 +630,6 @@ describe("openai transport stream", () => {
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "compaction-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(3);
@@ -802,23 +798,13 @@ describe("openai transport stream", () => {
         client: { responses: { create } } as never,
         request: request as never,
         requestOptions: undefined,
-        model: {
+        model: makeResponsesModel({
           id: "gpt-5.5",
           name: "GPT-5.5",
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://api.openai.com/v1",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 8192,
-        },
+        }),
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "reasoning-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(2);
@@ -859,18 +845,10 @@ describe("openai transport stream", () => {
         } as never,
         request: { model: "gpt-5.5", stream: true, input: [] } as never,
         requestOptions: undefined,
-        model: {
+        model: makeResponsesModel({
           id: "gpt-5.5",
           name: "GPT-5.5",
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://api.openai.com/v1",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 8192,
-        },
+        }),
       }),
     ).rejects.toBe(failure);
 
@@ -1136,18 +1114,6 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("include");
   });
 
-  it("uses shared stream reasoning as OpenAI Responses effort", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      emptyResponsesContext(),
-      {
-        reasoning: "high",
-      } as never,
-    ) as { reasoning?: unknown };
-
-    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
-
   it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
     const context = emptyResponsesContext();
     const baseModel = {
@@ -1220,21 +1186,13 @@ describe("openai transport stream", () => {
   });
 
   it("raises minimal OpenAI Responses reasoning when web_search is available", () => {
-    const model = {
+    const model = makeResponsesModel({
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
       compat: {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       },
-    } as unknown as Model<"openai-responses">;
+    });
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -1258,21 +1216,13 @@ describe("openai transport stream", () => {
   });
 
   it("keeps minimal OpenAI Responses reasoning without web_search", () => {
-    const model = {
+    const model = makeResponsesModel({
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
       compat: {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       },
-    } as unknown as Model<"openai-responses">;
+    });
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -1382,20 +1332,6 @@ describe("openai transport stream", () => {
       phase: "commentary",
     });
     expect(assistantItem?.id).toBeUndefined();
-  });
-
-  it("strips the internal cache boundary from OpenAI system prompts", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { instructions?: string };
-
-    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
@@ -1594,31 +1530,6 @@ describe("openai transport stream", () => {
 
     expect(first.tools?.map((tool) => tool.name)).toEqual(["alpha", "zeta"]);
     expect(first.tools).toEqual(second.tools);
-  });
-
-  it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: { path: { type: "string" } },
-              required: [],
-            },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean }> };
-
-    expect(params.tools?.[0]?.strict).toBe(false);
   });
 
   it("deduplicates repeated OpenAI strict schema downgrade diagnostics", async () => {

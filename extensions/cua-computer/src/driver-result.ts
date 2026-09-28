@@ -235,7 +235,9 @@ export async function callWindowTool(
     throw new Error("COMPUTER_STALE_OBSERVATION: computer driver generation changed during action");
   }
   adoptGeneration(state, driver.generation);
-  const refusalCode = result.errorCode ?? structuredRefusalCode(result);
+  // The SDK also puts successful diagnostic codes in errorCode.
+  const refusalCode =
+    (result.isError ? result.errorCode : undefined) ?? structuredRefusalCode(result);
   if (result.isError || refusalCode) {
     if (
       refusalCode &&

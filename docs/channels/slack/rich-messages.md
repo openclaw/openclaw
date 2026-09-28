@@ -46,11 +46,12 @@ Every native chart also carries a top-level text representation for screen
 readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
 deterministic chart data as text unless they advertise native chart support. If
-Slack rejects the chart with `invalid_blocks` during a phased rollout, OpenClaw
+Slack rejects the chart with `invalid_blocks`, OpenClaw
 removes the rejected native data blocks, keeps any sibling controls, and sends
 the complete chart representation as visible text.
 
-Slack currently accepts up to two `data_visualization` blocks per message. When
+Slack accepts at most two `data_visualization` blocks per message; its public
+reference does not document this per-message subtype limit. When
 a presentation contains more than two valid charts, OpenClaw keeps their order
 and continues native rendering in follow-up messages, with no more than two
 charts in each message.

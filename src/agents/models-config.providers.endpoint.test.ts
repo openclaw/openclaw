@@ -87,6 +87,9 @@ describe("provider endpoint source eligibility", () => {
   );
 
   it("keeps auth handles but records excluded prepared catalogs as empty", async () => {
+    const run = vi.fn(async () => ({ provider: nativeCatalog }));
+    const excludedProvider: ProviderPlugin = { ...provider, staticCatalog: { run } };
+    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([excludedProvider]);
     const prepared = await prepareImplicitProviderStaticCatalog({
       env: state.env,
       pluginMetadataSnapshot,
@@ -95,8 +98,11 @@ describe("provider endpoint source eligibility", () => {
         models: { providers: { fixture: { baseUrl: "https://proxy.example/v1", models: [] } } },
       },
     });
-    expect(prepared.providers).toEqual([provider]);
-    expect(prepared.entries).toEqual([{ provider, result: { providers: {} } }]);
+    expect(prepared.providers).toEqual([excludedProvider]);
+    expect(prepared.entries).toEqual([
+      { provider: excludedProvider, result: { providers: {} }, providerConfigs: {} },
+    ]);
+    expect(run).not.toHaveBeenCalled();
   });
   it("does not recover a generated native endpoint over an authored custom provider", async () => {
     replacePersistedPluginModelCatalogs({
@@ -167,6 +173,13 @@ describe("provider endpoint source eligibility", () => {
       providerDiscoveryProviderIds: ["alternate"],
     };
     const preparedStaticProviderCatalog = await prepareImplicitProviderStaticCatalog(params);
+    expect(preparedStaticProviderCatalog.entries).toEqual([
+      {
+        provider: aliasedProvider,
+        result: { providers: { alternate: nativeCatalog } },
+        providerConfigs: { alternate: nativeCatalog },
+      },
+    ]);
     const discovered = await resolveImplicitProviders({
       ...params,
       agentDir: state.agentDir(),
@@ -175,6 +188,22 @@ describe("provider endpoint source eligibility", () => {
     });
     expect(discovered?.alternate?.models.map((model) => model.id)).toEqual(["native-model"]);
     expect(discovered?.fixture).toBeUndefined();
+    const first = discovered?.alternate;
+    assert(first?.models[0], "Expected the selected native model");
+    first.baseUrl = "https://changed.example/v1";
+    first.models[0].name = "Changed by the first consumer";
+    const next = await resolveImplicitProviders({
+      ...params,
+      agentDir: state.agentDir(),
+      providerDiscoveryEntriesOnly: true,
+      preparedStaticProviderCatalog,
+    });
+    expect(next?.alternate?.baseUrl).toBe("https://native.example/v1");
+    expect(next?.alternate?.models[0]?.name).toBe("Native model");
+    expect(
+      preparedStaticProviderCatalog.entries[0]?.providerConfigs.alternate?.models[0]?.name,
+    ).toBe("Native model");
+    expect(nativeCatalog.models[0]?.name).toBe("Native model");
   });
   it.each([false, true])(
     "preserves an eligible shared-hook output without aliases (scoped: %s)",

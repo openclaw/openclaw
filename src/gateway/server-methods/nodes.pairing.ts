@@ -314,19 +314,28 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
               },
             )
           : null;
+      const resolved = {
+        requestId,
+        nodeId: approvedNode.nodeId,
+        decision: "approved",
+        ts: Date.now(),
+      };
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode });
+        const notified = await context.nodeRegistry.sendEventForPairingIdentity({
+          nodeId: updatedNode.nodeId,
+          connId: updatedNode.connId,
+          pairingIdentity: approved.pairingIdentity,
+          event: "node.pair.resolved",
+          payload: resolved,
+        });
+        if (!notified) {
+          context.logGateway.warn(
+            `node approval refresh was not delivered for ${approvedNode.nodeId}; the current node must republish after reconnect`,
+          );
+        }
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: approvedNode.nodeId,
-          decision: "approved",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
+      context.broadcast("node.pair.resolved", resolved, { dropIfSlow: true });
       respond(true, { requestId: approved.requestId, node: approvedNode }, undefined);
     });
   },

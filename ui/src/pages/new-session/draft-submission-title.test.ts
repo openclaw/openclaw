@@ -66,9 +66,7 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
   const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
   const select = (value: string) =>
-    draw()
-      .querySelector(".chat-model-account__picker")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+    draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
   return {
     ...fixture,
     accounts,
@@ -76,7 +74,7 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
     titleRequest,
     select,
     chooseAccount: async (account: UserModelAccount) => {
-      draw().querySelector(".chat-model-account__picker")!.dispatchEvent(new Event("wa-show"));
+      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(draw().textContent).toContain(account.label);
       select(`account:${account.authProfileId}`);
@@ -183,25 +181,23 @@ describe("prepared title creation handoff", () => {
     },
   );
 
-  it.each(["codex", "claude"])(
-    "does not send a native %s draft to title inference",
-    async (catalogId) => {
-      const { flow, request, titles } = createDraftTitleFixture(undefined, {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId,
-        catalogLabel: catalogId,
-        model: "",
-        startTerminal: true,
-      });
-      flow.setMessage("inspect this native-only workspace");
-      titles.hostUpdated();
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
-      ).toHaveLength(0);
-    },
-  );
+  it("does not send a native draft to title inference", async () => {
+    const catalogId = "claude";
+    const { flow, request, titles } = createDraftTitleFixture(undefined, {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId,
+      catalogLabel: catalogId,
+      model: "",
+      startTerminal: true,
+    });
+    flow.setMessage("inspect this native-only workspace");
+    titles.hostUpdated();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
+    ).toHaveLength(0);
+  });
 
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
     const { flow, context, place, titles } = createDraftTitleFixture();

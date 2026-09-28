@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -23,6 +24,7 @@ import {
   resolveSessionPinnedHarnessId,
 } from "../sessions/agent-harness-session-key.js";
 import type { PluginRegistryState } from "./registry-state.js";
+import type { PluginRegistry } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
@@ -35,8 +37,6 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "send",
   "sessions.abort",
   "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.branches.switch",
   "sessions.rewind",
   "sessions.fork",
@@ -58,20 +58,24 @@ const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
 ]);
 
 /** Session ownership checks loaded only when a plugin invokes an async action. */
-export function createPluginSessionOwnership(state: PluginRegistryState, pluginId: string) {
-  const { registry, registryParams } = state;
+export function createPluginSessionOwnership(
+  state: PluginRegistryState,
+  pluginId: string,
+  resolveRegistry: () => PluginRegistry = () => state.registry,
+) {
+  const { registryParams } = state;
   // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
   const currentSessionConfig = () => registryParams.runtime.config.current() as OpenClawConfig;
   const resolveHarnessRegistration = (harnessId: unknown) => {
     const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
     return normalizedHarnessId
-      ? registry.agentHarnesses.find(
+      ? resolveRegistry().agentHarnesses.find(
           (entry) => normalizeOptionalAgentRuntimeId(entry.harness.id) === normalizedHarnessId,
         )
       : undefined;
   };
   const resolveHarnessRegistrationForSessionKey = (sessionKey: string) =>
-    registry.agentHarnesses.find((entry) => {
+    resolveRegistry().agentHarnesses.find((entry) => {
       const rawHarnessId = normalizeOptionalString(entry.harness.id)?.toLowerCase();
       return (
         rawHarnessId === normalizeOptionalAgentRuntimeId(rawHarnessId) &&
@@ -260,13 +264,7 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
   }): void => {
     const agentId = normalizeOptionalString(params.agentId);
     const storePath = normalizeOptionalString(params.storePath);
-    const sessionKeys = new Set<string>();
-    for (const value of params.sessionKeys ?? []) {
-      const sessionKey = normalizeOptionalString(value);
-      if (sessionKey) {
-        sessionKeys.add(sessionKey);
-      }
-    }
+    const sessionKeys = new Set(normalizeTrimmedStringList(params.sessionKeys));
     for (const sessionKey of sessionKeys) {
       assertStoredSessionEntryOwned({
         action: params.action,
@@ -276,20 +274,8 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
       });
     }
 
-    const sessionIds = new Set<string>();
-    for (const value of params.sessionIds ?? []) {
-      const sessionId = normalizeOptionalString(value);
-      if (sessionId) {
-        sessionIds.add(sessionId);
-      }
-    }
-    const sessionFiles = new Set<string>();
-    for (const value of params.sessionFiles ?? []) {
-      const sessionFile = normalizeOptionalString(value);
-      if (sessionFile) {
-        sessionFiles.add(sessionFile);
-      }
-    }
+    const sessionIds = new Set(normalizeTrimmedStringList(params.sessionIds));
+    const sessionFiles = new Set(normalizeTrimmedStringList(params.sessionFiles));
     if (sessionIds.size === 0 && sessionFiles.size === 0) {
       return;
     }
@@ -314,9 +300,7 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
           });
         }
         const matchedSessionIds = new Set(
-          sessionKeyMatches
-            .map(({ entry }) => normalizeOptionalString(entry.sessionId))
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+          normalizeTrimmedStringList(sessionKeyMatches.map(({ entry }) => entry.sessionId)),
         );
         for (const match of entries) {
           const matchSessionId = normalizeOptionalString(match.entry.sessionId);

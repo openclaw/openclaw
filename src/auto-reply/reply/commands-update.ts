@@ -8,7 +8,7 @@ import {
   summarizeUpdateRunResponse,
 } from "../../gateway/update-run-summary.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { commandReply, defineGatewayControlCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -17,23 +17,23 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
   "/update",
   async (params) => {
     try {
+      const gatewayOptions = {
+        resolveGatewayContext:
+          readChannelContextGatewayContextResolver(params.ctx) ?? getInProcessGatewayToolContext,
+        timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
+      };
       const response = await callInProcessGatewayTool(
         "update.run",
         {
           sessionKey: params.sessionKey,
           note: "/update",
-          timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
           requester: {
             channel: params.command.channel ?? params.ctx.Provider,
             accountId: params.ctx.AccountId,
             senderId: params.command.senderId,
           },
         },
-        {
-          resolveGatewayContext:
-            readChannelContextGatewayContextResolver(params.ctx) ?? getInProcessGatewayToolContext,
-          timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
-        },
+        gatewayOptions,
       );
       const summary = summarizeUpdateRunResponse(response);
       // The Gateway sends the acknowledgement before handing off its process;
@@ -44,7 +44,18 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
       if (summary.ok && summary.acknowledgement) {
         return commandReply(summary.acknowledgement);
       }
-      const run = summary.runId ? getUpdateRun(summary.runId) : undefined;
+      if (summary.ok && summary.handoff?.status === "started") {
+        return commandReply(summary.message ?? summary.handoff.message ?? "Update started.");
+      }
+      const run = summary.runId
+        ? (
+            await callInProcessGatewayTool<{ run: UpdateRunRecord | null }>(
+              "update.runs.get",
+              { runId: summary.runId },
+              gatewayOptions,
+            )
+          ).run
+        : undefined;
       if (!run) {
         throw new Error(
           summary.message ??

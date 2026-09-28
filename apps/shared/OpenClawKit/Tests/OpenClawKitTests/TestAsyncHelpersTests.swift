@@ -1,23 +1,18 @@
 import Foundation
+import Synchronization
 import Testing
 
 private actor CompletingAsyncCondition {
+    nonisolated let clock = Mutex(Date(timeIntervalSince1970: 0))
     private(set) var completed = false
 
     func snapshot() async -> Bool {
         let snapshot = self.completed
         if snapshot { return snapshot }
 
-        // Predicate entry follows the helper's deadline construction, so this
-        // stale observation returns after that unchanged 15-second deadline.
-        let deadline = Date().addingTimeInterval(15)
-        do {
-            while Date() < deadline {
-                try await Task.sleep(nanoseconds: 10_000_000)
-            }
-        } catch {
-            return snapshot
-        }
+        // Keep time frozen until predicate entry so preemption cannot skip the first poll.
+        await Task.yield()
+        self.clock.withLock { $0.addTimeInterval(16) }
         self.completed = true
         return snapshot
     }
@@ -27,7 +22,9 @@ struct TestAsyncHelpersTests {
     @Test func `rechecks completion after an async predicate outlasts the deadline`() async throws {
         let condition = CompletingAsyncCondition()
 
-        try await waitUntil("completed async snapshot") { await condition.snapshot() }
+        try await waitUntil(
+            "completed async snapshot",
+            now: { condition.clock.withLock { $0 } }) { await condition.snapshot() }
 
         #expect(await condition.completed)
     }

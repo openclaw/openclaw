@@ -1,4 +1,3 @@
-// Voice Call plugin module implements base behavior.
 import type {
   AnswerCallInput,
   GetCallStatusInput,

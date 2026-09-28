@@ -1,15 +1,21 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
@@ -17,6 +23,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    workContext?: ChatWorkContext;
     mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
     runId: string;
@@ -29,7 +36,13 @@ export async function requestChatSend(
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
+  if (params.attachments?.length) {
+    assertUploadsEnabled(state.uploadConfig);
+  }
   const routing = resolveChatSendRouting(state, params);
+  if (chatProviderReviewRow(state, routing.sessionKey, routing.selectedAgentId)?.providerReview) {
+    throw new Error(t("chat.providerReview.pausedBody"));
+  }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
@@ -42,6 +55,7 @@ export async function requestChatSend(
     ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.workContext ? { workContext: params.workContext } : {}),
     ...(params.mentions?.length ? { mentions: params.mentions } : {}),
     ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,
@@ -59,9 +73,10 @@ export async function requestChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-export function resolveDisplayedLeafEntryId(
-  state: Pick<ChatState, "chatDisplayedLeafEntryId">,
-): string | null | undefined {
+export function resolveDisplayedLeafEntryId(state: ChatState): string | null | undefined {
+  if (state.chatLoading || isInitialChatHistoryUnavailable(state)) {
+    return undefined;
+  }
   if (state.chatDisplayedLeafEntryId === null) {
     return null;
   }
@@ -72,15 +87,9 @@ export function resolveDisplayedLeafEntryId(
 const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  const details = err.details;
   return (
-    typeof details === "object" &&
-    details !== null &&
-    !Array.isArray(details) &&
-    (details as { reason?: unknown }).reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+    err instanceof GatewayRequestError &&
+    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
   );
 }
 

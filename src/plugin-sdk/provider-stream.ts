@@ -166,10 +166,7 @@ export function buildProviderStreamFamilyHooks(
     case "openrouter-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
-          const thinkingLevel =
-            ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
-              ? undefined
-              : ctx.thinkingLevel;
+          const thinkingLevel = ctx.modelId === "auto" ? undefined : ctx.thinkingLevel;
           return createOpenRouterWrapper(ctx.streamFn, thinkingLevel, ctx.extraParams);
         },
       };

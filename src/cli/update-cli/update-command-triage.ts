@@ -1,31 +1,54 @@
 import { randomUUID } from "node:crypto";
 import { triageAfterFailure } from "../../commands/triage-failure.js";
-import {
-  sanitizeTriageUpdateFailure,
-  writeTriageUpdateFailure,
-} from "../../commands/triage-update.js";
+import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
+import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
+import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
-import { UpdateCommandFailure } from "./update-command-result.js";
+import {
+  reportUpdateCommandPendingRecovery,
+  UpdateCommandFailure,
+  UpdateCommandFinalizedRecoveryFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
+type UpdateFailureTriageOptions = Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & {
+  invocationCwd?: string;
+};
+
 export async function withUpdateFailureTriage(
-  opts: Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & { invocationCwd?: string },
+  opts: UpdateFailureTriageOptions,
   target: UpdateTriageTarget,
   run: () => Promise<void>,
 ): Promise<void> {
+  const handleFailure = await prepareUpdateCommandFailureTriage(opts, target);
+  try {
+    await run();
+  } catch (error) {
+    await handleFailure(error);
+  }
+}
+
+/** Capture repair code and operator context before replacing the installation. */
+export async function prepareUpdateCommandFailureTriage(
+  opts: UpdateFailureTriageOptions,
+  target: UpdateTriageTarget,
+): Promise<(error: unknown) => Promise<void>> {
   // CLI and Gateway reports for an admitted run share its identity and state scope.
   // Standalone calls without an admitted run still own a fresh attempt.
   const updateAttemptId = opts.run?.runId ?? randomUUID();
@@ -34,6 +57,9 @@ export async function withUpdateFailureTriage(
     : !opts.yes && isTerminalInteractive()
       ? "interactive"
       : "non-interactive";
+  if (mode === "interactive") {
+    await preparePublicUpdateFailureIdentifiers();
+  }
   const { prepareUpdateFailureTriage } = await import("../../infra/update-triage.js");
   const runTriage = await prepareUpdateFailureTriage({
     mode,
@@ -43,10 +69,38 @@ export async function withUpdateFailureTriage(
     },
     invocationCwd: opts.invocationCwd,
   });
-  try {
-    await run();
-  } catch (error) {
+  return async (error) => {
+    // Recovery can replace files still owned by an uncertain command. Preserve
+    // the original failure and retained executor for its recovery owner.
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    const causes = collectNestedErrorCandidates(error);
+    const finalized = causes.find(
+      (cause) => cause instanceof UpdateCommandFinalizedRecoveryFailure,
+    );
+    if (finalized) {
+      return exitCliAfterOutput(defaultRuntime, finalized.exitCode);
+    }
+    const pending = causes.find((cause) => cause instanceof UpdateCommandPendingRecoveryFailure);
+    if (pending) {
+      return reportUpdateCommandPendingRecovery(pending, opts);
+    }
     const reportedFailure = error instanceof UpdateCommandFailure;
+    if (reportedFailure && error.result.reason === "invalid-dev-target") {
+      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    }
+    const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);
+    // A healthy restored installation needs only an explicit terminal choice,
+    // never automatic diagnostics or a second managed-helper report.
+    if (
+      rollbackCompleted &&
+      (mode !== "interactive" ||
+        target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
+        error.result.steps.some((step) => step.termination === "signal"))
+    ) {
+      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    }
     // Post-core children return phase data; only their outer updater owns the final failure.
     if (
       (!reportedFailure || classifyUpdateOutcome(error.result) === "failed") &&
@@ -97,6 +151,7 @@ export async function withUpdateFailureTriage(
               env: opts.run?.env ?? target.env,
               ...(failure.error ? { error: failure.error } : {}),
               ...(failure.result ? { result: failure.result } : {}),
+              ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
               runtime: defaultRuntime,
             });
           } catch (reportError) {
@@ -122,5 +177,5 @@ export async function withUpdateFailureTriage(
       exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     throw error;
-  }
+  };
 }

@@ -5,7 +5,6 @@ import type {
   SkillsProposalRecordResult,
   SkillsProposalsListResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-// Workshop types define generated skill draft, policy, and config contracts.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Schema id for persisted skill workshop proposal records. */
@@ -36,30 +35,12 @@ export type SkillWorkshopPreparedPatch = {
 /** Run-scoped budget shared by every workshop tool instance created across runner retries. */
 export type SkillWorkshopProposalMutationBudget = {
   remaining: number;
-  /** Successful persisted mutation calls, including repeated revisions. */
-  successfulMutations?: number;
-  /** Failed or incompletely checkpointed reservations in the current model run. */
-  failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
   /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
   readSkillHashes?: Map<string, string>;
   /** Single-use exact-span patch authority prepared from authoritative live content. */
   preparedSkillPatches?: Map<string, SkillWorkshopPreparedPatch>;
-};
-
-export type SkillWorkshopProposalReviewProgress = {
-  proposalIds: string[];
-  remaining: number;
-  successfulMutations: number;
-};
-
-/** Shared completion latch for proposal-only reviewers that require a durable final checkpoint. */
-export type SkillWorkshopProposalReviewCompletion = {
-  activeMutations?: Set<Promise<void>>;
-  complete: () => Promise<void>;
-  phase: "open" | "completing" | "completed";
-  recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
 /** Exact proposal revision an operator reviewed before requesting an agent-authored revision. */
@@ -78,7 +59,6 @@ export type SkillWorkshopRunOptions = {
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
-  proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
@@ -91,19 +71,14 @@ export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { cont
 
 export type SkillProposalDraftFile = "PROPOSAL.md" | `generations/${string}/PROPOSAL.md`;
 
-export type SkillProposalRecord = Omit<
-  ProtocolSkillProposalRecord,
-  "draftFile" | "evaluation" | "origin"
-> & {
+export type SkillProposalRecord = Omit<ProtocolSkillProposalRecord, "draftFile"> & {
   /** True only for proposals created by autonomous correction or experience capture. */
   autonomousCapture?: true;
-  origin?: SkillProposalOrigin;
   /** Immutable run attribution used to recover interrupted proposal-only reviews. */
   originRunIds?: string[];
   /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
   originRunMutationCounts?: Record<string, number>;
   draftFile: SkillProposalDraftFile;
-  evaluation?: SkillProposalEvaluation;
 };
 
 export type SkillProposalManifestEntry = Omit<
@@ -139,12 +114,17 @@ export type SkillProposalSupportFileInput = NonNullable<
   SkillsProposalCreateParams["supportFiles"]
 >[number];
 
-export type SkillProposalCreateInput = {
+type SkillProposalContext = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+};
+
+export type SkillProposalCreateInput = SkillProposalContext & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   name: string;
   description: string;
   content: string;
@@ -156,12 +136,10 @@ export type SkillProposalCreateInput = {
   evidence?: string;
 };
 
-export type SkillProposalUpdateInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
+export type SkillProposalUpdateInput = Omit<
+  SkillProposalCreateInput,
+  "name" | "description" | "content"
+> & {
   skillName: string;
   description?: string;
   /** Complete replacement body. Exactly one of content or composePatch is required. */
@@ -173,23 +151,11 @@ export type SkillProposalUpdateInput = {
   composePatch?: { oldString: string; newString: string };
   /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
   expectedCurrentContentHash?: string;
-  supportFiles?: SkillProposalSupportFileInput[];
-  createdBy?: SkillProposalSource;
-  autonomousCapture?: boolean;
-  origin?: SkillProposalOrigin;
-  goal?: string;
-  evidence?: string;
 };
 
-export type SkillProposalReviseInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  proposalId: string;
-  expectedRevisionHash?: string;
-  correlationId?: string;
+export type SkillProposalReviseInput = SkillProposalRevisionInput & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   content?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   description?: string;
@@ -198,27 +164,15 @@ export type SkillProposalReviseInput = {
   evidence?: string;
 };
 
-export type SkillProposalActionInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
+type SkillProposalRevisionInput = SkillProposalContext & {
   proposalId: string;
   expectedRevisionHash?: string;
   correlationId?: string;
-  reason?: string;
 };
 
-export type SkillProposalEvaluateInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  proposalId: string;
-  expectedRevisionHash?: string;
-  correlationId?: string;
+export type SkillProposalActionInput = SkillProposalRevisionInput & { reason?: string };
+
+export type SkillProposalEvaluateInput = SkillProposalRevisionInput & {
   trigger?: SkillProposalEvaluationTrigger;
 };
 

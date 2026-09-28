@@ -36,7 +36,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 - dashboard widget data bindings and action verbs
 - static MCP servers that should exist while the plugin is enabled
 - durable and regenerable state- or agent-relative backup resources
-- QA runner metadata the shared `openclaw qa` host can inspect
+- QA runner metadata the shared [`openclaw qa`](/concepts/qa-e2e-automation) host can inspect
 - channel-specific config metadata merged into catalog and validation surfaces
 
 **Do not use it for:** registering native runtime hooks, declaring the full plugin runtime entrypoint, or npm install metadata. Those belong in your plugin code and `package.json`.
@@ -74,6 +74,7 @@ The anchors from the single-page version still resolve here.
 - <a id="setup-reference"></a>[`setup`, `providerUsageAuthEnvVars`](/plugins/manifest/setup-and-auth#setup-reference)
 - <a id="setup.providers-reference"></a><a id="setup-providers-reference"></a>[`setup.providers`](/plugins/manifest/setup-and-auth#setup-providers-reference)
 - <a id="setup-fields"></a>[`setup` field table](/plugins/manifest/setup-and-auth#setup-fields)
+- [`configGroups`](/plugins/manifest/setup-and-auth#configgroups-reference)
 - <a id="uihints-reference"></a>[`uiHints`](/plugins/manifest/setup-and-auth#uihints-reference)
 
 ### Capability fields
@@ -81,6 +82,7 @@ The anchors from the single-page version still resolve here.
 [Manifest capability fields](/plugins/manifest/capabilities) — Manifest capability ownership, tool availability metadata, and activation planning.
 
 - <a id="contracts-reference"></a>[`contracts`](/plugins/manifest/capabilities#contracts-reference)
+- [`decisionModels`](/plugins/manifest/capabilities#decision-models-reference)
 - <a id="tool-metadata-reference"></a>[`toolMetadata`](/plugins/manifest/capabilities#tool-metadata-reference)
 - <a id="activation-reference"></a>[`activation`](/plugins/manifest/capabilities#activation-reference)
 
@@ -92,13 +94,16 @@ The anchors from the single-page version still resolve here.
 - <a id="transcript-sources-reference"></a>[`transcriptSources`](/plugins/manifest/surfaces#transcript-sources-reference)
 - <a id="backupresources-reference"></a>[`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
 - <a id="mcp-server-reference"></a>[`mcpServers`](/plugins/manifest/surfaces#mcp-server-reference)
+- [`uiCapabilities`](/plugins/manifest/surfaces#ui-capabilities)
 - <a id="controlui-reference"></a>[`controlUi`](/plugins/manifest/surfaces#controlui-reference)
+- [`themes`](/plugins/manifest/surfaces#themes)
 - <a id="dashboard-reference"></a>[`dashboard`](/plugins/manifest/surfaces#dashboard-reference)
 - <a id="catalog-reference"></a>[`catalog`](/plugins/manifest/surfaces#catalog-reference)
 - <a id="clicommands-reference"></a>[`cliCommands`](/plugins/manifest/surfaces#clicommands-reference)
 - <a id="commandaliases-reference"></a>[`commandAliases`](/plugins/manifest/surfaces#commandaliases-reference)
 - <a id="qarunners-reference"></a>[`qaRunners`](/plugins/manifest/surfaces#qarunners-reference)
 - <a id="channelconfigs-reference"></a>[`channelConfigs`](/plugins/manifest/surfaces#channelconfigs-reference)
+- [`channelAccountKeyPolicies`](/plugins/manifest/surfaces#channelaccountkeypolicies-reference)
 - <a id="replacing-another-channel-plugin"></a>[`channelConfigs.<id>.preferOver`](/plugins/manifest/surfaces#replacing-another-channel-plugin)
 
 ### Config and secret fields
@@ -219,7 +224,7 @@ The anchors from the single-page version still resolve here.
 | `enabledByDefaultOnPlatforms`        | No       | `string[]`                   | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                                                                                                                                                                         |
 | `legacyPluginIds`                    | No       | `string[]`                   | Legacy ids that normalize to this canonical plugin id.                                                                                                                                                                                                                                                                                                                                           |
 | `autoEnableWhenConfiguredProviders`  | No       | `string[]`                   | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                                                                                                                                                                                                                                                                                                  |
-| `kind`                               | No       | `PluginKind \| PluginKind[]` | Declares one or more exclusive plugin kinds (`"memory"`, `"context-engine"`) used by `plugins.slots.*`. A plugin that owns both slots declares both kinds in one array.                                                                                                                                                                                                                          |
+| `kind`                               | No       | `PluginKind \| PluginKind[]` | Declares one or more exclusive plugin kinds (`"memory"`, `"context-engine"`) used by [`plugins.slots.*`](/gateway/configuration-reference#plugins). A plugin that owns both slots declares both kinds in one array.                                                                                                                                                                              |
 | `channels`                           | No       | `string[]`                   | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                                                                                                                                                                                                      |
 | `providers`                          | No       | `string[]`                   | Provider ids owned by this plugin.                                                                                                                                                                                                                                                                                                                                                               |
 | `providerCatalogEntry`               | No       | `string`                     | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                                                                                                                                                                              |
@@ -230,24 +235,26 @@ The anchors from the single-page version still resolve here.
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                                                                                                                        |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                                                                                                                         |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                                                                                                                           |
-| `secretProviderIntegrations`         | No       | `Record<string, object>`     | Declarative SecretRef exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                                                                                                                                                                  |
+| `secretProviderIntegrations`         | No       | `Record<string, object>`     | Declarative [SecretRef](/gateway/secrets) exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                                                                                                                                              |
 | `cliBackends`                        | No       | `string[]`                   | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                                                                                                                                                                      |
 | `syntheticAuthRefs`                  | No       | `string[]`                   | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                                                                                                                                                                                           |
 | `nonSecretAuthMarkers`               | No       | `string[]`                   | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                                                                                                                                                                             |
 | `commandAliases`                     | No       | `object[]`                   | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                                                                                                                                                                                             |
 | `cliCommands`                        | No       | `object[]`                   | Root CLI commands shown in `openclaw --help` before plugin code loads. Each row requires `name`, `description`, and `hasSubcommands`.                                                                                                                                                                                                                                                            |
 | `providerUsageAuthEnvVars`           | No       | `Record<string, string[]>`   | Usage/billing-only provider credentials. OpenClaw uses these names for usage discovery and secret scrubbing but never for inference auth.                                                                                                                                                                                                                                                        |
-| `providerAuthAliases`                | No       | `Record<string, string>`     | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                                                                                                                                                                       |
+| `providerAuthAliases`                | No       | `Record<string, AuthAlias>`  | Provider ids that reuse another provider for auth lookup. A `baseUrls` condition applies only when that provider's configured endpoint matches; stored credentials retain their provider identity.                                                                                                                                                                                               |
 | `providerAuthChoices`                | No       | `object[]`                   | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                                                                                                                                                                    |
 | `activation`                         | No       | `object`                     | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                                                                                                                                                                    |
 | `backupResources`                    | No       | `object[]`                   | Manifest-owned durable or regenerable state- or agent-relative backup resources. Applied only for effectively activated, loadable plugins without executing their runtime. See [backupResources reference](/plugins/manifest/surfaces#backupresources-reference).                                                                                                                                |
 | `setup`                              | No       | `object`                     | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                                                                                                                                                                                 |
 | `doctorContract`                     | No       | `object`                     | Declares which dynamic doctor-contract surfaces the plugin artifact exports so doctor loads only relevant modules.                                                                                                                                                                                                                                                                               |
-| `doctorHealthChecks`                 | No       | `boolean`                    | Declares health-check registration in the selected plugin's public API. Currently used for the Codex health API.                                                                                                                                                                                                                                                                                 |
+| `doctorHealthChecks`                 | No       | `boolean`                    | Declares health-check registration in the selected plugin's public API. Read by the Codex doctor health API.                                                                                                                                                                                                                                                                                     |
 | `sessionRouteStateOwners`            | No       | `object[]`                   | Static session-route ownership for doctor cleanup. Each entry declares an `id`, `label`, and optional `providerIds`, `runtimeIds`, `cliSessionKeys`, and `authProfilePrefixes`.                                                                                                                                                                                                                  |
 | `qaRunners`                          | No       | `object[]`                   | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                                                                                                                                                                                   |
+| `uiCapabilities`                     | No       | `string[]`                   | Static UI contribution kinds displayed in the plugin’s Capabilities section without activation. Omission means unspecified; `[]` declares none. See [UI capabilities](/plugins/manifest/surfaces#ui-capabilities).                                                                                                                                                                               |
 | `dashboard`                          | No       | `object`                     | Dashboard widget data bindings and action verbs. Each entry is validated against a Gateway method registered by this plugin with the required read or write scope. See [dashboard reference](/plugins/manifest/surfaces#dashboard-reference).                                                                                                                                                    |
 | `mcpServers`                         | No       | `Record<string, object>`     | Static MCP server definitions contributed while this plugin is enabled. Relative command arguments and working directories resolve from the plugin root. Operator `mcp.servers` entries override or disable definitions with the same name. See [MCP server reference](/plugins/manifest/surfaces#mcp-server-reference).                                                                         |
+| `themes`                             | No       | `object[]`                   | Static theme IDs, names, descriptions, and plugin-relative JSON sources. Enabled plugins contribute to the shared settings and agent theme catalog; plugin reload refreshes palette edits without a Gateway restart. See [Themes](/plugins/manifest/surfaces#themes).                                                                                                                            |
 | `contracts`                          | No       | `object`                     | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image/video/music generation, web fetch, web search, worker providers, document/web-content extraction, and tool ownership.                                                                                                                       |
 | `transcriptSources`                  | No       | `Record<string, object>`     | Static transcript source names and auto-start locator requirements for IDs declared in `contracts.transcriptSourceProviders`. See [Transcript sources reference](/plugins/manifest/surfaces#transcript-sources-reference).                                                                                                                                                                       |
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](/plugins/manifest/config-and-secrets#configcontracts-reference).                                                                                                                                       |
@@ -257,12 +264,75 @@ The anchors from the single-page version still resolve here.
 | `musicGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                                                                                                                               |
 | `toolMetadata`                       | No       | `Record<string, object>`     | Cheap availability metadata for plugin-owned tools declared in `contracts.tools`. Use it when a tool should not load runtime unless config, env, or auth evidence exists.                                                                                                                                                                                                                        |
 | `channelConfigs`                     | No       | `Record<string, object>`     | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                                                                                                                                                                                       |
+| `channelAccountKeyPolicies`          | No       | `Record<string, object>`     | Stored account-key selection rules for declared channels. See [account-key policies](/plugins/manifest/surfaces#channelaccountkeypolicies-reference).                                                                                                                                                                                                                                            |
 | `skills`                             | No       | `string[]`                   | Skill directories to load, relative to the plugin root.                                                                                                                                                                                                                                                                                                                                          |
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
+| `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare exactly one active category.                                                                                                                                                                                                                                               |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
+| `configGroups`                       | No       | `object[]`                   | Author-defined Settings sections with unique ids, titles, optional integer order, and immediate config property names. See [configGroups](/plugins/manifest/setup-and-auth#configgroups-reference).                                                                                                                                                                                              |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
+
+An `AuthAlias` is either a provider id string or an object with `provider` and
+`baseUrls`. An object alias applies only to the configured model-provider
+endpoint after trimming whitespace and trailing slashes. It does not rename
+stored credential providers or contribute a new setup provider. Existing profile
+order, explicit bindings, and plugin trust checks still apply.
+
+## Catalog categories
+
+Choose the one category that best describes why someone would install the plugin.
+Use its main user purpose, not every tool, provider, or runtime capability it exposes.
+For example, an agent execution backend belongs in `agent-runtimes`, document extraction
+belongs in `documents-files`, and a messaging adapter belongs in `channels` even when
+it also provides workspace tools.
+
+Bundled OpenClaw plugins declare exactly one active category. New ClawHub publications
+also accept exactly one declared category, using the same array shape, or omit the
+field for ClawHub to generate a category.
+
+OpenClaw's manifest reader continues to accept one to three unique, ordered categories
+so previously installed and published packages remain readable. When reading older
+multiple-category declarations, the first remains primary and all remain searchable.
+The stricter new-publication rule does not invalidate an installed plugin's manifest.
+
+The active categories below are listed in browse order:
+
+| Slug                  | Use for                                                                                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels`            | Human-agent messaging transports and channel adapters. Choose this when the main purpose is letting people talk to the agent through a messaging service, even if the adapter also exposes workspace tools.                                 |
+| `models`              | General model providers, inference backends, and model routing. Agent execution engines belong in Agent runtimes; specialized speech or media generators belong in Voice or Media when that is their main purpose.                          |
+| `agent-runtimes`      | Agent execution engines and backends that run model/tool loops and manage native sessions, including Codex, ACP, and Copilot runtimes. Context assembly belongs in Context; coordinating work across agents belongs in Agent orchestration. |
+| `memory`              | Durable agent memory, embeddings, and retrieval across conversations. Building or compacting the active conversation context belongs in Context.                                                                                            |
+| `context`             | Building, selecting, compacting, or managing the active conversation context. Durable memory belongs in Memory; an engine that runs the agent and owns its native sessions belongs in Agent runtimes.                                       |
+| `voice`               | Speech synthesis, transcription, voice calls, and spoken interaction. Music and general media creation or analysis belong in Media.                                                                                                         |
+| `web`                 | General web search, crawling, and fetching web pages. A tool whose main purpose is a specific research or business workflow belongs in that workflow's category.                                                                            |
+| `computer-use`        | Interactive desktop and browser navigation, clicking, typing, and screenshots. Hosting execution environments belongs in Infrastructure; web search and crawling belong in Web.                                                             |
+| `media`               | Creating, transforming, or understanding images, video, music, and other media. Spoken interaction and transcription belong in Voice.                                                                                                       |
+| `security`            | Protecting access and enforcing trust through authentication, authorization, credential controls, security auditing, or policy. Authentication incidental to another purpose does not belong here.                                          |
+| `integrations`        | General connectors, API bridges, and service integration platforms without a more specific user purpose. A connector to a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.                     |
+| `developer-tools`     | Writing, reviewing, testing, and debugging software, development environments, and coding workflows. Plugins whose main purpose is providing the agent execution engine belong in Agent runtimes.                                           |
+| `infrastructure`      | Deploying, hosting, monitoring, and operating systems, networks, services, and execution environments. Engines that run the agent loop belong in Agent runtimes; coordinating agents belongs in Agent orchestration.                        |
+| `documents-files`     | Reading, creating, extracting, transferring, and managing documents and files. Software code review belongs in Developer tools; task and project management belongs in Productivity.                                                        |
+| `inbox-collaboration` | Managing email, inboxes, team communication, and collaborative workspaces. Providing a transport for people to talk to the agent belongs in Channels.                                                                                       |
+| `productivity`        | Managing tasks, notes, projects, plans, and personal or team work. Appointments and availability belong in Scheduling; document processing belongs in Documents & files.                                                                    |
+| `scheduling`          | Calendars, appointments, availability, and booking. Technical job scheduling belongs with the workflow it supports, or Infrastructure for general system scheduling.                                                                        |
+| `finance-payments`    | Payments, billing, accounting, banking, trading, and financial workflows. General business reporting belongs in Data & analytics.                                                                                                           |
+| `sales-marketing`     | Customer relationships, sales, customer support, outreach, campaigns, and marketing operations. General email or chat management belongs in Inbox & collaboration.                                                                          |
+| `data-analytics`      | Querying databases, processing datasets, analysis, reporting, and business intelligence. Agent memory storage belongs in Memory; operational telemetry belongs in Infrastructure.                                                           |
+| `agent-orchestration` | Coordinating agents, delegating work, and running multi-step agent workflows. Engines and backends that execute the agent loop and manage its native sessions belong in Agent runtimes.                                                     |
+| `research`            | Investigating topics, evaluating sources, working with scientific literature, and synthesizing evidence. General web search and page fetching belong in Web; interactive browser control belongs in Computer use.                           |
+| `other`               | Use only when the plugin's main purpose does not fit another category or the available evidence is insufficient. Do not use this just because a plugin has several capabilities.                                                            |
+
+Legacy `tools`, `runtime`, and `gateway` declarations remain valid so existing
+packages keep loading. They are retired from the active browse taxonomy. Choose
+active categories for new declarations; legacy values are not automatically
+translated into a different category.
+
+Omission remains valid for external plugin compatibility. When an external catalog supplies a
+derived fallback, an explicit package declaration takes precedence. Bundled OpenClaw plugins must
+declare exactly one active category.
 
 ## JSON Schema requirements
 
@@ -318,7 +388,7 @@ catalog requests do not poll files for changes.
 - If a plugin is installed but has a broken or missing manifest or schema, validation fails and Doctor reports the plugin error.
 - If plugin config exists but the plugin is **disabled**, the config is kept and a **warning** is surfaced in Doctor + logs.
 
-See [Configuration reference](/gateway/configuration) for the full `plugins.*` schema.
+See [Configuration reference](/gateway/configuration-reference#plugins) for the full `plugins.*` schema.
 
 ## Notes
 
@@ -328,7 +398,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
-- Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older external plugins.
+- Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` was deprecated on 2026-07-25 and remains only as a compatibility fallback for older external plugins; its removal gate is 2026-10-01. See the [compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy).
 - Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).
@@ -365,5 +435,20 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
   </Card>
   <Card title="Manifest vs package.json" href="/plugins/manifest/package-json" icon="list">
     Which pre-runtime metadata lives in package.json, and which duplicate plugin id wins.
+  </Card>
+  <Card title="Plugin setup and config" href="/plugins/sdk-setup" icon="sliders">
+    Packaging and config schemas that consume this manifest.
+  </Card>
+  <Card title="Plugin entry points" href="/plugins/sdk-entrypoints" icon="door-open">
+    `definePluginEntry` and the other entry helpers a plugin's code exports.
+  </Card>
+  <Card title="Tool plugins" href="/plugins/tool-plugins" icon="wrench">
+    Declaring `contracts.tools` for agent tools.
+  </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins" icon="plug">
+    Installing and enabling the plugins this manifest describes.
+  </Card>
+  <Card title="Backup" href="/cli/backup" icon="box-archive">
+    The `backupResources` surface declared here.
   </Card>
 </CardGroup>

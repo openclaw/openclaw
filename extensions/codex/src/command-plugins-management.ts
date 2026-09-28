@@ -1,10 +1,39 @@
-// Codex plugin module implements command plugins management behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  renderMessagePresentationFallbackText,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
 import type { v2 } from "./app-server/protocol.js";
-import { canMutateCodexHost } from "./command-authorization.js";
+import { assertCodexHostOwnerCurrent, canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import {
+  buildCodexPluginAppLinks,
+  buildCodexPluginStatusButtons,
+} from "./command-plugin-app-links.js";
+import {
+  describeConfiguredPluginIdentityConflict,
+  marketplaceNamesRepresentSameCatalog,
+  matchesConfiguredPluginIdentity,
+  persistedPluginName,
+  resolveConfiguredPluginKey,
+  resolveCuratedMarketplaceAliases,
+  resolveInstalledPluginKey,
+  type CodexPluginConfigEntry,
+  type CodexPluginsConfigBlock,
+  type CodexPluginsManagementIO,
+} from "./command-plugin-config.js";
+import { formatCodexAvailablePlugins } from "./command-plugins-available.js";
+import {
+  formatCodexPluginReadiness,
+  codexPluginAppPageLinks,
+  readCodexPluginReadiness,
+} from "./command-plugins-readiness.js";
+import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import {
   buildCodexCommandPickerPresentation,
   type CodexCommandPickerButton,
@@ -16,55 +45,28 @@ import {
   type CodexPluginMarketplaceListRequest,
 } from "./plugin-marketplace-discovery.js";
 
-/**
- * Lightweight read/write surface over the Openclaw config file. Plugged in by
- * the command registration site so this module stays decoupled from the
- * concrete `mutateConfigFile` import in tests.
- */
-export type CodexPluginsManagementIO = {
-  readConfig: () => Promise<{
-    enabled?: boolean;
-    plugins?: Record<string, CodexPluginConfigEntry>;
-  }>;
-  mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
-};
-
-type CodexPluginConfigEntry = {
-  enabled?: boolean;
-  marketplaceName?: string;
-  pluginName?: string;
-  allow_destructive_actions?: boolean | "auto" | "ask";
-};
-
-export type CodexPluginsConfigBlock = {
-  enabled?: boolean;
-  plugins?: Record<string, CodexPluginConfigEntry>;
-};
-
 type CodexPluginsManagementRuntime = {
   workspaceDir: () => Promise<string>;
   list: CodexPluginMarketplaceListRequest;
   install: (params: v2.PluginInstallParams) => Promise<v2.PluginInstallResponse>;
   refresh?: (workspaceDir: string) => Promise<{ diagnostics: { message: string }[] }>;
+  withContext?: <T>(run: (context: CodexPluginCommandContext) => Promise<T>) => Promise<T>;
 };
-
-type ConfiguredPluginKeyResolution =
-  | { status: "matched"; configKey: string }
-  | { status: "missing" }
-  | { status: "ambiguous" }
-  | { status: "mismatched" };
 
 // Plugin lifecycle changes (enable/disable) write to openclaw.json
 // synchronously. The next message rotates the native thread onto the new
 // policy; a conversation reset or full gateway restart is not needed.
 const POLICY_REFRESH_HINT = "Takes effect on your next message.";
+const AVAILABLE_USAGE =
+  "Usage: /codex plugins available [query] [--page <positive integer>]. Search text must be at most 100 characters; use -- before literal query text that contains options.";
 
 export async function handleCodexPluginsSubcommand(
-  ctx: PluginCommandContext,
+  input: PluginCommandContext,
   rest: string[],
   io: CodexPluginsManagementIO,
   runtime?: CodexPluginsManagementRuntime,
 ): Promise<PluginCommandResult> {
+  const ctx = { ...input, gatewayClientScopes: input.gatewayClientScopes?.slice() };
   const [verb = "list", ...args] = rest;
   const normalized = verb.toLowerCase();
 
@@ -93,13 +95,32 @@ export async function handleCodexPluginsSubcommand(
   }
 
   if (normalized === "available") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins available" };
-    }
     if (!canMutateCodexHost(ctx)) {
       return {
         text: "Only an owner or operator.admin gateway client can list available Codex plugins.",
       };
+    }
+    let page = 1;
+    const queryParts: string[] = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = expectDefined(args[index], "current Codex plugin search argument");
+      if (arg === "--") {
+        queryParts.push(...args.slice(index + 1));
+        break;
+      }
+      if (arg === "--page") {
+        const parsedPage = parseStrictPositiveInteger(args[++index]);
+        if (parsedPage === undefined) {
+          return { text: AVAILABLE_USAGE };
+        }
+        page = parsedPage;
+      } else {
+        queryParts.push(arg);
+      }
+    }
+    const query = queryParts.join(" ").trim();
+    if (query.length > 100) {
+      return { text: AVAILABLE_USAGE };
     }
     if (!runtime) {
       return { text: "Codex plugin discovery is unavailable for this command." };
@@ -109,12 +130,59 @@ export async function handleCodexPluginsSubcommand(
         request: runtime.list,
         workspaceDir: await runtime.workspaceDir(),
       });
-      return { text: formatAvailablePlugins(discovered.plugins, discovered.warnings) };
+      return formatCodexAvailablePlugins(discovered.plugins, discovered.warnings, query, page);
     } catch (error) {
       return {
-        text: `Could not list Codex plugins: ${formatCodexDisplayText(errorMessage(error))}`,
+        text: `Could not list Codex plugins: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
       };
     }
+  }
+
+  if (normalized === "status") {
+    const requestedPlugin = args[0];
+    const page = args[1] === undefined ? 1 : Number(args[1]);
+    if (
+      !requestedPlugin ||
+      !parseCodexPluginMarketplaceId(requestedPlugin) ||
+      args.length > 2 ||
+      !Number.isSafeInteger(page) ||
+      page < 1
+    ) {
+      return {
+        text: "Usage: /codex plugins status <name>@<marketplace> [page]. Use /codex plugins list to find a configured plugin.",
+      };
+    }
+    if (!canMutateCodexHost(ctx)) {
+      return {
+        text: "Only an owner or operator.admin gateway client can run /codex plugins status.",
+      };
+    }
+    if (!runtime?.withContext) {
+      return {
+        text: "Codex plugin status is unavailable. Check the configured Codex app-server, then run this command again.",
+      };
+    }
+    return await runtime.withContext(async (context) => {
+      const configured = resolveConfiguredPluginKey(context.current.plugins ?? {}, requestedPlugin);
+      if (configured.status === "ambiguous" || configured.status === "mismatched") {
+        return {
+          text: describeConfiguredPluginIdentityConflict(requestedPlugin, configured.status),
+        };
+      }
+      if (configured.status === "missing") {
+        return {
+          text: "This plugin is not explicitly configured. Use /codex plugins list, or /codex plugins available to find an install command.",
+        };
+      }
+      return formatCodexPluginReadiness(
+        await readCodexPluginReadiness({
+          context,
+          current: context.current,
+          configKey: configured.configKey,
+        }),
+        page,
+      );
+    });
   }
 
   if (normalized === "install") {
@@ -129,7 +197,7 @@ export async function handleCodexPluginsSubcommand(
     if (!runtime) {
       return { text: "Codex plugin installation is unavailable for this command." };
     }
-    return await installCodexPlugin(args[0], io, runtime);
+    return await installCodexPlugin(args[0], io, runtime, ctx);
   }
 
   const target = args[0];
@@ -165,13 +233,17 @@ export async function handleCodexPluginsSubcommand(
       };
     }
     const configKey = configured.configKey;
-    await io.mutate((block) => {
-      if (wantEnabled) {
-        block.enabled = true;
-      }
-      block.plugins ??= {};
-      block.plugins[configKey] = { ...block.plugins[configKey], enabled: wantEnabled };
-    });
+    assertCodexHostOwnerCurrent(ctx);
+    await io.mutate(
+      (block) => {
+        if (wantEnabled) {
+          block.enabled = true;
+        }
+        block.plugins ??= {};
+        block.plugins[configKey] = { ...block.plugins[configKey], enabled: wantEnabled };
+      },
+      () => assertCodexHostOwnerCurrent(ctx),
+    );
     return {
       text: `${formatCodexDisplayText(configKey)}: ${wantEnabled ? "enabled" : "disabled"} in openclaw.json. ${POLICY_REFRESH_HINT}`,
     };
@@ -186,6 +258,7 @@ function buildPluginsMenuReply(): PluginCommandResult {
   const buttons: CodexCommandPickerButton[] = [
     { label: "list", command: "/codex plugins list" },
     { label: "available", command: "/codex plugins available" },
+    { label: "Refresh hosted apps", command: "/codex plugins refresh" },
     { label: "enable", command: "/codex plugins enable" },
     { label: "disable", command: "/codex plugins disable" },
     { label: "help", command: "/codex plugins help" },
@@ -196,9 +269,11 @@ function buildPluginsMenuReply(): PluginCommandResult {
     "",
     "  1. /codex plugins list",
     "  2. /codex plugins available",
-    "  3. /codex plugins enable",
-    "  4. /codex plugins disable",
-    "  5. /codex plugins help",
+    "  3. /codex plugins status <name>@<marketplace>",
+    "  4. /codex plugins refresh — refresh hosted apps",
+    "  5. /codex plugins enable",
+    "  6. /codex plugins disable",
+    "  7. /codex plugins help",
     "",
     "Type '/codex' to go back to the main menu.",
   ].join("\n");
@@ -278,11 +353,13 @@ function buildPluginsHelp(): string {
     "Codex plugin discovery and owner-approved installation:",
     "- /codex plugins                            (alias for list)",
     "- /codex plugins list                       show explicitly configured plugins",
-    "- /codex plugins available                  list discoverable Codex marketplaces",
+    "- /codex plugins available [query] [--page <n>]  search or browse Codex plugins",
+    "- /codex plugins status <name>@<marketplace> [page]  inspect app readiness without refreshing",
+    "- /codex plugins refresh                   refresh all hosted apps for the current Codex account/runtime",
     "- /codex plugins install <name>@<marketplace>  install and authorize one plugin",
     "- /codex plugins enable <name>              enable a configured plugin",
     "- /codex plugins disable <name>             disable a configured plugin",
-    "Only an owner or operator.admin can discover, install, enable, or disable plugins.",
+    "Only an owner or operator.admin can discover, inspect, refresh hosted apps, install, enable, or disable plugins.",
   ].join("\n");
 }
 
@@ -290,11 +367,12 @@ async function installCodexPlugin(
   requestedId: string,
   io: CodexPluginsManagementIO,
   runtime: CodexPluginsManagementRuntime,
+  ctx: PluginCommandContext,
 ): Promise<PluginCommandResult> {
   const requested = parseCodexPluginMarketplaceId(requestedId);
   if (!requested) {
     return {
-      text: "Invalid plugin identifier. Use /codex plugins install <plugin>@<marketplace> with ASCII letters, digits, underscores, or hyphens.",
+      text: "Invalid plugin identifier. Use /codex plugins install <plugin>@<marketplace>. Both names allow ASCII letters, digits, underscores, and hyphens. Plugin names may also contain dots between nonempty segments.",
     };
   }
 
@@ -323,7 +401,7 @@ async function installCodexPlugin(
     }
   } catch (error) {
     return {
-      text: `Could not verify the requested Codex plugin: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `Could not verify the requested Codex plugin: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -360,7 +438,7 @@ async function installCodexPlugin(
     }
   } catch (error) {
     return {
-      text: `Could not verify existing Codex plugin authorization: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `Could not verify existing Codex plugin authorization: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -380,46 +458,51 @@ async function installCodexPlugin(
       };
     }
     try {
+      assertCodexHostOwnerCurrent(ctx);
       result = await runtime.install(requestParams);
     } catch (error) {
       return {
-        text: `Could not install ${formatCodexDisplayText(requestedId)}: ${formatCodexDisplayText(errorMessage(error))}`,
+        text: `Could not install ${formatCodexDisplayText(requestedId)}: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
       };
     }
   }
 
   const selectedPlugin = plugin;
   try {
-    await io.mutate((block) => {
-      block.plugins ??= {};
-      const configured = resolveInstalledPluginKey(block.plugins, selectedPlugin);
-      if (configured.status === "ambiguous" || configured.status === "mismatched") {
-        throw new Error(
-          describeConfiguredPluginIdentityConflict(selectedPlugin.id, configured.status),
-        );
-      }
-      const curated = isOpenAiCuratedMarketplaceName(selectedPlugin.marketplaceName);
-      const canonicalId = curated
-        ? `${selectedPlugin.pluginName}@${CODEX_PLUGINS_MARKETPLACE_NAME}`
-        : selectedPlugin.id;
-      const configKey = configured.status === "matched" ? configured.configKey : canonicalId;
-      const existing = block.plugins[configKey];
-      block.enabled = true;
-      const updated = {
-        ...existing,
-        enabled: true,
-        marketplaceName:
-          existing?.marketplaceName ??
-          (curated ? CODEX_PLUGINS_MARKETPLACE_NAME : selectedPlugin.marketplaceName),
-        pluginName:
-          existing?.pluginName ??
-          (curated ? selectedPlugin.pluginName : persistedPluginName(selectedPlugin)),
-      };
-      block.plugins[configKey] = updated;
-    });
+    assertCodexHostOwnerCurrent(ctx);
+    await io.mutate(
+      (block) => {
+        block.plugins ??= {};
+        const configured = resolveInstalledPluginKey(block.plugins, selectedPlugin);
+        if (configured.status === "ambiguous" || configured.status === "mismatched") {
+          throw new Error(
+            describeConfiguredPluginIdentityConflict(selectedPlugin.id, configured.status),
+          );
+        }
+        const curated = isOpenAiCuratedMarketplaceName(selectedPlugin.marketplaceName);
+        const canonicalId = curated
+          ? `${selectedPlugin.pluginName}@${CODEX_PLUGINS_MARKETPLACE_NAME}`
+          : selectedPlugin.id;
+        const configKey = configured.status === "matched" ? configured.configKey : canonicalId;
+        const existing = block.plugins[configKey];
+        block.enabled = true;
+        const updated = {
+          ...existing,
+          enabled: true,
+          marketplaceName:
+            existing?.marketplaceName ??
+            (curated ? CODEX_PLUGINS_MARKETPLACE_NAME : selectedPlugin.marketplaceName),
+          pluginName:
+            existing?.pluginName ??
+            (curated ? selectedPlugin.pluginName : persistedPluginName(selectedPlugin)),
+        };
+        block.plugins[configKey] = updated;
+      },
+      () => assertCodexHostOwnerCurrent(ctx),
+    );
   } catch (error) {
     return {
-      text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -431,242 +514,71 @@ async function installCodexPlugin(
         .map((diagnostic) => ` ${formatCodexDisplayText(diagnostic.message)}`)
         .join("");
     } catch (error) {
-      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(errorMessage(error))}`;
+      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(coerceErrorMessage(error))}`;
     }
   }
 
   const appsNeedingAuth = result?.appsNeedingAuth ?? [];
   if (appsNeedingAuth.length > 0) {
-    const apps = appsNeedingAuth
-      .map((app) => formatCodexDisplayText(app.name))
-      .slice(0, 5)
-      .join(", ");
+    let appLinks: v2.AppSummary[] = [];
+    if (runtime.withContext) {
+      try {
+        appLinks = await runtime.withContext(async (context) => {
+          const configured = resolveConfiguredPluginKey(context.current.plugins ?? {}, requestedId);
+          if (configured.status !== "matched") {
+            return [];
+          }
+          const readiness = await readCodexPluginReadiness({
+            context,
+            current: context.current,
+            configKey: configured.configKey,
+          });
+          const pendingIds = new Set(appsNeedingAuth.map((app) => app.id));
+          return codexPluginAppPageLinks(readiness).filter((app) => pendingIds.has(app.id));
+        });
+      } catch {
+        // Installation already completed. A changed account or unavailable status
+        // must not undo local intent or present setup links from the old scope.
+      }
+    }
+    const authRequirement =
+      appsNeedingAuth.length === 1
+        ? "1 app still requires"
+        : `${appsNeedingAuth.length} apps still require`;
+    const presentation: MessagePresentation = {
+      title: "Codex plugin app setup",
+      tone: "warning",
+      blocks: [
+        {
+          type: "text",
+          text: `${formatCodexDisplayText(requestedId)} bundle was installed in Codex. OpenClaw app access is configured. ${authRequirement} connector authentication in ChatGPT. Installation does not confirm app connections or current-conversation readiness.`,
+        },
+        ...buildCodexPluginAppLinks(appLinks),
+        ...(appLinks.length < appsNeedingAuth.length
+          ? [
+              {
+                type: "text" as const,
+                text: `Some app setup permissions could not be confirmed. Run /codex plugins status ${requestedId} to check the current account and restrictions.`,
+              },
+            ]
+          : []),
+        buildCodexPluginStatusButtons(requestedId, appLinks.length > 0),
+        { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
+      ],
+    };
     return {
-      text: `${formatCodexDisplayText(requestedId)} was installed and authorized, but ${apps} still require connector authentication. Complete sign-in before using those apps.${refreshWarning} ${POLICY_REFRESH_HINT}`,
+      text: renderMessagePresentationFallbackText({ presentation }),
+      presentation,
+      presentationTextMode: "fallback",
     };
   }
 
   const status = alreadyInstalled
-    ? "was already installed in Codex and is now authorized"
-    : "was installed and authorized";
+    ? "bundle was already installed in Codex"
+    : "bundle was installed in Codex";
   return {
-    text: `${formatCodexDisplayText(requestedId)} ${status}.${refreshWarning} ${POLICY_REFRESH_HINT}`,
+    text: `${formatCodexDisplayText(requestedId)} ${status}. OpenClaw app access is configured.${refreshWarning} ${POLICY_REFRESH_HINT}`,
   };
-}
-
-/** Merge historical curated wire aliases only when they identify the same install source. */
-function resolveCuratedMarketplaceAliases(
-  plugins: readonly CodexAvailablePlugin[],
-  requestedMarketplaceName: string,
-): CodexAvailablePlugin | undefined {
-  if (!isOpenAiCuratedMarketplaceName(requestedMarketplaceName)) {
-    return undefined;
-  }
-  const sourceIdentities = new Set(
-    plugins.map((plugin) =>
-      plugin.marketplacePath
-        ? `local:${plugin.marketplacePath}`
-        : plugin.remotePluginId
-          ? `remote:${plugin.remotePluginId}`
-          : undefined,
-    ),
-  );
-  if (sourceIdentities.size !== 1 || sourceIdentities.has(undefined)) {
-    return undefined;
-  }
-  const selected =
-    plugins.find((plugin) => plugin.marketplaceName === requestedMarketplaceName) ?? plugins[0];
-  if (!selected) {
-    return undefined;
-  }
-  return {
-    ...selected,
-    installed: plugins.some((plugin) => plugin.installed),
-    enabled: plugins.some((plugin) => plugin.installed && plugin.enabled),
-    available: plugins.every((plugin) => plugin.available),
-    ...(selected.remotePluginId
-      ? {
-          mustShowInstallationInterstitial: plugins.some(
-            (plugin) => plugin.mustShowInstallationInterstitial === true,
-          )
-            ? true
-            : plugins.every((plugin) => plugin.mustShowInstallationInterstitial === false)
-              ? false
-              : null,
-        }
-      : {}),
-    ...(plugins.some((plugin) => plugin.installPolicy === "NOT_AVAILABLE")
-      ? { installPolicy: "NOT_AVAILABLE" }
-      : {}),
-  };
-}
-
-function persistedPluginName(plugin: CodexAvailablePlugin): string {
-  return !plugin.marketplacePath && plugin.summaryId.endsWith(`@${plugin.marketplaceName}`)
-    ? plugin.summaryId
-    : plugin.pluginName;
-}
-
-function resolveConfiguredPluginKey(
-  plugins: Record<string, CodexPluginConfigEntry>,
-  target: string,
-): ConfiguredPluginKeyResolution {
-  const requested = parseCodexPluginMarketplaceId(target);
-  const direct = plugins[target];
-  if (!requested) {
-    if (!direct) {
-      return { status: "missing" };
-    }
-    const qualifiedName = direct.pluginName
-      ? parseCodexPluginMarketplaceId(direct.pluginName)
-      : undefined;
-    if (
-      qualifiedName &&
-      direct.marketplaceName &&
-      !marketplaceNamesRepresentSameCatalog(qualifiedName.marketplaceName, direct.marketplaceName)
-    ) {
-      return { status: "mismatched" };
-    }
-    const identity = resolveConfiguredPluginIdentity(direct);
-    if (!identity) {
-      return { status: "matched", configKey: target };
-    }
-    const marketplaceName = isOpenAiCuratedMarketplaceName(identity.marketplaceName)
-      ? CODEX_PLUGINS_MARKETPLACE_NAME
-      : identity.marketplaceName;
-    const canonicalId = `${identity.pluginName}@${marketplaceName}`;
-    const canonical = plugins[canonicalId];
-    if (canonical && !matchesConfiguredPluginIdentity(canonical, identity, canonicalId)) {
-      return { status: "mismatched" };
-    }
-    const matching = Object.values(plugins).filter((entry) =>
-      matchesConfiguredPluginIdentity(entry, identity, canonicalId),
-    );
-    return matching.length > 1 ? { status: "ambiguous" } : { status: "matched", configKey: target };
-  }
-  if (direct && !matchesConfiguredPluginIdentity(direct, requested, target)) {
-    return { status: "mismatched" };
-  }
-  const matching = Object.entries(plugins).filter(([, entry]) =>
-    matchesConfiguredPluginIdentity(entry, requested, target),
-  );
-  if (matching.length > 1) {
-    return { status: "ambiguous" };
-  }
-  const configKey = matching[0]?.[0];
-  return configKey ? { status: "matched", configKey } : { status: "missing" };
-}
-
-function resolveInstalledPluginKey(
-  plugins: Record<string, CodexPluginConfigEntry>,
-  plugin: CodexAvailablePlugin,
-): ConfiguredPluginKeyResolution {
-  const discovered = resolveConfiguredPluginKey(plugins, plugin.id);
-  if (discovered.status === "ambiguous" || discovered.status === "mismatched") {
-    return discovered;
-  }
-  if (!isOpenAiCuratedMarketplaceName(plugin.marketplaceName)) {
-    return discovered;
-  }
-  const canonicalId = `${plugin.pluginName}@${CODEX_PLUGINS_MARKETPLACE_NAME}`;
-  const canonical = resolveConfiguredPluginKey(plugins, canonicalId);
-  if (canonical.status === "ambiguous" || canonical.status === "mismatched") {
-    return canonical;
-  }
-  if (
-    discovered.status === "matched" &&
-    canonical.status === "matched" &&
-    discovered.configKey !== canonical.configKey
-  ) {
-    return { status: "ambiguous" };
-  }
-  return canonical.status === "matched" ? canonical : discovered;
-}
-
-function resolveConfiguredPluginIdentity(
-  entry: CodexPluginConfigEntry,
-): { pluginName: string; marketplaceName: string } | undefined {
-  if (!entry.pluginName || !entry.marketplaceName) {
-    return undefined;
-  }
-  const qualified = parseCodexPluginMarketplaceId(entry.pluginName);
-  if (qualified) {
-    return marketplaceNamesRepresentSameCatalog(qualified.marketplaceName, entry.marketplaceName)
-      ? { pluginName: qualified.pluginName, marketplaceName: entry.marketplaceName }
-      : undefined;
-  }
-  return parseCodexPluginMarketplaceId(`${entry.pluginName}@${entry.marketplaceName}`);
-}
-
-function matchesConfiguredPluginIdentity(
-  entry: CodexPluginConfigEntry,
-  requested: { pluginName: string; marketplaceName: string },
-  target: string,
-): boolean {
-  const configuredName = entry.pluginName
-    ? parseCodexPluginMarketplaceId(entry.pluginName)
-    : undefined;
-  return (
-    typeof entry.marketplaceName === "string" &&
-    marketplaceNamesRepresentSameCatalog(entry.marketplaceName, requested.marketplaceName) &&
-    (entry.pluginName === requested.pluginName ||
-      entry.pluginName === target ||
-      (configuredName?.pluginName === requested.pluginName &&
-        marketplaceNamesRepresentSameCatalog(
-          configuredName.marketplaceName,
-          requested.marketplaceName,
-        )))
-  );
-}
-
-function marketplaceNamesRepresentSameCatalog(left: string, right: string): boolean {
-  return (
-    left === right ||
-    (isOpenAiCuratedMarketplaceName(left) && isOpenAiCuratedMarketplaceName(right))
-  );
-}
-
-function describeConfiguredPluginIdentityConflict(
-  target: string,
-  status: "ambiguous" | "mismatched",
-): string {
-  const identity = formatCodexDisplayText(target);
-  return status === "ambiguous"
-    ? `Multiple configured Codex plugins match '${identity}'; resolve duplicate plugin policies first.`
-    : `Configured Codex plugin key '${identity}' points to a different plugin identity; resolve the configuration conflict first.`;
-}
-
-function formatAvailablePlugins(plugins: CodexAvailablePlugin[], warnings: string[]): string {
-  if (plugins.length === 0) {
-    return [
-      "No Codex plugins were discovered for the current workspace.",
-      ...warnings.map((warning) => `Warning: ${formatCodexDisplayText(warning)}`),
-    ].join("\n");
-  }
-  return [
-    "Discoverable Codex plugins:",
-    ...plugins.slice(0, 30).map((plugin) => {
-      const state = plugin.installed
-        ? plugin.enabled
-          ? "installed"
-          : "installed, disabled"
-        : plugin.available
-          ? "available"
-          : "unavailable";
-      const description = plugin.description
-        ? ` - ${formatCodexDisplayText(plugin.description)}`
-        : "";
-      return `- ${plugin.id} (${state})${description}`;
-    }),
-    ...(plugins.length > 30 ? ["- Additional plugins omitted."] : []),
-    ...warnings.map((warning) => `Warning: ${formatCodexDisplayText(warning)}`),
-    "To authorize one plugin, an owner or operator.admin must send:",
-    "/codex plugins install <plugin>@<marketplace>",
-  ].join("\n");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function formatPluginList(
@@ -699,6 +611,7 @@ function formatPluginList(
     ...(globalEnabled
       ? []
       : ["Global codexPlugins.enabled is off; configured sub-plugins are inactive.", ""]),
+    "Inspect one configured plugin: /codex plugins status <name>@<marketplace> [page].",
     POLICY_REFRESH_HINT,
   ].join("\n");
 }

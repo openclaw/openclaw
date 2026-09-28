@@ -8,7 +8,7 @@ import { i18n } from "../i18n/index.ts";
 import {
   findCatalogSessionHovercardRow,
   formatSidebarTimestamp,
-  visibleCatalogHosts,
+  projectSidebarSessionCatalogs,
 } from "./app-sidebar-session-catalogs.ts";
 
 describe("formatSidebarTimestamp", () => {
@@ -134,7 +134,13 @@ describe("findCatalogSessionHovercardRow", () => {
   });
 });
 
-describe("visibleCatalogHosts", () => {
+describe("projectSidebarSessionCatalogs", () => {
+  const catalog = (hosts: SessionCatalogHost[]): SessionCatalog => ({
+    id: "codex",
+    label: "Codex",
+    capabilities: { continueSession: true, archive: false },
+    hosts,
+  });
   const session = (threadId: string, name: string) => ({
     threadId,
     name,
@@ -162,7 +168,9 @@ describe("visibleCatalogHosts", () => {
       },
     ];
 
-    expect(visibleCatalogHosts(hosts)).toEqual([hosts[0]]);
+    expect(projectSidebarSessionCatalogs([catalog(hosts)], null, [])).toEqual([
+      { ...catalog(hosts), visibleHosts: [hosts[0]] },
+    ]);
   });
 
   it("filters sessions by effective owner without inferring host identity", () => {
@@ -185,8 +193,8 @@ describe("visibleCatalogHosts", () => {
       },
     ];
 
-    expect(visibleCatalogHosts(hosts, "operator:mine")).toEqual([
-      { ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] },
+    expect(projectSidebarSessionCatalogs([catalog(hosts)], "operator:mine", [])).toEqual([
+      { ...catalog(hosts), visibleHosts: [{ ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] }] },
     ]);
   });
 
@@ -209,7 +217,14 @@ describe("visibleCatalogHosts", () => {
     ];
 
     expect(
-      visibleCatalogHosts(hosts, "operator:owner", new Map([[adoptedKey, "operator:owner"]])),
-    ).toEqual(hosts);
+      projectSidebarSessionCatalogs([catalog(hosts)], "operator:owner", [
+        {
+          key: adoptedKey,
+          kind: "direct",
+          updatedAt: 1,
+          owner: { actor: { type: "human", id: "operator:owner" } },
+        },
+      ]),
+    ).toEqual([{ ...catalog(hosts), visibleHosts: hosts }]);
   });
 });

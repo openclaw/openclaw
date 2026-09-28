@@ -3,9 +3,14 @@
  *
  * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
  */
-import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import { randomUUID } from "node:crypto";
+import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
-import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import {
+  getAiTransportHost,
+  resolveAiTransportHeaderSentinels,
+  type AiProviderStreamHookContext,
+} from "../host.js";
 import {
   buildTransportAwareSimpleStreamFn,
   createOpenClawTransportStreamFnForModel,
@@ -13,6 +18,20 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
+
+/** Standalone completions have no durable session, but may require routing identity. */
+export function prepareHeadersForSimpleCompletion(
+  model: Pick<Model, "baseUrl" | "headers">,
+  options?: Pick<StreamOptions, "sessionId" | "headers">,
+): Record<string, string> | undefined {
+  // Keep the synthetic identity in the required header only: a stream sessionId
+  // would also enable unrelated cache and WebSocket session ownership.
+  return resolveOpencodeSessionHeaders(model, {
+    ...options,
+    sessionId: options?.sessionId || randomUUID(),
+  });
+}
 
 const PROVIDER_SIMPLE_COMPLETION_API_PREFIX = "openclaw-provider-simple:";
 const PROVIDER_STREAM_API_PREFIX = "openclaw-provider-stream:";
@@ -79,8 +98,20 @@ export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): st
   return path.endsWith("/codex") ? path : `${path}/codex`;
 }
 
-function resolveProviderSimpleCompletionApi(model: Model): Api {
+function resolveProviderSimpleCompletionApi(
+  model: Model,
+  auth?: AiProviderStreamHookContext["auth"],
+  agentId?: string,
+): Api {
   const parts = [model.provider, model.id, model.api, model.baseUrl || "default"];
+  // Registered wrappers retain their preparation context. A credential switch
+  // must select its own policy instead of reusing another grant's wrapper.
+  if (auth) {
+    parts.push(auth.mode, auth.authFlow ?? "");
+  }
+  if (agentId) {
+    parts.push("agent", agentId);
+  }
   return `${PROVIDER_SIMPLE_COMPLETION_API_PREFIX}${parts
     .map((part) => encodeURIComponent(part))
     .join(":")}`;
@@ -96,6 +127,8 @@ function applyProviderSimpleCompletionWrapper(
   model: Model,
   cfg?: unknown,
   hookSourceApi: Api = model.api,
+  auth?: AiProviderStreamHookContext["auth"],
+  agentId?: string,
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -117,6 +150,8 @@ function applyProviderSimpleCompletionWrapper(
       modelId: model.id,
       model,
       sourceApi: hookSourceApi,
+      auth,
+      agentId,
       streamFn: sourceStreamFn,
     },
   });
@@ -124,8 +159,17 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const api = resolveProviderSimpleCompletionApi(model);
-  return registerCustomApi(registry, api, streamFn) ? projectModel(model, { api }) : model;
+  // The registered simple-completion alias is only a dispatch key. Keep the
+  // original wire API visible while the wrapped stream applies request-body
+  // policy; the source stream projects back to dispatchApi before calling the
+  // provider, so provider routing still uses its registered alias.
+  const registeredStreamFn: StreamFn = (runtimeModel, context, options) =>
+    streamFn(projectModel(runtimeModel, { api: hookSourceApi }), context, options);
+
+  const api = resolveProviderSimpleCompletionApi(model, auth, agentId);
+  return registerCustomApi(registry, api, registeredStreamFn)
+    ? projectModel(model, { api })
+    : model;
 }
 
 function prepareCodexSimpleTransportModel<TApi extends Api>(
@@ -154,7 +198,15 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
   return projectModel(transportModel, { api });
 }
 
-function resolveModelHeaderSentinels<TApi extends Api>(model: Model<TApi>): Model<TApi> {
+function resolveModelTransportSentinels<TApi extends Api>(
+  model: Model<TApi>,
+  boundary: string,
+): Model<TApi> {
+  const host = getAiTransportHost();
+  if (host.unwrapModelTransportSentinels) {
+    return host.unwrapModelTransportSentinels(model, boundary);
+  }
+  // Partial embedding hosts still own visible headers through the original port.
   const headers = resolveAiTransportHeaderSentinels(model.headers);
   return headers === model.headers ? model : (projectModel(model, { headers }) as Model<TApi>);
 }
@@ -165,7 +217,7 @@ function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {
     const apiKey = options?.apiKey ? host.resolveSecretSentinel(options.apiKey) : options?.apiKey;
     const headers = resolveAiTransportHeaderSentinels(options?.headers);
     return streamFn(
-      resolveModelHeaderSentinels(model),
+      resolveModelTransportSentinels(model, "plugin simple-completion stream egress"),
       context,
       apiKey === options?.apiKey && headers === options?.headers
         ? options
@@ -179,7 +231,10 @@ function prepareProviderStreamModel<TApi extends Api>(params: {
   cfg?: unknown;
   apiRegistry: ApiRegistry;
 }): Model | undefined {
-  const pluginModel = resolveModelHeaderSentinels(params.model);
+  const pluginModel = resolveModelTransportSentinels(
+    params.model,
+    "plugin simple-completion stream construction",
+  );
   const providerStreamFn = getAiTransportHost().plugin.resolveProviderStream({
     provider: params.model.provider,
     config: params.cfg,
@@ -223,23 +278,46 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   apiRegistry: ApiRegistry;
   model: Model<TApi>;
   cfg?: unknown;
+  auth?: AiProviderStreamHookContext["auth"];
+  agentId?: string;
 }): Model {
-  const { apiRegistry, model, cfg } = params;
+  const { apiRegistry, model, cfg, auth, agentId } = params;
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, providerStreamModel, cfg, model.api);
+    return applyProviderSimpleCompletionWrapper(
+      apiRegistry,
+      providerStreamModel,
+      cfg,
+      model.api,
+      auth,
+      agentId,
+    );
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, codexTransportModel, cfg, model.api);
+    return applyProviderSimpleCompletionWrapper(
+      apiRegistry,
+      codexTransportModel,
+      cfg,
+      model.api,
+      auth,
+      agentId,
+    );
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg, model.api);
+      return applyProviderSimpleCompletionWrapper(
+        apiRegistry,
+        transportAwareModel,
+        cfg,
+        model.api,
+        auth,
+        agentId,
+      );
     }
   }
 
@@ -249,9 +327,16 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
       const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg, model.api);
+      return applyProviderSimpleCompletionWrapper(
+        apiRegistry,
+        transportModel,
+        cfg,
+        model.api,
+        auth,
+        agentId,
+      );
     }
   }
 
-  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg);
+  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth, agentId);
 }

@@ -1,5 +1,20 @@
 // Published plugin compatibility uses the same compiled SDK graph as native execution.
 const currentModuleUrl = import.meta.url;
+export const mcpProviderCatalogEntrypoint = {
+  currentModuleUrl,
+  sourceWorkerName: "../plugin-sdk/provider-catalog-runtime",
+  distWorkerPath: "plugin-sdk/provider-catalog-runtime.js",
+} as const;
+export const mcpPluginToolsServeEntrypoint = {
+  currentModuleUrl,
+  sourceWorkerName: "../mcp/plugin-tools-serve",
+  distWorkerPath: "mcp/plugin-tools-serve.js",
+} as const;
+export const computerUseSdkEntrypoint = {
+  currentModuleUrl,
+  sourceWorkerName: "../plugin-sdk/computer-use",
+  distWorkerPath: "plugin-sdk/computer-use.js",
+} as const;
 export const publishedSdkBridgeEntrypoints = [
   {
     currentModuleUrl,
@@ -16,4 +31,5 @@ export const publishedSdkBridgeEntrypoints = [
     sourceWorkerName: "../plugin-sdk/channel-outbound",
     distWorkerPath: "plugin-sdk/channel-outbound.js",
   },
+  computerUseSdkEntrypoint,
 ] as const;

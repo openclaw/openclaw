@@ -72,6 +72,7 @@ type SingleProviderPluginManifestAuthChoice = Pick<
   | "assistantPriority"
   | "onboardingFeatured"
 > & {
+  modelTarget?: string;
   assistantVisibility?: string;
   onboardingScopes?: readonly string[];
 };
@@ -264,7 +265,9 @@ function resolveManifestProviderAuth(params: {
   }
   const defaultModel = readManifestProviderDefaultModelRef(params.manifest, params.providerId);
   const assistantVisibility =
-    choice.assistantVisibility === "visible" || choice.assistantVisibility === "manual-only"
+    choice.assistantVisibility === "visible" ||
+    choice.assistantVisibility === "manual-only" ||
+    choice.assistantVisibility === "detected-only"
       ? choice.assistantVisibility
       : undefined;
   const onboardingScopes = choice.onboardingScopes?.filter(
@@ -298,6 +301,7 @@ function resolveManifestProviderAuth(params: {
                 ? { assistantPriority: choice.assistantPriority }
                 : {}),
               ...(assistantVisibility ? { assistantVisibility } : {}),
+              ...(choice.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
               ...(choice.onboardingFeatured !== undefined
                 ? { onboardingFeatured: choice.onboardingFeatured }
                 : {}),
@@ -321,6 +325,7 @@ function resolveWizardSetup(params: {
   const methodId = params.auth.methodId.trim();
   return {
     choiceId: wizard.choiceId ?? `${params.providerId}-${methodId}`,
+    ...(wizard.modelTarget ? { modelTarget: wizard.modelTarget } : {}),
     choiceLabel: wizard.choiceLabel ?? params.auth.label,
     ...(wizard.choiceHint ? { choiceHint: wizard.choiceHint } : {}),
     ...(wizard.assistantPriority !== undefined

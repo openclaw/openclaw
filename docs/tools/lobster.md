@@ -7,10 +7,8 @@ read_when:
 ---
 
 Lobster runs multi-step tool pipelines as one deterministic tool call, with
-explicit approval checkpoints and resume tokens. It sits one layer above
-detached background work: for orchestrating flows across many detached tasks,
-see [Task Flow](/automation/taskflow) (`openclaw tasks flow`); for the task
-activity ledger, see [Background Tasks](/automation/tasks).
+explicit approval checkpoints and resume tokens. Approval checkpoints belong
+to the Lobster runner, not a separate orchestration registry.
 
 ## Why
 
@@ -77,14 +75,16 @@ token (or a short approval ID) so you can continue later.
 ## Enable
 
 Lobster is an **optional** plugin tool, not installed or enabled by default.
-Install the official plugin, then restart the Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/lobster
-openclaw gateway restart
 ```
 
-After the Gateway restarts, allow the tool globally:
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
+Then allow the tool globally:
 
 ```json
 {
@@ -198,6 +198,16 @@ openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
 Use the example below only when running the **standalone Lobster CLI** in an
 environment where `openclaw.invoke` is already configured with the correct
 gateway/auth context.
+
+For `openclaw.invoke` and `clawd.invoke`, ambient `OPENCLAW_TOKEN` or
+`CLAWD_TOKEN` credentials are accepted only for `localhost`, `127.0.0.1`, or
+`[::1]` destinations. To send credentials to another HTTP(S) endpoint, pass
+`--token` explicitly. This rule also applies to embedded workflows that
+explicitly configure a remote connection. This command argument is the remote
+Gateway credential, not the Lobster tool's approval-resume `token` parameter.
+If an invocation times out or fails after dispatch,
+Lobster does not retry it automatically, because the Gateway may already have
+performed the action.
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -321,29 +331,6 @@ Run a workflow file with args:
 or `approvalId` (the short id from the same object) - use whichever the halted
 run returned. `approve` is required.
 
-### Managed Task Flow mode
-
-Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
-`flowExpectedRevision` on `resume`) drives the call through the plugin
-runtime's managed [Task Flow](/automation/taskflow) API instead of returning
-a bare envelope: OpenClaw creates or resumes a durable flow record and applies
-the Lobster outcome to it (`waiting` on approval, `succeeded`/`failed`/`cancelled`
-on completion). The tool returns the envelope fields at the top level, alongside
-`flow` and `mutation`. Check `mutation.applied` for a successful state transition
-and carry forward **`mutation.flow.revision`**; top-level `flow` is the snapshot
-from before that transition. Cancellation instead reports `mutation.cancelled`.
-A workflow error is surfaced as a tool error after an attempted flow failure;
-inspect the persisted flow rather than assuming the failure write succeeded.
-
-This mode requires a non-sandboxed tool context with a bound session. It records
-a managed flow, not detached ACP/subagent tasks for each shell step. Flow state
-persists in OpenClaw SQLite; Lobster's approval checkpoint is separate and must
-also remain available for resume. After a restart, the controller must inspect
-the latest flow and explicitly resume it with the matching approval token or ID.
-Neither Task Flow nor a skill automatically replays arbitrary JavaScript. See
-[Task Flow](/automation/taskflow) for the runnable examples and child-linking
-contract.
-
 ## Output envelope
 
 Lobster returns a JSON envelope with one of three statuses:
@@ -410,3 +397,4 @@ not.
 
 - [Automation](/automation) - all automation mechanisms
 - [Tools Overview](/tools) - all available agent tools
+- [Lobster plugin reference](/plugins/reference/lobster) - manifest, config, and tool reference for the plugin

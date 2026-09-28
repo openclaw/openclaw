@@ -33,25 +33,12 @@ export function scopedToolAgentMatches(
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }
-  return entry.scope === "global" && !hasScopedToolEvidence(entries, entry.kind, policyAgentId);
+  return entry.scope === "global" && !hasScopedAgentEvidence(entries, entry.kind, policyAgentId);
 }
 
 function hasScopedAgentEvidence(
-  entries: readonly PolicyAgentWorkspaceEvidence[],
-  kind: PolicyAgentWorkspaceEvidence["kind"],
-  policyAgentId: string,
-): boolean {
-  return entries.some(
-    (candidate) =>
-      candidate.scope === "agent" &&
-      candidate.kind === kind &&
-      scopedAgentIdMatches(candidate.agentId, policyAgentId),
-  );
-}
-
-function hasScopedToolEvidence(
-  entries: readonly PolicyToolPostureEvidence[],
-  kind: PolicyToolPostureEvidence["kind"],
+  entries: readonly (PolicyAgentWorkspaceEvidence | PolicyToolPostureEvidence)[],
+  kind: PolicyAgentWorkspaceEvidence["kind"] | PolicyToolPostureEvidence["kind"],
   policyAgentId: string,
 ): boolean {
   return entries.some(
@@ -72,16 +59,22 @@ export function scopedAgentIdMatches(
   );
 }
 
-export function policyHasExecApprovalsRules(policy: unknown): boolean {
+function policyOrScopeHasRules(
+  policy: unknown,
+  section: string,
+  hasRules: (value: unknown) => boolean,
+): boolean {
   if (!isRecord(policy)) {
     return false;
   }
-  if (execApprovalsPolicyHasRules(policy.execApprovals)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    execApprovalsPolicyHasRules(overlay.execApprovals),
+  return (
+    hasRules(policy[section]) ||
+    agentScopedPolicyOverlays(policy).some(([, overlay]) => hasRules(overlay[section]))
   );
+}
+
+export function policyHasExecApprovalsRules(policy: unknown): boolean {
+  return policyOrScopeHasRules(policy, "execApprovals", execApprovalsPolicyHasRules);
 }
 
 function execApprovalsPolicyHasRules(value: unknown): boolean {
@@ -113,15 +106,7 @@ export function policyHasAuthProfileRules(policy: unknown): boolean {
 }
 
 export function policyHasIngressRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (ingressPolicyHasRules(policy.ingress)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    ingressPolicyHasRules(overlay.ingress),
-  );
+  return policyOrScopeHasRules(policy, "ingress", ingressPolicyHasRules);
 }
 
 export function policyHasRoutingRules(policy: unknown): boolean {
@@ -177,15 +162,7 @@ export function policyHasAgentWorkspaceRules(policy: unknown): boolean {
 }
 
 export function policyHasSandboxPostureRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (sandboxPosturePolicyHasRules(policy.sandbox)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    sandboxPosturePolicyHasRules(overlay.sandbox),
-  );
+  return policyOrScopeHasRules(policy, "sandbox", sandboxPosturePolicyHasRules);
 }
 
 function sandboxPosturePolicyHasRules(value: unknown): boolean {
@@ -205,15 +182,7 @@ function sandboxPosturePolicyHasRules(value: unknown): boolean {
 }
 
 export function policyHasDataHandlingRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (dataHandlingPolicyHasRules(policy.dataHandling)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    dataHandlingPolicyHasRules(overlay.dataHandling),
-  );
+  return policyOrScopeHasRules(policy, "dataHandling", dataHandlingPolicyHasRules);
 }
 
 export function dataHandlingPolicyHasRules(value: unknown): boolean {
@@ -233,15 +202,7 @@ export function dataHandlingPolicyHasRules(value: unknown): boolean {
 }
 
 export function policyHasToolPostureRules(policy: unknown): boolean {
-  if (!isRecord(policy)) {
-    return false;
-  }
-  if (toolPosturePolicyHasRules(policy.tools)) {
-    return true;
-  }
-  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
-    toolPosturePolicyHasRules(overlay.tools),
-  );
+  return policyOrScopeHasRules(policy, "tools", toolPosturePolicyHasRules);
 }
 
 function workspacePolicyHasRules(value: unknown): boolean {
@@ -322,7 +283,6 @@ export function channelScopedPolicyTargets(policy: unknown): readonly ChannelSco
 }
 
 type ScopedPolicyField = {
-  readonly fieldPath: string;
   readonly propertyPath: string;
   readonly targetPath: string;
   readonly metadata: PolicyRuleMetadata;
@@ -367,7 +327,6 @@ function duplicateScopedFieldFinding(
   const seen = new Map<
     string,
     {
-      readonly scopeName: string;
       readonly propertyPath: string;
       readonly field: ScopedPolicyField;
     }
@@ -399,12 +358,11 @@ function duplicateScopedFieldFinding(
             `Use an equally or more restrictive scoped value, or remove the scoped override.`,
           );
         }
-        const key = `${selectorValue}\0${field.fieldPath}`;
+        const key = `${selectorValue}\0${field.propertyPath}`;
         const previous = seen.get(key);
         if (previous !== undefined) {
           if (isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)) {
             seen.set(key, {
-              scopeName,
               propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
               field,
             });
@@ -418,7 +376,6 @@ function duplicateScopedFieldFinding(
           );
         }
         seen.set(key, {
-          scopeName,
           propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
           field,
         });
@@ -438,7 +395,6 @@ function scopedPolicyFields(
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
-      fieldPath: rule.policyPath.join("."),
       propertyPath: rule.policyPath.join("."),
       targetPath: `${prefix}/${rule.policyPath.map(ocPathSegment).join("/")}`,
       metadata: rule,

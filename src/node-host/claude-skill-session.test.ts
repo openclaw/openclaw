@@ -23,7 +23,7 @@ describe("node Claude skill artifact cleanup", () => {
         "---\ndescription: Guide\n---\n# Guide\n",
       );
       const resources = await prepareSkillResourceDelivery(
-        buildSkillSnapshot(workspace, {
+        await buildSkillSnapshot(workspace, {
           entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
         }),
         () => {},
@@ -95,7 +95,7 @@ describe("node Claude skill artifact cleanup", () => {
     await fs.writeFile(path.join(skillDir, "SKILL.md"), markdown);
     await fs.writeFile(path.join(skillDir, "reference.md"), "supporting resource");
     const resources = await prepareSkillResourceDelivery(
-      buildSkillSnapshot(workspace, {
+      await buildSkillSnapshot(workspace, {
         entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
       }),
       () => {},

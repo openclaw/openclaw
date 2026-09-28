@@ -1,6 +1,6 @@
 // Copilot plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 
@@ -37,9 +37,9 @@ export default definePluginEntry({
     const poolOptions = readPoolOptions(api.pluginConfig);
     // Prepared registries discover the harness without activating runtime state.
     // Resolve the trusted store only when a harness operation needs a binding.
-    let sessionStore: PluginStateSyncKeyedStore<CopilotSessionBinding> | undefined;
+    let sessionStore: PluginStateKeyedStore<CopilotSessionBinding> | undefined;
     const getSessionStore = () =>
-      (sessionStore ??= api.runtime.state.openSyncKeyedStore<CopilotSessionBinding>({
+      (sessionStore ??= api.runtime.state.openKeyedStore<CopilotSessionBinding>({
         namespace: "sdk-sessions",
         maxEntries: 5000,
         defaultTtlMs: 90 * 24 * 60 * 60 * 1000,

@@ -60,7 +60,10 @@ const InstallRecordShape = {
   gitCommit: z.string().optional(),
 } as const;
 
-export const PluginInstallRecordShape = {
+const InstallRecordSchema = z.object(InstallRecordShape);
+export type InstallRecordBase = z.infer<typeof InstallRecordSchema>;
+
+const PluginInstallRecordShape = {
   ...InstallRecordShape,
   source: PluginInstallSourceSchema,
   marketplaceName: z.string().optional(),
@@ -85,3 +88,7 @@ export const PluginInstallRecordShape = {
   acceptedSurfaceAt: z.string().optional(),
   acceptedSurfaceIntegrity: z.string().optional(),
 } as const;
+
+export const StrictPluginInstallRecordSchema = z.object(PluginInstallRecordShape);
+export type PluginInstallRecord = z.infer<typeof StrictPluginInstallRecordSchema>;
+export type PluginAcceptedDeclaredSurface = NonNullable<PluginInstallRecord["acceptedSurface"]>;

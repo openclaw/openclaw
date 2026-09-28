@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "../dashboard.js";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
@@ -52,9 +53,7 @@ const fakePassword = ["te", "st-password"].join("");
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 const runtime = {
-  error: vi.fn(),
-  exit: vi.fn(),
-  log: vi.fn(),
+  ...createTestRuntime(),
   writeJson: vi.fn(),
   writeStdout: vi.fn(),
 };

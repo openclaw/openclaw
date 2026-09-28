@@ -1,4 +1,3 @@
-// Telegram plugin module implements inbound event delivery behavior.
 import { createInboundEventDeliveryCorrelation } from "openclaw/plugin-sdk/inbound-event-delivery";
 import { stripTelegramInternalPrefixes } from "./targets.js";
 
@@ -23,11 +22,7 @@ function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean
   if (hasTelegramTopicTarget(expectedTarget)) {
     return false;
   }
-  const expectedBase = stripTelegramTopicTarget(expectedTarget);
-  const actualBase = stripTelegramTopicTarget(actualTarget);
-  return (
-    expectedBase === actualBase && (expectedTarget === expectedBase || actualTarget === actualBase)
-  );
+  return expectedTarget === stripTelegramTopicTarget(actualTarget);
 }
 
 export const telegramInboundEventDelivery = createInboundEventDeliveryCorrelation({

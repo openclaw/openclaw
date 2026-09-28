@@ -1,4 +1,5 @@
 import type { CapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import type { PluginInstallSource } from "./install-channel-specs.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 
 export class ManagedPluginLifecycleError extends Error {
@@ -8,18 +9,12 @@ export class ManagedPluginLifecycleError extends Error {
   readonly warning?: string;
   readonly installPolicyWarning?: InstallPolicyWarningDetails;
   readonly capabilityConsent?: Omit<CapabilityConsentErrorDetails, "capabilityConsentCode">;
+  readonly installRejected?: boolean;
+  readonly installSource?: PluginInstallSource;
 
   constructor(
     message: string,
-    details?: {
-      kind?: "invalid-request" | "unavailable";
-      code?: string;
-      version?: string;
-      warning?: string;
-      installPolicyWarning?: InstallPolicyWarningDetails;
-      capabilityConsent?: Omit<CapabilityConsentErrorDetails, "capabilityConsentCode">;
-      cause?: unknown;
-    },
+    details?: Partial<Omit<ManagedPluginLifecycleError, keyof Error>> & ErrorOptions,
   ) {
     super(message, details?.cause !== undefined ? { cause: details.cause } : undefined);
     this.name = "ManagedPluginLifecycleError";
@@ -29,5 +24,7 @@ export class ManagedPluginLifecycleError extends Error {
     this.warning = details?.warning;
     this.installPolicyWarning = details?.installPolicyWarning;
     this.capabilityConsent = details?.capabilityConsent;
+    this.installRejected = details?.installRejected;
+    this.installSource = details?.installSource;
   }
 }

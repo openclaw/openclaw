@@ -9,7 +9,6 @@ import type {
 } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopAccess } from "./access.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
-import type { SkillWorkshopHistoryScanState } from "./state.ts";
 
 export type SkillWorkshopProps = {
   access: SkillWorkshopAccess;
@@ -35,7 +34,6 @@ export type SkillWorkshopProps = {
   assistantName: string;
   workshopAgentName: string;
   selfLearning: SkillWorkshopSelfLearning | null;
-  historyScan: SkillWorkshopHistoryScanState;
   onRetry: () => void;
   onQueryChange: (query: string) => void;
   onFilePreviewQueryChange: (query: string) => void;
@@ -54,5 +52,4 @@ export type SkillWorkshopProps = {
   onPreviewFile: (key: string, path: string) => void;
   onClosePreview: () => void;
   onSelfLearningToggle: (enabled: boolean) => void;
-  onHistoryScan: () => void;
 };

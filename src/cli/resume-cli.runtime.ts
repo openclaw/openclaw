@@ -1,5 +1,5 @@
 // Resolves recent Gateway sessions and attaches the existing TUI to the selected key.
-import { cancel, isCancel } from "@clack/prompts";
+import { cancel } from "@clack/prompts";
 import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsResolveResultSchema } from "../../packages/gateway-protocol/src/schema/sessions-resolve.js";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
@@ -147,7 +147,7 @@ async function promptResumeSession(
       hint: choice.description ? sanitizeTerminalText(choice.description) : undefined,
     })),
   });
-  if (isCancel(selected)) {
+  if (typeof selected === "symbol") {
     cancel("Cancelled.");
     return null;
   }

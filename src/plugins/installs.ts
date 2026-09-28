@@ -6,12 +6,14 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 
 /** Plugin install record update with the target plugin id attached. */
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
+
+export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/install-source-utils.js";
 
 type NpmInstallPathRecord = Pick<PluginInstallRecord, "source" | "installPath">;
 
@@ -89,16 +91,6 @@ export function reconcileNpmPluginLoadPath(params: {
       load: { ...params.config.plugins?.load, paths },
     },
   };
-}
-
-/** Builds install record fields from resolved npm package metadata. */
-export function buildNpmResolutionInstallFields(
-  resolution?: NpmSpecResolution,
-): Pick<
-  PluginInstallRecord,
-  "resolvedName" | "resolvedVersion" | "resolvedSpec" | "integrity" | "shasum" | "resolvedAt"
-> {
-  return buildNpmResolutionFields(resolution);
 }
 
 function isExactRegistryNpmSpec(spec: string | undefined): spec is string {

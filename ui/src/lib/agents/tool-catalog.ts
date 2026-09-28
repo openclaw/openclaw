@@ -1,5 +1,7 @@
+import { listCoreToolSections } from "../../../../src/agents/tool-catalog.js";
+import { AUTOMATIONS_TOOL_NAME } from "../../../../src/agents/tools/automations-tool-name.js";
 import type { ToolCatalogProfile, ToolsCatalogResult } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
+import { t, translateActive } from "../../i18n/index.ts";
 
 export type AgentToolEntry = {
   id: string;
@@ -19,76 +21,10 @@ export type AgentToolSection = {
   tools: AgentToolEntry[];
 };
 
-type FallbackToolSection = Omit<AgentToolSection, "label" | "tools"> & {
-  labelId: string;
-  tools: string[];
-};
-
-const FALLBACK_TOOL_SECTIONS: FallbackToolSection[] = [
-  {
-    id: "fs",
-    labelId: "files",
-    tools: ["read", "write", "edit", "apply_patch"],
-  },
-  {
-    id: "runtime",
-    labelId: "runtime",
-    tools: ["exec", "process"],
-  },
-  {
-    id: "web",
-    labelId: "web",
-    tools: ["web_search", "web_fetch"],
-  },
-  {
-    id: "memory",
-    labelId: "memory",
-    tools: ["memory_search", "memory_get"],
-  },
-  {
-    id: "sessions",
-    labelId: "sessions",
-    tools: [
-      "sessions_list",
-      "sessions_history",
-      "sessions_send",
-      "sessions_spawn",
-      "session_status",
-    ],
-  },
-  {
-    id: "ui",
-    labelId: "ui",
-    tools: ["browser", "canvas"],
-  },
-  {
-    id: "messaging",
-    labelId: "messaging",
-    tools: ["message"],
-  },
-  {
-    id: "automation",
-    labelId: "automation",
-    tools: ["cron", "gateway"],
-  },
-  {
-    id: "nodes",
-    labelId: "nodes",
-    tools: ["nodes"],
-  },
-  {
-    id: "agents",
-    labelId: "agents",
-    tools: ["agents_list"],
-  },
-  {
-    id: "media",
-    labelId: "media",
-    tools: ["view_image"],
-  },
-];
-
 function fallbackToolDescriptionId(toolId: string): string {
+  if (toolId === AUTOMATIONS_TOOL_NAME) {
+    return "cron";
+  }
   return toolId === "view_image"
     ? "image"
     : toolId.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase());
@@ -106,9 +42,10 @@ export const PROFILE_OPTIONS = [
 // Gateway catalog labels are English-only strings. Translate the known core
 // group/profile enum labels locally so localized UIs don't render English
 // section names; plugin groups (`plugin:<id>` ids) never match and keep the
-// catalog-provided label.
+// catalog-provided label. Fallback descriptions use canonical English where
+// the active locale has no translation for the existing description id.
 const CORE_GROUP_LABEL_IDS = new Map<string, string>(
-  FALLBACK_TOOL_SECTIONS.map((section) => [section.id, section.labelId]),
+  listCoreToolSections().map((section) => [section.id, section.id === "fs" ? "files" : section.id]),
 );
 const PROFILE_LABEL_KEYS = new Map<string, string>(
   PROFILE_OPTIONS.map((profile) => [profile.id, profile.labelKey]),
@@ -137,13 +74,14 @@ export function resolveToolSections(
       };
     });
   }
-  return FALLBACK_TOOL_SECTIONS.map((section) => ({
+  return listCoreToolSections().map((section) => ({
     id: section.id,
-    label: t(`agents.toolCatalog.groups.${section.labelId}`),
-    tools: section.tools.map((toolId) => ({
-      id: toolId,
-      label: toolId,
-      description: t(`agents.toolCatalog.descriptions.${fallbackToolDescriptionId(toolId)}`),
+    label: t(`agents.toolCatalog.groups.${CORE_GROUP_LABEL_IDS.get(section.id)}`),
+    tools: section.tools.map((tool) => ({
+      ...tool,
+      description:
+        translateActive(`agents.toolCatalog.descriptions.${fallbackToolDescriptionId(tool.id)}`) ??
+        tool.description,
     })),
   }));
 }

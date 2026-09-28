@@ -21,7 +21,6 @@ import {
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
   type RestartSentinel,
-  type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 import {
@@ -292,10 +291,6 @@ export async function readRestartSentinelSnapshot(): Promise<{
   );
 }
 
-function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
-  return structuredClone(payload);
-}
-
 async function rewriteRestartSentinel(
   rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
   env: NodeJS.ProcessEnv = process.env,
@@ -306,7 +301,7 @@ async function rewriteRestartSentinel(
       if (current.kind !== "valid") {
         return null;
       }
-      const nextPayload = rewrite(cloneRestartSentinelPayload(current.sentinel.payload));
+      const nextPayload = rewrite(structuredClone(current.sentinel.payload));
       return nextPayload
         ? writeRestartSentinelRowIfRevisionSync(db, nextPayload, current.sentinel.revision)
         : null;
@@ -349,7 +344,7 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
         return null;
       }
 
-      const payload = cloneRestartSentinelPayload(current.sentinel.payload);
+      const payload = structuredClone(current.sentinel.payload);
       const stats = payload.stats ? { ...payload.stats } : {};
       const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
       let changed = false;
@@ -417,29 +412,23 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
 export async function markUpdateRestartSentinelFailure(
   reason: string,
   env: NodeJS.ProcessEnv = process.env,
+  expectedOwner?: { runId?: string; handoffId?: string },
 ): Promise<RestartSentinel | null> {
   return await rewriteRestartSentinel((payload) => {
-    if (payload.kind !== "update") {
+    // Match within the existing atomic read/rewrite, not a racy preflight read.
+    if (
+      payload.kind !== "update" ||
+      (expectedOwner?.runId !== undefined && payload.stats?.runId !== expectedOwner.runId) ||
+      (expectedOwner?.handoffId !== undefined &&
+        payload.stats?.handoffId !== expectedOwner.handoffId)
+    ) {
       return null;
     }
-    const payloadWithoutContinuation = { ...payload };
-    delete payloadWithoutContinuation.continuation;
-    const stats = payload.stats ? { ...payload.stats } : {};
-    stats.reason = reason;
-    return {
-      ...payloadWithoutContinuation,
-      status: "error",
-      stats,
-    };
+    delete payload.continuation;
+    payload.status = "error";
+    payload.stats = { ...payload.stats, reason };
+    return payload;
   }, env);
-}
-
-export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => deleteRestartSentinelRowSync(db),
-    { env },
-    { operationLabel: "restart-sentinel.clear" },
-  );
 }
 
 export async function clearRestartSentinelIfRevision(
@@ -451,17 +440,6 @@ export async function clearRestartSentinelIfRevision(
     { env },
     { operationLabel: "restart-sentinel.clear-if-revision" },
   );
-}
-
-export function buildRestartSuccessContinuation(params: {
-  sessionKey?: string;
-  continuationMessage?: string | null;
-}): RestartSentinelContinuation | null {
-  const message = params.continuationMessage?.trim();
-  if (message) {
-    return { kind: "agentTurn", message };
-  }
-  return null;
 }
 
 export async function readRestartSentinel(

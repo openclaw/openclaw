@@ -25,13 +25,127 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
-  fun dropsInternalToolBlocksFromDisplayHistory() {
+  fun projectsToolResultsIntoBoundedDisplayActivity() {
     val content =
       Json.parseToJsonElement(
-        """{"type":"toolResult","content":"large internal output"}""",
+        """{"type":"toolResult","toolCallId":"call-1","name":"read","content":"useful output"}""",
       )
 
-    assertNull(parseChatMessageContent(content))
+    assertEquals(
+      ChatMessageContent(
+        type = "toolResult",
+        toolActivity = ChatToolActivity("call-1", "read", null, "useful output", false),
+      ),
+      parseChatMessageContent(content),
+    )
+  }
+
+  @Test
+  fun preservesWebToolNameAndCallIdentityAliases() {
+    for (nameKey in listOf("toolName", "tool_name")) {
+      for (idKey in listOf("toolUseId", "tool_use_id", "callId")) {
+        val parsed =
+          parseChatMessageContent(
+            Json.parseToJsonElement(
+              """{"type":"toolResult","name":" ","toolCallId":" ","$nameKey":"bash","$idKey":"call-1","content":"output"}""",
+            ),
+          )
+        assertEquals(ChatToolActivity("call-1", "bash", null, "output", false), parsed?.toolActivity)
+      }
+    }
+  }
+
+  @Test
+  fun browserPresentationRequiresSuccessfulBrowserResultAndCompleteRoute() {
+    val host = """{"target":"host","profile":"openclaw","targetId":"t1","title":"Travel checklist","url":"https://example.test/travel"}"""
+    val node = """{"target":"node","node":"workstation","profile":"work","targetId":"t2"}"""
+
+    fun parse(
+      tab: String,
+      name: String = "browser",
+      type: String = "toolResult",
+      error: Boolean = false,
+    ) = parseChatMessageContent(
+      Json.parseToJsonElement("""{"type":"$type","toolName":"$name","toolCallId":"browser-1","isError":$error,"details":{"browserTab":$tab},"content":"https://example.test/travel"}"""),
+    )?.toolActivity?.browserTab
+
+    assertEquals(ChatBrowserTab("host", null, "openclaw", "t1", "https://example.test/travel", "Travel checklist"), parse(host))
+    assertEquals(ChatBrowserTab("node", "workstation", "work", "t2", null, null), parse(node))
+    for (invalid in listOf(
+      """{"target":"host","targetId":"t1"}""",
+      """{"target":"node","profile":"work","targetId":"t1"}""",
+      """{"target":"host","node":"workstation","profile":"work","targetId":"t1"}""",
+      """{"target":"host","profile":"work","targetId":" "}""",
+      """{"target":"sandbox","profile":"work","targetId":"t1"}""",
+    )) {
+      assertNull(parse(invalid))
+    }
+    assertNull(parse(host, name = "web_fetch"))
+    assertNull(parse(host, type = "toolCall"))
+    assertNull(parse(host, error = true))
+  }
+
+  @Test
+  fun preservesUnnamedResultsForMatchingWithoutInventingCallIdentity() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement("""{"type":"tool_result","tool_use_id":"call-1","content":"failure details","isError":true}"""),
+      )
+    assertEquals(ChatToolActivity("call-1", "tool", null, "failure details", true), parsed?.toolActivity)
+    assertNull(parseChatMessageContent(Json.parseToJsonElement("""{"type":"toolResult","content":""}""")))
+  }
+
+  @Test
+  fun boundsToolResultTextAndOnlyProjectsMeaningfulArguments() {
+    val longResult = "x".repeat(2_100)
+    val result =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","name":"exec","content":"$longResult","details":{"secret":"hidden"}}""",
+        ),
+      )
+    val call =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"call-1","name":"exec","arguments":{"command":"./gradlew test","token":"hidden"}}""",
+        ),
+      )
+
+    assertEquals(2_001, result?.toolActivity?.result?.length)
+    assertEquals("command: ./gradlew test", call?.toolActivity?.detail)
+    assertEquals(null, call?.toolActivity?.result)
+  }
+
+  @Test
+  fun toolResultsKeepAllMeaningfulTextBlocksInOrderWithinTheDisplayLimit() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","content":[{"text":" "},{"text":"first"},{"type":"image","data":"hidden"},{"text":"second"}]}""",
+        ),
+      )
+    assertEquals("first\nsecond", parsed?.toolActivity?.result)
+    val bounded =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","content":[{"text":"${"x".repeat(1_999)}"},{"text":"second"}]}""",
+        ),
+      )
+    assertEquals("x".repeat(1_999) + "…", bounded?.toolActivity?.result)
+  }
+
+  @Test
+  fun progressPresentationRejectsUnknownAndUnboundedPlanStatuses() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"progress-1","name":"progress_card","arguments":{"plan":[{"step":"Ready","status":"pending"},{"step":"Working","status":"in_progress"},{"step":"Done","status":"completed"},{"step":"Invalid","status":"${"x".repeat(10_000)}"}]}}""",
+        ),
+      )
+    assertEquals(
+      Json.parseToJsonElement("""[{"step":"Ready","status":"pending"},{"step":"Working","status":"in_progress"},{"step":"Done","status":"completed"}]"""),
+      parsed?.toolActivity?.arguments?.get("plan"),
+    )
   }
 
   @Test

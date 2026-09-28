@@ -12,7 +12,7 @@ const SCRIPT_FAILURE_COPY = {
   snapshot_limit_exceeded: "exceeded its state limit",
   internal_error: "failed internally",
   tool_budget_exceeded: "exceeded its tool budget",
-} satisfies Record<CronTriggerFailureCode, string>;
+} satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
 /** Renders only classified reasons or closed producer-authored failure facts. */
 export function cronFailureDetailLines(
@@ -43,5 +43,12 @@ export function cronFailureDetailLines(
   }
   const label =
     failureNotificationDetail.source === "payload" ? "automation script" : "trigger script";
+  if (failureNotificationDetail.code === "plugin_reload_failed") {
+    return [
+      "Cause: tools could not be refreshed after a plugin reload.",
+      `The ${label} did not run. Automatic setup recovery failed.`,
+      "Check automation history and plugin status, then retry the automation.",
+    ];
+  }
   return [`Cause: ${label} ${SCRIPT_FAILURE_COPY[failureNotificationDetail.code]}`];
 }

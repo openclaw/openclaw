@@ -6,9 +6,28 @@
  * package and managed transports from drifting on token buckets, service-tier pricing, or future
  * terminal-event semantics.
  */
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type OpenAI from "openai";
-import type { StopReason, Usage } from "../types.js";
+import type { AssistantMessage, StopReason, Usage } from "../types.js";
+
+/** A known output ceiling can resume sampling after admitted tools have settled. */
+export function isResponsesOutputLimitToolCallError(
+  message: Pick<AssistantMessage, "stopReason" | "errorCode" | "diagnostics">,
+): boolean {
+  return (
+    message.stopReason === "error" &&
+    message.errorCode === "incomplete_tool_call" &&
+    !isProviderRefusalAssistantError(message) &&
+    message.diagnostics?.some(
+      ({ type, details }) =>
+        type === "openai_responses_terminal" &&
+        details?.eventType === "response.incomplete" &&
+        details.stopReason === "length" &&
+        details.incompleteReason === "max_output_tokens",
+    ) === true
+  );
+}
 
 /** Terminal usage payload, modeled structurally so untyped callers can pass raw records. */
 export type ResponsesTerminalUsagePayload = {

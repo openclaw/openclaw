@@ -1,17 +1,19 @@
 import Foundation
 
-final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
-    let watcher: SimpleFileWatcher
+final class CanvasFileWatcher: @unchecked Sendable {
+    private let watcher: CoalescingFSEventsWatcher
     private let pollingWatcher: PollingDirectoryWatcher
 
     init(url: URL, onChange: @escaping () -> Void) {
-        self.watcher = SimpleFileWatcher(CoalescingFSEventsWatcher(
+        // Both producers can stop together from onChange without waiting on each other.
+        let queue = DispatchQueue(label: "ai.openclaw.canvaswatcher")
+        self.watcher = CoalescingFSEventsWatcher(
             paths: [url.path],
-            queueLabel: "ai.openclaw.canvaswatcher",
-            onChange: onChange))
+            queue: queue,
+            onChange: onChange)
         self.pollingWatcher = PollingDirectoryWatcher(
             url: url,
-            queueLabel: "ai.openclaw.canvaswatcher.poll",
+            queue: queue,
             onChange: onChange)
     }
 
@@ -50,22 +52,25 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
 
     private let url: URL
     private let queue: DispatchQueue
+    private let queueKey = DispatchSpecificKey<UInt8>()
     private let onChange: () -> Void
     private var timer: DispatchSourceTimer?
     private var lastSnapshot: [String: FileSignature] = [:]
 
-    init(url: URL, queueLabel: String, onChange: @escaping () -> Void) {
+    init(url: URL, queue: DispatchQueue, onChange: @escaping () -> Void) {
         self.url = url
-        self.queue = DispatchQueue(label: queueLabel)
+        self.queue = queue
         self.onChange = onChange
+        self.queue.setSpecific(key: self.queueKey, value: 1)
     }
 
     deinit {
         self.stop()
+        self.queue.setSpecific(key: self.queueKey, value: nil)
     }
 
     func start() {
-        self.queue.sync {
+        self.onQueue {
             guard self.timer == nil else { return }
             self.lastSnapshot = self.snapshot()
 
@@ -80,7 +85,7 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
     }
 
     func stop() {
-        self.queue.sync {
+        self.onQueue {
             self.timer?.cancel()
             self.timer = nil
             self.lastSnapshot = [:]
@@ -88,12 +93,20 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
     }
 
     var isRunning: Bool {
-        self.queue.sync {
+        self.onQueue {
             self.timer != nil
         }
     }
 
+    private func onQueue<T>(_ action: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: self.queueKey) != nil {
+            return action()
+        }
+        return self.queue.sync(execute: action)
+    }
+
     private func poll() {
+        guard self.timer != nil else { return }
         let next = self.snapshot()
         guard next != self.lastSnapshot else { return }
         self.lastSnapshot = next

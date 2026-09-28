@@ -1,6 +1,3 @@
-/**
- * Installs context guards for oversized tool-result histories.
- */
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
@@ -21,10 +18,12 @@ import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
+  estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
@@ -33,8 +32,6 @@ type GuardableTransformContext = (
   messages: AgentMessage[],
   signal: AbortSignal,
 ) => AgentMessage[] | Promise<AgentMessage[]>;
-
-type GuardableAgent = object;
 
 type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
@@ -112,27 +109,17 @@ function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
   return messageRest;
 }
 
-function projectTranscriptPromptMessages(
+function projectMessages(
   messages: AgentMessage[],
-  cache: WeakMap<AgentMessage, AgentMessage>,
+  project: (message: AgentMessage) => AgentMessage,
 ): AgentMessage[] {
   let changed = false;
   const projected = messages.map((message) => {
-    const next = restoreTranscriptPromptText(message, cache);
+    const next = project(message);
     changed ||= next !== message;
     return next;
   });
   return changed ? projected : messages;
-}
-
-function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] {
-  let changed = false;
-  const stripped = messages.map((message) => {
-    const next = stripTranscriptPromptMarker(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? stripped : messages;
 }
 
 function replaceToolResultContent(
@@ -140,15 +127,15 @@ function replaceToolResultContent(
   replacement: string | unknown[],
 ): AgentMessage {
   const content = (msg as { content?: unknown }).content;
-  const rest = { ...msg };
-  Reflect.deleteProperty(rest, "details");
-  return {
-    ...rest,
+  const result = {
+    ...msg,
     content:
       typeof replacement === "string" && !(typeof content === "string" || content === undefined)
         ? [{ type: "text", text: replacement }]
         : replacement,
   } as AgentMessage;
+  Reflect.deleteProperty(result, "details");
+  return result;
 }
 
 function estimateBudgetToRawChars(maxChars: number): number {
@@ -173,10 +160,7 @@ function truncateToolResultToChars(
     const isImage = (block: unknown) =>
       Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image";
     const isText = (block: unknown): block is { type: "text"; text: string } =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string";
+      isToolResultTextBlock(block) && block.type === "text";
     const imageCount = content.filter(isImage).length;
     const omissionNotice = (retainedImages: number) => {
       const omittedImages = imageCount - retainedImages;
@@ -187,13 +171,10 @@ function truncateToolResultToChars(
     };
     const projectContent = (retainedContent: unknown[], noticeText?: string) => {
       const notice = noticeText ? [{ type: "text", text: noticeText }] : [];
-      const reservedChars = estimateMessageCharsCached(
-        replaceToolResultContent(msg, [
-          ...retainedContent.filter((block) => !isText(block)),
-          ...notice,
-        ]),
-        cache,
-      );
+      const reservedChars = estimateMessageChars(msg, [
+        ...retainedContent.filter((block) => !isText(block)),
+        ...notice,
+      ]);
       const bounded = truncateToolResultMessage(
         replaceToolResultContent(msg, retainedContent),
         Math.max(0, maxChars - reservedChars),
@@ -233,12 +214,9 @@ function truncateToolResultToChars(
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
     // blocks. Reserve a visible notice even when only omission markers can fit.
-    const omittedChars = estimateMessageCharsCached(
-      replaceToolResultContent(
-        msg,
-        content.filter((block) => !isText(block)),
-      ),
-      cache,
+    const omittedChars = estimateMessageChars(
+      msg,
+      content.filter((block) => !isText(block)),
     );
     return projectContent(
       content.filter(isText),
@@ -261,25 +239,9 @@ function enforceToolResultLimit(params: {
 }): AgentMessage[] {
   const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
-  let changed = false;
-  const guarded = messages.map((message) => {
-    const next = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? guarded : messages;
-}
-
-function hasNewToolResultAfterFence(params: {
-  messages: AgentMessage[];
-  prePromptMessageCount: number;
-}): boolean {
-  for (const message of params.messages.slice(params.prePromptMessageCount)) {
-    if (isToolResultMessage(message)) {
-      return true;
-    }
-  }
-  return false;
+  return projectMessages(messages, (message) =>
+    truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
+  );
 }
 
 function toMidTurnPrecheckRequest(
@@ -304,7 +266,7 @@ function toMidTurnPrecheckRequest(
  * attempts retain their eager lifecycle and finalization checkpoint.
  */
 export function installContextEngineLoopHook(params: {
-  agent: GuardableAgent;
+  agent: object;
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
@@ -332,7 +294,7 @@ export function installContextEngineLoopHook(params: {
   let lastSourceMessages: AgentMessage[] | null = null;
   const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = async (messages, signal) => {
     signal?.throwIfAborted();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
@@ -341,8 +303,10 @@ export function installContextEngineLoopHook(params: {
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const transcriptMessages = params.deferredTurn
       ? sourceMessages
-      : projectTranscriptPromptMessages(sourceMessages, transcriptProjectionCache);
-    const providerMessages = stripTranscriptPromptMarkers(sourceMessages);
+      : projectMessages(sourceMessages, (message) =>
+          restoreTranscriptPromptText(message, transcriptProjectionCache),
+        );
+    const providerMessages = projectMessages(sourceMessages, stripTranscriptPromptMarker);
     const sourceHistoryChanged =
       lastSeenLength != null &&
       lastSourceMessages != null &&
@@ -370,6 +334,7 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       return lastAssembledView ?? providerMessages;
     }
+    const preassemblyMessages = providerMessages.slice();
     try {
       if (!params.deferredTurn) {
         if (typeof contextEngine.afterTurn === "function") {
@@ -435,25 +400,26 @@ export function installContextEngineLoopHook(params: {
         runtimeSettings: params.runtimeSettings,
       });
       signal?.throwIfAborted();
-      if (assembled && Array.isArray(assembled.messages)) {
-        const modelMessages = pendingMessages.length
-          ? [...assembled.messages, ...pendingMessages]
-          : assembled.messages;
-        lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
-        return lastAssembledView;
+      if (!assembled || !Array.isArray(assembled.messages)) {
+        throw new Error("context engine assembly returned invalid messages");
       }
-      lastAssembledView = null;
+      const modelMessages = pendingMessages.length
+        ? [...assembled.messages, ...pendingMessages]
+        : assembled.messages;
+      lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
+      return lastAssembledView;
     } catch {
+      // Restore the provider array even when afterTurn mutated it before failing.
+      providerMessages.splice(0, providerMessages.length, ...preassemblyMessages);
       signal?.throwIfAborted();
-      // Best-effort: any engine failure falls through to the raw source
-      // messages so the tool loop still makes forward progress.
+      // Retry from the original fence so failed assembly cannot consume history.
       lastSeenLength = prePromptMessageCount;
       lastAssembledView = null;
       lastSourceMessages = transcriptMessages;
     }
 
     return providerMessages;
-  }) as GuardableTransformContext;
+  };
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
@@ -461,7 +427,7 @@ export function installContextEngineLoopHook(params: {
 }
 
 export function installToolResultContextGuard(params: {
-  agent: GuardableAgent;
+  agent: object;
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
@@ -473,7 +439,7 @@ export function installToolResultContextGuard(params: {
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = async (messages, signal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
@@ -494,12 +460,7 @@ export function installToolResultContextGuard(params: {
         ),
       );
       lastSeenLength = prePromptMessageCount;
-      if (
-        hasNewToolResultAfterFence({
-          messages: contextMessages,
-          prePromptMessageCount,
-        })
-      ) {
+      if (contextMessages.slice(prePromptMessageCount).some(isToolResultMessage)) {
         // Use the same post-truncation view the runtime will send to the next model call.
         // Recovery re-applies truncation to the persisted session manager, so
         // this precheck is only a routing signal, not the source of truth.
@@ -529,7 +490,7 @@ export function installToolResultContextGuard(params: {
       lastSeenLength = contextMessages.length;
     }
     return contextMessages;
-  }) as GuardableTransformContext;
+  };
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;

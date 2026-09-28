@@ -58,7 +58,7 @@ export const en = {
       verificationFailedError: "Verification failed: {error}",
       verificationFailedStatus: "Verification failed: status {status}",
       verificationSuccessful: "Verification successful.",
-      validUrl: "Please enter a valid URL (e.g. http://...)",
+      validUrl: "Please enter a valid HTTP or HTTPS URL (e.g. http://localhost:11434/v1)",
     },
     gateway: {
       auth: "Gateway auth",
@@ -321,6 +321,9 @@ export const en = {
       lookAroundYes: "Yes, take a look",
       settingUp: "Setting up your workspace, gateway, and sessions…",
       setupDone: "Everything's in place.",
+      setupFailed: "Setup failed",
+      workspaceSetupFailed: "Workspace setup failed",
+      gatewaySetupFailed: "Gateway setup failed",
       complete: "OpenClaw is ready.",
       completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
@@ -436,6 +439,12 @@ export const en = {
         "Existing agents currently use {current}. The requested workspace is {requested}. Changing this fleet-wide default can disconnect agents from their memory and bootstrap files.",
       workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
+      workspaceNotDirectory: '"{path}" is not a directory. Choose a workspace inside a directory.',
+      workspacePathError: 'Cannot inspect "{path}": {error}. Check the path and try again.',
+      workspaceSymlinkLoop:
+        '"{path}" cannot be resolved because of a symlink loop. Fix the symbolic links or choose another workspace.',
+      workspaceSymlinkNotDirectory:
+        '"{path}" is a symbolic link that does not resolve to an existing directory. Choose a workspace inside a directory.',
     },
     security: {
       askForHelp:
@@ -503,6 +512,15 @@ export const en = {
     },
     channels: {
       account: "{label} account",
+      commandOwnerTitle: "Administration from chat",
+      commandOwnerHelp:
+        "Chat access lets someone talk to your agent. A command owner can also update OpenClaw, restart the Gateway, change configuration, and approve commands. Choose only your own trusted operator account. This works in servers and groups without DM pairing; it does not grant chat access or change channel access rules.",
+      commandOwnerSetup: "Set up administration from your own chat account?",
+      commandOwnerOwnAccount: "Set up my operator account",
+      commandOwnerChannel: "Which channel has your operator account?",
+      commandOwnerUserId: "Your personal {label} user ID (not a bot, server, or channel ID)",
+      commandOwnerInvalidId: "Enter one user ID without spaces or wildcards.",
+      commandOwnerConfirm: "This is my account: allow {owner} to administer this installation?",
       configuredAction: "{label} already configured. What do you want to do?",
       configuredDeleteUnsupported: "{label} does not support deleting config entries.",
       configureDmPolicies: "Configure DM access policies now? (default: pairing)",

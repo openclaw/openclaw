@@ -79,7 +79,9 @@ export async function pokeUrbitChannel(
 }
 
 export async function scryUrbitPath(
-  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl">,
+  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl"> & {
+    beforeRequest?: () => void;
+  },
   params: { path: string; auditContext: string },
 ): Promise<unknown> {
   const scryPath = `/~/scry${params.path}`;
@@ -93,6 +95,7 @@ export async function scryUrbitPath(
     ssrfPolicy: deps.ssrfPolicy,
     lookupFn: deps.lookupFn,
     fetchImpl: deps.fetchImpl,
+    beforeRequest: deps.beforeRequest,
     timeoutMs: 30_000,
     auditContext: params.auditContext,
   });

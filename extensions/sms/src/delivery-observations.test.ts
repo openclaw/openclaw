@@ -38,6 +38,10 @@ function createAccount(
 
 function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
   const values = new Map<string, SmsDeliveryRecord>();
+  const observe = (key: string) => ({
+    value: structuredClone(values.get(key)),
+    comparison: JSON.stringify(values.get(key)) ?? "missing",
+  });
   return {
     async register(key, value) {
       values.set(key, value);
@@ -49,20 +53,22 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       values.set(key, value);
       return true;
     },
-    async update(key, updateValue) {
-      const next = updateValue(values.get(key));
-      if (!next) {
-        return false;
-      }
-      values.set(key, next);
-      return true;
+    async observe(key) {
+      return observe(key);
     },
-    async deleteIf(key, predicate) {
-      const value = values.get(key);
-      if (!value || !predicate(value)) {
-        return false;
+    async compareAndApply(key, comparison, intent) {
+      const current = observe(key);
+      if (comparison !== current.comparison) {
+        return { status: "conflict", current };
       }
-      return values.delete(key);
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "delete") {
+        return { status: values.delete(key) ? "applied" : "unchanged" };
+      }
+      values.set(key, structuredClone(intent.value));
+      return { status: "applied" };
     },
     async lookup(key) {
       return values.get(key);
@@ -306,6 +312,45 @@ describe("SMS delivery observations", () => {
         record: { observations: [{ status: "delivered" }] },
       },
     );
+  });
+
+  it.each([
+    {
+      secondStatus: "delivered",
+      status: "delivered",
+      duplicates: [false, true],
+      lastObservedAt: 100,
+      observations: [{ status: "delivered", observedAt: 100 }],
+    },
+    {
+      secondStatus: "failed",
+      status: "conflicted",
+      duplicates: [false, false],
+      lastObservedAt: 101,
+      observations: [
+        { status: "delivered", observedAt: 100 },
+        { status: "failed", observedAt: 101 },
+      ],
+    },
+  ])("retains concurrent $secondStatus observations", async (expected) => {
+    const store = createStore();
+    const results = await Promise.all(
+      ["delivered", expected.secondStatus].map((status, index) =>
+        recordInitialSmsDeliveryResult({
+          account: createAccount(),
+          result: { sid: "SM123", to: "+15551234567", status },
+          nowMs: 100 + index,
+          store,
+        }),
+      ),
+    );
+
+    expect(results.map((result) => result?.duplicate)).toEqual(expected.duplicates);
+    const record = await latestRecord(store);
+    expect(record.status).toBe(expected.status);
+    expect(record.firstObservedAt).toBe(100);
+    expect(record.lastObservedAt).toBe(expected.lastObservedAt);
+    expect(record.observations).toMatchObject(expected.observations);
   });
 
   it("isolates records by local account and account SID but survives token rotation", async () => {

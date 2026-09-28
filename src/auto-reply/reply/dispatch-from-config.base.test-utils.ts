@@ -7,18 +7,22 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
+import { resolveGroupThreadConfig } from "../group-thread-config.js";
+import { runGroupThread } from "../group-thread.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -65,6 +69,50 @@ beforeAll(globalBeforeAll0);
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
 
+  it.each([false, true])(
+    "reports agent refusal before runtime loading (aborted: %s)",
+    async (aborted) => {
+      const refusal = {
+        agentId: "cleaner",
+        paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch" as const,
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Keep the main copy and quarantine the divergent cleaner copy, then restart.",
+      };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, cleaner: {} } } };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "must not run" }));
+      const abort = new AbortController();
+      if (aborted) {
+        abort.abort();
+      }
+      recordAgentDatabaseAdmissions([refusal]);
+      try {
+        const result = await dispatchReplyFromConfig({
+          ctx: buildTestCtx({ AgentId: "cleaner", SessionKey: "agent:cleaner:main" }),
+          cfg,
+          dispatcher,
+          replyResolver,
+          replyOptions: { abortSignal: abort.signal },
+        });
+        expect(result.queuedFinal).toBe(!aborted);
+        if (aborted) {
+          expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        } else {
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+            text: `${refusal.reason}\n${refusal.repairHint}`,
+            isError: true,
+          });
+        }
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+      } finally {
+        recordAgentDatabaseAdmissions([]);
+      }
+    },
+  );
+
   function createActiveSlackThread(userId: string) {
     setNoAbort();
     const sessionKey = `agent:main:slack:direct:${userId}`;
@@ -100,7 +148,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       SessionKey: "agent:main:main",
     });
 
@@ -122,7 +169,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg,
         dispatcher,
         replyResolver,
-        usePublishedModelRuntime: true,
       });
     } finally {
       preparedLookup.mockRestore();
@@ -182,14 +228,12 @@ describe("dispatchReplyFromConfig", () => {
     try {
       await dispatchReplyFromConfig({
         ctx: buildTestCtx({
-          Provider: "whatsapp",
           SessionKey: "agent:main:main",
           MessageSid: "prepared",
         }),
         cfg,
         dispatcher: createDispatcher(),
         replyResolver,
-        usePublishedModelRuntime: true,
       });
       expect(preparedLookup).toHaveBeenCalledTimes(2);
       expect(preparedLookup).toHaveBeenNthCalledWith(1, { agentId: "main" });
@@ -511,24 +555,15 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "channel:C123",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
+    const replyDispatchCall = firstMockCall(
+      hookMocks.runner.runReplyDispatch,
+      "reply dispatch",
+    ) as [PluginHookReplyDispatchEvent, unknown];
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(false);
     expect(replyDispatchCall?.[0]?.originatingAccountId).toBe("work");
   });
@@ -697,8 +732,6 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       SessionKey: "agent:main:whatsapp:direct:chat-1",
       BodyForAgent: "text turn",
     });
@@ -1345,6 +1378,72 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it("keeps group participants pending until the active reply operation completes", async () => {
+    setNoAbort();
+    const { createRuntimeChannel } = await import("../../plugins/runtime/runtime-channel.js");
+    const lowLevelDispatch = createRuntimeChannel().reply.dispatchReplyFromConfig;
+    const sessionKey = "agent:main:telegram:group:123";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const cfg: OpenClawConfig = {
+      ...emptyConfig,
+      agents: { entries: { main: {} } },
+      broadcast: { "telegram:123": ["main"] },
+    };
+    const group = expectDefined(
+      resolveGroupThreadConfig({ cfg, channel: "telegram", peerId: "123" }),
+      "expected configured group thread",
+    );
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "participant final" }) satisfies ReplyPayload);
+    const resultPromise = runGroupThread({
+      cfg,
+      group,
+      channel: "telegram",
+      peerId: "123",
+      messageId: "group-pending-turn",
+      text: "Discuss the proposal",
+      runTurn: (turn) =>
+        lowLevelDispatch({
+          ctx: buildTestCtx({
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            SessionKey: sessionKey,
+            MessageSid: turn.messageId,
+            BodyForAgent: "Discuss the proposal",
+          }),
+          cfg,
+          dispatcher,
+          replyResolver,
+        }),
+    });
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      activeOperation.complete();
+      await expect(resultPromise).resolves.toMatchObject({ turnsStarted: 1, failedTurns: 0 });
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "participant final" });
+    } finally {
+      activeOperation.complete();
+      await resultPromise;
+    }
+  });
+
   it("lets Gateway-owned turns reach queue resolution while a reply operation is active", async () => {
     setNoAbort();
     const sessionKey = "agent:main:main";
@@ -1902,24 +2001,11 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "telegram:999",
     });
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | {
-          accountId?: unknown;
-          channel?: unknown;
-          groupId?: unknown;
-          isGroup?: unknown;
-          threadId?: unknown;
-          to?: unknown;
-        }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("telegram");
     expect(routeCall?.to).toBe("telegram:999");
     expect(routeCall?.accountId).toBe("acc-1");
@@ -1953,9 +2039,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("telegram");
     expect(routeCall?.to).toBe("telegram:999");
     expect(routeCall?.accountId).toBe("acc-1");
@@ -1963,18 +2047,10 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as { accountId?: unknown; messageProvider?: unknown } | undefined;
     expect(normalizerOptions?.messageProvider).toBe("telegram");
     expect(normalizerOptions?.accountId).toBe("acc-1");
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
+    const replyDispatchCall = firstMockCall(
+      hookMocks.runner.runReplyDispatch,
+      "reply dispatch",
+    ) as [PluginHookReplyDispatchEvent, unknown];
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
     expect(replyDispatchCall?.[0]?.originatingChannel).toBe("telegram");
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("telegram:999");
@@ -2023,15 +2099,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | {
-          accountId?: unknown;
-          channel?: unknown;
-          replyDelivery?: unknown;
-          threadId?: unknown;
-          to?: unknown;
-        }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("feishu");
     expect(routeCall?.to).toBe("user:ou_123");
     expect(routeCall?.accountId).toBe("work");
@@ -2040,19 +2108,10 @@ describe("dispatchReplyFromConfig", () => {
       chatType: "channel",
       replyToMode: "all",
     });
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingChatType?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
+    const replyDispatchCall = firstMockCall(
+      hookMocks.runner.runReplyDispatch,
+      "reply dispatch",
+    ) as [PluginHookReplyDispatchEvent, unknown];
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
     expect(replyDispatchCall?.[0]?.originatingChannel).toBe("feishu");
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
@@ -2084,9 +2143,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
+    const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("discord");
     expect(routeCall?.to).toBe("channel:123");
     expect(routeCall?.accountId).toBe("default");

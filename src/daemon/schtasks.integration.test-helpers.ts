@@ -93,15 +93,7 @@ async function runShortLivedStartupLauncher(params: {
 }): Promise<{ launcherPid: number; childPid: number }> {
   const result = spawnSync(
     process.execPath,
-    [
-      "--import",
-      "tsx",
-      params.harnessPath,
-      params.mode,
-      params.markerPath,
-      params.parentPidPath,
-      params.probePath,
-    ],
+    [params.harnessPath, params.mode, params.markerPath, params.parentPidPath, params.probePath],
     { cwd: process.cwd(), encoding: "utf8", windowsHide: true, timeout: WAIT_TIMEOUT_MS },
   );
   if (result.error || result.status !== 0) {
@@ -261,6 +253,7 @@ async function inspectNativeAclDenial(params: {
 export async function proveNativeStartupFallbackLaunch(params: {
   env: GatewayServiceEnv;
   rootDir: string;
+  runtimeModuleUrl: URL;
 }): Promise<NativeStartupFallbackProof> {
   const proofRoot = path.join(params.rootDir, "startup-fallback-proof");
   const stateDir = path.join(proofRoot, "state & %OPENCLAW_STARTUP_PROBE% !");
@@ -301,7 +294,7 @@ export async function proveNativeStartupFallbackLaunch(params: {
     harnessPath,
     [
       'import fs from "node:fs";',
-      `import { launchFallbackTaskScript } from ${JSON.stringify(new URL("./schtasks-runtime.ts", import.meta.url).href)};`,
+      `import { launchFallbackTaskScript } from ${JSON.stringify(params.runtimeModuleUrl.href)};`,
       `const env = ${JSON.stringify({
         APPDATA: env.APPDATA,
         OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,

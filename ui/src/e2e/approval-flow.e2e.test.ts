@@ -1,8 +1,8 @@
 // Control UI E2E tests cover approval queue behavior through the Gateway WebSocket.
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -63,14 +63,17 @@ suite.define(() => {
       "exec.approval.requested",
       approval("approval-active", "echo active", 1_000),
     );
-    await currentPage.getByText("echo active", { exact: true }).waitFor();
-    await currentPage.getByRole("button", { name: "Allow once" }).focus();
+    const activeCard = currentPage.locator(
+      '.chat-inline-approval [data-approval-id="approval-active"]',
+    );
+    await activeCard.getByText("echo active", { exact: true }).waitFor();
+    await activeCard.getByRole("button", { name: "Allow once" }).focus();
     expect(
-      await currentPage
+      await activeCard
         .getByRole("button", { name: "Allow once" })
         .evaluate((button) => button === document.activeElement),
     ).toBe(true);
-    await currentPage.getByRole("button", { name: "Allow once" }).click();
+    await activeCard.getByRole("button", { name: "Allow once" }).click();
 
     await gateway.emitGatewayEvent(
       "exec.approval.requested",
@@ -83,11 +86,7 @@ suite.define(() => {
     });
 
     await expect
-      .poll(() =>
-        currentPage
-          .locator('[data-approval-id="approval-active"] .exec-approval-error')
-          .textContent(),
-      )
+      .poll(() => activeCard.locator(".exec-approval-error").textContent())
       .toBe("Approval failed: gateway unavailable");
 
     await approvalInboxButton(currentPage).click();

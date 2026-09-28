@@ -21,6 +21,7 @@ type ReadResponsePrefixResult = {
 };
 
 export type ReadResponseTextPrefixOptions = {
+  signal?: AbortSignal;
   chunkTimeoutMs?: number;
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   /** Static timeout or lazy resolver evaluated immediately before body consumption. */
@@ -38,32 +39,25 @@ async function readResponsePrefixFromReader(
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   const chunks: Uint8Array[] = [];
-  let result: { size: number; truncated: boolean };
-  try {
-    result = await withResponseBodyIdleTimeout(
-      reader,
-      options?.chunkTimeoutMs || undefined,
-      options?.onIdleTimeout,
-      (refreshTimeout) =>
-        consumeResponseBytes({
-          maxBytes,
-          stopAtLimit: options?.stopAtLimit,
-          read: () => {
-            refreshTimeout?.();
-            return reader.read();
-          },
-          onChunk: (chunk) => chunks.push(chunk),
-          onLimit: () => {
-            // Capture tees must not delay bounded dispatcher release.
-            void reader.cancel().catch(() => undefined);
-          },
-        }),
-    );
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
+  const result = await withResponseBodyIdleTimeout(
+    reader,
+    options?.chunkTimeoutMs || undefined,
+    options?.onIdleTimeout,
+    (refreshTimeout) =>
+      consumeResponseBytes({
+        maxBytes,
+        stopAtLimit: options?.stopAtLimit,
+        read: () => {
+          refreshTimeout?.();
+          return reader.read();
+        },
+        onChunk: (chunk) => chunks.push(chunk),
+        onLimit: () => {
+          // Capture tees must not delay bounded dispatcher release.
+          void reader.cancel().catch(() => undefined);
+        },
+      }),
+  );
 
   return {
     // Full-body readers reject overflow before allocating a contiguous copy.
@@ -93,6 +87,7 @@ async function readResponsePrefix(
     return await withResponseBodyTimeout({
       timeoutMs,
       onTimeout: options?.onTimeout,
+      signal: options?.signal,
       cancel: async (error) => await body?.cancel(error),
       read: async () => {
         const fallback = Buffer.from(await response.arrayBuffer());
@@ -107,12 +102,17 @@ async function readResponsePrefix(
   }
 
   const reader = body.getReader();
-  return await withResponseBodyTimeout({
-    timeoutMs,
-    onTimeout: options?.onTimeout,
-    cancel: async (error) => await reader.cancel(error),
-    read: async () => await readResponsePrefixFromReader(reader, maxBytes, options),
-  });
+  try {
+    return await withResponseBodyTimeout({
+      timeoutMs,
+      onTimeout: options?.onTimeout,
+      signal: options?.signal,
+      cancel: async (error) => await reader.cancel(error),
+      read: async () => await readResponsePrefixFromReader(reader, maxBytes, options),
+    });
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export type ReadResponseTextPrefixResult = {
@@ -148,6 +148,7 @@ export async function readResponseWithLimit(
 ): Promise<Buffer> {
   const onOverflow = options?.onOverflow;
   const prefix = await readResponsePrefix(response, maxBytes, {
+    signal: options?.signal,
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
     timeoutMs: options?.timeoutMs,
@@ -172,6 +173,7 @@ export async function readResponseTextSnippet(
   const maxBytes = options?.maxBytes ?? 8 * 1024;
   const maxChars = options?.maxChars ?? 200;
   const prefix = await readResponseTextPrefix(response, maxBytes, {
+    signal: options?.signal,
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
     timeoutMs: options?.timeoutMs,

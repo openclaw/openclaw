@@ -213,7 +213,8 @@ final class RootSidebarModel {
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
-        groups: [OpenClawChatSessionGroup]) -> [ChatSessionSidebarModel.Section]
+        groups: [OpenClawChatSessionGroup],
+        sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
     {
         ChatSessionSidebarModel.sections(
             sessions: self.sessions,
@@ -222,7 +223,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
-            query: query)
+            query: query,
+            sessionRoutingContract: sessionRoutingContract)
     }
 
     func refresh(appModel: NodeAppModel) async {

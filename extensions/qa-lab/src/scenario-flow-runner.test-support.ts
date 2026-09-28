@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import timersPromises from "node:timers/promises";
+import { promisify } from "node:util";
 import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
+import { vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { TelegramUserbotUpdate } from "./live-transports/telegram/userbot-driver.runtime.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
@@ -9,6 +13,7 @@ import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import type { QaSuiteStep } from "./suite-types.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { projectQaToolMessages } from "./tool-activity.js";
 
 function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
   return state
@@ -96,6 +101,7 @@ export async function runLoadedScenarioFlow(
         }),
   };
   const api = {
+    projectQaToolMessages,
     env: {
       providerMode: "mock-openai",
       gateway: {
@@ -353,7 +359,10 @@ export async function assertTelegramRichObservationFlow(
     markers.add(marker);
     return marker;
   };
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const schedule = vi.spyOn(timersPromises, "setTimeout").mockImplementation(promisify(setTimeout));
   try {
+    syncBuiltinESMExports();
     const pending = runLoadedScenarioFlow("telegram-rich-inline-composition", {
       api: {
         fs,
@@ -413,7 +422,33 @@ export async function assertTelegramRichObservationFlow(
           buildAgentDelivery: () => ({ to: "123" }),
         },
         readTelegramMessages: () => structuredClone(observed),
-        waitForCondition: waitForQaTransportCondition,
+        waitForCondition: async (...args: Parameters<typeof waitForQaTransportCondition>) => {
+          const waiting = waitForQaTransportCondition(...args);
+          let settled = false;
+          const joined = waiting.then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+          try {
+            await vi.advanceTimersByTimeAsync(0);
+            for (;;) {
+              if (settled) {
+                break;
+              }
+              await vi.advanceTimersToNextTimerAsync();
+            }
+            return await waiting;
+          } finally {
+            if (!settled) {
+              await vi.advanceTimersByTimeAsync(args[1] ?? 15_000);
+            }
+            await joined;
+          }
+        },
         runQaCli: async (_env: unknown, args: string[]) => {
           assert.deepEqual(args.slice(0, 2), ["message", "edit"]);
           const id = Number(args[args.indexOf("--message-id") + 1]);
@@ -575,6 +610,9 @@ export async function assertTelegramRichObservationFlow(
     for (const timer of timers) {
       clearTimeout(timer);
     }
+    schedule.mockRestore();
+    vi.useRealTimers();
+    syncBuiltinESMExports();
     await tempDirs.cleanup();
   }
 }

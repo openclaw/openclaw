@@ -15,8 +15,12 @@ vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
       getLatestSubagentRunByChildSessionKeyMock(...args),
-    getLatestLiveSubagentRunByChildSessionKey: (...args: unknown[]) =>
-      getLatestLiveSubagentRunByChildSessionKeyMock(...args),
+    getLatestLiveSubagentRunByChildSessionKey: (
+      ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
+    ) => {
+      const run = getLatestLiveSubagentRunByChildSessionKeyMock(...args);
+      return run && (!args[1] || args[1](run)) ? run : undefined;
+    },
   };
 });
 
@@ -25,6 +29,27 @@ vi.mock("../agents/subagents/registry/subagent-registry-runtime.js", () => ({
 }));
 
 import { reactivateCompletedSubagentSession } from "./session-subagent-reactivation.js";
+
+function endedRun(
+  childSessionKey: string,
+  { runId = "run-prev-ended", task = "previous task", createdAt = 40 } = {},
+) {
+  return {
+    runId,
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task,
+    cleanup: "keep" as const,
+    createdAt,
+    execution: {
+      status: "terminal" as const,
+      startedAt: createdAt + 1,
+      endedAt: createdAt + 2,
+      outcome: { status: "ok" as const },
+    },
+  };
+}
 
 describe("reactivateCompletedSubagentSession", () => {
   beforeEach(() => {
@@ -36,21 +61,11 @@ describe("reactivateCompletedSubagentSession", () => {
   it("reactivates the newest ended row even when stale active rows still exist for the same child session", async () => {
     const childSessionKey = "agent:main:subagent:followup-race";
     const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
-    const latestEndedRun = {
+    const latestEndedRun = endedRun(childSessionKey, {
       runId: "run-current-ended",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "current ended task",
-      cleanup: "keep" as const,
       createdAt: 20,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 21,
-        endedAt: 22,
-        outcome: { status: "ok" as const },
-      },
-    };
+    });
 
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
@@ -102,21 +117,10 @@ describe("reactivateCompletedSubagentSession", () => {
     // After a gateway restart the orphan recovery would rewrap the stale
     // `task` from the previous run instead of the canonical follow-up text.
     const childSessionKey = "agent:main:subagent:reactivate-with-task";
-    const latestEndedRun = {
-      runId: "run-prev-ended",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    const latestEndedRun = endedRun(childSessionKey, {
       task: "stale original task",
-      cleanup: "keep" as const,
       createdAt: 30,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 31,
-        endedAt: 32,
-        outcome: { status: "ok" as const },
-      },
-    };
+    });
 
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
@@ -141,21 +145,10 @@ describe("reactivateCompletedSubagentSession", () => {
 
   it("omits the task field entirely when no follow-up text is supplied (caller-side backward compat)", async () => {
     const childSessionKey = "agent:main:subagent:no-task";
-    const latestEndedRun = {
-      runId: "run-prev-ended",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    const latestEndedRun = endedRun(childSessionKey, {
       task: "stale original task",
-      cleanup: "keep" as const,
       createdAt: 40,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 41,
-        endedAt: 42,
-        outcome: { status: "ok" as const },
-      },
-    };
+    });
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
 
@@ -184,7 +177,9 @@ describe("reactivateCompletedSubagentSession", () => {
       createdAt: 40,
       execution: { status: "terminal", startedAt: 41, endedAt: 42 },
     });
-    replaceSubagentRunAfterSteerMock.mockRejectedValueOnce(new Error("database unavailable"));
+    replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
+      throw new Error("database unavailable");
+    });
 
     await expect(
       reactivateCompletedSubagentSession({

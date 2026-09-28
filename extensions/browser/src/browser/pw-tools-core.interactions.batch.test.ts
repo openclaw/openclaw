@@ -1,6 +1,6 @@
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 // Browser tests cover pw tools core.interactions.batch plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,
@@ -9,7 +9,7 @@ import { isPolicyDenyNavigationError } from "./pw-session-navigation.js";
 
 let page: {
   evaluate: ReturnType<typeof vi.fn>;
-  keyboard: { press: ReturnType<typeof vi.fn> };
+  keyboard: { press: ReturnType<typeof vi.fn>; insertText: ReturnType<typeof vi.fn> };
   isClosed: ReturnType<typeof vi.fn>;
   mainFrame: ReturnType<typeof vi.fn>;
   mouse: { click: ReturnType<typeof vi.fn> };
@@ -105,7 +105,7 @@ describe("batchViaPlaywright", () => {
     page = {
       evaluate: vi.fn(async () => {}),
       isClosed: vi.fn(() => closed),
-      keyboard: { press: vi.fn(async () => {}) },
+      keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async () => {}) },
       mainFrame: vi.fn(() => mainFrame),
       mouse: { click: vi.fn(async () => {}) },
       off: vi.fn((event: string, handler: (frame: unknown) => void) => {
@@ -159,6 +159,24 @@ describe("batchViaPlaywright", () => {
     });
     expect(locator!.hover).not.toHaveBeenCalled();
     expect(page!.keyboard.press).not.toHaveBeenCalled();
+  });
+
+  it("does not expose pasted text when native insertion fails", async () => {
+    const text = "synthetic-password-paste";
+    page!.keyboard.insertText.mockRejectedValueOnce(new Error(`Insert "${text}" failed`));
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [{ kind: "insertText", text }],
+    });
+    expect(result.results).toEqual([
+      {
+        ok: false,
+        error: "Unable to paste text into the browser. Focus an editable field and try again.",
+      },
+    ]);
+    expect(page!.keyboard.insertText).toHaveBeenCalledWith(text);
+    expect(JSON.stringify(result)).not.toContain(text);
   });
 
   it("aborts remaining actions after a same-URL reload", async () => {
@@ -328,37 +346,12 @@ describe("batchViaPlaywright", () => {
   it.each([
     { name: "hover", action: { kind: "hover", ref: "1" } as const },
     { name: "scrollIntoView", action: { kind: "scrollIntoView", ref: "1" } as const },
-    {
-      name: "drag",
-      action: { kind: "drag", startRef: "1", endRef: "2" } as const,
-    },
-  ])("forwards navigation policy to batched $name actions", async ({ action }) => {
-    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      actions: [action],
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-
-    expect(result).toEqual({ results: [{ ok: true }] });
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-      action: expect.any(Function),
-      onPolicyCheckStarted: expect.any(Function),
-      onPolicyDenied: expect.any(Function),
-      page,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-  });
-
-  it.each([
+    { name: "drag", action: { kind: "drag", startRef: "1", endRef: "2" } as const },
     { name: "click", action: { kind: "click", ref: "1" } as const },
     { name: "clickCoords", action: { kind: "clickCoords", x: 10, y: 20 } as const },
     { name: "type", action: { kind: "type", ref: "1", text: "value" } as const },
     { name: "press", action: { kind: "press", key: "Enter" } as const },
+    { name: "insertText", action: { kind: "insertText", text: "  pasted 🦞\n" } as const },
     {
       name: "select",
       action: { kind: "select" as const, ref: "1", values: ["one"] },

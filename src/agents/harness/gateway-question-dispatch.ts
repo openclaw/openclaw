@@ -1,4 +1,14 @@
+import type {
+  QuestionAnswers,
+  QuestionRequestQuestion,
+} from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { isEmbeddedMode } from "../../infra/embedded-mode.js";
+import type { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
 import type { GatewayQuestionCall } from "../tools/gateway-question-lifecycle.js";
+import type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputQuestion,
+} from "./user-input-types.js";
 
 export type AgentHarnessQuestionGatewayCall = (
   method: string,
@@ -13,6 +23,38 @@ type QuestionDispatchAuthority =
 
 export class QuestionDispatchRefusedError extends Error {
   override name = "QuestionDispatchRefusedError";
+}
+
+/** No input was submitted; the inherited name preserves legacy runtime refusal propagation. */
+export class QuestionDispatchUnsupportedError extends QuestionDispatchRefusedError {}
+
+/** A core input was refused after question and source preparation. */
+export class PreparedQuestionAnswerRefusedError extends Error {
+  override name = "PreparedQuestionAnswerRefusedError";
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "Prepared question input is no longer current", {
+      cause,
+    });
+  }
+}
+
+export function buildAgentQuestionRequestQuestions(
+  questions: readonly AgentHarnessUserInputQuestion[],
+): QuestionRequestQuestion[] {
+  return questions.map(({ id, ...question }) => ({
+    ...question,
+    questionId: id,
+    options: [...(question.options ?? [])],
+  }));
+}
+
+export function buildAgentQuestionAnswers(parsed: AgentHarnessUserInputAnswers): QuestionAnswers {
+  return {
+    answers: Object.fromEntries(
+      Object.entries(parsed.answers).map(([id, answer]) => [id, answer.answers]),
+    ),
+  };
 }
 
 /** A failed transport cannot release possibly committed input for another route. */
@@ -45,11 +87,13 @@ export function resolveAgentQuestionGatewayCall(
   if (dispatcher && typeof dispatcher !== "function" && dispatcher.version !== 2) {
     throw new Error("unsupported question dispatcher version");
   }
+  let embeddedBroker: EmbeddedQuestionBroker | null = null;
   return async (...args) => {
     const [method, options, params, extra] = args;
     if (typeof dispatcher === "function") {
       if (extra?.dispatchAuthority?.kind === "source-bound") {
-        throw new QuestionDispatchRefusedError(
+        extra.dispatchAuthority.assertCurrent();
+        throw new QuestionDispatchUnsupportedError(
           "source-bound question input requires the default or a version 2 dispatcher",
         );
       }
@@ -68,6 +112,16 @@ export function resolveAgentQuestionGatewayCall(
             ? { kind: "source-bound", assertCurrent: extra.dispatchAuthority.assertCurrent }
             : { kind: "unscoped" },
       });
+    }
+    if (!embeddedBroker && isEmbeddedMode()) {
+      const { getEmbeddedQuestionBroker } = await import("../../infra/embedded-question-broker.js");
+      embeddedBroker = getEmbeddedQuestionBroker();
+    }
+    if (embeddedBroker) {
+      // Cancellation/readback stay with the original owner during backend shutdown.
+      extra?.signal?.throwIfAborted();
+      extra?.dispatchAuthority?.assertCurrent();
+      return embeddedBroker.call(method, params, extra);
     }
     // Keep tool/runtime dependencies out of question registration and SDK imports.
     const { callGatewayTool } = await import("./gateway-question-dispatch.runtime.js");

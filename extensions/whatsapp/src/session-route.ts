@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
@@ -8,7 +7,7 @@ import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
   normalizeWhatsAppTarget,
-} from "./normalize.js";
+} from "./normalize-target.js";
 
 export function resolveWhatsAppOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const normalized = normalizeWhatsAppTarget(params.target);

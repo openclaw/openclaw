@@ -1,7 +1,7 @@
 // Early JSON-output detection and console-log routing for parseable CLI stdout.
 import { loggingState } from "../logging/state.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isConfigSetJsonParseOnly } from "./config-output-mode.js";
+import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 let resolvedJsonOutputMode: boolean | null = null;
 
@@ -20,10 +20,13 @@ export function hasJsonOutputFlag(argv: readonly string[]): boolean {
 
 /** Uses Commander-resolved output ownership when available, then falls back to argv. */
 export function isJsonOutputModeActive(argv: readonly string[]): boolean {
-  const commandPath = resolveCliArgvInvocation([...argv]).commandPath;
-  const parseOnlyJson =
-    commandPath[0] === "config" && commandPath[1] === "set" && isConfigSetJsonParseOnly(argv);
-  return resolvedJsonOutputMode ?? (hasJsonOutputFlag(argv) && !parseOnlyJson);
+  return (
+    resolvedJsonOutputMode ??
+    (hasJsonOutputFlag(argv) &&
+      !(
+        resolveCliParentCommandPath(argv, "config")?.[1] === "set" && isConfigSetJsonParseOnly(argv)
+      ))
+  );
 }
 
 /** Keeps structured JSON stdout clean by routing incidental console logs to stderr. */

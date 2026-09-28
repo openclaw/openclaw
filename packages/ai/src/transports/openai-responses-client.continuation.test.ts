@@ -165,10 +165,27 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   };
 }
 
+// A custom/proxy OpenAI-Responses-compatible endpoint (e.g. a self-hosted
+// OmniRoute deployment) carries no native-host trust signal on its own --
+// the operator's explicit per-model opt-in is the *only* path to eligibility.
+const customEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+  compat: { supportsResponsesContinuation: true },
+} satisfies Model<"openai-responses">;
+
+const unoptedCustomEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+} satisfies Model<"openai-responses">;
+
 async function run(
   context: Context,
   options: {
     sessionId?: string;
+    cacheRetention?: "none" | "short";
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
     reasoningEffort?: "low" | "medium" | "high";
@@ -182,6 +199,7 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
+    cacheRetention: options.cacheRetention,
     transport: options.transport ?? "sse",
     authProfileId: options.authProfileId,
     reasoningEffort: options.reasoningEffort ?? "low",
@@ -231,34 +249,146 @@ describe("native OpenAI Responses SSE continuation", () => {
     vi.useRealTimers();
   });
 
-  it("continues stateful literal SSE turns with only appended input", async () => {
+  it.each([undefined, "short", "none"] as const)(
+    "continues stateful SSE turns with %s retention and matching affinity",
+    async (cacheRetention) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const firstUser = userMessage("first question", 1);
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const requestModel =
+        cacheRetention === undefined ? model : { ...model, compat: { sendSessionIdHeader: true } };
+      const first = await run(
+        { messages: [firstUser], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+      const second = await run(
+        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.clientHeaders).toMatchObject([
+        { "x-openclaw-turn-id": "turn-1" },
+        { "x-openclaw-turn-id": "turn-2" },
+      ]);
+      expect(sseState.clientHeaders.map((headers) => headers.session_id)).toEqual(
+        cacheRetention === "short" ? ["session-1", "session-1"] : [undefined, undefined],
+      );
+      expect(sseState.requests[1]).toMatchObject({
+        previous_response_id: "resp_1",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second question" }],
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([undefined, "session-raw"])(
+    "preserves native raw no-store requests with session %s",
+    async (sessionId) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const transport = createOpenAIResponsesTransportStreamFn();
+      const options = { apiKey: "test-key", transport: "sse" as const, sessionId };
+      const firstUser = userMessage("first question", 1);
+      const first = await (await transport(model, { messages: [firstUser] }, options)).result();
+      const second = await (
+        await transport(
+          model,
+          {
+            messages: [firstUser, first, userMessage("second question", 2)],
+          },
+          options,
+        )
+      ).result();
+
+      expect(first.stopReason).toBe("stop");
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.requests).toHaveLength(2);
+      for (const request of sseState.requests) {
+        expect(request.store).toBe(false);
+        expect(request).not.toHaveProperty("previous_response_id");
+      }
+      expect(sseState.requests[1]?.input).toHaveLength(3);
+    },
+  );
+
+  it("engages for a custom/proxy endpoint once the operator opts a model in explicitly", async () => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
     );
     const firstUser = userMessage("first question", 1);
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const second = await run(
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      customEndpointModel,
+    );
+    await run(
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
       { onPayload },
+      customEndpointModel,
     );
 
-    expect(second.stopReason).toBe("stop");
-    expect(sseState.clientHeaders).toMatchObject([
-      { "x-openclaw-turn-id": "turn-1" },
-      { "x-openclaw-turn-id": "turn-2" },
-    ]);
-    expect(sseState.requests[1]).toMatchObject({
-      previous_response_id: "resp_1",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "second question" }],
-        },
-      ],
-    });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("engages for a custom/proxy endpoint purely from the real store policy, with no onPayload store override", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const identity = (payload: Record<string, unknown>) => payload;
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload: identity },
+      customEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload: identity },
+      customEndpointModel,
+    );
+
+    expect(sseState.requests[0]).toMatchObject({ store: true });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
+
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[1]?.input).toHaveLength(3);
   });
 
   it("keeps final store:false turns stateless and sends full history", async () => {
@@ -674,39 +804,51 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(JSON.stringify(sseState.requests[1]?.input)).not.toContain('"compaction"');
   });
 
-  it("recovers a rejected continuation with full history and advances the baseline", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      Object.assign(new Error("previous response not found"), {
-        code: "previous_response_not_found",
-        status: 400,
-      }),
-      sdkCompletion("resp_2", "second answer"),
-      sdkCompletion("resp_3", "third answer"),
-    );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const firstUser = userMessage("first question", 1);
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const secondContext = {
-      messages: [firstUser, first, userMessage("second question", 2)],
-      tools: [],
-    };
-    const second = await run(secondContext, { onPayload });
-    await run(
-      {
-        messages: [...secondContext.messages, second, userMessage("third question", 3)],
+  it.each<{ rejection: string; error: { code: string; param?: string; status: number } }>([
+    {
+      rejection: "previous response not found",
+      error: { code: "previous_response_not_found", status: 400 },
+    },
+    {
+      rejection:
+        "Previous response cannot be used for this organization due to Zero Data Retention.",
+      error: { code: "unsupported_parameter", param: "previous_response_id", status: 400 },
+    },
+  ])(
+    "recovers a continuation rejected with $error.code using full history",
+    async ({ rejection, error }) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        Object.assign(new Error(`400 ${rejection}`), error),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_3", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const firstUser = userMessage("first question", 1);
+      const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
+      const secondContext = {
+        messages: [firstUser, first, userMessage("second question", 2)],
         tools: [],
-      },
-      { onPayload },
-    );
+      };
+      const second = await run(secondContext, { onPayload });
+      expect(second.stopReason).toBe("stop");
+      await run(
+        {
+          messages: [...secondContext.messages, second, userMessage("third question", 3)],
+          tools: [],
+        },
+        { onPayload },
+      );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(sseState.requests[1]?.input).toHaveLength(1);
-    expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
-    expect(sseState.requests[2]?.input).toHaveLength(3);
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
-    expect(sseState.requests[3]?.input).toHaveLength(1);
-  });
+      expect(sseState.requests).toHaveLength(4);
+      expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+      expect(sseState.requests[1]?.input).toHaveLength(1);
+      expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+      expect(sseState.requests[2]?.input).toHaveLength(3);
+      expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+      expect(sseState.requests[3]?.input).toHaveLength(1);
+    },
+  );
 
   it("records the effective full-history compaction recovery request", async () => {
     sseState.outcomes.push(

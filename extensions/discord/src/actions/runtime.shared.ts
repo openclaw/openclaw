@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.shared behavior.
 import {
   parseAvailableTags,
   readNonNegativeIntegerParam,

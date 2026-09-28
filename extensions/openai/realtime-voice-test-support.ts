@@ -81,6 +81,31 @@ export function createOpenAIRealtimeMockState() {
   };
 }
 
+/** Native workers do not inherit Vitest's ws mock. Keep registered GPT-Live
+ * provider tests on the real media owner with fake wire I/O, without changing
+ * the legacy FakeWebSocket behavior relied on by the GA suites. */
+export async function createTestMediaSocketFactory(
+  FakeWebSocket: ReturnType<typeof createOpenAIRealtimeMockState>["FakeWebSocket"],
+) {
+  const [{ EventEmitter }, { fakeQuicksilverMediaSocket }] = await Promise.all([
+    import("node:events"),
+    import("./realtime-quicksilver-socket.test-support.js"),
+  ]);
+  return fakeQuicksilverMediaSocket((url, options) => {
+    const wire = new FakeWebSocket(url, options);
+    const socket = Object.assign(new EventEmitter(), {
+      readyState: wire.readyState,
+      send: (payload: string) => wire.send(payload),
+      close: (code?: number, reason?: string) => wire.close(code, reason),
+    });
+    Object.defineProperty(socket, "readyState", { get: () => wire.readyState });
+    for (const event of ["open", "message", "error", "close"]) {
+      wire.on(event, (...args) => socket.emit(event, ...args));
+    }
+    return socket;
+  });
+}
+
 type FakeWebSocketLike = {
   sent: string[];
   readyState: number;
@@ -129,7 +154,10 @@ type InternalRealtimeVoiceProviderApi = {
   projectPublicProjection: (ctx: {
     providerConfig: Record<string, unknown>;
     config: Record<string, unknown>;
-  }) => { config: Record<string, unknown> };
+  }) => {
+    config: Record<string, unknown>;
+    clientHints?: { modelSource?: "gateway"; gatewayRelaySupported: boolean };
+  };
   validateGatewayRelayLaunch: (ctx: {
     cfg?: object;
     providerConfig: Record<string, unknown>;

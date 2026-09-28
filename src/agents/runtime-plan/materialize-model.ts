@@ -26,19 +26,20 @@ function modelMatchesPreparedTarget(params: {
   model: RuntimeRouteModel;
   provider: string;
   modelId: string;
-  route: NonNullable<AgentRuntimeAuthPlan["modelRoute"]>;
+  route?: AgentRuntimeAuthPlan["modelRoute"];
 }): boolean {
   const modelId = canonicalizeProviderModelId(params.provider, params.model.id ?? "");
   const targetModelId = canonicalizeProviderModelId(params.provider, params.modelId);
   return (
     normalizeProviderId(params.model.provider ?? "") === normalizeProviderId(params.provider) &&
     modelId === targetModelId &&
-    modelMatchesProviderModelRoute({
-      provider: params.provider,
-      api: params.model.api,
-      baseUrl: params.model.baseUrl,
-      route: params.route,
-    })
+    (!params.route ||
+      modelMatchesProviderModelRoute({
+        provider: params.provider,
+        api: params.model.api,
+        baseUrl: params.model.baseUrl,
+        route: params.route,
+      }))
   );
 }
 
@@ -47,6 +48,58 @@ type PreparedRuntimeModelRequest = {
   authProfileId?: string;
   authProfileMode?: ProviderModelRouteMaterializationAuthMode;
 };
+
+type PreparedRuntimeModelTarget = {
+  provider: string;
+  modelId: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  route?: AgentRuntimeAuthPlan["modelRoute"];
+};
+
+function validatePreparedTarget(params: PreparedRuntimeModelTarget): void {
+  const { route } = params;
+  if (
+    route &&
+    (normalizeProviderId(route.provider) !== normalizeProviderId(params.provider) ||
+      canonicalizeProviderModelId(route.provider, route.modelId) !==
+        canonicalizeProviderModelId(params.provider, params.modelId))
+  ) {
+    throw new Error(
+      `Prepared runtime auth route ${route.provider}/${route.modelId} does not match target ${params.provider}/${params.modelId}.`,
+    );
+  }
+}
+
+/** Validates supplied final metadata without preparing credentials or resolving another model. */
+export function validatePreparedRuntimeModel<Model extends RuntimeRouteModel>(
+  params: PreparedRuntimeModelTarget & { model: Model },
+): Model {
+  validatePreparedTarget(params);
+  const { model, route } = params;
+  if (route && !modelMatchesPreparedTarget({ ...params, route })) {
+    throw new Error(
+      `Caller-provided ${params.provider}/${params.modelId} metadata does not match its prepared ${route.authRequirement} route.`,
+    );
+  }
+  const suppression = resolveBuiltInModelSuppressionFromManifest({
+    provider: model.provider ?? params.provider,
+    id: model.id ?? params.modelId,
+    baseUrl: model.baseUrl,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  if (suppression?.retirement) {
+    throw new FailoverError(suppression.errorMessage, {
+      reason: "model_not_found",
+      provider: model.provider ?? params.provider,
+      model: model.id ?? params.modelId,
+    });
+  }
+  return model;
+}
 
 /** Resolves the exact model tuple selected by a prepared runtime auth plan. */
 export async function materializePreparedRuntimeModel<Model extends RuntimeRouteModel>(params: {
@@ -68,52 +121,15 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   const config = route
     ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
     : params.config;
-  const validateFinalModel = (model: Model | undefined): Model | undefined => {
-    if (!model) {
-      return undefined;
-    }
-    const suppression = resolveBuiltInModelSuppressionFromManifest({
-      provider: model.provider ?? params.provider,
-      id: model.id ?? params.modelId,
-      baseUrl: model.baseUrl,
-      config,
-      workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
-    });
-    if (suppression?.retirement) {
-      throw new FailoverError(suppression.errorMessage, {
-        reason: "model_not_found",
-        provider: model.provider ?? params.provider,
-        model: model.id ?? params.modelId,
-      });
-    }
-    return model;
-  };
+  const target = { ...params, route, config };
+  const validateFinalModel = (model: Model | undefined): Model | undefined =>
+    model ? validatePreparedRuntimeModel({ ...target, model }) : undefined;
   if (!route && !params.forceResolve) {
     return validateFinalModel(params.model);
   }
-  if (
-    route &&
-    (normalizeProviderId(route.provider) !== normalizeProviderId(params.provider) ||
-      canonicalizeProviderModelId(route.provider, route.modelId) !==
-        canonicalizeProviderModelId(params.provider, params.modelId))
-  ) {
-    throw new Error(
-      `Prepared runtime auth route ${route.provider}/${route.modelId} does not match target ${params.provider}/${params.modelId}.`,
-    );
-  }
+  validatePreparedTarget(target);
   const callerModelMatches =
-    params.model !== undefined &&
-    normalizeProviderId(params.model.provider ?? "") === normalizeProviderId(params.provider) &&
-    canonicalizeProviderModelId(params.provider, params.model.id ?? "") ===
-      canonicalizeProviderModelId(params.provider, params.modelId) &&
-    (!route ||
-      modelMatchesPreparedTarget({
-        model: params.model,
-        provider: params.provider,
-        modelId: params.modelId,
-        route,
-      }));
+    params.model !== undefined && modelMatchesPreparedTarget({ ...target, model: params.model });
   if (callerModelMatches && !params.forceResolve) {
     return validateFinalModel(params.model);
   }
@@ -135,19 +151,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
         })
       : resolveProviderModelMaterializationAuthMode(params.plan.selectedAuthMode),
   });
-  if (
-    !resolved.model ||
-    normalizeProviderId(resolved.model.provider ?? "") !== normalizeProviderId(params.provider) ||
-    canonicalizeProviderModelId(params.provider, resolved.model.id ?? "") !==
-      canonicalizeProviderModelId(params.provider, params.modelId) ||
-    (route &&
-      !modelMatchesPreparedTarget({
-        model: resolved.model,
-        provider: params.provider,
-        modelId: params.modelId,
-        route,
-      }))
-  ) {
+  if (!resolved.model || !modelMatchesPreparedTarget({ ...target, model: resolved.model })) {
     throw new Error(
       resolved.error ??
         (route

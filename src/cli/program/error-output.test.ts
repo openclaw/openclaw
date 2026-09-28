@@ -705,6 +705,26 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
+  it.each([
+    {
+      name: "missing mandatory option",
+      raw: "  ERROR: required option '--node <id>' not specified\n",
+      message: 'Missing required option "--node <id>".',
+    },
+    {
+      name: "unclassified Commander diagnostic",
+      raw: "error: option '--timeout <ms>' argument missing\n",
+      message: "OpenClaw could not parse this command: option '--timeout <ms>' argument missing",
+    },
+  ])("preserves the complete ordinary $name diagnostic", ({ raw, message }) => {
+    expect(
+      formatCliParseErrorOutput(raw, {
+        argv: ["node", "openclaw", "nodes", "invoke"],
+        commandPath: ["nodes", "invoke"],
+      }),
+    ).toBe(`${message}\nTry: openclaw nodes invoke --help\n`);
+  });
+
   it("prefers the parsed Commander path over option-like argv values", () => {
     const output = formatCliParseErrorOutput("error: unknown option '--wat'\n", {
       argv: ["node", "openclaw", "plugins", "--source", "install", "list", "--wat"],

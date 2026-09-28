@@ -6,13 +6,18 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import {
+  createAccountCronScheduledToolPolicy,
+  type CronScheduledToolCallerOrigin,
+} from "../cron/scheduled-tool-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 describe("resolveConversationCapabilityProfile", () => {
   it("intersects base and provider profile contributions from plugin manifests", () => {
@@ -125,84 +130,39 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.skills.snapshot?.skills).toEqual([{ name: "ops" }]);
   });
 
-  it("exempts owner WebChat from wildcard sender tool restrictions", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
+  it.each([
+    {
+      name: "exempts owner WebChat from wildcard sender tool restrictions",
+      params: { messageProvider: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true },
+      restricted: false,
+    },
+    {
+      name: "exempts owner WebChat identified through the message channel",
+      params: { messageChannel: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true },
+      restricted: false,
+    },
+    {
+      name: "keeps wildcard sender tool restrictions for non-owner WebChat",
+      params: { messageProvider: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: false },
+      restricted: true,
+    },
+    {
+      name: "keeps wildcard sender tool restrictions for owners on external channels",
+      params: { messageProvider: "discord", senderIsOwner: true },
+      restricted: true,
+    },
+  ])("$name", ({ params, restricted }) => {
+    const deny = ["exec", "process"];
     const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      config: { tools: { toolsBySender: { "*": { deny } } } },
       chatType: "direct",
-      senderIsOwner: true,
+      ...params,
     });
 
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.explicitToolDenylist).toEqual([]);
-  });
-
-  it("exempts owner WebChat identified through the message channel", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageChannel: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toBeUndefined();
-    expect(profile.policy.explicitToolDenylist).toEqual([]);
-  });
-
-  it("keeps wildcard sender tool restrictions for non-owner WebChat", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: INTERNAL_MESSAGE_CHANNEL,
-      chatType: "direct",
-      senderIsOwner: false,
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
-  });
-
-  it("keeps wildcard sender tool restrictions for owners on external channels", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      messageProvider: "discord",
-      chatType: "direct",
-      senderIsOwner: true,
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
+    expect(profile.policy.senderPolicy).toEqual(
+      restricted ? { deny: ["exec", "process"] } : undefined,
+    );
+    expect(profile.policy.explicitToolDenylist).toEqual(restricted ? ["exec", "process"] : []);
   });
 
   it("prepares a shared conversation profile with group per-sender restrictions", () => {
@@ -493,12 +453,83 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     expect(scheduledProfile({ work: {} }).policy.groupPolicy).toEqual({ allow: ["read"] });
   });
 
-  it("denies every tool for a scheduled run after its owner account is removed", () => {
-    const groupPolicy = scheduledProfile({}).policy.groupPolicy;
-
-    expect(groupPolicy).toEqual({ allow: [], deny: ["*"] });
-    for (const toolName of ["read", "write", "exec", "apply_patch"]) {
-      expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
-    }
+  it("rejects a scheduled run after its owner account is removed", () => {
+    expect(() => scheduledProfile({})).toThrow('Scheduled account "work" is unavailable');
   });
+
+  it.each<{
+    name: string;
+    origin: CronScheduledToolCallerOrigin["kind"];
+    configured: boolean;
+    delivery: string;
+  }>([
+    { name: "configured creator", origin: "external", configured: true, delivery: "telegram" },
+    { name: "unknown creator origin", origin: "unknown", configured: true, delivery: "whatsapp" },
+    {
+      name: "removed creator account",
+      origin: "external",
+      configured: false,
+      delivery: "telegram",
+    },
+    { name: "local creator", origin: "local", configured: true, delivery: "whatsapp" },
+    {
+      name: "removed local resource account",
+      origin: "local",
+      configured: false,
+      delivery: "whatsapp",
+    },
+  ])(
+    "preserves scheduled creator authority for $name across tool consumers",
+    ({ origin, configured, delivery }) => {
+      const config: OpenClawConfig = {
+        channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
+      };
+      const ownerOrigin: CronScheduledToolCallerOrigin =
+        origin === "external" ? { kind: origin, channel: "whatsapp" } : { kind: origin };
+      const params = {
+        config,
+        sessionKey: "agent:main:cron:job:run:turn",
+        agentId: "main",
+        agentAccountId: "default",
+        messageProvider: delivery,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey:
+            origin === "local" ? "agent:main:main" : "agent:main:whatsapp:direct:sender",
+          ownerAccountId: "work",
+          ownerOrigin,
+        } satisfies ScheduledToolPolicyContext,
+      };
+      const conversationTools = () =>
+        projectConversationToolNames({
+          capabilityProfile: resolveConversationCapabilityProfile({
+            ...params,
+            config: { ...params.config, tools: { allow: ["read"] } },
+          }),
+          toolNames: ["read", "write"],
+          warn: () => undefined,
+        });
+      const webSearch = () =>
+        resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
+      const harnessTools = () =>
+        resolvePluginHarnessPolicyToolsAllow({
+          ...params,
+          provider: "fixture",
+          modelId: "fixture-model",
+          senderId: "sender",
+          conversationToolPolicy: { deny: ["*"] },
+        });
+
+      if (origin === "unknown" || !configured) {
+        for (const resolve of [conversationTools, webSearch, harnessTools]) {
+          expect(resolve).toThrow('Scheduled account "work" is unavailable');
+        }
+        return;
+      }
+      expect(conversationTools()).toEqual(["read"]);
+      expect(webSearch()).toEqual({ allowed: true, persistentAllowed: true });
+      expect(harnessTools()).toEqual([]);
+    },
+  );
 });

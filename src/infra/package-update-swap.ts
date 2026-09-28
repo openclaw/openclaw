@@ -1,284 +1,148 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
-import { readPackageVersion } from "./package-json.js";
-import {
-  createPackageIntegrityReader,
-  type PackageRootIntegrityFingerprint,
-} from "./package-update-integrity.js";
+import { encodePackageActivationLauncher } from "./package-update-activation-journal.js";
+import { preparePackageActivation } from "./package-update-activation.js";
 import {
   activateStagedNpmPackageRoot,
-  createNpmPackageRootLinkLifecycle,
-} from "./package-update-npm-root.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
+  capturePackageLaunchers,
+  type PackageLauncherBackup,
+  discardPackageLauncherBackup,
+  discardPackageUpdateBackup,
+  copyPackagePathEntry as copyPathEntry,
+  PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+  packagePathEntriesMatch as pathEntriesMatch,
+  packagePathEntryExists as pathEntryExists,
+  removePackagePath as removePath,
+  restoreNpmPackageRoot,
+} from "./package-update-filesystem.js";
 import {
-  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
-  verifyPackageUpdateRecovery,
-  type NpmGlobalPrefixLayout,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+  createPackageIntegrityReader,
+  PackageIntegrityTimeoutError,
+  readPackageVersionIfPresent,
+  type PackageDirectoryIdentity,
+  type PackageRootIntegrityFingerprint,
+} from "./package-update-integrity.js";
+import { preparePackageSwapLocalOverrides } from "./package-update-local-overrides.js";
+import {
+  createNpmPackageRootLinkLifecycle,
+  verifyNpmRootRecovery,
+} from "./package-update-npm-root.js";
+import {
+  PackageUpdateActivationError,
+  type PackageUpdateTransaction,
+  type StagedPackageSwapResult,
+  type StagedPackageSwapParams,
+} from "./package-update-swap-contract.js";
+import { createPackageSwapResults } from "./package-update-swap-results.js";
+import { retireVerifiedPackageSwap } from "./package-update-swap-retirement.js";
+import { resolveStagedPackageSwapTarget } from "./package-update-swap-target.js";
+import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
+import {
+  createFreeBsdPkgOwnershipInspection,
+  FreeBsdPkgOwnershipError,
+} from "./update-freebsd-pkg-ownership.js";
+import { verifyPackageUpdateRecovery } from "./update-global.js";
 import {
   finalizeNativePackageStage,
   NativePackageRollbackError,
-  type NativePackageStage,
 } from "./update-native-package-stage.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
-const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
+export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
+export type {
+  PackageUpdateTransaction,
+  StagedPackageInstall,
+} from "./package-update-swap-contract.js";
 
-/** The orchestrator owns schema safety and service verification before confirming or restoring. */
-export type PackageUpdateTransaction = {
-  backupRoot: string;
-  assertRollbackSafe?: () => Promise<void>;
-  rollback: () => Promise<
-    UpdateStepResult & { activePackageRoot: string | null; reason?: "rollback-project-changed" }
-  >;
-  complete: (outcome: { activationVerified: boolean }) => Promise<UpdateStepResult | void>;
-};
+export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
-// Service suspension and cancellation belong to the caller. Carry their exact
-// cause through package failure handling without reclassifying service safety.
-export class PackageUpdateActivationError extends Error {
-  constructor(cause: unknown) {
-    super("Package activation preparation failed", { cause });
-  }
-}
-
-export type StagedPackageInstall = {
-  prefix: string;
-  layout: NpmGlobalPrefixLayout;
-  packageRoot: string;
-  installTarget: ResolvedGlobalInstallTarget;
-  native?: NativePackageStage;
-};
-
-type StagedPackageSwapResult =
-  | {
-      status: "committed";
-      activePackageRoot: string | null;
-      step: UpdateStepResult;
-      postVerifyStep: UpdateStepResult | null;
-    }
-  | {
-      status: "failed";
-      activePackageRoot: string | null;
-      step: UpdateStepResult;
-      postVerifyStep: UpdateStepResult | null;
-      packageRollbackVerified: boolean;
-    };
-
-export function isBlockingPackageUpdateStep(step: UpdateStepResult): boolean {
-  return step.exitCode !== 0 && step.advisory === undefined;
-}
-
-function removePath(targetPath: string): Promise<void> {
-  return fs.rm(targetPath, {
-    recursive: true,
-    force: true,
-    maxRetries: process.platform === "win32" ? 5 : 2,
-    retryDelay: 100,
-  });
-}
-
-export async function removePackageUpdatePath(targetPath: string): Promise<boolean> {
-  try {
-    await removePath(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function pathEntryExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.lstat(targetPath);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
-}
-
-export async function readPackageVersionIfPresent(
-  packageRoot: string | null,
-): Promise<string | null> {
-  return packageRoot ? readPackageVersion(packageRoot) : null;
-}
-
-async function copyPathEntry(source: string, destination: string): Promise<void> {
-  const stat = await fs.lstat(source);
-  await removePath(destination);
-  if (stat.isSymbolicLink()) {
-    await fs.symlink(await fs.readlink(source), destination);
-    return;
-  }
-  if (stat.isDirectory()) {
-    await fs.cp(source, destination, {
-      recursive: true,
-      force: true,
-      preserveTimestamps: false,
-    });
-    return;
-  }
-  await fs.copyFile(source, destination);
-  await fs.chmod(destination, stat.mode);
-}
-
-async function pathEntriesMatch(left: string, right: string): Promise<boolean> {
-  const [leftStat, rightStat] = await Promise.all([
-    fs.lstat(left).catch(() => null),
-    fs.lstat(right).catch(() => null),
-  ]);
-  if (!leftStat || !rightStat) {
-    return false;
-  }
-  if (leftStat.isSymbolicLink() || rightStat.isSymbolicLink()) {
-    return (
-      leftStat.isSymbolicLink() &&
-      rightStat.isSymbolicLink() &&
-      (await fs.readlink(left)) === (await fs.readlink(right))
-    );
-  }
-  if (!leftStat.isFile() || !rightStat.isFile()) {
-    return false;
-  }
-  if ((leftStat.mode & 0o777) !== (rightStat.mode & 0o777) || leftStat.size !== rightStat.size) {
-    return false;
-  }
-  const [leftContents, rightContents] = await Promise.all([fs.readFile(left), fs.readFile(right)]);
-  return leftContents.equals(rightContents);
-}
-
-export async function swapStagedPackageInstall(params: {
-  stage: StagedPackageInstall;
-  installTarget: ResolvedGlobalInstallTarget;
-  packageName: string;
-  postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
-  beforeActivate?: () => Promise<void>;
-  onLiveMutation?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
-  timeoutMs?: number;
-}): Promise<StagedPackageSwapResult> {
+export async function swapStagedPackageInstall(
+  params: StagedPackageSwapParams,
+): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
   const native = params.stage.native;
-  const targetLayout = native
-    ? {
-        prefix: native.liveProjectRoot,
-        globalRoot: path.dirname(native.liveProjectRoot),
-        binDir: native.liveBinDir,
-      }
-    : resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot, {
-        allowDirectNodeModulesRoot: params.installTarget.directNodeModulesRoot === true,
-      });
-  const targetPackageRoot = native
-    ? path.join(native.liveProjectRoot, path.relative(native.projectRoot, params.stage.packageRoot))
-    : params.installTarget.packageRoot;
-  const targetSwapRoot = native?.liveProjectRoot ?? targetPackageRoot;
-  const stagedSwapRoot = native?.projectRoot ?? params.stage.packageRoot;
-  const step = (
-    exitCode: number,
-    stdoutTail: string | null,
-    stderrTail: string | null,
-  ): UpdateStepResult => ({
-    name: "global install swap",
-    command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot ?? "unknown root"}`,
-    cwd: targetLayout?.globalRoot ?? params.stage.prefix,
-    durationMs: Date.now() - startedAt,
-    exitCode,
-    stdoutTail,
-    stderrTail,
-  });
+  const { targetLayout, targetPackageRoot, targetSwapRoot, stagedSwapRoot } =
+    resolveStagedPackageSwapTarget(params);
+  let baselineError: Error | undefined;
+  const results = createPackageSwapResults(params, targetLayout, targetPackageRoot, startedAt);
+  const { warnings, step } = results;
   if (!targetLayout || !targetPackageRoot || !targetSwapRoot) {
-    return {
-      status: "failed",
-      activePackageRoot,
-      step: step(1, null, "cannot resolve npm global prefix layout"),
-      postVerifyStep: null,
-      packageRollbackVerified: false,
-    };
+    return results.invalidLayout(activePackageRoot);
+  }
+
+  if (!native) {
+    params.assertCurrent?.();
+    params.reserveInstallSlot?.(targetSwapRoot);
   }
 
   // Recovery artifacts must survive cleanupGlobalRenameDirs on a later update.
-  const backupRoot = path.join(
+  let backupRoot = path.join(
     targetLayout.globalRoot,
     `.openclaw.package-backup-${process.pid}-${Date.now()}`,
   );
-  const discardBackup = async (backupPath: string, label: string): Promise<string | null> => {
-    if (await removePackageUpdatePath(backupPath)) {
-      return null;
-    }
-    const retiredPath = path.join(
-      targetLayout.globalRoot,
-      path.basename(backupPath).replace(/^\.openclaw\./, ".openclaw-"),
-    );
-    try {
-      // Only obsolete backups enter npm's disposable namespace, after restoration
-      // or activation completes. Retirement cannot change the update outcome.
-      await fs.rename(backupPath, retiredPath);
-      return `preserved ${label} at ${retiredPath} for delayed cleanup`;
-    } catch {
-      return `preserved ${label} at ${backupPath}; remove it manually after verifying the installation`;
-    }
-  };
-  let shimBackupDir: string | undefined;
+  const databaseBackupRoot = backupRoot;
   let hadPackage = false;
+  let replayLocalOverrides: Awaited<ReturnType<typeof preparePackageSwapLocalOverrides>>;
   let previousVersion: string | null = null;
   let previousDistFiles: string[] | undefined;
   let previousRoot: PackageRootIntegrityFingerprint | undefined;
-  let rootLink: ReturnType<typeof createNpmPackageRootLinkLifecycle> | undefined;
+  let previousIdentity: PackageDirectoryIdentity | undefined;
+  let rootLink: Awaited<ReturnType<typeof createNpmPackageRootLinkLifecycle>> | undefined;
   let packageBackedUp = false;
   let displacedCandidateRoot: string | undefined;
   const baseline = createPackageIntegrityReader(params.timeoutMs);
-  const shims: Array<{
-    source: string;
-    destination: string;
-    backup: string | null;
-    fingerprint?: string;
-  }> = [];
-  const rollback: Array<() => Promise<void>> = [];
+  const launchers: PackageLauncherBackup = { entries: [] };
+  const shims = launchers.entries;
+  const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];
   let packageRollbackVerified = false;
   let retained = false;
+  let liveMutationStarted = false;
   let projectActivated = false;
   let activationCompleted = false;
-  const verifyNpmRecovery = async (root: string, fromBackup: boolean) => {
-    const reader = createPackageIntegrityReader(params.timeoutMs);
-    await reader.observe(fromBackup ? "retained" : "restored", async () => {
-      if (
-        hadPackage
-          ? !previousRoot ||
-            !isDeepStrictEqual(
-              await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
-              previousRoot,
-            )
-          : !fromBackup && (await reader.exists(root))
-      ) {
-        throw new Error(
-          `Package rollback verification failed: retained package ${previousRoot?.kind === "link" ? "link" : "tree"} changed`,
-        );
-      }
-      for (const shim of shims) {
-        const target = fromBackup ? shim.backup : shim.destination;
-        if (
-          shim.backup
-            ? !target || (await reader.launcher(target)) !== shim.fingerprint
-            : !fromBackup && (await reader.exists(shim.destination))
-        ) {
-          throw new Error(
-            `Package rollback verification failed: launcher ${shim.destination} changed`,
-          );
-        }
-      }
-    });
+  let activationRetirementStarted = false;
+  let preparationCustody = false;
+  let activation: Awaited<ReturnType<typeof preparePackageActivation>>;
+  const assertReplacementUnowned = async () => {
+    // A fresh observation, not an atomic lock against an external pkg writer.
+    const inspection = createFreeBsdPkgOwnershipInspection(
+      params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+    );
+    await inspection.assertUnowned(targetSwapRoot);
+    for (const shim of shims) {
+      await inspection.assertEntryUnowned(shim.destination);
+    }
   };
-  const restoreSwap = async (): Promise<string[]> => {
+  const verifyNpmRecovery = (root: string, fromBackup: boolean) =>
+    verifyNpmRootRecovery(
+      { root, fromBackup, hadPackage, previousRoot, previousIdentity, targetSwapRoot, shims },
+      params.timeoutMs,
+      rootLink?.verifyRuntime,
+    );
+  const restoreSwap = async (executorAssertion = () => {}): Promise<string[]> => {
+    const assertCurrent = () => {
+      executorAssertion();
+      activation?.assertCurrent();
+    };
+    assertCurrent();
+    if (preparationCustody && !activation) {
+      return [
+        "Preparation custody is retained by the package recovery journal; run its repair command.",
+      ];
+    }
+    if (activation) {
+      packageBackedUp = await activation.disarmRollback();
+    }
     const messages: string[] = [];
     if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
       try {
@@ -287,16 +151,38 @@ export async function swapStagedPackageInstall(params: {
         // This observation does not exclude concurrent writers.
         await verifyNpmRecovery(backupRoot, true);
       } catch (error) {
+        assertCurrent();
         packageRollbackVerified = false;
         return [
           `${formatErrorMessage(error)}; current package unchanged; recovery evidence retained in ${targetLayout.globalRoot}`,
         ];
       }
     }
-    for (const restore of native ? rollback.toReversed() : rollback) {
+    if (process.platform === "freebsd" && (packageBackedUp || rollback.length > 0)) {
       try {
-        await restore();
+        await assertReplacementUnowned();
+        assertCurrent();
+      } catch (error) {
+        assertCurrent();
+        packageRollbackVerified = false;
+        return [
+          `${formatErrorMessage(error)}; installation and backups retained for manual recovery`,
+        ];
+      }
+    }
+    for (const restore of activation && !packageBackedUp
+      ? []
+      : native
+        ? rollback.toReversed()
+        : rollback) {
+      try {
+        assertCurrent();
+        await restore(assertCurrent);
+        assertCurrent();
       } catch (restoreError) {
+        // Ownership loss stops all compensation, including partial activation.
+        // It is not an ordinary restore failure that permits the next launcher.
+        assertCurrent();
         packageRollbackVerified = false;
         messages.push(`rollback failed: ${formatErrorMessage(restoreError)}`);
         // Keep a fully activated candidate's launchers on package refusal.
@@ -324,16 +210,20 @@ export async function swapStagedPackageInstall(params: {
     }
     if (!native) {
       try {
-        await verifyNpmRecovery(targetSwapRoot, false);
-        // Returning to absence cannot establish a verified previous runtime.
         packageRollbackVerified =
-          hadPackage && previousRoot?.kind === "directory" && messages.length === 0;
-        if (previousRoot?.kind === "link" && messages.length === 0) {
+          (await verifyNpmRecovery(targetSwapRoot, false)) && messages.length === 0;
+        if (packageRollbackVerified && !previousRoot) {
+          warnings.push(
+            "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
+          );
+        }
+        if (previousRoot?.kind === "link" && !rootLink?.verifyRuntime && messages.length === 0) {
           messages.push(
             `${rollback.length > 0 ? "Restored" : "Verified"} the npm package link and affected launchers; external checkout runtime integrity is unverified.`,
           );
         }
       } catch (error) {
+        assertCurrent();
         packageRollbackVerified = false;
         messages.push(formatErrorMessage(error));
       }
@@ -359,6 +249,7 @@ export async function swapStagedPackageInstall(params: {
           );
         }
       } catch (verificationError) {
+        assertCurrent();
         packageRollbackVerified = false;
         messages.push(
           `rollback verification failed for launcher ${shim.destination}: ${formatErrorMessage(verificationError)}`,
@@ -369,34 +260,63 @@ export async function swapStagedPackageInstall(params: {
       messages.push(
         `Installation recovery is unverified; inspect the installation and backups in ${targetLayout.globalRoot} before restarting.`,
       );
+    } else if (activation && activation.status().phase !== "aborted") {
+      await activation.restored();
     } else {
       for (const [root, label] of [
-        [shimBackupDir, "shim backup"],
-        [displacedCandidateRoot, "rejected candidate"],
+        [launchers.backupDir, "shim backup"],
+        [displacedCandidateRoot, "rejected update"],
       ] as const) {
         if (root) {
-          const cleanup = await discardBackup(root, label);
+          const cleanup = await discardPackageUpdateBackup(
+            root,
+            label,
+            targetLayout.globalRoot,
+            assertCurrent,
+          );
           if (cleanup) {
             messages.push(cleanup);
           }
         }
       }
     }
+    assertCurrent();
     return messages;
   };
-  const prepareBaseline = async () => {
+  const readBaseline = async () => {
     hadPackage = await (native ? pathEntryExists(targetSwapRoot) : baseline.exists(targetSwapRoot));
     previousVersion =
       hadPackage && native
         ? await readPackageVersionIfPresent(params.installTarget.packageRoot)
         : null;
     if (hadPackage && !native) {
-      // Unreadable or unbounded rollback material must fail while the old
-      // package is still live, before beforeActivate may stop its service.
-      previousRoot = await baseline.rootEntry(targetSwapRoot);
-      previousVersion = previousRoot.kind === "directory" ? previousRoot.tree.version : null;
-      if (previousRoot.kind === "link") {
-        rootLink = createNpmPackageRootLinkLifecycle({
+      try {
+        previousRoot = await baseline.rootEntry(targetSwapRoot);
+      } catch (error) {
+        // Preserve the scan cause if the identity fallback also fails.
+        baselineError = new Error("Baseline package scan failed", { cause: error });
+        if (!(error instanceof PackageIntegrityTimeoutError)) {
+          throw error;
+        }
+        // Capture the identity before mutation even when the full walk exhausted its budget.
+        previousIdentity =
+          (await createPackageIntegrityReader(params.timeoutMs).directoryIdentity(
+            targetSwapRoot,
+          )) ?? undefined;
+        if (!previousIdentity) {
+          throw error;
+        }
+        warnings.push(
+          `baseline package fingerprint incomplete after ${error.budgetMs / 1000} s; rollback will be verified by the retained package copy`,
+        );
+      }
+      baselineError = undefined;
+      previousVersion =
+        previousRoot?.kind === "directory"
+          ? previousRoot.tree.version
+          : (previousIdentity?.version ?? null);
+      if (previousRoot?.kind === "link") {
+        rootLink = await createNpmPackageRootLinkLifecycle({
           liveRoot: targetSwapRoot,
           backupRoot,
           fingerprint: previousRoot,
@@ -409,67 +329,87 @@ export async function swapStagedPackageInstall(params: {
         (await readPackageDistInventoryIfPresent(params.installTarget.packageRoot!)) ??
         (await collectPackageDistInventory(params.installTarget.packageRoot!));
     }
+    replayLocalOverrides = await preparePackageSwapLocalOverrides({
+      ...params,
+      hadPackage,
+      rootLinked: Boolean(rootLink),
+      targetSwapRoot,
+      backupRoot,
+    });
     packageRollbackVerified = hadPackage && previousVersion !== null;
-    await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-    const shimNames = new Set([params.packageName, "openclaw"]);
-    const shimEntries =
-      params.installTarget.directNodeModulesRoot === true
-        ? []
-        : (
-            await (
-              native
-                ? fs.readdir(params.stage.layout.binDir)
-                : baseline.entries(params.stage.layout.binDir)
-            ).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return [];
-              }
-              throw error;
-            })
-          )
-            .filter((entry) => shimNames.has(entry) || shimNames.has(path.parse(entry).name))
-            .toSorted();
-    if (shimEntries.length > 0) {
-      shimBackupDir = await fs.mkdtemp(
-        path.join(targetLayout.globalRoot, ".openclaw.shim-backup-"),
-      );
-      await fs.mkdir(targetLayout.binDir, { recursive: true });
-      // Capture every original before moving its package; relative npm shims can
-      // become dangling during the swap, and failed backup copies touch no live entry.
-      for (const entry of shimEntries) {
-        const destination = path.join(targetLayout.binDir, entry);
-        const backup = (await (native
-          ? pathEntryExists(destination)
-          : baseline.exists(destination)))
-          ? path.join(shimBackupDir, entry)
-          : null;
-        const fingerprint = backup && !native ? await baseline.launcher(destination) : undefined;
-        if (backup) {
-          await copyPathEntry(destination, backup);
-          if (!native && (await baseline.launcher(backup)) !== fingerprint) {
-            throw new Error(`Package rollback launcher backup changed: ${destination}`);
-          }
-        }
-        shims.push({
-          source: path.join(params.stage.layout.binDir, entry),
-          destination,
-          backup,
-          fingerprint,
-        });
-      }
-    }
   };
   try {
-    if (native) {
-      await prepareBaseline();
-    } else {
-      await baseline.observe("baseline", prepareBaseline);
+    await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
+    // The optional tree scan must not consume the launcher backup's deadline.
+    const launcherReader = createPackageIntegrityReader(params.timeoutMs);
+    await launcherReader.observe("baseline", () =>
+      capturePackageLaunchers(launchers, params, targetLayout, launcherReader),
+    );
+    if (
+      params.activation &&
+      process.platform !== "freebsd" &&
+      !native &&
+      !rootLink &&
+      previousRoot?.kind === "directory"
+    ) {
+      if (params.localOverrides?.reapply) {
+        // Replaying edits changes the sealed candidate digest. Keep that existing
+        // update path instead of creating a journal for a mutable candidate.
+        const message =
+          "Standalone package publication repair is unavailable while replaying local overrides; the existing package backup and rollback path remains in use.";
+        warnings.push(message);
+        params.activation.onUnavailable?.(message);
+      } else {
+        activation = await preparePackageActivation({
+          installTarget: params.installTarget,
+          options: {
+            ...params.activation,
+            onUnavailable: (message) => {
+              warnings.push(message);
+              params.activation?.onUnavailable?.(message);
+            },
+          },
+          liveRoot: targetSwapRoot,
+          stageRoot: stagedSwapRoot,
+          launcherRoot: params.stage.layout.binDir,
+          binDir: targetLayout.binDir,
+          previous: previousRoot.tree,
+          previousLauncherRoot: launchers.backupDir,
+          onCustody: (custodyRetained) => {
+            preparationCustody = custodyRetained;
+            params.stage.activationCustody = custodyRetained;
+          },
+          launchers: shims.map((shim) => ({
+            name: path.basename(shim.destination),
+            previous: shim.fingerprint ? encodePackageActivationLauncher(shim.fingerprint) : null,
+          })),
+        });
+        if (activation) {
+          params.stage.activationCustody = false;
+          backupRoot = path.join(activation.anchor, "previous");
+          launchers.backupDir =
+            launchers.backupDir && path.join(activation.anchor, "previous-launchers");
+          for (const shim of shims) {
+            shim.source = path.join(
+              activation.anchor,
+              "launchers",
+              path.basename(shim.destination),
+            );
+            if (shim.backup) {
+              shim.backup = path.join(launchers.backupDir!, path.basename(shim.destination));
+            }
+          }
+        }
+      }
     }
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
     const assertProjectUnchanged = native
       ? await finalizeNativePackageStage(native, params.packageName)
       : undefined;
+    if (process.platform === "freebsd") {
+      await assertReplacementUnowned();
+    }
     try {
       await params.beforeActivate?.();
     } catch (error) {
@@ -479,11 +419,25 @@ export async function swapStagedPackageInstall(params: {
       // Service preparation can wait for drain; revalidate the project copied before that wait.
       await native.assertUnchanged();
     }
+    if (process.platform === "freebsd") {
+      // Draining and project validation may outlive package ownership. Refuse
+      // before registering a transaction or replacing any live entry.
+      await assertReplacementUnowned();
+      params.assertCurrent?.();
+    }
     if (params.onTransaction) {
       retained = true;
-      let completed = false;
+      let retirement: Promise<UpdateStepResult | void> | undefined;
       let rollbackRefused = false;
       let rollbackResult: ReturnType<PackageUpdateTransaction["rollback"]> | undefined;
+      let retainedAssertion: (() => void) | undefined = params.activation?.fence.assertCurrent;
+      const retainAuthority = (assertCurrent: () => void) => {
+        // Replays and completion keep the first executor. A later caller cannot
+        // re-admit a transaction whose original owner has been revoked.
+        retainedAssertion ??= assertCurrent;
+        retainedAssertion();
+        return retainedAssertion;
+      };
       const assertRollbackSafe = assertProjectUnchanged
         ? async () => {
             if (!projectActivated) {
@@ -496,19 +450,21 @@ export async function swapStagedPackageInstall(params: {
               throw error;
             }
           }
-        : undefined;
-      params.onTransaction({
+        : rootLink?.verifyRuntime;
+      await params.onTransaction({
         backupRoot,
+        ...(activation ? { databaseBackupRoot } : {}),
         ...(assertRollbackSafe ? { assertRollbackSafe } : {}),
-        rollback: () => {
-          if (completed) {
+        rollback: (assertion) => {
+          const assertCurrent = retainAuthority(assertion);
+          if (retirement) {
             return Promise.resolve({
               ...step(
                 1,
                 null,
-                "Package transaction is already complete; its backup is no longer retained.",
+                "Package transaction retirement has started; automatic rollback is no longer available.",
               ),
-              name: "global install rollback",
+              name: "package-rollback",
               activePackageRoot,
             });
           }
@@ -520,14 +476,15 @@ export async function swapStagedPackageInstall(params: {
             try {
               await assertRollbackSafe?.();
             } catch (error) {
+              assertCurrent();
               return {
                 ...step(1, null, formatErrorMessage(error)),
-                name: "global install rollback",
+                name: "package-rollback",
                 activePackageRoot,
                 ...(error instanceof NativePackageRollbackError ? { reason: error.reason } : {}),
               };
             }
-            const messages = await restoreSwap();
+            const messages = await restoreSwap(assertCurrent);
             return {
               ...step(
                 packageRollbackVerified ? 0 : 1,
@@ -536,7 +493,7 @@ export async function swapStagedPackageInstall(params: {
                   : null,
                 messages.join("\n") || null,
               ),
-              name: "global install rollback",
+              name: "package-rollback",
               activePackageRoot,
               command: `restore ${backupRoot} -> ${targetSwapRoot}`,
               durationMs: Date.now() - rollbackStartedAt,
@@ -544,15 +501,17 @@ export async function swapStagedPackageInstall(params: {
           })();
           return rollbackResult;
         },
-        complete: async ({ activationVerified }): Promise<UpdateStepResult | void> => {
-          if (completed) {
-            return;
+        complete: async ({ activationVerified }, assertion): Promise<UpdateStepResult | void> => {
+          const assertCurrent = retainAuthority(assertion);
+          if (retirement) {
+            return await retirement;
           }
           // Retire backups only after verified activation or restoration. A failed
           // backup move can leave its published copy as the only intact installation.
           const outcomeVerified = rollbackResult
             ? (await rollbackResult).exitCode === 0 && packageRollbackVerified
             : (native ? projectActivated : activationCompleted) && activationVerified;
+          assertCurrent();
           if (rollbackRefused || !outcomeVerified) {
             return {
               ...step(
@@ -560,186 +519,221 @@ export async function swapStagedPackageInstall(params: {
                 null,
                 `Installation recovery is unverified; inspect the installation and backups in ${targetLayout.globalRoot} before restarting.`,
               ),
-              name: "global install backup retention",
+              name: "package-backup-retention",
             };
           }
-          const linkRetention = rootLink ? await rootLink.retire() : null;
-          if (linkRetention) {
-            return { ...step(1, null, linkRetention), name: "global install backup retention" };
-          }
-          completed = true;
-          if (hadPackage && previousRoot?.kind !== "link") {
-            await discardBackup(backupRoot, "old package");
-          }
-          if (shimBackupDir) {
-            await discardBackup(shimBackupDir, "shim backup");
-          }
+          // Seal automatic rollback once retirement begins, but retain the actual
+          // outcome. A repeated completion must not report a renamed backup gone.
+          retirement ??= retireVerifiedPackageSwap({
+            activation,
+            rootLink,
+            hadPackage,
+            previousRoot,
+            backupRoot,
+            // Rollback snapshots remain recovery evidence even after successful restoration.
+            databaseBackupRoot: rollbackResult ? undefined : databaseBackupRoot,
+            launchers,
+            packageBackedUp,
+            globalRoot: targetLayout.globalRoot,
+            assertCurrent,
+            step,
+          });
+          return await retirement;
         },
       });
     }
-    await rootLink?.assertLiveUnchanged();
-    // A native refusal must still allow the unchanged Gateway to restart.
-    // Mark mutation only now: a copy-fallback move can fail after partial publication,
-    // and only a completed backup permits restoration.
-    params.onLiveMutation?.();
-    packageRollbackVerified = false;
-    if (native || !hadPackage) {
-      activePackageRoot = null;
-    }
-    if (hadPackage) {
-      if (native) {
-        await movePathWithCopyFallback({
-          from: targetSwapRoot,
-          sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-          to: backupRoot,
-        });
-      } else if (rootLink) {
-        const acquisition = await rootLink.acquire();
-        if (!acquisition.acquired) {
-          activePackageRoot = null;
-          throw new Error(acquisition.error);
-        }
-      } else {
-        await fs.rename(targetSwapRoot, backupRoot);
-      }
-      activePackageRoot = null;
-      packageBackedUp = true;
-      packageRollbackVerified = native !== undefined || previousRoot?.kind === "directory";
-    }
-    rollback.push(async () => {
+    const restorePackage = async (assertCurrent: () => void) => {
       if (!native && hadPackage) {
         // Retain the candidate until the exact old object is restored. A
         // denied/cross-device rename must not silently copy or strand it.
         const candidatePresent = await pathEntryExists(targetSwapRoot);
         const displaced = `${backupRoot}.candidate`;
-        if (candidatePresent) {
-          await fs.rename(targetSwapRoot, displaced);
-          displacedCandidateRoot = displaced;
-        }
         activePackageRoot = null;
         try {
-          await fs.rename(backupRoot, targetSwapRoot);
+          await restoreNpmPackageRoot({
+            liveRoot: targetSwapRoot,
+            backupRoot,
+            displacedRoot: displaced,
+            candidatePresent,
+            assertCurrent,
+          });
+          displacedCandidateRoot = candidatePresent ? displaced : undefined;
           packageBackedUp = false;
           activePackageRoot = params.installTarget.packageRoot;
         } catch (error) {
+          assertCurrent();
           if (candidatePresent) {
-            await fs.rename(displaced, targetSwapRoot);
-            displacedCandidateRoot = undefined;
-            activePackageRoot = targetPackageRoot;
+            displacedCandidateRoot = (await pathEntryExists(displaced)) ? displaced : undefined;
+            activePackageRoot = (await pathEntryExists(targetSwapRoot)) ? targetPackageRoot : null;
+            if (displacedCandidateRoot) {
+              throw new Error(
+                `${formatErrorMessage(error)}; update retained at ${displacedCandidateRoot}`,
+                { cause: error },
+              );
+            }
           }
           throw error;
         }
         return;
       }
       activePackageRoot = null;
-      await removePath(targetSwapRoot);
+      await removePath(targetSwapRoot, assertCurrent);
       if (hadPackage) {
         await movePathWithCopyFallback({
           from: backupRoot,
           sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
           to: targetSwapRoot,
+          assertBeforeRename: assertCurrent,
+          assertBeforeMutation: assertCurrent,
+          onDestinationPublished: assertCurrent,
         });
         activePackageRoot = params.installTarget.packageRoot;
       }
-    });
-    await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
-    activePackageRoot = targetPackageRoot;
-    projectActivated = true;
-    for (const shim of shims) {
-      // Register before copying: replacing an entry can fail after removing it.
-      rollback.push(async () => {
-        if (shim.backup) {
-          await copyPathEntry(shim.backup, shim.destination);
-        } else {
-          await removePath(shim.destination);
-        }
-      });
-      await copyPathEntry(shim.source, shim.destination);
-    }
-    activationCompleted = true;
-    let postVerifyStep: UpdateStepResult | null = null;
-    if (params.postVerifyStep) {
-      try {
-        postVerifyStep = await params.postVerifyStep(targetPackageRoot);
-      } catch (error) {
-        postVerifyStep = {
-          name: "post-install verification",
-          command: "verify installed package",
-          cwd: targetPackageRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: formatErrorMessage(error),
-        };
-      }
-      postVerifyStep ??= {
-        name: "post-install verification",
-        command: "verify installed package",
-        cwd: targetPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail:
-          "Required post-install verification did not produce a result; Gateway activation is unsafe.",
-      };
-    }
-    if (postVerifyStep && isBlockingPackageUpdateStep(postVerifyStep) && !retained) {
-      const rollbackMessages = await restoreSwap();
-      return {
-        status: "failed",
-        activePackageRoot,
-        step: packageRollbackVerified
-          ? step(
-              0,
-              [
-                `restored previous ${params.packageName} package and affected launchers after verification failed`,
-                "candidate Doctor may have changed persistent state; managed Gateway remains stopped",
-                ...rollbackMessages,
-              ]
-                .filter(Boolean)
-                .join("; "),
-              null,
-            )
-          : step(1, null, rollbackMessages.join("\n")),
-        postVerifyStep,
-        packageRollbackVerified,
-      };
-    }
-    const cleanup = [
-      hadPackage && !retained
-        ? rootLink
-          ? await rootLink.retire()
-          : await discardBackup(backupRoot, "old package")
-        : null,
-      shimBackupDir && !retained ? await discardBackup(shimBackupDir, "shim backup") : null,
-    ];
-    return {
-      status: "committed",
-      activePackageRoot,
-      step: step(
-        0,
-        [
-          hadPackage ? `replaced ${params.packageName}` : `installed ${params.packageName}`,
-          ...cleanup,
-        ]
-          .filter(Boolean)
-          .join("; "),
-        null,
-      ),
-      postVerifyStep,
     };
-  } catch (error) {
-    if (error instanceof PackageUpdateActivationError) {
-      if (shimBackupDir) {
-        await discardBackup(shimBackupDir, "shim backup");
+    const restoreShim = (shim: (typeof shims)[number]) => async (assertCurrent: () => void) => {
+      if (shim.backup) {
+        await copyPathEntry(
+          shim.backup,
+          shim.destination,
+          assertCurrent,
+          activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+        );
+      } else {
+        await removePath(shim.destination, assertCurrent);
       }
+    };
+    if (activation) {
+      rollback.push(restorePackage, ...shims.map(restoreShim));
+      params.onLiveMutation?.();
+      liveMutationStarted = true;
+      packageRollbackVerified = false;
+      await activation.publish(false, async () => {
+        packageBackedUp = true;
+        activePackageRoot = null;
+        activation!.assertCurrent();
+        await replayLocalOverrides?.({
+          backupRoot,
+          packageRoot: path.join(activation!.anchor, "candidate"),
+        });
+        activation!.assertCurrent();
+      });
+      activePackageRoot = targetPackageRoot;
+      projectActivated = true;
+      activationCompleted = true;
+    } else {
+      await rootLink?.assertLiveUnchanged();
+      if (process.platform === "freebsd") {
+        // Keep executor authority after the last asynchronous link observation.
+        params.assertCurrent?.();
+      }
+      // A native refusal must still allow the unchanged Gateway to restart.
+      // Mark mutation only now: a copy-fallback move can fail after partial publication,
+      // and only a completed backup permits restoration.
+      params.onLiveMutation?.();
+      liveMutationStarted = true;
+      packageRollbackVerified = false;
+      if (native || !hadPackage) {
+        activePackageRoot = null;
+      }
+      if (hadPackage) {
+        if (native) {
+          await movePathWithCopyFallback({
+            from: targetSwapRoot,
+            sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+            to: backupRoot,
+          });
+        } else if (rootLink) {
+          const acquisition = await rootLink.acquire();
+          if (!acquisition.acquired) {
+            activePackageRoot = null;
+            throw new Error(acquisition.error);
+          }
+        } else {
+          await fs.rename(targetSwapRoot, backupRoot);
+        }
+        activePackageRoot = null;
+        packageBackedUp = true;
+        packageRollbackVerified =
+          native !== undefined ||
+          previousRoot?.kind === "directory" ||
+          previousIdentity !== undefined;
+      }
+      rollback.push(restorePackage);
+      await replayLocalOverrides?.();
+      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
+      activePackageRoot = targetPackageRoot;
+      projectActivated = true;
+      for (const shim of shims) {
+        // Register before copying: replacing an entry can fail after removing it.
+        rollback.push(restoreShim(shim));
+        await copyPathEntry(shim.source, shim.destination);
+      }
+      activationCompleted = true;
+    }
+    const postVerifyStep = params.postVerifyStep
+      ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
+      : null;
+    if (postVerifyStep && isFailedUpdateStep(postVerifyStep) && !retained) {
+      const rollbackMessages = await restoreSwap();
+      return results.verificationFailed(
+        activePackageRoot,
+        packageRollbackVerified,
+        rollbackMessages,
+        postVerifyStep,
+      );
+    }
+    if (activation && !retained) {
+      // Retirement may remove the previous generation before its final acknowledgement.
+      // From here, preserve the resumable receipt instead of starting compensation.
+      activationRetirementStarted = true;
+      await activation.retire();
+    }
+    const cleanup = activation
+      ? []
+      : [
+          hadPackage && !retained
+            ? rootLink
+              ? await rootLink.retire()
+              : await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot)
+            : null,
+          !retained ? await discardPackageLauncherBackup(launchers, targetLayout.globalRoot) : null,
+        ];
+    return results.committed(activePackageRoot, hadPackage, cleanup, postVerifyStep);
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    const errors = [formatErrorMessage(error), ...(retained ? [] : await restoreSwap())];
-    return {
-      status: "failed",
+    if (
+      error instanceof PackageUpdateActivationError ||
+      error instanceof FreeBsdPkgOwnershipError
+    ) {
+      if (!activation && !preparationCustody) {
+        await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
+      }
+      throw error instanceof PackageUpdateActivationError
+        ? error
+        : new PackageUpdateActivationError(error);
+    }
+    const errors = [formatErrorMessage(baselineError ?? error)];
+    if (!retained && !liveMutationStarted && !activation && !preparationCustody) {
+      // Preparation can fail before a baseline exists. There is nothing to
+      // restore; the caller independently verifies the untouched runtime.
+      packageRollbackVerified = false;
+      const cleanup = await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
+      if (cleanup) {
+        errors.push(cleanup);
+      }
+    } else if (activationRetirementStarted) {
+      errors.push("Package retirement remains pending; use the retained package recovery command.");
+    } else if (!retained) {
+      errors.push(...(await restoreSwap()));
+    }
+    return results.failed(
       activePackageRoot,
-      step: step(1, null, errors.join("\n")),
-      postVerifyStep: null,
-      packageRollbackVerified: retained ? false : packageRollbackVerified,
-    };
+      error,
+      errors,
+      retained ? false : packageRollbackVerified,
+      baselineError,
+    );
   }
 }

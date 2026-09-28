@@ -43,14 +43,6 @@ function makeAgentModelEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 function expectedStaticChatCatalog() {
   // Mirror the production mapping (provider-catalog.ts / discoverDeepInfraModels)
   // so per-family compat tagging (e.g. thinkingFormat) stays in one place.
@@ -82,7 +74,7 @@ afterEach(() => {
 function mockProjectionFetch(projection: () => Promise<Response> | Response) {
   return vi.fn(async (url: string) => {
     if (url === "https://api.deepinfra.com/models/list") {
-      return jsonResponse([
+      return Response.json([
         {
           model_name: "fixture/native-only",
           pricing: { type: "tokens", cents_per_input_token: 0.0002, cents_per_output_token: 0.001 },
@@ -146,7 +138,7 @@ describe("DeepInfra pre-auth discovery", () => {
     { key: "   ", live: false },
     { key: undefined, live: false },
   ])("discovers only with a configured environment key: $live", async ({ key, live }) => {
-    const mockFetch = mockProjectionFetch(() => jsonResponse({ data: [makeAgentModelEntry()] }));
+    const mockFetch = mockProjectionFetch(() => Response.json({ data: [makeAgentModelEntry()] }));
     await withFetchPathTest(mockFetch, {}, async () => {
       expect((await discoverDeepInfraSurfaces({ env: { DEEPINFRA_API_KEY: key } })).live).toBe(
         live,
@@ -160,7 +152,7 @@ describe("DeepInfra pre-auth discovery", () => {
 
   it("discovers with a saved profile when the environment has no key", async () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
-    const mockFetch = mockProjectionFetch(() => jsonResponse({ data: [makeAgentModelEntry()] }));
+    const mockFetch = mockProjectionFetch(() => Response.json({ data: [makeAgentModelEntry()] }));
     await withFetchPathTest(mockFetch, {}, async () => {
       expect(
         (await discoverDeepInfraSurfaces({ env: {}, agentDir: "/tmp/openclaw-agent" })).live,
@@ -176,20 +168,18 @@ describe("DeepInfra pre-auth discovery", () => {
 describe("discoverDeepInfraModels", () => {
   it("returns static catalog without credentials", async () => {
     const models = await discoverDeepInfraModels({ hasApiKey: false });
-    const modelIds = models.map((m) => m.id);
     const streamingUsageIncompatibleModelIds = models
       .filter((m) => !m.compat?.supportsUsageInStreaming)
       .map((m) => m.id);
 
     expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V4-Flash");
     expect(models).toStrictEqual(expectedStaticChatCatalog());
-    expect(modelIds).toStrictEqual(expectedStaticChatCatalog().map((model) => model.id));
     expect(streamingUsageIncompatibleModelIds).toStrictEqual([]);
   });
 
   it("fetches the openclaw-projection endpoint and parses chat-surface entries when an API key is configured", async () => {
     const mockFetch = mockProjectionFetch(
-      vi.fn().mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry()] })),
+      vi.fn().mockResolvedValue(Response.json({ data: [makeAgentModelEntry()] })),
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
@@ -260,7 +250,7 @@ describe("discoverDeepInfraModels", () => {
         },
       }),
     ];
-    const mockFetch = mockProjectionFetch(vi.fn().mockResolvedValue(jsonResponse({ data: rows })));
+    const mockFetch = mockProjectionFetch(vi.fn().mockResolvedValue(Response.json({ data: rows })));
     DEEPINFRA_MODEL_CATALOG.push(DEEPINFRA_MODEL_CATALOG[0]!);
 
     try {
@@ -303,7 +293,7 @@ describe("discoverDeepInfraModels", () => {
   it("skips entries with no metadata or no surface tag, and deduplicates ids", async () => {
     const mockFetch = mockProjectionFetch(
       vi.fn().mockResolvedValue(
-        jsonResponse({
+        Response.json({
           data: [
             { id: "BAAI/bge-m3", object: "model", metadata: null },
             makeAgentModelEntry({
@@ -319,20 +309,7 @@ describe("discoverDeepInfraModels", () => {
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
       const models = await discoverDeepInfraModels();
-      expect(models.map((m) => m.id)).toEqual(
-        [
-          {
-            id: "openai/gpt-oss-120b",
-            name: "openai/gpt-oss-120b",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ].map((model) => model.id),
-      );
+      expect(models.map((m) => m.id)).toEqual(["openai/gpt-oss-120b"]);
     });
   });
 
@@ -390,28 +367,15 @@ describe("discoverDeepInfraModels", () => {
     const mockFetch = mockProjectionFetch(
       vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse(payload))
+        .mockResolvedValueOnce(Response.json(payload))
         .mockResolvedValueOnce(
-          jsonResponse({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+          Response.json({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
         ),
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
       await expect(discoverDeepInfraModels()).rejects.toThrow(error);
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        [
-          {
-            id: "recovered/model",
-            name: "recovered/model",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ].map((model) => model.id),
-      );
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(["recovered/model"]);
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
   });
@@ -420,25 +384,16 @@ describe("discoverDeepInfraModels", () => {
     const mockFetch = mockProjectionFetch(
       vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse({ data: [makeAgentModelEntry({ id: "first/model" })] }))
         .mockResolvedValueOnce(
-          jsonResponse({ data: [makeAgentModelEntry({ id: "second/model" })] }),
+          Response.json({ data: [makeAgentModelEntry({ id: "first/model" })] }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({ data: [makeAgentModelEntry({ id: "second/model" })] }),
         ),
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const expectedIds = [
-        {
-          id: "first/model",
-          name: "first/model",
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 131072,
-          maxTokens: 65536,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          compat: { supportsUsageInStreaming: true },
-        },
-      ].map((model) => model.id);
+      const expectedIds = ["first/model"];
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
       expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -449,9 +404,9 @@ describe("discoverDeepInfraModels", () => {
     const mockFetch = mockProjectionFetch(
       vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse({ data: [] }))
+        .mockResolvedValueOnce(Response.json({ data: [] }))
         .mockResolvedValueOnce(
-          jsonResponse({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+          Response.json({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
         ),
     );
 
@@ -466,7 +421,7 @@ describe("discoverDeepInfraModels", () => {
 describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
   it("buckets dynamic entries by short-alias surface tag", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [
           makeAgentModelEntry({
             id: "anthropic/claude-sonnet-4-6",
@@ -543,7 +498,7 @@ describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
 
   it("drops malformed live numeric metadata", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [
           makeAgentModelEntry({
             id: "bad/chat",

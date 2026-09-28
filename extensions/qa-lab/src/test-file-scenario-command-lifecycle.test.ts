@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -87,14 +88,15 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       const descendantScript = [
         "const { writeFileSync } = require('node:fs');",
         "process.on('SIGTERM', () => {});",
+        // Disconnect follows the leader's flushed write and exit, regardless of scheduling.
+        "process.once('disconnect', () => process.stdout.write('delayed descendant output\\n'));",
         `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-        "setTimeout(() => process.stdout.write('delayed descendant output\\n'), 40);",
         "setInterval(() => {}, 1000);",
       ].join(" ");
       const leaderScript = [
         "const { spawn } = require('node:child_process');",
         "const { existsSync } = require('node:fs');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'inherit', 'inherit'] }).unref();`,
+        `spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] }).unref();`,
         `const ready = setInterval(() => { if (!existsSync(${JSON.stringify(descendantPidPath)})) return; clearInterval(ready); process.stdout.write('Docker scheduling finished\\n', () => process.exit(7)); }, 5);`,
       ].join("\n");
 
@@ -177,7 +179,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
 
   it("cleans the command group before re-raising a parent SIGTERM", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-parent-signal-"));
-    const descendantPidPath = path.join(root, "descendant.pid");
     const bundlePath = path.join(root, "test-file-scenario-command-lifecycle.mjs");
     // Compile before the readiness window; a cold tsx child can exceed it under the full QA suite.
     // The bundle needs only the UTF-16 helper behind this SDK import, not the full plugin runtime.
@@ -195,20 +196,33 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       outfile: bundlePath,
       platform: "node",
       target: "node22",
+      // The plugin package tsconfig targets built SDK declarations; this fixture runs from source.
+      tsconfig: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
     });
     const moduleUrl = pathToFileURL(bundlePath).href;
-    let descendantPid: number | undefined;
     if (!actualSpawn.value) {
       throw new Error("real spawn unavailable");
     }
+    let descendant: Socket | undefined;
+    const server = createServer((socket) => {
+      descendant = socket;
+      socket.resume();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("descendant observer did not bind a TCP port");
+    }
+    const connected = once(server, "connection", { signal: AbortSignal.timeout(10_000) });
     const controllerScript = [
       `import { runQaScenarioCommandLifecycle, setQaScenarioCommandCleanupTimings } from ${JSON.stringify(moduleUrl)};`,
       "setQaScenarioCommandCleanupTimings({ killGraceMs: 50, forceSettleMs: 50 });",
       "const nested = [",
-      "  \"const { writeFileSync } = require('node:fs');\",",
-      `  ${JSON.stringify(`writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`)},`,
       "  \"process.on('SIGTERM', () => {});\",",
-      '  "setInterval(() => {}, 1000);",',
+      `  ${JSON.stringify(`const socket = require('node:net').connect(${address.port}, '127.0.0.1');`)},`,
+      "  \"socket.on('error', () => process.exit(1));\",",
+      "  \"socket.on('close', () => process.exit(0));\",",
       "].join(' ');",
       "await runQaScenarioCommandLifecycle({",
       "  command: process.execPath,",
@@ -224,24 +238,28 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       { cwd: process.cwd(), env: process.env, stdio: "ignore" },
     );
     try {
-      descendantPid = await waitForPidFile(descendantPidPath);
+      await connected;
+      if (!descendant) {
+        throw new Error("descendant did not connect");
+      }
+      // The held socket identifies this process even after its numeric PID is reused.
+      const descendantClosed = once(descendant, "close", {
+        signal: AbortSignal.timeout(10_000),
+      });
+      const controllerClosed = once(controller, "close");
       controller.kill("SIGTERM");
-      const [exitCode, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
-        (resolve) => {
-          controller.once("close", (code, nextSignal) => resolve([code, nextSignal]));
-        },
-      );
+      const [[exitCode, signal]] = await Promise.all([controllerClosed, descendantClosed]);
 
       expect(exitCode).toBeNull();
       expect(signal).toBe("SIGTERM");
-      await waitForDead(descendantPid);
     } finally {
       if (controller.exitCode === null && controller.signalCode === null) {
         controller.kill("SIGKILL");
       }
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
+      descendant?.destroy();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       await rm(root, { force: true, recursive: true });
     }
   });

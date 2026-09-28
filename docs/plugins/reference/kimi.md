@@ -1,5 +1,5 @@
 ---
-summary: "Adds Kimi, Kimi Coding model provider support to OpenClaw."
+summary: "Adds Kimi, Kimi Code, Kimi Coding model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the kimi plugin
 title: "Kimi plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds Kimi, Kimi Coding model provider support to OpenClaw.
+Adds Kimi, Kimi Code, Kimi Coding model provider support to OpenClaw.
 
 ## Distribution
 
@@ -19,7 +19,7 @@ Adds Kimi, Kimi Coding model provider support to OpenClaw.
 
 ## Surface
 
-- Providers: `kimi`, `kimi-coding`
+- Providers: `kimi`, `kimi-code`, `kimi-coding`
 
 ## Related docs
 

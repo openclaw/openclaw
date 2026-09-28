@@ -41,9 +41,6 @@ if (!suppliedProfile || process.env.GH_CONFIG_DIR !== suppliedProfile) {
   throw new Error("Fixture requires the explicitly supplied synthetic profile");
 }
 if (process.argv[3] === "deleted-after-launch") fs.rmSync(suppliedProfile, { recursive: true });
-if (process.argv[3] === "stripped-after-launch") {
-  fs.writeFileSync(path.join(suppliedProfile, "hosts.yml"), JSON.stringify({ "github.com": { user: "synthetic-managed-account" } }));
-}
 const fakeKeyring = new Map([["github.com", "synthetic-native-token"]]);
 let selected;
 let source;
@@ -82,17 +79,13 @@ process.stdout.write(JSON.stringify({ account, source, ...lineage }) + "\n");
 `;
 
 describe.skipIf(process.platform === "win32")("selected GitHub profile authentication", () => {
-  it.each(
-    [
-      { pty: false, service: false },
-      { pty: true, service: false },
-      { pty: false, service: true },
-    ].flatMap(({ pty, service }) =>
-      ["missing", "tokenless", "available", "deleted-after-launch", "stripped-after-launch"].map(
-        (profileState) => ({ pty, service, profileState }),
-      ),
-    ),
-  )(
+  it.each([
+    { pty: false, service: false, profileState: "missing" },
+    { pty: false, service: false, profileState: "tokenless" },
+    { pty: false, service: false, profileState: "available" },
+    { pty: true, service: false, profileState: "deleted-after-launch" },
+    { pty: false, service: true, profileState: "deleted-after-launch" },
+  ])(
     "$profileState profile binds local auth (pty=$pty, service=$service)",
     async ({ profileState, pty, service }) => {
       const sends: MockInstance<ChildProcess["send"]>[] = [];

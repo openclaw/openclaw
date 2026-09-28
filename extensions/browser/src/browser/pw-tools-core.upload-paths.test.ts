@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreSessionMocks,
@@ -108,6 +109,124 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
       ok: true,
       paths: ["/home/user/.openclaw/media/inbound/report.pdf"],
     });
+  });
+
+  it.each(["atomic", "passive"] as const)(
+    "checks authority after %s upload page preparation",
+    async (kind) => {
+      const page = createAtomicFileChooserPageMocks();
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      sessionMocks.getPageForTargetId.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return page.currentPage;
+      });
+      interactionMocks.clickViaPlaywright.mockImplementationOnce(async () => page.emitChooser());
+      let current = true;
+      const options = {
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        paths: ["/tmp/upload.txt"],
+        assertCurrent: async () => {
+          if (!current) {
+            throw new Error("Dashboard upload revoked");
+          }
+        },
+      };
+      const operation =
+        kind === "atomic"
+          ? uploadViaPlaywright({ ...options, ref: "e1" })
+          : armFileUploadViaPlaywright(options);
+      const settled = Promise.allSettled([operation]);
+      try {
+        await Promise.race([
+          entered.promise,
+          operation.then(() => {
+            throw new Error("Upload skipped held preparation");
+          }),
+        ]);
+        current = false;
+        release.resolve();
+        expect(await settled).toMatchObject([
+          { status: "rejected", reason: { message: "Dashboard upload revoked" } },
+        ]);
+        expect(interactionMocks.clickViaPlaywright).not.toHaveBeenCalled();
+        expect(page.listenerCount()).toBe(0);
+        expect(page.fileChooser.setFiles).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        page.emitChooser();
+        await settled;
+      }
+    },
+  );
+
+  it("keeps an accepted passive upload arm alive after its requesting invocation ends", async () => {
+    const page = createAtomicFileChooserPageMocks();
+    const invocation = new AbortController();
+    const assertCurrent = vi.fn(async () => invocation.signal.throwIfAborted());
+    try {
+      await armFileUploadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        paths: ["/tmp/upload.txt"],
+        assertCurrent,
+      });
+      invocation.abort(new Error("requesting invocation ended"));
+      page.emitChooser();
+      await vi.waitFor(() => expect(page.fileChooser.setFiles).toHaveBeenCalledOnce());
+      expect(page.listenerCount()).toBe(0);
+    } finally {
+      page.emitChooser();
+    }
+  });
+
+  it("dismisses its acquired chooser when authority is revoked during atomic payload preparation", async () => {
+    const page = createAtomicFileChooserPageMocks();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    pathMocks.resolveStrictExistingUploadPaths.mockImplementationOnce(
+      async ({ requestedPaths }) => {
+        entered.resolve();
+        await release.promise;
+        return { ok: true, paths: requestedPaths };
+      },
+    );
+    interactionMocks.clickViaPlaywright.mockImplementationOnce(async () => page.emitChooser());
+    let current = true;
+    const upload = uploadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "e1",
+      paths: ["/tmp/upload.txt"],
+      assertCurrent: async () => {
+        if (!current) {
+          throw new Error("Dashboard upload revoked");
+        }
+      },
+    });
+    const settled = Promise.allSettled([upload]);
+    try {
+      await Promise.race([
+        entered.promise,
+        upload.then(() => {
+          throw new Error("Upload skipped payload preparation");
+        }),
+      ]);
+      current = false;
+      release.resolve();
+      expect(await settled).toMatchObject([
+        { status: "rejected", reason: { message: "Dashboard upload revoked" } },
+      ]);
+      expect(page.fileChooser.setFiles).not.toHaveBeenCalled();
+      expect(page.press).toHaveBeenCalledExactlyOnceWith("Escape");
+      expect(page.listenerCount()).toBe(0);
+    } finally {
+      release.resolve();
+      page.emitChooser();
+      await settled;
+    }
   });
 
   it("sets resolved files once and leaves browser events to Playwright", async () => {

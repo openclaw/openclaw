@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   movePendingDeliveryQueueEntryNamespace,
@@ -116,6 +117,7 @@ async function prepareLegacyEntryCheckpoint(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<"checkpointed" | "skipped"> {
   const preparationParams = buildLegacyPreparationParams(params.entry, params.cfg);
   const reply = preparationParams.reply;
@@ -190,7 +192,8 @@ async function prepareLegacyEntryCheckpoint(params: {
     leaseTimer.unref();
     try {
       preparedBatch = await prepareOutboundPayloadBatch(preparationParams, {
-        onBeforeFirstModifier: () => {
+        hookRunner: params.hookRunner,
+        onBeforeFirstModifier: async () => {
           if (leaseLost) {
             throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
           }
@@ -479,6 +482,7 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<LegacyOutboundDeliveryMigrationResult> {
   const migrationKey = params.stateDir ?? "<default-state>";
   return await getOrCreatePromise(
@@ -493,6 +497,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;

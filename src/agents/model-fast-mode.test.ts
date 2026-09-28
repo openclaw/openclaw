@@ -31,6 +31,48 @@ function resolver(cfg: OpenClawConfig = {}) {
   });
 }
 describe("private selected Fast metadata", () => {
+  it("uses each selected model's policy and effective agent parameters", () => {
+    const catalog: ModelCatalogEntry[] = [
+      {
+        id: "speed-fixture",
+        name: "Speed fixture",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+      { id: "grok-3", name: "Grok 3", provider: "xai", api: "openai-responses" },
+      { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax", api: "anthropic-messages" },
+    ];
+    const resolve = createModelFastModeResolver({
+      cfg: {
+        agents: {
+          entries: {
+            main: { models: { "openai/speed-fixture": { params: { serviceTier: "flex" } } } },
+          },
+        },
+      },
+      agentId: "main",
+      catalog,
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: ["openai", "xai", "minimax"].map((id) => ({
+          id,
+          providers: [id],
+          rootDir: path.resolve(import.meta.dirname, "../../extensions", id),
+        })),
+      }),
+    });
+    const evaluation = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
+    expect(catalog.map((entry) => resolve(entry, evaluation, "openclaw"))).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    expect(catalog.map((entry) => resolve(entry, evaluation, "codex"))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
   it("loads the provider's light policy for the exact model and auth facts", () => {
     const resolve = resolver();
     expect(

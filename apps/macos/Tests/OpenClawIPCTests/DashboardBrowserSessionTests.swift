@@ -64,7 +64,10 @@ struct DashboardBrowserSessionTests {
         #expect(cookie.isHTTPOnly)
         #expect(cookie.domain == "gateway.example")
         #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
-        try controller.nativeBrowser.open(tabId: "mac-private", url: #require(URL(string: "about:blank")))
+        try controller.nativeBrowser.open(
+            tabId: "mac-private",
+            url: #require(URL(string: "about:blank")),
+            sessionKey: "")
         let readingStore = try #require(controller.nativeBrowser.webView(for: "mac-private"))
             .configuration.websiteDataStore
         #expect(readingStore !== store.dataStore)
@@ -94,6 +97,70 @@ struct DashboardBrowserSessionTests {
         #expect(observer.navigationCount == 0)
         #expect(controller.webView.url == nil)
         #expect(!controller.isWindowOpen)
+    }
+
+    @Test func `same account renewal updates retained leases and cookies without clearing website data`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let previous = try self.session("previous-session")
+        let next = try self.session("renewed-session", expiresAt: previous.expiresAt.addingTimeInterval(3600))
+        let lease = store.lease(for: previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+        let preference = try #require(HTTPCookie(properties: [
+            .name: "ui-theme", .value: "dark", .originURL: previous.origin, .path: "/",
+        ]))
+        await store.dataStore.httpCookieStore.setCookie(preference)
+        let openedDuringRenewal = store.lease(for: next)
+
+        try await store.renewSession(previous: previous, next: next, ifCurrent: { true })
+
+        #expect(lease.isCurrent)
+        #expect(lease.session == next)
+        #expect(openedDuringRenewal.isCurrent)
+        #expect(openedDuringRenewal.session == next)
+        try await lease.prepare(for: next.origin, in: WKUserContentController())
+        let cookies = await store.dataStore.httpCookieStore.allCookies()
+        let renewed = try #require(cookies.first { $0.name == "CF_Authorization" })
+        #expect(renewed.value == "renewed-session")
+        let cookieExpiry = try #require(renewed.expiresDate)
+        #expect(abs(cookieExpiry.timeIntervalSince(next.expiresAt)) < 1)
+        #expect(cookies.first { $0.name == "ui-theme" }?.value == "dark")
+    }
+
+    @Test(arguments: [false, true])
+    func `renewal rejects changed accounts and retired attempts without disturbing the current session`(
+        retiredAttempt: Bool) async throws
+    {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let previous = try self.session("current-session")
+        let next = try self.session("rejected-session", subject: retiredAttempt ? previous.subject : "other-account")
+        let lease = store.lease(for: previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+
+        await #expect(throws: GatewayBrowserSessionError.superseded) {
+            try await store.renewSession(previous: previous, next: next, ifCurrent: { !retiredAttempt })
+        }
+
+        #expect(lease.isCurrent)
+        #expect(lease.session == previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+        #expect(await store.dataStore.httpCookieStore.allCookies().map(\.value) == ["current-session"])
+    }
+
+    @Test func `a failed cookie renewal leaves valid dashboard navigation usable`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let previous = try self.session("still-valid")
+        let expired = try self.session("expired-renewal", expiresAt: Date(timeIntervalSince1970: 10000))
+        let lease = store.lease(for: previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+
+        await #expect(throws: GatewayBrowserSessionError.expired) {
+            try await store.renewSession(previous: previous, next: expired, ifCurrent: { true })
+        }
+
+        #expect(lease.isCurrent)
+        #expect(lease.session == previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+        #expect(await store.dataStore.httpCookieStore.allCookies().map(\.value) == ["still-valid"])
     }
 
     @Test func `profile stores isolate accounts and replacement retires an older cookie write`() async throws {
@@ -248,7 +315,7 @@ struct DashboardBrowserSessionTests {
 
     @Test(arguments: [false, true])
     func `only browser sign-in profiles use an isolated website store`(_ browserSignIn: Bool) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity)
         defer { server.stop() }
         let session = try GatewayBrowserSession(

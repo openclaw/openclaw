@@ -436,7 +436,7 @@ describe("retired runtime config migrations", () => {
     const result = applyAll(configWithPath(path));
     expect(getPath(result.raw, path)).toBeUndefined();
     expect(result.changes).toContain(
-      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      `Removed retired runtime tuning knobs: ${path.replace("agents.list.0.", "agents.list[0].")}; built-in defaults now apply.`,
     );
   });
 
@@ -465,7 +465,7 @@ describe("retired runtime config migrations", () => {
       },
     });
     expect(result.changes).toContain(
-      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      "Removed retired runtime tuning knobs: channels.slack.streaming.progress.render, channels.discord.accounts.main.streaming.progress.render; built-in defaults now apply.",
     );
   });
 
@@ -509,7 +509,7 @@ describe("retired runtime config migrations", () => {
     });
     expect(result.changes).toEqual([
       "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
-      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      "Removed retired runtime tuning knobs: agents.defaults.cliBackends.keep.reliability.outputLimits, agents.defaults.cliBackends.prune.reliability.outputLimits; built-in defaults now apply.",
     ]);
   });
 

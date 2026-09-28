@@ -1,4 +1,3 @@
-// Voice Call plugin module implements webhook behavior.
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -18,6 +17,7 @@ import {
   normalizeWebhookPath,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -76,10 +76,13 @@ type WebhookHeaderGateResult =
       reason: string;
     };
 
-function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
-  const metadata = call.metadata ?? {};
-  const recent = Array.isArray(metadata.recentTalkEvents)
-    ? metadata.recentTalkEvents.filter(
+function appendRecentTalkEventMetadata(
+  metadata: CallRecord["metadata"],
+  event: TalkEvent,
+): CallRecord["metadata"] {
+  const previous = metadata ?? {};
+  const recent = Array.isArray(previous.recentTalkEvents)
+    ? previous.recentTalkEvents.filter(
         (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
           Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
       )
@@ -90,8 +93,8 @@ function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void
     sessionId: event.sessionId,
     turnId: event.turnId,
   });
-  call.metadata = {
-    ...metadata,
+  return {
+    ...previous,
     lastTalkEventAt: event.timestamp,
     lastTalkEventType: event.type,
     recentTalkEvents: recent.slice(-10),
@@ -197,6 +200,8 @@ export class VoiceCallWebhookServer {
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
   private readonly streamDisconnectGrace: StreamDisconnectGrace;
+  // Revoke pending transcript replies before persistence has created a response guard.
+  private readonly streamSpeechGenerations = new WeakMap<CallRecord, symbol>();
   /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
   private replayResponses = new Map<string, CachedWebhookResponse>();
@@ -257,9 +262,6 @@ export class VoiceCallWebhookServer {
     });
   }
 
-  /**
-   * Get the media stream handler (for wiring to provider).
-   */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
   }
@@ -340,13 +342,16 @@ export class VoiceCallWebhookServer {
       : undefined;
   }
 
-  private interruptStreamReply(providerCallId: string, streamSid: string): void {
+  private interruptStreamReply(providerCallId: string, streamSid: string): symbol | undefined {
     const current = this.getCurrentStream(providerCallId, streamSid);
     if (!current || this.shouldSuppressBargeInForInitialMessage(current.call)) {
-      return;
+      return undefined;
     }
+    const generation = Symbol("stream speech");
+    this.streamSpeechGenerations.set(current.call, generation);
     this.manager.invalidateAutoResponse(current.call);
     current.provider.clearTtsQueue(providerCallId);
+    return generation;
   }
 
   /**
@@ -429,7 +434,7 @@ export class VoiceCallWebhookServer {
           );
           return;
         }
-        const { call, provider: streamProvider } = current;
+        const { call } = current;
         const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
         if (suppressBargeIn) {
           this.logger.info(
@@ -438,7 +443,7 @@ export class VoiceCallWebhookServer {
           return;
         }
 
-        streamProvider.clearTtsQueue(providerCallId);
+        const generation = this.interruptStreamReply(providerCallId, streamSid);
 
         // Create a speech event and process it through the manager
         const event: NormalizedEvent = {
@@ -450,7 +455,14 @@ export class VoiceCallWebhookServer {
           transcript,
           isFinal: true,
         };
-        this.processEventWithAutoResponse(event);
+        void this.processEventWithAutoResponse(
+          event,
+          () =>
+            this.streamSpeechGenerations.get(call) === generation &&
+            this.getCurrentStream(providerCallId, streamSid)?.call === call,
+        ).catch((err: unknown) => {
+          this.logger.error(`Error processing stream transcript: ${String(err)}`);
+        });
       },
       onSpeechStart: (providerCallId, streamSid) =>
         this.interruptStreamReply(providerCallId, streamSid),
@@ -461,7 +473,15 @@ export class VoiceCallWebhookServer {
       onTalkEvent: (providerCallId, streamSid, event) => {
         const current = this.getCurrentStream(providerCallId, streamSid);
         if (current) {
-          appendRecentTalkEventMetadata(current.call, event);
+          void this.manager
+            .updateCallMetadata(current.call, (metadata) =>
+              this.getCurrentStream(providerCallId, streamSid)
+                ? appendRecentTalkEventMetadata(metadata, event)
+                : metadata,
+            )
+            .catch((error: unknown) => {
+              this.logger.warn(`Failed to update stream call metadata: ${String(error)}`);
+            });
         }
       },
       onConnect: (callId, streamSid) => {
@@ -552,7 +572,9 @@ export class VoiceCallWebhookServer {
           if (path === streamPath && this.mediaStreamHandler) {
             this.mediaStreamHandler?.handleUpgrade(request, socket, head);
           } else {
-            socket.destroy();
+            // HTTP relinquishes upgraded sockets; own errors while the 404 flushes.
+            socket.once("error", () => {});
+            rejectWebSocketUpgrade(socket, { status: 404 });
           }
         });
       }
@@ -588,9 +610,6 @@ export class VoiceCallWebhookServer {
     return this.startPromise;
   }
 
-  /**
-   * Stop the webhook server.
-   */
   stop(): Promise<void> {
     if (this.stopPromise) {
       return this.stopPromise;
@@ -665,9 +684,6 @@ export class VoiceCallWebhookServer {
     return normalizeWebhookPath(requestPath) === normalizeWebhookPath(configuredPath);
   }
 
-  /**
-   * Handle incoming HTTP request.
-   */
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -731,7 +747,12 @@ export class VoiceCallWebhookServer {
     try {
       let body = "";
       try {
-        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
+        // Defer destruction so a limit rejection can be answered before the close.
+        body = await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_WEBHOOK_BODY_BYTES,
+          timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+          destroyOnLimit: false,
+        });
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
           await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
@@ -814,7 +835,7 @@ export class VoiceCallWebhookServer {
         const parsed = this.provider.parseWebhookEvent(ctx, {
           verifiedRequestKey: verification.verifiedRequestKey,
         });
-        if (!isReplay && this.processParsedEvents(parsed.events)) {
+        if (!isReplay && (await this.processParsedEvents(parsed.events))) {
           verification.releaseReplay?.();
         }
 
@@ -1009,11 +1030,11 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private processParsedEvents(events: NormalizedEvent[]): boolean {
+  private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {
     let replayable = false;
     for (const event of events) {
       try {
-        replayable = this.processEventWithAutoResponse(event) || replayable;
+        replayable = (await this.processEventWithAutoResponse(event)) || replayable;
       } catch (err) {
         this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
         throw err;
@@ -1022,12 +1043,15 @@ export class VoiceCallWebhookServer {
     return replayable;
   }
 
-  private processEventWithAutoResponse(event: NormalizedEvent): boolean {
-    const result = this.manager.processEvent(event);
+  private async processEventWithAutoResponse(
+    event: NormalizedEvent,
+    isCurrent?: () => boolean,
+  ): Promise<boolean> {
+    const result = await this.manager.processEvent(event);
     if (result.kind !== "final-speech") {
       return result.replayable === true;
     }
-    if (result.waiterResolved) {
+    if (result.waiterResolved || (isCurrent && !isCurrent())) {
       return false;
     }
     const callMode = result.call.metadata?.mode as string | undefined;
@@ -1051,18 +1075,6 @@ export class VoiceCallWebhookServer {
       }
     }
     res.end(payload.body);
-  }
-
-  /**
-   * Read request body as string with timeout protection.
-   */
-  private readBody(
-    req: http.IncomingMessage,
-    maxBytes: number,
-    timeoutMs: number,
-  ): Promise<string> {
-    // Defer destruction so a limit rejection can be answered before the close.
-    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs, destroyOnLimit: false });
   }
 
   /**
@@ -1095,7 +1107,10 @@ export class VoiceCallWebhookServer {
         return false;
       }
       this.logger.info(`AI response queued ${callId} chars=${text.length}`);
-      const result = await this.manager.speak(callId, text, { listenAfterPlayback: true });
+      const result = await this.manager.speak(callId, text, {
+        listenAfterPlayback: true,
+        isCurrent: response.isCurrent,
+      });
       return result.success;
     };
     try {

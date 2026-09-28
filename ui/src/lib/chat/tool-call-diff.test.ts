@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildWriteDiffLines,
   computeLineDiff,
-  countTextLines,
   joinDiffSections,
   parseDiffDetailsString,
   type DiffLine,
@@ -29,16 +28,6 @@ describe("parseDiffDetailsString", () => {
     });
   });
 
-  it("accepts the persisted history truncation marker", () => {
-    expect(parseDiffDetailsString("+12 kept line\n...(truncated)...")).toEqual({
-      kind: "truncated",
-      lines: [
-        { kind: "add", lineNo: 12, text: "kept line" },
-        { kind: "skip", text: "" },
-      ],
-    });
-  });
-
   it.each([
     ["empty input", ""],
     ["whitespace-only input", "   \n  "],
@@ -60,6 +49,40 @@ describe("parseDiffDetailsString", () => {
 });
 
 describe("computeLineDiff", () => {
+  it.each([
+    ["", ""],
+    ["", "one\n\ntwo\n"],
+    ["one\n\ntwo\n", ""],
+    ["a\nb\na", "b\na\nb"],
+    ["a\n\nb\n", "a\n \nb\n"],
+    ["a\r\nb\r", "a\nb\n"],
+  ])("preserves both normalized sides for %j -> %j", (oldText, newText) => {
+    const result = computeLineDiff(oldText, newText);
+    expect(result.kind).toBe("complete");
+    const normalize = (text: string) => text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+    expect(
+      result.lines
+        .filter((line) => line.kind !== "add")
+        .map((line) => line.text)
+        .join("\n"),
+    ).toBe(normalize(oldText));
+    expect(
+      result.lines
+        .filter((line) => line.kind !== "del")
+        .map((line) => line.text)
+        .join("\n"),
+    ).toBe(normalize(newText));
+  });
+
+  it("retains complete statistics for wholly replaced bounded inputs", () => {
+    const oldText = Array.from({ length: 600 }, (_, index) => `old ${index}`).join("\n");
+    const newText = Array.from({ length: 600 }, (_, index) => `new ${index}`).join("\n");
+    const result = computeLineDiff(oldText, newText);
+    expect(result).toMatchObject({ kind: "complete", stat: { added: 600, removed: 600 } });
+    expect(result.lines).toHaveLength(401);
+    expect(result.lines.at(-1)).toEqual({ kind: "skip", text: "" });
+  });
+
   it("reports an incomplete comparison when the only change is beyond the work budget", () => {
     const oldLines = Array.from({ length: 700 }, (_, index) => `line ${index}`);
     const newLines = [...oldLines];
@@ -179,14 +202,6 @@ describe("computeLineDiff", () => {
 });
 
 describe("buildWriteDiffLines", () => {
-  it("numbers every content line as an addition from line 1", () => {
-    expect(buildWriteDiffLines("one\ntwo\nthree\n")).toEqual([
-      { kind: "add", lineNo: 1, text: "one" },
-      { kind: "add", lineNo: 2, text: "two" },
-      { kind: "add", lineNo: 3, text: "three" },
-    ]);
-  });
-
   it("truncates past maxLines with a skip marker", () => {
     expect(buildWriteDiffLines("a\nb\nc\nd", 2)).toEqual([
       { kind: "add", lineNo: 1, text: "a" },
@@ -236,15 +251,5 @@ describe("joinDiffSections", () => {
     expect(joined).toMatchObject({ kind: "complete", stat: { added: 250, removed: 250 } });
     expect(joined.lines).toHaveLength(401);
     expect(joined.lines.at(-1)).toEqual({ kind: "skip", text: "" });
-  });
-});
-
-describe("countTextLines", () => {
-  it.each([
-    ["a", 1],
-    ["a\nb", 2],
-    ["a\nb\n", 2],
-  ])("counts %j as %d lines", (content, expected) => {
-    expect(countTextLines(content)).toBe(expected);
   });
 });

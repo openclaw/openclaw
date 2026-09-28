@@ -5,29 +5,46 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
+import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import {
+  computeOneShotNextRunAtMs,
+  clearInvalidForcePreservedNextRun,
+  resolveForcePreservedOneShotAtMs,
+} from "./one-shot-schedule.js";
+import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
+import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
+const TIME_SCHEDULE_STATE_FIELDS = [
+  "startupCatchupAtMs",
+  "pacedNextRunAtMs",
+  "forcePreservedNextRunAtMs",
+  "nextRunAtMs",
+] as const;
+
+export type CronScheduleOwnership = {
+  reservations: ReadonlyMap<string, { markerAtMs: number; preserveWhenDisabled: boolean }>;
+  isJobActive: (jobId: string) => boolean;
+};
 
 // A matching process reservation keeps its durable queued/running marker live;
 // disabled jobs additionally require force-run ownership.
 function ownsCronRunMarker(
-  state: CronServiceState,
+  ownership: CronScheduleOwnership,
   jobId: string,
   markerAtMs: number,
   requireForce = false,
 ): boolean {
-  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  const reservation = ownership.reservations.get(jobId);
   return (
     reservation?.markerAtMs === markerAtMs && (!requireForce || reservation.preserveWhenDisabled)
   );
@@ -203,16 +220,6 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   return previous === runAtMs;
 }
 
-function isPendingErrorBackoffSlot(params: {
-  job: CronJob;
-  nextRunAtMs: number;
-  nowMs: number;
-}): boolean {
-  const { job, nextRunAtMs, nowMs } = params;
-  const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
-  return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
-}
-
 export function isStaleFutureCronSlot(job: CronJob, nowMs: number): boolean {
   const nextRun = job.state.nextRunAtMs;
   if (
@@ -225,8 +232,12 @@ export function isStaleFutureCronSlot(job: CronJob, nowMs: number): boolean {
     return false;
   }
 
-  // Preserve non-cron retry timestamps only while their error backoff is pending.
-  if (isPendingErrorBackoffSlot({ job, nextRunAtMs: nextRun, nowMs })) {
+  // Retry and trigger floors can fall between expression slots.
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
+  if (
+    (backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRun <= backoffUntilMs) ||
+    hasPendingCronTriggerInterval(job, nowMs)
+  ) {
     return false;
   }
   let naturalNext: number | undefined;
@@ -235,7 +246,7 @@ export function isStaleFutureCronSlot(job: CronJob, nowMs: number): boolean {
   } catch {
     return false;
   }
-  if (!isFiniteTimestamp(naturalNext)) {
+  if (!isFiniteTimestamp(naturalNext) || nextRun === naturalNext) {
     return false;
   }
   let isScheduledSlot;
@@ -250,10 +261,6 @@ export function isStaleFutureCronSlot(job: CronJob, nowMs: number): boolean {
   if (nextRun < naturalNext) {
     return job.payload.kind !== "agentTurn";
   }
-  if (nextRun === naturalNext) {
-    return false;
-  }
-
   let followingNaturalNext: number | undefined;
   try {
     followingNaturalNext = computeStaggeredCronNextRunAtMs(job, naturalNext);
@@ -303,6 +310,10 @@ export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
   return job.enabled ?? true;
 }
 
+export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
+  return job.schedule.kind !== "on-exit" && job.schedule.kind !== "stream";
+}
+
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job)) {
@@ -339,16 +350,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    const atMs = parseAbsoluteTimeMs(job.schedule.at);
-    // One-shot jobs stay due until they successfully finish, but if the
-    // schedule was updated to a time after the last run, re-arm the job.
-    if (resolveJobLastRunStatus(job) === "ok" && job.state.lastRunAtMs) {
-      if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
-        return atMs;
-      }
-      return undefined;
-    }
-    return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
+    return computeOneShotNextRunAtMs(job, resolveJobLastRunStatus(job));
   }
   const next = computeStaggeredCronNextRunAtMs(job, nowMs);
   if (next === undefined && job.schedule.kind === "cron") {
@@ -371,10 +373,10 @@ const MAX_SCHEDULE_ERRORS = 3;
 
 /** Records a schedule-computation failure and auto-disables after repeated errors. */
 export function recordScheduleComputeError(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   err: unknown;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -386,7 +388,6 @@ export function recordScheduleComputeError(params: {
 
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
     autoDisableCronJob({
-      state,
       job,
       reason: "schedule-errors",
       atMs: state.deps.nowMs(),
@@ -407,11 +408,17 @@ export function recordScheduleComputeError(params: {
   return true;
 }
 
-function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; nowMs: number }): {
+function normalizeJobTickState(params: {
+  state: CronJobPolicyContext;
+  job: CronJob;
+  nowMs: number;
+  ownership: CronScheduleOwnership;
+}): {
   changed: boolean;
   skip: boolean;
 } {
-  const { state, job, nowMs } = params;
+  const { state, job, nowMs, ownership } = params;
+  const { log } = state.deps;
   let changed = false;
 
   if (!job.state) {
@@ -444,31 +451,36 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     }
   }
 
-  if (!isJobEnabled(job)) {
-    for (const key of [
-      "startupCatchupAtMs",
-      "pacedNextRunAtMs",
-      "forcePreservedNextRunAtMs",
-      "nextRunAtMs",
-    ] as const) {
+  // Event schedules cannot retain a timed slot, including one preserved by a force run.
+  if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
+    for (const key of TIME_SCHEDULE_STATE_FIELDS) {
+      if (
+        key === "forcePreservedNextRunAtMs" &&
+        resolveForcePreservedOneShotAtMs(job) !== undefined
+      ) {
+        continue;
+      }
       if (job.state[key] !== undefined) {
         job.state[key] = undefined;
         changed = true;
       }
     }
+  }
+  if (!isJobEnabled(job)) {
     if (
       job.state.queuedAtMs !== undefined &&
-      !ownsCronRunMarker(state, job.id, job.state.queuedAtMs, true)
+      !ownsCronRunMarker(ownership, job.id, job.state.queuedAtMs, true)
     ) {
       job.state.queuedAtMs = undefined;
       changed = true;
     }
     if (
       job.state.runningAtMs !== undefined &&
-      !ownsCronRunMarker(state, job.id, job.state.runningAtMs, true) &&
-      !isCronJobActive(job.id)
+      !ownsCronRunMarker(ownership, job.id, job.state.runningAtMs, true) &&
+      !ownership.isJobActive(job.id)
     ) {
-      job.state.runningAtMs = undefined;
+      Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
+      delete job.state.runningScheduleChangeId;
       changed = true;
     }
     return { changed, skip: true };
@@ -479,26 +491,15 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
-  const forcePreservedNextRunAtMs = job.state.forcePreservedNextRunAtMs;
-  if (
-    forcePreservedNextRunAtMs !== undefined &&
-    (!isFiniteTimestamp(forcePreservedNextRunAtMs) ||
-      forcePreservedNextRunAtMs !== job.state.nextRunAtMs)
-  ) {
-    job.state.forcePreservedNextRunAtMs = undefined;
-    changed = true;
-  }
+  changed = clearInvalidForcePreservedNextRun(job) || changed;
 
   const queuedAt = job.state.queuedAtMs;
   if (
     typeof queuedAt === "number" &&
     Math.abs(nowMs - queuedAt) > CRON_STUCK_RUN_MS &&
-    !ownsCronRunMarker(state, job.id, queuedAt)
+    !ownsCronRunMarker(ownership, job.id, queuedAt)
   ) {
-    state.deps.log.warn(
-      { jobId: job.id, queuedAtMs: queuedAt },
-      "cron: clearing stuck queued marker",
-    );
+    log.warn({ jobId: job.id, queuedAtMs: queuedAt }, "cron: clearing stuck queued marker");
     job.state.queuedAtMs = undefined;
     changed = true;
   }
@@ -507,13 +508,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   if (
     typeof runningAt === "number" &&
     Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
-    !ownsCronRunMarker(state, job.id, runningAt)
+    !ownsCronRunMarker(ownership, job.id, runningAt)
   ) {
-    state.deps.log.warn(
-      { jobId: job.id, runningAtMs: runningAt },
-      "cron: clearing stuck running marker",
-    );
-    job.state.runningAtMs = undefined;
+    log.warn({ jobId: job.id, runningAtMs: runningAt }, "cron: clearing stuck running marker");
+    Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
+    delete job.state.runningScheduleChangeId;
     changed = true;
     const nextRun = job.state.nextRunAtMs;
     const lastRun = job.state.lastRunAtMs;
@@ -525,35 +524,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   return { changed, skip: false };
 }
 
-function walkSchedulableJobs(
-  state: CronServiceState,
-  fn: (params: { job: CronJob; nowMs: number }) => boolean,
-  nowMs = state.deps.nowMs(),
-): boolean {
-  if (!state.store) {
-    return false;
-  }
-  let changed = false;
-  for (const job of state.store.jobs) {
-    const tick = normalizeJobTickState({ state, job, nowMs });
-    if (tick.changed) {
-      changed = true;
-    }
-    if (tick.skip) {
-      continue;
-    }
-    if (fn({ job, nowMs })) {
-      changed = true;
-    }
-  }
-  return changed;
-}
-
 export function recomputeJobNextRunAtMs(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   nowMs: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
   skipScheduleErrorHandling?: boolean;
 }) {
   let changed = false;
@@ -599,49 +574,24 @@ export function recomputeJobNextRunAtMs(params: {
   return changed;
 }
 
-/** Recomputes missing, due, or repairable next-run timestamps for all schedulable jobs. */
-export function recomputeNextRuns(state: CronServiceState): boolean {
-  return walkSchedulableJobs(state, ({ job, nowMs: now }) => {
-    // Only recompute if nextRunAtMs is missing or already past-due.
-    // Preserving a still-future nextRunAtMs avoids accidentally advancing
-    // a job that hasn't fired yet (e.g. during restart recovery).
-    const nextRun = job.state.nextRunAtMs;
-    const hasForcePreservedNextRun =
-      isFiniteTimestamp(job.state.forcePreservedNextRunAtMs) &&
-      hasScheduledNextRunAtMs(nextRun) &&
-      job.state.forcePreservedNextRunAtMs === nextRun;
-    const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
-    return (
-      !hasForcePreservedNextRun &&
-      (isDueOrMissing || isStaleFutureCronSlot(job, now)) &&
-      recomputeJobNextRunAtMs({ state, job, nowMs: now })
-    );
-  });
-}
-
-/**
- * Maintenance-only version of recomputeNextRuns that handles disabled jobs
- * and stuck markers, but does NOT recompute nextRunAtMs for enabled jobs
- * with existing values. Used during timer ticks when no due jobs were found
- * to prevent silently advancing past-due nextRunAtMs values without execution
- * (see #13992).
- */
-export type CronMaintenanceOptions = {
-  recomputeExpired?: boolean;
-  nowMs?: number;
-  repairFutureCronNextRunAtMs?: boolean;
-  preserveExpiredPacedNextRunJobId?: string;
-  deferredNotifications?: DeferredCronNotifications;
-  skipScheduleErrorHandling?: boolean;
+/** Repairs schedule state while preserving due slots that have not executed. */
+type CronMaintenanceOptions = CronScheduleMaintenanceOptions & {
+  deferredNotifications: DeferredCronNotifications;
 };
 
-function isExpiredCronScheduleRepairCandidate(job: CronJob, nowMs: number): boolean {
+function isExpiredCronScheduleRepairCandidate(
+  job: CronJob,
+  nowMs: number,
+  active: boolean,
+): boolean {
   const nextRunAtMs = job.state.nextRunAtMs;
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
   return (
     hasScheduledNextRunAtMs(nextRunAtMs) &&
     nowMs >= nextRunAtMs &&
-    !hasActiveCronRun(job) &&
+    typeof job.state.queuedAtMs !== "number" &&
+    typeof job.state.runningAtMs !== "number" &&
+    !active &&
     job.state.startupCatchupAtMs !== nextRunAtMs &&
     job.state.forcePreservedNextRunAtMs !== nextRunAtMs &&
     ((isFiniteTimestamp(job.state.lastRunAtMs) && job.state.lastRunAtMs >= nextRunAtMs) ||
@@ -650,37 +600,37 @@ function isExpiredCronScheduleRepairCandidate(job: CronJob, nowMs: number): bool
 }
 
 export function needsCronTimerMaintenance(job: CronJob, nowMs: number): boolean {
+  if (!isTimeScheduledJob(job)) {
+    return TIME_SCHEDULE_STATE_FIELDS.some((key) => job.state[key] !== undefined);
+  }
   return (
-    isExpiredCronScheduleRepairCandidate(job, nowMs) ||
+    isExpiredCronScheduleRepairCandidate(job, nowMs, isCronJobActive(job.id)) ||
     isStaleFutureCronSlot(job, nowMs) ||
-    (job.schedule.kind !== "stream" &&
-      job.schedule.kind !== "on-exit" &&
-      isJobEnabled(job) &&
-      !hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
-      !hasActiveCronRun(job))
+    (isJobEnabled(job) && !hasScheduledNextRunAtMs(job.state.nextRunAtMs) && !hasActiveCronRun(job))
   );
 }
 
 export function recomputeSingleJobForMaintenance(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
-  opts?: CronMaintenanceOptions,
+  opts: CronMaintenanceOptions,
+  ownership: CronScheduleOwnership,
 ): boolean {
-  const now = opts?.nowMs ?? state.deps.nowMs();
-  const tick = normalizeJobTickState({ state, job, nowMs: now });
+  const now = opts.nowMs ?? state.deps.nowMs();
+  const tick = normalizeJobTickState({ state, job, nowMs: now, ownership });
   let changed = tick.changed;
   if (tick.skip) {
     return changed;
   }
-  const recomputeExpired = opts?.recomputeExpired ?? false;
-  const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
+  const recomputeExpired = opts.recomputeExpired ?? false;
+  const repairFutureCronNextRunAtMs = opts.repairFutureCronNextRunAtMs ?? true;
   const recomputeJob = () =>
     recomputeJobNextRunAtMs({
       state,
       job,
       nowMs: now,
-      deferredNotifications: opts?.deferredNotifications,
-      skipScheduleErrorHandling: opts?.skipScheduleErrorHandling,
+      deferredNotifications: opts.deferredNotifications,
+      skipScheduleErrorHandling: opts.skipScheduleErrorHandling,
     });
   const startupCatchupAtMs = job.state.startupCatchupAtMs;
   const pacedNextRunAtMs = job.state.pacedNextRunAtMs;
@@ -701,7 +651,7 @@ export function recomputeSingleJobForMaintenance(
     isFiniteTimestamp(pacedNextRunAtMs) &&
     hasScheduledNextRunAtMs(nextRunAtMs) &&
     pacedNextRunAtMs === nextRunAtMs &&
-    (now < pacedNextRunAtMs || opts?.preserveExpiredPacedNextRunJobId === job.id);
+    (now < pacedNextRunAtMs || opts.preserveExpiredPacedNextRunJobId === job.id);
   if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
     job.state.pacedNextRunAtMs = undefined;
     changed = true;
@@ -717,7 +667,10 @@ export function recomputeSingleJobForMaintenance(
     isStaleFutureCronSlot(job, now)
   ) {
     changed = recomputeJob() || changed;
-  } else if (recomputeExpired && isExpiredCronScheduleRepairCandidate(job, now)) {
+  } else if (
+    recomputeExpired &&
+    isExpiredCronScheduleRepairCandidate(job, now, ownership.isJobActive(job.id))
+  ) {
     changed = recomputeJob() || changed;
   }
   return changed;
@@ -725,14 +678,18 @@ export function recomputeSingleJobForMaintenance(
 
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: CronMaintenanceOptions,
+  opts: CronMaintenanceOptions,
 ): boolean {
   if (!state.store) {
     return false;
   }
   let changed = false;
   for (const job of state.store.jobs) {
-    changed = recomputeSingleJobForMaintenance(state, job, opts) || changed;
+    changed =
+      recomputeSingleJobForMaintenance(state, job, opts, {
+        reservations: state.queuedRunReservationsByJobId,
+        isJobActive: isCronJobActive,
+      }) || changed;
   }
   return changed;
 }
@@ -753,7 +710,7 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     if (rawEnabled) {
       enabledCount += 1;
     }
-    if ((rawEnabled ?? true) && hasNextRun) {
+    if ((rawEnabled ?? true) && isTimeScheduledJob(job) && hasNextRun) {
       nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
     }
   }
@@ -791,6 +748,7 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   }
   return (
     isJobEnabled(job) &&
+    isTimeScheduledJob(job) &&
     hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
     nowMs >= job.state.nextRunAtMs
   );

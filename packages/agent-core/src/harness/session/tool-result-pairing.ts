@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
@@ -13,6 +14,7 @@ type ToolCallLike = {
 };
 
 type ToolCallOccurrence = {
+  contentIndex: number;
   id: string;
   name?: string;
   result?: ToolResultMessage;
@@ -88,27 +90,25 @@ export function createToolCallOccurrenceQueue<T>(): ToolCallOccurrenceQueue<T> {
   };
 }
 
+function readToolCall(block: unknown): ToolCallLike | undefined {
+  const record = asOptionalObjectRecord(block);
+  if (
+    typeof record?.type !== "string" ||
+    !TOOL_CALL_TYPES.has(record.type) ||
+    typeof record.id !== "string" ||
+    !record.id
+  ) {
+    return undefined;
+  }
+  return { id: record.id, name: typeof record.name === "string" ? record.name : undefined };
+}
+
 export function extractToolCallsFromAssistant(
   message: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block) => {
-    if (!block || typeof block !== "object") {
-      return [];
-    }
-    const record = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (
-      typeof record.type !== "string" ||
-      !TOOL_CALL_TYPES.has(record.type) ||
-      typeof record.id !== "string" ||
-      !record.id
-    ) {
-      return [];
-    }
-    return [{ id: record.id, name: typeof record.name === "string" ? record.name : undefined }];
-  });
+  return Array.isArray(message.content)
+    ? message.content.flatMap((block) => readToolCall(block) ?? [])
+    : [];
 }
 
 export function extractToolResultIds(message: ToolResultMessage): string[] {
@@ -157,31 +157,29 @@ export function makeMissingToolResult(params: {
     details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true, reason: "missing_tool_result" },
     isError: true,
     timestamp: Date.now(),
-  } as ToolResultMessage;
+  };
 }
 
-function isSyntheticMissingToolResult(message: ToolResultMessage): boolean {
-  if (!(message as { isError?: unknown }).isError) {
+export function isSyntheticMissingToolResult(message: {
+  isError?: unknown;
+  details?: unknown;
+  content?: unknown;
+}): boolean {
+  if (!message.isError) {
     return false;
   }
-  const details = (message as { details?: unknown }).details;
   if (
-    details &&
-    typeof details === "object" &&
-    (details as Record<string, unknown>)[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true
+    asOptionalObjectRecord(message.details)?.[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true
   ) {
     return true;
   }
-  const content = (message as { content?: unknown }).content;
+  const content = message.content;
   return (
     Array.isArray(content) &&
-    content.some(
-      (block) =>
-        typeof block === "object" &&
-        block !== null &&
-        (block as { type?: string }).type === "text" &&
-        (block as { text?: string }).text === DEFAULT_MISSING_TOOL_RESULT_TEXT,
-    )
+    content.some((block) => {
+      const record = asOptionalObjectRecord(block);
+      return record?.type === "text" && record.text === DEFAULT_MISSING_TOOL_RESULT_TEXT;
+    })
   );
 }
 
@@ -189,20 +187,12 @@ function normalizeToolResultName(
   message: ToolResultMessage,
   fallbackName?: string,
 ): ToolResultMessage {
-  const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = normalizeOptionalString(rawToolName);
-  if (normalizedToolName) {
-    return rawToolName === normalizedToolName
-      ? message
-      : ({ ...message, toolName: normalizedToolName } as ToolResultMessage);
-  }
-  const normalizedFallback = normalizeOptionalString(fallbackName);
-  if (normalizedFallback) {
-    return { ...message, toolName: normalizedFallback } as ToolResultMessage;
-  }
-  return typeof rawToolName === "string"
-    ? ({ ...message, toolName: "unknown" } as ToolResultMessage)
-    : message;
+  const rawToolName = message.toolName;
+  const toolName =
+    normalizeOptionalString(rawToolName) ??
+    normalizeOptionalString(fallbackName) ??
+    (typeof rawToolName === "string" ? "unknown" : undefined);
+  return toolName && toolName !== rawToolName ? { ...message, toolName } : message;
 }
 
 export function normalizeLegacyToolResultId(
@@ -216,12 +206,12 @@ export function normalizeLegacyToolResultId(
   if (!toolCall) {
     return message;
   }
-  const resultName = normalizeOptionalString((message as { toolName?: unknown }).toolName);
+  const resultName = normalizeOptionalString(message.toolName);
   const callName = normalizeOptionalString(toolCall.name);
   if (resultName && callName && resultName !== callName) {
     return message;
   }
-  return { ...message, toolCallId: toolCall.id, isError: true } as ToolResultMessage;
+  return { ...message, toolCallId: toolCall.id, isError: true };
 }
 
 /** Classifies call/result ownership without reordering or synthesizing transcript messages. */
@@ -241,12 +231,17 @@ export function classifyToolUseResultPairing(
   const frameRecords: Array<ToolUsePairingFrame & { unclaimedResults: ToolResultRecord[] }> =
     frameStartIndexes.map((startIndex, frameIndex) => {
       const assistant = messages[startIndex] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCalls = extractToolCallsFromAssistant(assistant);
+      const toolCalls: ToolCallLike[] = [];
       const occurrences: ToolCallOccurrence[] = [];
       const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
       const syntheticById = new Map<string, ToolCallOccurrence[]>();
-      for (const toolCall of toolCalls) {
-        const occurrence = { id: toolCall.id, name: toolCall.name };
+      for (const [contentIndex, block] of assistant.content.entries()) {
+        const toolCall = readToolCall(block);
+        if (!toolCall) {
+          continue;
+        }
+        toolCalls.push(toolCall);
+        const occurrence = { ...toolCall, contentIndex };
         occurrences.push(occurrence);
         pending.add(toolCall.id, occurrence);
       }
@@ -377,6 +372,22 @@ export function classifyToolUseResultPairing(
   }
 
   return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount, droppedResults };
+}
+
+/** Select actual completed occurrences, never unmatched calls or synthesized missing results. */
+export function collectCompletedToolCallBlocks(messages: readonly AgentMessage[]): Set<object> {
+  const completed = new Set<object>();
+  for (const frame of classifyToolUseResultPairing(messages).frames) {
+    for (const occurrence of frame.occurrences) {
+      if (occurrence.sourceResult && !isSyntheticMissingToolResult(occurrence.sourceResult)) {
+        const block = frame.assistant.content[occurrence.contentIndex];
+        if (block && typeof block === "object") {
+          completed.add(block);
+        }
+      }
+    }
+  }
+  return completed;
 }
 
 /** Select reset-tail model context without changing persisted entry bytes or order. */

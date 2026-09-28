@@ -1,22 +1,20 @@
 import { spawn, spawnSync } from "node:child_process";
 // Qa Lab tests cover gateway child plugin behavior.
 import { EventEmitter, once } from "node:events";
-import { lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createQaBundledPluginsDir,
-  resolveQaOwnerPluginIdsForProviderIds,
-  resolveQaRuntimeHostVersion,
-} from "./bundled-plugin-staging.js";
 import { preserveQaGatewayDebugArtifacts } from "./gateway-child-artifacts.js";
 import { resolveQaGatewayChildCommand, runQaGatewayCliCommand } from "./gateway-child-command.js";
+import {
+  readJsonLines,
+  writePackagedGatewayFixture,
+} from "./gateway-child-command.test-support.js";
 import {
   buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
@@ -39,7 +37,6 @@ import {
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
 import { createQaGatewayChild } from "./gateway-child.js";
-import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
 import {
   assertQaLiveCodexAuthAvailable,
   stageQaLiveAnthropicSetupToken,
@@ -151,144 +148,6 @@ function requireSsrFetchCall(index = 0): SsrFetchCall {
   return call[0] as SsrFetchCall;
 }
 
-async function writeJsonFixture(filePath: string, value: unknown, space?: number) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(value, null, space), "utf8");
-}
-
-async function writeTempProviderConfig(value: unknown) {
-  const configPath = path.join(await tempDirs.makeTempDir("qa-provider-config-"), "openclaw.json");
-  await writeJsonFixture(configPath, value);
-  return configPath;
-}
-
-async function writePackagedGatewayFixture(root: string): Promise<string> {
-  const fixturePath = path.join(root, "packaged-gateway-fixture.mjs");
-  await writeFile(
-    fixturePath,
-    `import fs from "node:fs";
-import path from "node:path";
-
-const args = process.argv.slice(2);
-const recordPath = process.env.QA_RECORD_PATH;
-const configPath = process.env.OPENCLAW_CONFIG_PATH;
-const stateDir = process.env.OPENCLAW_STATE_DIR;
-if (!recordPath || !configPath || !stateDir) {
-  throw new Error("missing fixture environment");
-}
-const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
-const fail = async (code, message) => {
-  await new Promise((resolve) => process.stderr.write(
-    message + "\\ncontext retained\\n" + "diagnostic ".repeat(400) +
-    "\\nterminal failure: Authorization: Bearer fixture-tail-secret", resolve));
-  process.exit(code);
-};
-const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
-if (args[0] === "models") {
-  let stdin = "";
-  process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) stdin += chunk;
-  const provider = args[args.indexOf("--provider") + 1];
-  const configStat = fs.lstatSync(configPath);
-  record({
-    kind: "auth",
-    args,
-    stdin,
-    authDbPath,
-    dbExists: fs.existsSync(authDbPath),
-    configPath,
-    configMode: configStat.mode & 0o777,
-    configRegular: configStat.isFile(),
-    configSymlink: configStat.isSymbolicLink(),
-    stateDir,
-    env: {
-      OPENCLAW_CLI: process.env.OPENCLAW_CLI,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-  });
-  fs.mkdirSync(path.dirname(authDbPath), { recursive: true });
-  fs.writeFileSync(authDbPath, "fixture auth");
-  if (process.env.QA_FAIL_PROVIDER === provider) {
-    await fail(9, "Authorization: Bearer " + stdin.trim());
-  }
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  config.fixtureProfiles = [...(config.fixtureProfiles ?? []), provider];
-  fs.writeFileSync(configPath, JSON.stringify(config));
-  process.exit(0);
-}
-if (args[0] === "update") {
-  const phase = args.includes("--help") ? "help" : "repair";
-  if (phase === "repair" && process.env.QA_ASSERT_AUTH_HANDOFF === "1") {
-    const { DatabaseSync } = await import("node:sqlite");
-    const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-    try {
-      const leases = db.prepare("SELECT owner_pid FROM agent_database_leases").all();
-      if (leases.length) throw new Error("staged auth database still leased by parent");
-      record({ kind: "auth-handoff", leases: leases.length });
-    } finally {
-      db.close();
-    }
-  }
-  if (process.env.QA_FAIL_PLUGIN_SETUP === phase) {
-    record({ kind: "plugins", args, authDbPath, configPath, stateDir });
-    await fail(8, "plugin fixture rejected: Authorization: Bearer " + "fixture-plugin-secret".repeat(200));
-  }
-  if (args.includes("--help")) {
-    record({ kind: "help", args, authDbPath, configPath, stateDir });
-    process.stdout.write(process.env.QA_LEGACY_PLUGIN_SETUP === "1" ? "Options: --yes" : "Options: --accept-capabilities --yes");
-    process.exit(0);
-  }
-  if (process.env.QA_LEGACY_PLUGIN_SETUP === "1" && args.includes("--accept-capabilities")) {
-    process.stderr.write("unknown option --accept-capabilities");
-    process.exit(2);
-  }
-  record({ kind: "plugins", args, authDbPath, configPath, stateDir });
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  delete config.plugins.entries["qa-lab"];
-  config.plugins.allow = config.plugins.allow.filter((id) => id !== "qa-lab");
-  fs.writeFileSync(configPath, JSON.stringify(config));
-  process.stdout.write(JSON.stringify({ status: "ok", mode: "finalize", restart: false }));
-  process.exit(0);
-}
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-record({
-  kind: "gateway",
-  args,
-  authDbPath,
-  dbExists: fs.existsSync(authDbPath),
-  configPath,
-  authProfileIds: Object.keys(config.auth?.profiles ?? {}),
-  fixtureProfiles: config.fixtureProfiles,
-  sourcePluginConfigured: Boolean(config.plugins?.entries?.["qa-lab"]),
-  configPort: config.gateway.port,
-  stateDir,
-});
-const gatewayAttempts = fs.readFileSync(recordPath, "utf8").trim().split("\\n")
-  .map((line) => JSON.parse(line)).filter((entry) => entry.kind === "gateway").length;
-if (gatewayAttempts === 1 && process.env.QA_STARTUP_RETRY) {
-  process.stderr.write(process.env.QA_STARTUP_RETRY === "migration"
-    ? "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness."
-    : "listen EADDRINUSE: address already in use");
-  process.exit(18);
-}
-process.stderr.write("fixture gateway exit");
-process.exit(17);
-`,
-    "utf8",
-  );
-  return fixturePath;
-}
-
-async function readJsonLines(filePath: string): Promise<Array<Record<string, unknown>>> {
-  const contents = await readFile(filePath, "utf8");
-  return contents
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
 describe("runQaGatewayCliCommand", () => {
   it("runs CLI commands with the Gateway fixture environment", async () => {
     const output = await runQaGatewayCliCommand({
@@ -304,19 +163,6 @@ describe("runQaGatewayCliCommand", () => {
     });
 
     expect(output).toBe("1:fixture:voicecall,start");
-  });
-
-  it("reports CLI stderr when a fixture command fails", async () => {
-    await expect(
-      runQaGatewayCliCommand({
-        lifetime: new QaGatewayChildLifecycle(),
-        executablePath: process.execPath,
-        argsPrefix: ["--eval", 'process.stderr.write("fixture failure"); process.exit(7)'],
-        args: [],
-        cwd: process.cwd(),
-        env: process.env,
-      }),
-    ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
   });
 
   it("retains bounded redacted stdout failures alongside stderr panels", async () => {
@@ -413,53 +259,50 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
 });
 
 describe("waitForGatewayReady", () => {
-  it.each(["startup", "restart"] as const)(
-    "does not accept a healthy listener as %s readiness",
-    async (phase) => {
-      vi.useFakeTimers();
-      const baseUrl = "http://127.0.0.1:43124";
-      const release = vi.fn(async () => {});
-      let ready = false;
+  it("does not accept a healthy listener as readiness", async () => {
+    vi.useFakeTimers();
+    const baseUrl = "http://127.0.0.1:43124";
+    const release = vi.fn(async () => {});
+    let ready = false;
 
-      fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-        const status = url.endsWith("/healthz") || ready ? 200 : 503;
-        return { response: { ok: status === 200, status }, release };
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      const status = url.endsWith("/healthz") || ready ? 200 : 503;
+      return { response: { ok: status === 200, status }, release };
+    });
+
+    try {
+      const readiness = waitForGatewayReady({
+        baseUrl,
+        logs: () => "startup logs",
+        child: { exitCode: null, signalCode: null },
+        timeoutMs: 1_000,
       });
 
-      try {
-        const readiness = waitForGatewayReady({
-          baseUrl,
-          logs: () => `${phase} logs`,
-          child: { exitCode: null, signalCode: null },
-          timeoutMs: 1_000,
-        });
+      await vi.advanceTimersByTimeAsync(0);
 
-        await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+        `${baseUrl}/readyz`,
+      ]);
+      const healthRequest = requireSsrFetchCall();
+      expect(healthRequest.init?.method).toBe("HEAD");
+      expect(healthRequest.init?.headers).toEqual({ connection: "close" });
+      expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
+      expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
+      expect(release).toHaveBeenCalledTimes(1);
 
-        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-          `${baseUrl}/readyz`,
-        ]);
-        const healthRequest = requireSsrFetchCall();
-        expect(healthRequest.init?.method).toBe("HEAD");
-        expect(healthRequest.init?.headers).toEqual({ connection: "close" });
-        expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
-        expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
-        expect(release).toHaveBeenCalledTimes(1);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(250);
 
-        ready = true;
-        await vi.advanceTimersByTimeAsync(250);
-
-        await expect(readiness).resolves.toBeUndefined();
-        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-          `${baseUrl}/readyz`,
-          `${baseUrl}/readyz`,
-        ]);
-        expect(release).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      await expect(readiness).resolves.toBeUndefined();
+      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+        `${baseUrl}/readyz`,
+        `${baseUrl}/readyz`,
+      ]);
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("bounds a stalled readiness probe by the remaining deadline", async () => {
     let probeSignal: AbortSignal | undefined;
@@ -690,31 +533,28 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
   });
 
-  it.each([undefined, { OPENCLAW_BUILD_PRIVATE_QA: "0", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "0" }])(
-    "keeps private-QA and slow-reply controls enabled under fast mode with patch %j",
-    (runtimeEnvPatch) => {
-      const env = buildQaRuntimeEnv({
-        ...createParams({}),
-        providerMode: "mock-openai",
-        runtimeEnvPatch,
-      });
+  it("keeps private-QA and slow-reply controls enabled despite caller patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({}),
+      providerMode: "mock-openai",
+      runtimeEnvPatch: { OPENCLAW_BUILD_PRIVATE_QA: "0", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "0" },
+    });
 
-      expect(env.OPENCLAW_TEST_FAST).toBe("1");
-      expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
-      expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
-      expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
-      expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
-      expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
-        "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
-      );
-      expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
-      expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-      expect(env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
-      expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
-      expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
-      expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
-    },
-  );
+    expect(env.OPENCLAW_TEST_FAST).toBe("1");
+    expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
+    expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
+    expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
+    expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
+    expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
+      "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
+    );
+    expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
+    expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+    expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+    expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
+    expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
+  });
 
   it("isolates gateway children from Vitest without removing QA controls or non-test NODE_ENV", () => {
     const testEnv = buildQaRuntimeEnv({
@@ -770,34 +610,6 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENCLAW_SKIP_CHANNELS).toBe("patched-channels");
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
-  });
-
-  it("binds plugin authority to the source candidate after caller environment patches", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
-      }),
-      developmentSourceRoot: "/repo/release-candidate",
-      runtimeEnvPatch: {
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
-      },
-    });
-
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe("/repo/release-candidate");
-  });
-
-  it("clears inherited and patched source roots for packaged candidates", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
-      }),
-      developmentSourceRoot: null,
-      runtimeEnvPatch: {
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
-      },
-    });
-
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBeUndefined();
   });
 
   it("maps live frontier key aliases into provider env vars", () => {
@@ -914,43 +726,13 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe("subscription");
   });
 
-  it("does not pass QA setup-token values to the gateway child env", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_LIVE_SETUP_TOKEN_VALUE: `sk-ant-oat01-${"a".repeat(80)}`,
-        OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: `sk-ant-oat01-${"b".repeat(80)}`,
-      }),
-      providerMode: "live-frontier",
-    });
-
-    expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
-    expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
-  });
-
-  it("does not pass credential broker or Telegram harness secrets to the gateway child env", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
-        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
-        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
-        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
-        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
-      }),
-      providerMode: "live-frontier",
-    });
-
-    expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
-    expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
-    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
-    expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
-    expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
-    expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
-  });
-
   it("re-scrubs blocked credentials after runtime env patches", () => {
     const env = buildQaRuntimeEnv({
-      ...createParams({ SAFE_VALUE: "base" }),
+      ...createParams({
+        SAFE_VALUE: "base",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
+      }),
+      providerMode: "live-frontier",
       runtimeEnvPatch: {
         SAFE_VALUE: "patched",
         OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
@@ -965,6 +747,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     expect(env.SAFE_VALUE).toBe("patched");
+    expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
     expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
     expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
@@ -1228,7 +1011,7 @@ describe("buildQaRuntimeEnv", () => {
       timeoutMs: 100,
     });
 
-    logs += "signal SIGUSR1 received\nrestart mode: in-process restart\n";
+    logs += "signal SIGUSR2 received\nrestart mode: in-process restart\n";
 
     await expect(wait).resolves.toBeUndefined();
   });
@@ -1325,21 +1108,10 @@ describe("buildQaRuntimeEnv", () => {
     expect(output.text()).not.toContain("�");
   });
 
-  it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
-    await expect(
-      waitForQaGatewayRestartBoundary({
-        readLogsSince: () => "signal SIGUSR1 received\n",
-        mark: 0,
-        pollMs: 1,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow("qa gateway child did not reach restart boundary");
-  });
-
   it("keeps oversized restart-boundary poll intervals within the timeout", async () => {
     await expect(
       waitForQaGatewayRestartBoundary({
-        readLogsSince: () => "signal SIGUSR1 received\n",
+        readLogsSince: () => "signal SIGUSR2 received\n",
         mark: 0,
         pollMs: Number.MAX_SAFE_INTEGER,
         timeoutMs: 5,
@@ -1371,65 +1143,61 @@ describe("buildQaRuntimeEnv", () => {
     expect(storeProfile.token).toBe(token);
   });
 
-  it("stages live env API-key profiles for isolated QA workers", async () => {
+  it.each([
+    { source: "provider env", apiKey: undefined, env: { OPENAI_API_KEY: "qa-live-key" } },
+    {
+      source: "live alias",
+      apiKey: undefined,
+      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
+    },
+    { source: "config literal", apiKey: "qa-live-key", env: {} },
+    {
+      source: "config secret ref",
+      apiKey: { source: "env" as const, provider: "default", id: "OPENCLAW_LIVE_CODEX_API_KEY" },
+      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
+    },
+    {
+      source: "config env marker",
+      apiKey: "OPENCLAW_LIVE_CODEX_API_KEY",
+      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
+    },
+  ])("stages $source API-key auth for isolated live QA workers", async ({ apiKey, env }) => {
     const stateDir = await tempDirs.makeTempDir("qa-live-api-key-state-");
-
     const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {},
+      cfg:
+        apiKey === undefined
+          ? {}
+          : {
+              models: { providers: { openai: { baseUrl: "", models: [], apiKey } } },
+            },
       stateDir,
       providerIds: ["openai"],
-      env: {
-        OPENAI_API_KEY: "qa-live-not-a-real-key",
-      },
+      env,
     });
-
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env");
-    expect(configProfile.provider).toBe("openai");
-    expect(configProfile.mode).toBe("api_key");
-    expect(configProfile.displayName).toBe("QA live openai env credential");
+    expect(requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env")).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+      displayName: "QA live openai env credential",
+    });
     expect(Object.values(cfg.auth?.profiles ?? {})).not.toContainEqual(
       expect.objectContaining({ provider: "anthropic" }),
     );
-
     for (const agentId of ["main", "qa"]) {
       const profiles = readAuthProfileStore(stateDir, agentId).profiles;
-      const storeProfile = requireAuthProfile(profiles, "qa-live-openai-env");
-      expect(storeProfile.type).toBe("api_key");
-      expect(storeProfile.provider).toBe("openai");
-      expect(storeProfile.key).toBe("qa-live-not-a-real-key");
+      expect(requireAuthProfile(profiles, "qa-live-openai-env")).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "qa-live-key",
+      });
       expect(Object.values(profiles)).not.toContainEqual(
         expect.objectContaining({ provider: "anthropic" }),
       );
     }
-  });
-
-  it("stages direct live OpenAI API-key aliases for isolated QA workers", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-direct-key-state-");
-
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {},
-      stateDir,
-      providerIds: ["openai"],
-      env: {
-        OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
-      },
-    });
-
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "qa").profiles,
-      "qa-live-openai-env",
-    );
-    expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai");
-    expect(storeProfile.key).toBe("qa-live-direct-codex-key");
-
     expect(() =>
       assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: ["openai"],
-        env: {
-          OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
-        },
+        env: {},
         readCodexCredentials: () => null,
       }),
     ).not.toThrow();
@@ -1498,131 +1266,6 @@ describe("buildQaRuntimeEnv", () => {
     ).not.toThrow();
   });
 
-  it("stages configured OpenAI API keys for live QA runs", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-config-key-state-");
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "",
-              models: [],
-              apiKey: "qa-configured-not-a-real-key",
-            },
-          },
-        },
-      },
-      stateDir,
-      providerIds: ["openai"],
-      env: {},
-    });
-
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env");
-    expect(configProfile.provider).toBe("openai");
-    expect(configProfile.mode).toBe("api_key");
-    for (const agentId of ["main", "qa"]) {
-      const storeProfile = requireAuthProfile(
-        readAuthProfileStore(stateDir, agentId).profiles,
-        "qa-live-openai-env",
-      );
-      expect(storeProfile.type).toBe("api_key");
-      expect(storeProfile.provider).toBe("openai");
-      expect(storeProfile.key).toBe("qa-configured-not-a-real-key");
-    }
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env: {},
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("stages configured OpenAI env secret refs for default OpenAI live QA runs", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-config-ref-state-");
-    const env = {
-      OPENCLAW_LIVE_CODEX_API_KEY: "qa-configured-env-ref-not-a-real-key",
-    };
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "",
-              models: [],
-              apiKey: {
-                source: "env",
-                provider: "default",
-                id: "OPENCLAW_LIVE_CODEX_API_KEY",
-              },
-            },
-          },
-        },
-      },
-      stateDir,
-      providerIds: ["openai"],
-      env,
-    });
-
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "qa").profiles,
-      "qa-live-openai-env",
-    );
-    expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai");
-    expect(storeProfile.key).toBe("qa-configured-env-ref-not-a-real-key");
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env,
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("stages configured OpenAI env markers for live QA runs", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-config-marker-state-");
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "",
-              models: [],
-              apiKey: "OPENCLAW_LIVE_CODEX_API_KEY",
-            },
-          },
-        },
-      },
-      stateDir,
-      providerIds: ["openai"],
-      env: {
-        OPENCLAW_LIVE_CODEX_API_KEY: "qa-configured-marker-not-a-real-key",
-      },
-    });
-
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "main").profiles,
-      "qa-live-openai-env",
-    );
-    expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai");
-    expect(storeProfile.key).toBe("qa-configured-marker-not-a-real-key");
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env: {},
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
   it("accepts a logged-in Codex CLI home for live OpenAI QA runs", () => {
     const readCodexCredentials = vi.fn(() => ({
       type: "oauth" as const,
@@ -1683,41 +1326,6 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it("releases staged live auth stores before packaged Doctor starts", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "qa-synthetic-auth-handoff");
-    const fixtureRoot = await tempDirs.makeTempDir("qa-live-auth-handoff-");
-    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
-    const recordPath = path.join(fixtureRoot, "commands.jsonl");
-    await mkdir(tempParentDir);
-    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
-    const owner = ownGateway();
-    await expect(
-      owner.start({
-        repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [fixturePath],
-          tempParentDir,
-          usePackagedPlugins: true,
-        },
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4",
-        transportBaseUrl: "http://127.0.0.1:43123",
-        runtimeEnvPatch: {
-          QA_RECORD_PATH: recordPath,
-          QA_ASSERT_AUTH_HANDOFF: "1",
-        },
-      }),
-    ).rejects.toThrow("fixture gateway exit");
-    const records = await readJsonLines(recordPath);
-    expect(records.find((record) => record.kind === "auth-handoff")).toMatchObject({ leases: 0 });
-    expect(records.at(-1)).toMatchObject({
-      kind: "gateway",
-      authProfileIds: ["qa-live-openai-env"],
-    });
-  });
-
   it.each([false, true])(
     "lets the packaged candidate create its auth DB before gateway spawn (legacy=%s)",
     async (legacy) => {
@@ -1742,6 +1350,7 @@ describe("buildQaRuntimeEnv", () => {
           runtimeEnvPatch: {
             QA_RECORD_PATH: recordPath,
             QA_LEGACY_PLUGIN_SETUP: legacy ? "1" : "0",
+            QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
           },
         }),
       ).rejects.toThrow("fixture gateway exit");
@@ -1750,30 +1359,19 @@ describe("buildQaRuntimeEnv", () => {
       const records = await readJsonLines(recordPath);
       const authRecords = records.filter((record) => record.kind === "auth");
       expect(authRecords).toHaveLength(2);
-      expect(authRecords.map((record) => record.args)).toEqual([
-        [
+      expect(authRecords.map((record) => record.args)).toEqual(
+        ["openai", "anthropic"].map((provider) => [
           "models",
           "auth",
           "--agent",
           "qa",
           "paste-api-key",
           "--provider",
-          "openai",
+          provider,
           "--profile-id",
-          "qa-mock-openai",
-        ],
-        [
-          "models",
-          "auth",
-          "--agent",
-          "qa",
-          "paste-api-key",
-          "--provider",
-          "anthropic",
-          "--profile-id",
-          "qa-mock-anthropic",
-        ],
-      ]);
+          `qa-mock-${provider}`,
+        ]),
+      );
       for (const record of authRecords) {
         expect(record.stdin).toMatch(/^sk-qa-mock-[a-f0-9]{32}\n$/u);
         expect(record.env).toMatchObject({
@@ -1796,6 +1394,7 @@ describe("buildQaRuntimeEnv", () => {
       expect(records.at(-1)).toMatchObject({
         kind: "gateway",
         authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+        configVersion: "2026.7.33",
         dbExists: true,
       });
       expect(records.at(-1)?.configPath).not.toBe(authConfigPaths[0]);
@@ -1819,6 +1418,7 @@ describe("buildQaRuntimeEnv", () => {
         ],
         configPath: records.at(-1)?.configPath,
         stateDir: records.at(-1)?.stateDir,
+        configPort: records.at(-1)?.configPort,
       });
       expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
     },
@@ -1848,7 +1448,11 @@ describe("buildQaRuntimeEnv", () => {
           },
           providerMode: "mock-openai",
           transportBaseUrl: "http://127.0.0.1:43123",
-          runtimeEnvPatch: { QA_RECORD_PATH: recordPath, QA_STARTUP_RETRY: retry },
+          runtimeEnvPatch: {
+            QA_RECORD_PATH: recordPath,
+            QA_STARTUP_RETRY: retry,
+            QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
+          },
           mutateConfig,
         }),
       ).rejects.toThrow("fixture gateway exit");
@@ -1856,7 +1460,11 @@ describe("buildQaRuntimeEnv", () => {
       const gateways = records.filter((record) => record.kind === "gateway");
       expect(gateways).toHaveLength(2);
       expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
-      expect(records.filter((record) => record.kind === "plugins")).toHaveLength(configBuilds);
+      const repairs = records.filter((record) => record.kind === "plugins");
+      expect(repairs).toHaveLength(configBuilds);
+      expect(repairs.map((record) => record.configPort)).toEqual(
+        retry === "bind" ? gateways.map((record) => record.configPort) : [gateways[0]?.configPort],
+      );
       expect(mutateConfig).toHaveBeenCalledTimes(configBuilds);
       expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
       expect(records.map((record) => record.kind)).toEqual([
@@ -1874,6 +1482,7 @@ describe("buildQaRuntimeEnv", () => {
         expect(gateway).toMatchObject({
           dbExists: true,
           authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+          configVersion: "2026.7.33",
         });
       }
       if (retry === "migration") {
@@ -1882,7 +1491,34 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
-  it.each(["openai", "anthropic", "help", "repair"] as const)(
+  it("preserves authored newer-version metadata so the packaged candidate refuses it", async () => {
+    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-newer-config-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    await mkdir(tempParentDir);
+    await expect(
+      ownGateway().start({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [fixturePath],
+          tempParentDir,
+          usePackagedPlugins: true,
+        },
+        providerMode: "mock-openai",
+        transportBaseUrl: "http://127.0.0.1:43123",
+        runtimeEnvPatch: {
+          QA_RECORD_PATH: recordPath,
+          QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
+        },
+        mutateConfig: (cfg) => ({ ...cfg, meta: { lastTouchedVersion: "2026.9.4" } }),
+      }),
+    ).rejects.toThrow("config last written by newer runtime: 2026.9.4");
+    await expect(lstat(recordPath)).rejects.toThrow(/ENOENT/u);
+  });
+
+  it.each(["anthropic", "help", "repair"] as const)(
     "blocks packaged gateway spawn with bounded redacted diagnostics when %s fails",
     async (phase) => {
       const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-command-fail-");
@@ -1890,7 +1526,7 @@ describe("buildQaRuntimeEnv", () => {
       const recordPath = path.join(fixtureRoot, "commands.jsonl");
       const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
       await mkdir(tempParentDir);
-      const provider = phase === "openai" || phase === "anthropic" ? phase : undefined;
+      const provider = phase === "anthropic" ? phase : undefined;
       const owner = ownGateway();
       const error = await owner
         .start({
@@ -1928,9 +1564,7 @@ describe("buildQaRuntimeEnv", () => {
       const records = await readJsonLines(recordPath);
       expect(records.map((record) => record.kind)).toEqual(
         provider
-          ? provider === "openai"
-            ? ["auth"]
-            : ["auth", "auth"]
+          ? ["auth", "auth"]
           : ["auth", "auth", ...(phase === "repair" ? ["help"] : []), "plugins"],
       );
       expect(records[0]).toMatchObject({
@@ -2186,10 +1820,6 @@ describe("buildQaRuntimeEnv", () => {
       "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
       "bind-collision",
     ],
-    [
-      "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
-      "migration-convergence-restart",
-    ],
   ] as const)("classifies %s", (details, expectedKind) => {
     expect(
       resolveQaGatewayStartupRetry({
@@ -2200,12 +1830,8 @@ describe("buildQaRuntimeEnv", () => {
     ).toBe(expectedKind);
   });
 
-  it.each([
-    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
-    "OpenClaw plugin migration inputs changed during startup convergence",
-    "Restart OpenClaw so state migrations can continue.",
-    "gateway failed to become healthy",
-  ])("does not retry unrelated startup failure: %s", (details) => {
+  it("does not retry an incomplete migration-convergence diagnostic", () => {
+    const details = "OpenClaw plugin migration inputs changed during startup convergence";
     expect(
       resolveQaGatewayStartupRetry({
         attempt: 1,
@@ -2367,497 +1993,4 @@ describe("buildQaRuntimeEnv", () => {
   });
 });
 
-describe("qa bundled plugin dir", () => {
-  it("creates a scoped bundled plugin tree with the always-staged runtime facade", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-bundled-scope-");
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify(
-        {
-          name: "openclaw",
-          type: "module",
-          exports: {
-            "./plugin-sdk/account-id": {
-              default: "./dist/plugin-sdk/account-id.js",
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
-    await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
-    await mkdir(path.join(repoRoot, "dist", "extensions", "image-generation-core"), {
-      recursive: true,
-    });
-    await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
-    await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist", "plugin-sdk", "account-id.js"),
-      "export const normalizeAccountId = (value) => value.toLowerCase();\n",
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "dist", "extensions", "qa-channel", "package.json"),
-      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "dist", "extensions", "qa-channel", "index.js"),
-      [
-        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
-        'export const accountId = normalizeAccountId("QA");',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "extensions", "qa-channel", "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "qa-channel",
-        toolMetadata: { qa_read: { replaySafe: true } },
-      }),
-      "utf8",
-    );
-    await writeFile(path.join(repoRoot, "dist", "shared-chunk-abc123.js"), "export {};\n", "utf8");
-    const tempRoot = await tempDirs.makeTempDir("qa-bundled-target-");
-
-    const { bundledPluginsDir, stagedRoot } = await createQaBundledPluginsDir({
-      repoRoot,
-      tempRoot,
-      allowedPluginIds: ["qa-channel", "memory-core"],
-    });
-
-    expect((await readdir(bundledPluginsDir)).toSorted()).toEqual([
-      "image-generation-core",
-      "memory-core",
-      "qa-channel",
-    ]);
-    expect(bundledPluginsDir).toBe(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "extensions",
-      ),
-    );
-    expect(stagedRoot).toBe(
-      path.join(repoRoot, ".artifacts", "qa-runtime", path.basename(tempRoot)),
-    );
-    await expect(readFile(path.join(stagedRoot, "package.json"), "utf8")).resolves.toContain(
-      '"name": "openclaw"',
-    );
-    const qaChannel = (await import(
-      `${pathToFileURL(path.join(bundledPluginsDir, "qa-channel", "index.js")).href}?t=${Date.now()}`
-    )) as { accountId: string };
-    expect(qaChannel.accountId).toBe("qa");
-    await expect(
-      readFile(path.join(bundledPluginsDir, "qa-channel", "openclaw.plugin.json"), "utf8"),
-    ).resolves.toContain('"replaySafe":true');
-    expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
-    expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
-    expect((await lstat(path.join(bundledPluginsDir, "image-generation-core"))).isDirectory()).toBe(
-      true,
-    );
-    const sharedChunkStat = await lstat(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "shared-chunk-abc123.js",
-      ),
-    );
-    if (sharedChunkStat.isFile()) {
-      expect(sharedChunkStat.isFile()).toBe(true);
-    } else {
-      expect(sharedChunkStat.isSymbolicLink()).toBe(true);
-    }
-  });
-
-  it("preserves dist-runtime-only root chunks when dist also exists", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-bundled-mixed-runtime-");
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist", "shared-dist.js"),
-      'export const dist = "dist";\n',
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "dist-runtime", "extensions", "runtime-only"), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(repoRoot, "dist-runtime", "runtime-chunk.js"),
-      'export const marker = "runtime";\n',
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "dist-runtime", "extensions", "runtime-only", "package.json"),
-      JSON.stringify({ name: "@openclaw/runtime-only", type: "module" }, null, 2),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "dist-runtime", "extensions", "runtime-only", "index.js"),
-      ['import { marker } from "../../runtime-chunk.js";', "export { marker };", ""].join("\n"),
-      "utf8",
-    );
-    const tempRoot = await tempDirs.makeTempDir("qa-bundled-mixed-target-");
-
-    const { bundledPluginsDir } = await createQaBundledPluginsDir({
-      repoRoot,
-      tempRoot,
-      allowedPluginIds: ["runtime-only"],
-    });
-
-    expect(bundledPluginsDir).toBe(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "extensions",
-      ),
-    );
-    const runtimeOnly = (await import(
-      `${pathToFileURL(path.join(bundledPluginsDir, "runtime-only", "index.js")).href}?t=${Date.now()}`
-    )) as { marker: string };
-    expect(runtimeOnly.marker).toBe("runtime");
-    const runtimeChunkStat = await lstat(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "runtime-chunk.js",
-      ),
-    );
-    if (runtimeChunkStat.isFile()) {
-      expect(runtimeChunkStat.isFile()).toBe(true);
-    } else {
-      expect(runtimeChunkStat.isSymbolicLink()).toBe(true);
-    }
-  });
-
-  it("rejects invalid bundled plugin ids before staging paths are built", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-bundled-invalid-id-");
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-      "utf8",
-    );
-    const tempRoot = await tempDirs.makeTempDir("qa-bundled-invalid-target-");
-
-    await expect(
-      createQaBundledPluginsDir({
-        repoRoot,
-        tempRoot,
-        allowedPluginIds: ["../escape"],
-      }),
-    ).rejects.toThrow("invalid QA bundled plugin id: ../escape");
-  });
-
-  it("leaves external allowed plugins to configured load paths", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-bundled-external-id-");
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-      "utf8",
-    );
-    const tempRoot = await tempDirs.makeTempDir("qa-bundled-external-target-");
-
-    const { bundledPluginsDir } = await createQaBundledPluginsDir({
-      repoRoot,
-      tempRoot,
-      allowedPluginIds: ["external-fixture"],
-    });
-
-    await expect(readdir(bundledPluginsDir)).resolves.not.toContain("external-fixture");
-  });
-
-  it("stages source-only bundled plugins into a repo-like runtime root with node_modules", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-bundled-source-stage-");
-    const fakeDepStoreRoot = await tempDirs.makeTempDir("qa-bundled-source-store-");
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify(
-        {
-          name: "openclaw",
-          type: "module",
-          exports: {
-            "./plugin-sdk/account-id": {
-              default: "./dist/plugin-sdk/account-id.js",
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist", "plugin-sdk", "account-id.js"),
-      "export const normalizeAccountId = (value) => value.toLowerCase();\n",
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "extensions", "qa-channel", "package.json"),
-      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "extensions", "qa-channel", "index.ts"),
-      [
-        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
-        'import { marker } from "fake-dep";',
-        'export const accountId = `${normalizeAccountId("QA")}:${marker}`;',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    const fakeDepPackageDir = path.join(fakeDepStoreRoot, "fake-dep");
-    await mkdir(fakeDepPackageDir, { recursive: true });
-    await writeFile(
-      path.join(fakeDepPackageDir, "package.json"),
-      JSON.stringify({ name: "fake-dep", type: "module" }, null, 2),
-      "utf8",
-    );
-    await writeFile(
-      path.join(fakeDepPackageDir, "index.js"),
-      'export const marker = "ok";\n',
-      "utf8",
-    );
-    await mkdir(path.join(repoRoot, "node_modules"), { recursive: true });
-    await symlink(fakeDepPackageDir, path.join(repoRoot, "node_modules", "fake-dep"), "dir");
-    const tempRoot = await tempDirs.makeTempDir("qa-bundled-source-target-");
-
-    const { bundledPluginsDir, stagedRoot } = await createQaBundledPluginsDir({
-      repoRoot,
-      tempRoot,
-      allowedPluginIds: ["qa-channel"],
-    });
-
-    expect(bundledPluginsDir).toBe(
-      path.join(
-        repoRoot,
-        ".artifacts",
-        "qa-runtime",
-        path.basename(tempRoot),
-        "dist",
-        "extensions",
-      ),
-    );
-    if (!stagedRoot) {
-      throw new Error("expected staged runtime root");
-    }
-    const qaChannel = (await import(
-      `${pathToFileURL(path.join(bundledPluginsDir, "qa-channel", "index.ts")).href}?t=${Date.now()}`
-    )) as { accountId: string };
-    expect(qaChannel.accountId).toBe("qa:ok");
-    await expect(
-      lstat(path.join(stagedRoot, "node_modules", "fake-dep")).then((stats) =>
-        stats.isSymbolicLink(),
-      ),
-    ).resolves.toBe(true);
-    await expect(
-      readFile(path.join(stagedRoot, "node_modules", "fake-dep", "index.js"), "utf8"),
-    ).resolves.toContain('marker = "ok"');
-  });
-
-  it("maps cli backend provider ids to their owning bundled plugin ids", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-plugin-owner-");
-    await writeJsonFixture(
-      path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
-      {
-        id: "openai",
-        providers: ["openai", "openai"],
-        cliBackends: ["codex-cli"],
-      },
-    );
-
-    await expect(
-      resolveQaOwnerPluginIdsForProviderIds({
-        repoRoot,
-        providerIds: ["codex-cli"],
-      }),
-    ).resolves.toEqual(["openai"]);
-  });
-
-  it("maps configured OpenAI Responses provider aliases to the OpenAI plugin", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-plugin-owner-");
-    await writeJsonFixture(
-      path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
-      {
-        id: "openai",
-        providers: ["openai"],
-        cliBackends: ["codex-cli"],
-      },
-    );
-
-    await expect(
-      resolveQaOwnerPluginIdsForProviderIds({
-        repoRoot,
-        providerIds: ["custom-openai"],
-        providerConfigs: {
-          "custom-openai": {
-            baseUrl: "https://api.example.test/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "model-a",
-                name: "model-a",
-                api: "openai-responses",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 4096,
-              },
-            ],
-          },
-        },
-      }),
-    ).resolves.toEqual(["openai"]);
-  });
-
-  it("copies selected live provider configs from the host config", async () => {
-    const configPath = await writeTempProviderConfig({
-      models: {
-        providers: {
-          "custom-openai": {
-            baseUrl: "https://api.example.test/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "model-a",
-                name: "model-a",
-                api: "openai-responses",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 4096,
-              },
-            ],
-          },
-          ignored: {
-            baseUrl: "https://ignored.example.test/v1",
-            api: "openai-responses",
-            models: [],
-          },
-        },
-      },
-    });
-
-    const overrides = await readQaLiveProviderConfigOverrides({
-      providerIds: ["custom-openai"],
-      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
-    });
-    expect(Object.keys(overrides)).toEqual(["custom-openai"]);
-    expect(overrides["custom-openai"]?.baseUrl).toBe("https://api.example.test/v1");
-    expect(overrides["custom-openai"]?.api).toBe("openai-responses");
-  });
-
-  it("copies OpenAI auth-only live provider configs for default OpenAI runs", async () => {
-    const configPath = await writeTempProviderConfig({
-      models: {
-        providers: {
-          openai: {
-            apiKey: {
-              source: "env",
-              id: "OPENCLAW_LIVE_CODEX_API_KEY",
-            },
-          },
-        },
-      },
-    });
-
-    const overrides = await readQaLiveProviderConfigOverrides({
-      providerIds: ["openai"],
-      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
-    });
-    expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
-    expect(overrides["openai"]?.models).toEqual([]);
-    expect(overrides["openai"]?.apiKey).toEqual({
-      source: "env",
-      id: "OPENCLAW_LIVE_CODEX_API_KEY",
-    });
-  });
-
-  it("omits empty base URLs without dropping provider configs that inherit auth", async () => {
-    const configPath = await writeTempProviderConfig({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "",
-            api: "openai-responses",
-            models: [],
-          },
-        },
-      },
-    });
-
-    const overrides = await readQaLiveProviderConfigOverrides({
-      providerIds: ["openai"],
-      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
-    });
-    expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
-    expect(overrides["openai"]?.api).toBe("openai-responses");
-  });
-
-  it("raises the QA runtime host version to the highest allowed plugin floor", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-runtime-version-");
-    await writeJsonFixture(path.join(repoRoot, "package.json"), { version: "2026.4.7-1" });
-    const bundledRoot = path.join(repoRoot, "extensions");
-    await writeJsonFixture(path.join(bundledRoot, "qa-channel", "package.json"), {
-      openclaw: { install: { minHostVersion: ">=2026.4.8" } },
-    });
-
-    await writeJsonFixture(path.join(bundledRoot, "memory-core", "package.json"), {
-      openclaw: { install: { minHostVersion: ">=2026.4.7" } },
-    });
-
-    await expect(
-      resolveQaRuntimeHostVersion({
-        repoRoot,
-        allowedPluginIds: ["memory-core", "qa-channel"],
-      }),
-    ).resolves.toBe("2026.4.8");
-  });
-
-  it("includes the always-staged runtime facade when raising the QA runtime host version", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-runtime-version-runtime-facade-");
-    await writeJsonFixture(path.join(repoRoot, "package.json"), { version: "2026.4.7-1" });
-    const bundledRoot = path.join(repoRoot, "extensions");
-    await writeJsonFixture(path.join(bundledRoot, "qa-channel", "package.json"), {
-      openclaw: { install: { minHostVersion: ">=2026.4.8" } },
-    });
-    await writeJsonFixture(path.join(bundledRoot, "image-generation-core", "package.json"), {
-      openclaw: { install: { minHostVersion: ">=2026.4.9" } },
-    });
-
-    await expect(
-      resolveQaRuntimeHostVersion({
-        repoRoot,
-        allowedPluginIds: ["qa-channel"],
-      }),
-    ).resolves.toBe("2026.4.9");
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

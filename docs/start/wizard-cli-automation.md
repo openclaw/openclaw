@@ -17,34 +17,27 @@ Each command can install a managed Gateway with `--install-daemon`, require an a
 
 ## Review required plugins
 
-Non-interactive onboarding cannot accept new external plugin capabilities.
+Bundled plugins and verified plugins from OpenClaw's official catalog do not
+require capability consent during setup. This includes the official Codex
+runtime installed for OpenAI setup.
+
+Non-interactive onboarding cannot accept new third-party plugin capabilities.
 `--accept-risk` acknowledges onboarding risk only; it does not grant plugin
-consent. Before automating a setup that needs an external provider or runtime,
-review that plugin's source and declared capabilities, then preinstall it with
-explicit consent. For OpenAI setup, install the official Codex runtime:
+consent. Before automating a setup that needs a third-party provider, runtime,
+or channel plugin, review its source and declared capabilities, then preinstall
+it with explicit consent:
 
 ```bash
-# After reviewing the plugin and its declared capabilities:
-openclaw plugins install codex --accept-capabilities
+openclaw plugins install <plugin-spec> --accept-capabilities
 ```
 
-The `codex` selector lets OpenClaw's official catalog choose the runtime package.
-Then run your onboarding command below. If onboarding reports a required plugin
-capability review, review and install the named plugin and rerun the same
-command. For an already-installed plugin that needs approval to enable it, use
+If onboarding reports a required plugin capability review, review and install
+the named plugin and rerun the same command. For an already-installed plugin
+that needs approval to enable it, use
 `openclaw plugins enable <plugin-id> --accept-capabilities`.
 
-External channel plugins need the same preparation before scripted
-`openclaw channels add`; for example, after reviewing Discord:
-
-```bash
-openclaw plugins install discord --accept-capabilities
-openclaw channels add --channel discord --token "$DISCORD_BOT_TOKEN"
-```
-
-Bundled plugins are exempt. Consent applies to the reviewed plugin operation,
-not every subsequent install. See
-[Capability consent](/plugins/manage-plugins#capability-consent) for artifact
+Consent applies to the reviewed plugin operation, not every subsequent install.
+See [Capability consent](/plugins/manage-plugins#capability-consent) for artifact
 review, enablement, and update rules.
 
 ## Baseline non-interactive example
@@ -223,7 +216,7 @@ Anthropic setup-token auth remains supported, but OpenClaw prefers Claude CLI re
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.6-sol \
+  --model openai/gpt-6-astra \
   --bind whatsapp:biz \
   --non-interactive \
   --json

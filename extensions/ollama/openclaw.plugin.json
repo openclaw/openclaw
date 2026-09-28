@@ -1,5 +1,6 @@
 {
   "id": "ollama",
+  "categories": ["models"],
   "doctorContract": {
     "configRepair": true
   },
@@ -374,6 +375,26 @@
     "tools": ["node_inference"],
     "webSearchProviders": ["ollama"]
   },
+  "configGroups": [
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 10,
+      "properties": ["discovery"]
+    },
+    {
+      "id": "node-inference",
+      "title": "Node inference",
+      "order": 20,
+      "properties": ["nodeInference"]
+    },
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 30,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

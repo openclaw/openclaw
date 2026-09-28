@@ -9,7 +9,7 @@ import process from "node:process";
 import type { runDependencyVulnerabilityGate } from "./dependency-vulnerability-gate.mts";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import {
-  RELEASE_DEPENDENCY_RISK_LOCKFILES,
+  getReleaseDependencyRiskLockfiles,
   resolveReleaseDependencyRiskAcceptance,
 } from "./lib/release-dependency-risk-acceptance.mts";
 import { REPORT_CLI_PARSE_OPTIONS } from "./lib/report-cli-helpers.mts";
@@ -381,6 +381,7 @@ async function runEvidenceReports(
   packageVersion: string,
 ) {
   let riskAcceptance: ReturnType<typeof resolveReleaseDependencyRiskAcceptance> = null;
+  const riskLockfiles = getReleaseDependencyRiskLockfiles(packageVersion);
   const toolingRoot = path.resolve(import.meta.dirname, "..");
   // Report implementations belong to this tooling checkout; --root selects only the source data.
   // Release branches can keep frozen product bytes while trusted release tooling is repaired.
@@ -408,7 +409,7 @@ async function runEvidenceReports(
         !(error instanceof Error) ||
         !("status" in error) ||
         error.status !== 1 ||
-        packageVersion !== "2026.9.1"
+        !riskLockfiles
       ) {
         throw error;
       }
@@ -417,7 +418,7 @@ async function runEvidenceReports(
       >(reportPath(outputDir, report.json));
       const lockfileSha256 = Object.fromEntries(
         await Promise.all(
-          Object.keys(RELEASE_DEPENDENCY_RISK_LOCKFILES).map(async (file) => [
+          riskLockfiles.map(async (file) => [
             file,
             createHash("sha256")
               .update(await readFile(path.join(rootDir, file)))
@@ -434,7 +435,7 @@ async function runEvidenceReports(
         throw error;
       }
       console.warn(
-        "WARNING: 2026.9.1 dependency risks accepted by maintainer; scan findings remain unresolved.",
+        `WARNING: ${packageVersion} dependency risks accepted by maintainer; scan findings remain unresolved.`,
       );
     }
   }
@@ -524,7 +525,7 @@ export async function generateDependencyReleaseEvidence({
       counts,
     }) +
       (riskAcceptance
-        ? "\n## Operator-accepted dependency risk\n\nThe maintainer accepted the five recorded advisory blockers for 2026.9.1 with unchanged dependencies. They remain unresolved, not a clean security scan. Exact graph hashes and findings are retained in dependency-evidence-manifest.json.\n"
+        ? `\n## Operator-accepted dependency risk\n\nThe maintainer accepted ${riskAcceptance.blockers.length} recorded advisory finding(s) for ${packageVersion} with unchanged dependencies. They remain unresolved, not a clean security scan. Exact graph hashes and findings are retained in dependency-evidence-manifest.json.\n`
         : ""),
     "utf8",
   );
@@ -538,7 +539,7 @@ export async function generateDependencyReleaseEvidence({
         counts,
       }) +
         (riskAcceptance
-          ? "\nWARNING: Five dependency advisory blockers remain unresolved and were explicitly accepted for 2026.9.1. See the dependency evidence manifest.\n"
+          ? `\nWARNING: ${riskAcceptance.blockers.length} dependency advisory finding(s) remain unresolved and were explicitly accepted for ${packageVersion}. See the dependency evidence manifest.\n`
           : ""),
       "utf8",
     );

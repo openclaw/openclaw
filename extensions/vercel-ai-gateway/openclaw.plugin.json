@@ -1,5 +1,6 @@
 {
   "id": "vercel-ai-gateway",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -29,6 +30,10 @@
   "modelPricing": {
     "providers": {
       "vercel-ai-gateway": {
+        "modelsDev": {
+          "provider": "vercel",
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },

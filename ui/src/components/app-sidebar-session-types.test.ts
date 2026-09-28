@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredCollapsedSessionSections,
   loadStoredHiddenSessionCatalogIds,
@@ -18,20 +19,6 @@ import {
 // getSafeLocalStorage only accepts an own value property under Vitest, so the
 // jsdom getter-backed localStorage must be replaced with a plain mock.
 let originalLocalStorage: PropertyDescriptor | undefined;
-
-function createStorageMock(): Storage {
-  const values = new Map<string, string>();
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key: string) => values.get(key) ?? null,
-    key: (index: number) => [...values.keys()][index] ?? null,
-    removeItem: (key: string) => void values.delete(key),
-    setItem: (key: string, value: string) => void values.set(key, value),
-  };
-}
 
 beforeEach(() => {
   originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

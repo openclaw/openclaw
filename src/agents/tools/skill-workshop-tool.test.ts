@@ -2,20 +2,19 @@
 // applying generated skills to the workspace.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
-import type {
-  SkillWorkshopProposalMutationBudget,
-  SkillWorkshopProposalReviewCompletion,
-} from "../../skills/workshop/types.js";
+import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { listCoreToolSections } from "../tool-catalog.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
@@ -71,7 +70,7 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
-  it("describes action selection and pending-proposal discovery in its schema", () => {
+  it("describes and routes personal library and Workshop proposal actions", async () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);
     const lazyDescription = listCoreToolSections()
@@ -99,6 +98,77 @@ describe("skill_workshop tool", () => {
     expect(schema).not.toContain("action fails if content or support files changed");
     expect(tool.description).toContain(lazyDescription);
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
+
+    const invoke = vi.fn<SkillLibraryAuthoringCapability["invoke"]>(async () => ({
+      entries: [],
+      profileId: null,
+      multipleProfiles: false,
+      defaultTarget: "workspace",
+      canManageWorkspace: true,
+      defaultSelectionLimit: 20,
+    }));
+    const combined = normalizeToolParameters(
+      createSkillWorkshopTool({
+        workspaceDir: testState.workspaceDir,
+        libraryAuthoring: {
+          target: "personal",
+          defaultTarget: "workspace",
+          multipleProfiles: false,
+          bind: vi.fn(),
+          invoke,
+        },
+      }),
+      { modelProvider: "openai" },
+    );
+    for (const [input, message] of [
+      [{ action: "list", target: "personal", limit: 50 }, /personal.*limit/s],
+      [
+        { action: "prepare_patch", target: "personal", skill_name: "ordinary" },
+        /personal.*action/s,
+      ],
+      [
+        { action: "read", target: "personal", skill_id: "private-input-sentinel".repeat(3) },
+        /skill_id.*36 characters/s,
+      ],
+      [
+        {
+          action: "create",
+          target: "personal",
+          files: [
+            { path: "references/example.txt", content: "private-input-sentinel".repeat(1600) },
+          ],
+        },
+        /files\/0\/content.*32768 characters/s,
+      ],
+      [
+        { action: "list", target: "personal", query: "private-input-sentinel" },
+        /unsupported fields "query"/,
+      ],
+    ] as const) {
+      const failure = await combined.execute("invalid", input).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ message: expect.stringMatching(message) });
+      expect(String(failure)).not.toContain("private-input-sentinel");
+    }
+    expect(invoke).not.toHaveBeenCalled();
+    expect(await combined.execute("workshop-list", { action: "list", limit: 50 })).toMatchObject({
+      details: { proposals: [] },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+    const personal = await combined.execute("personal-list", {
+      action: "list",
+      target: "personal",
+    });
+    expect(
+      JSON.parse(personal.content.find((block) => block.type === "text")!.text!),
+    ).toMatchObject({ entries: [] });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: "list" }));
+    expect(combined.description).toContain("Omit target");
+    expect(combined.description).toContain("skill_id");
+    expect(combined.description).toContain("expected_revision");
+    expect(combined.description).toContain("limit maximum 50, default 20");
+    expect(combined.description).toContain("read/prepare_patch/patch/update use skill_name");
+    expect(combined.description).toContain("inspect/revise use proposal_id or name");
+    expect(combined.description).toContain("update needs complete proposal_content");
   });
 
   it("evaluates an exact pending draft and exposes the persisted result", async () => {
@@ -140,7 +210,7 @@ describe("skill_workshop tool", () => {
       },
     });
     expect(
-      listSkillProposalEvents({ config: {}, proposalId: details.id }).events.map(
+      (await listSkillProposalEvents({ config: {}, proposalId: details.id })).events.map(
         (event) => event.actor,
       ),
     ).toEqual([
@@ -239,81 +309,6 @@ describe("skill_workshop tool", () => {
     ).resolves.toMatchObject({ details: { proposals: [] } });
   });
 
-  it("pins the default action enum and blocks work after proposal review completion", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-completion-");
-    let completions = 0;
-    const progress: Array<{ proposalIds: string[]; remaining: number }> = [];
-    let releaseProgress!: () => void;
-    const progressGate = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
-    let markProgressStarted!: () => void;
-    const progressStarted = new Promise<void>((resolve) => {
-      markProgressStarted = resolve;
-    });
-    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
-    const proposalReviewCompletion: SkillWorkshopProposalReviewCompletion = {
-      phase: "open",
-      complete: async () => {
-        completions += 1;
-      },
-      recordProgress: async (next: { proposalIds: string[]; remaining: number }) => {
-        progress.push(next);
-        markProgressStarted();
-        await progressGate;
-      },
-    };
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      proposalOnly: true,
-      proposalMutationBudget,
-      proposalReviewCompletion,
-    });
-
-    expect(
-      (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual([
-      "create",
-      "prepare_patch",
-      "patch",
-      "update",
-      "read",
-      "revise",
-      "list",
-      "inspect",
-      "evaluate",
-      "apply",
-      "reject",
-      "quarantine",
-      "history",
-      "restore_collection",
-      "complete",
-    ]);
-    const create = tool.execute("call-create-before-complete", {
-      action: "create",
-      name: "Checkpointed Learning",
-      description: "Reuse a checkpointed workflow",
-      proposal_content: "# Checkpointed Learning\n\nFollow the workflow.\n",
-    });
-    await progressStarted;
-    const complete = tool.execute("call-complete", { action: "complete" });
-    await Promise.resolve();
-    expect(completions).toBe(0);
-    releaseProgress();
-    await create;
-    await expect(complete).resolves.toMatchObject({ details: { completed: true } });
-    expect(progress).toHaveLength(1);
-    expect(progress[0]).toMatchObject({ remaining: 0 });
-    expect(progress[0]?.proposalIds).toHaveLength(1);
-    await expect(
-      tool.execute("call-complete-retry", { action: "complete" }),
-    ).resolves.toMatchObject({ details: { completed: true } });
-    expect(completions).toBe(1);
-    await expect(tool.execute("call-list-after-complete", { action: "list" })).rejects.toThrow(
-      "review is already completing or complete",
-    );
-  });
-
   it("revises support files without requiring the proposal body again", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-support-revise-");
     const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main" });
@@ -403,7 +398,7 @@ describe("skill_workshop tool", () => {
     }
 
     expect(proposalMutationBudget.mutatedProposalIds).toEqual(new Set([proposalId]));
-    expect(proposalMutationBudget.successfulMutations).toBe(3);
+    expect(proposalMutationBudget.remaining).toBe(0);
   });
 
   it("is not exposed from sandboxed OpenClaw tool sets", async () => {

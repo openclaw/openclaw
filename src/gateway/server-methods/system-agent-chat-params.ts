@@ -1,3 +1,5 @@
+import { normalizeSystemAgentPluginReference } from "@openclaw/gateway-protocol/system-agent-context";
+
 const SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN = /^[A-Za-z0-9/_-]{1,64}$/u;
 
 export function sanitizeSystemAgentChatParams(params: unknown): unknown {
@@ -24,5 +26,6 @@ export function sanitizeSystemAgentChatParams(params: unknown): unknown {
     const { context: _droppedContext, ...rest } = record;
     return rest;
   }
-  return { ...record, context: { page } };
+  const plugin = normalizeSystemAgentPluginReference(contextRecord.plugin);
+  return { ...record, context: { page, ...(plugin ? { plugin } : {}) } };
 }

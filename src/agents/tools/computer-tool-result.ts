@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import type { ComputerActResult } from "../../plugins/computer-use-contract.js";
 import { DEFAULT_IMAGE_MAX_DIMENSION_PX } from "../image-sanitization.js";
@@ -12,7 +13,11 @@ import type {
   ComputerToolAction,
   ScreenshotCapture,
 } from "./computer-tool-shared.js";
-import { COMPUTER_REF_WIDTH, MODEL_OBSERVATION_MAX_ELEMENTS } from "./computer-tool-shared.js";
+import {
+  COMPUTER_REF_WIDTH,
+  MODEL_OBSERVATION_MAX_ELEMENTS,
+  computerTargetDetails,
+} from "./computer-tool-shared.js";
 
 type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> & {
   truncatedElements?: number;
@@ -60,10 +65,7 @@ function computerFrameImageIdentity(
   if (!image || duplicate) {
     return undefined;
   }
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify([image.mimeType, image.data]))
-    .digest("hex");
+  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
 }
 
 function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
@@ -173,7 +175,7 @@ export async function projectScreenshotResult(params: {
   const result = {
     content: [{ type: "text" as const, text }, ...content],
     details: {
-      node: target.nodeId,
+      ...computerTargetDetails(target),
       action: params.action,
       width: dimensions?.width,
       height: dimensions?.height,
@@ -188,6 +190,7 @@ export async function projectScreenshotResult(params: {
 
 export async function projectComputerActResult(params: {
   result: ComputerActResult;
+  precedingAction?: { action: ComputerToolAction; result: ComputerActResult };
   target: ComputerTarget;
   action: ComputerToolAction;
   referenceWidth: number;
@@ -229,14 +232,29 @@ export async function projectComputerActResult(params: {
   return {
     result: {
       content: [
+        ...(params.precedingAction
+          ? [
+              {
+                type: "text" as const,
+                text: computerActResultText(
+                  params.precedingAction.action,
+                  params.precedingAction.result,
+                ),
+              },
+            ]
+          : []),
         { type: "text", text: JSON.stringify({ action: params.action, ...result }) },
         ...content,
       ],
       details: {
-        node: params.target.nodeId,
-        action: params.action,
+        ...computerTargetDetails(params.target),
+        action: params.precedingAction?.action ?? params.action,
         screenIndex: params.target.screenIndex,
-        result,
+        // Keep mutation evidence separate from the read's coordinate space and other metadata.
+        result: params.precedingAction
+          ? projectComputerActResultMetadata(params.precedingAction.result)
+          : result,
+        ...(params.precedingAction ? { followUpObservation: result } : {}),
         media: { outbound: false },
       },
     },

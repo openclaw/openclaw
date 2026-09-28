@@ -1,28 +1,15 @@
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import type { resolveOpenAIRequestReasoning } from "../providers/openai-request-reasoning.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
-import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 
 export function applyDirectCompletionsReasoningAndRouting(
   params: Record<string, unknown>,
   model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
+  reasoning: ReturnType<typeof resolveOpenAIRequestReasoning>,
   compat: ResolvedOpenAICompletionsCompat,
 ): void {
-  // Provider compat is authoritative; keep model-level and literal values as fallbacks
-  // for catalogs that have not adopted reasoningEffortMap.
-  const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
-  const thinkingLevelMap:
-    | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
-    | undefined = model.thinkingLevelMap;
-  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
-  const reasoningEffort =
-    options?.reasoningEffort === undefined
-      ? (offReasoningEffort ?? undefined)
-      : (reasoningEffortMap[options.reasoningEffort] ??
-        thinkingLevelMap?.[options.reasoningEffort] ??
-        options.reasoningEffort);
-  const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
+  const nativeEffort = compat.thinkingFormat === "openrouter" ? undefined : reasoning.effort;
+  const reasoningEnabled = reasoning.thinkingEnabled ?? false;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = reasoningEnabled
@@ -37,28 +24,17 @@ export function applyDirectCompletionsReasoningAndRouting(
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
     params.thinking = { type: reasoningEnabled ? "enabled" : "disabled" };
-    if (reasoningEnabled && compat.supportsReasoningEffort) {
-      params.reasoning_effort = reasoningEffort;
-    }
-  } else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
-    // OpenRouter normalizes reasoning across providers via a nested reasoning object.
-    if (reasoningEnabled) {
-      params.reasoning = { effort: reasoningEffort };
-    } else if (offReasoningEffort !== null) {
-      params.reasoning = { effort: offReasoningEffort ?? "none" };
+    if (reasoningEnabled && compat.supportsReasoningEffort && nativeEffort !== undefined) {
+      params.reasoning_effort = nativeEffort;
     }
   } else if (compat.thinkingFormat === "together" && model.reasoning) {
     params.reasoning = { enabled: reasoningEnabled };
-    if (reasoningEnabled && compat.supportsReasoningEffort) {
-      params.reasoning_effort = reasoningEffort;
+    if (reasoningEnabled && compat.supportsReasoningEffort && nativeEffort !== undefined) {
+      params.reasoning_effort = nativeEffort;
     }
-  } else if (reasoningEnabled && model.reasoning && compat.supportsReasoningEffort) {
+  } else if (model.reasoning && compat.supportsReasoningEffort && nativeEffort !== undefined) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort = reasoningEffort;
-  } else if (model.reasoning && compat.supportsReasoningEffort) {
-    if (typeof offReasoningEffort === "string") {
-      params.reasoning_effort = offReasoningEffort;
-    }
+    params.reasoning_effort = nativeEffort;
   }
 
   // OpenRouter provider routing preferences

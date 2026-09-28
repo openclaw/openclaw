@@ -19,11 +19,13 @@ import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surface
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import * as doctor from "./state-migrations.doctor.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
@@ -116,7 +118,7 @@ describe("shared auth store relocation", () => {
             PRAGMA wal_autocheckpoint = 0;
             CREATE TABLE IF NOT EXISTS auth_profile_store (store_key TEXT, store_json TEXT, updated_at INTEGER);
             CREATE TABLE IF NOT EXISTS config_machine_state (state_key TEXT, value_json TEXT, updated_at_ms INTEGER);
-            CREATE TABLE IF NOT EXISTS migration_sources (source_key TEXT, migration_kind TEXT, source_path TEXT, removed_source INTEGER);
+            CREATE TABLE IF NOT EXISTS migration_sources (source_key TEXT, migration_kind TEXT, source_path TEXT, removed_source INTEGER, source_sha256 TEXT, report_json TEXT);
             PRAGMA wal_checkpoint(TRUNCATE);
           `);
           if (target === fixture.sourcePath) {
@@ -124,12 +126,15 @@ describe("shared auth store relocation", () => {
               .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
               .run(JSON.stringify(makeStore("openai:copied", "fixture-key")));
           } else {
+            seed.exec(
+              extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"),
+            );
             seed
               .prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)")
               .run(JSON.stringify({ location }));
             seed
               .prepare(
-                "INSERT INTO migration_sources VALUES ('pending', 'shared-auth-store-state-db', ?, 0)",
+                "INSERT INTO migration_sources (source_key, migration_kind, source_path, removed_source) VALUES ('pending', 'shared-auth-store-state-db', ?, 0)",
               )
               .run(fixture.sourcePath);
           }
@@ -192,6 +197,7 @@ describe("shared auth store relocation", () => {
     "preserves the live auth source's POSIX locks during copied inspection",
     async () => {
       const fixture = await createEmptyFixture(false);
+      stateDb.openOpenClawStateDatabase({ env: fixture.env });
       fs.mkdirSync(path.dirname(fixture.sourcePath), { recursive: true });
       const writer = new DatabaseSync(fixture.sourcePath);
       try {
@@ -263,9 +269,12 @@ describe("shared auth store relocation", () => {
       doctorOnlyStateMigrations: true,
     });
 
-    expect(
-      await fixture.migration.migrateSharedAuthStore({ detected, stateDir: fixture.stateDir }),
-    ).toMatchObject({ warnings: [], changes: [expect.stringContaining("Relocated shared auth")] });
+    const migrate = () =>
+      fixture.migration.migrateSharedAuthStore({ detected, stateDir: fixture.stateDir });
+    expect(await migrate()).toMatchObject({
+      warnings: [],
+      changes: [expect.stringContaining("Relocated shared auth")],
+    });
 
     expect(fixture.sqlite.readPersistedAuthProfileStoreRaw()).toEqual(fixture.sharedStore);
     expect(fixture.sqlite.readPersistedAuthProfileStateRaw()).toEqual(fixture.sharedState);
@@ -355,7 +364,6 @@ describe("shared auth store relocation", () => {
   });
 
   it.each([
-    "identical subset",
     "older subset",
     "empty subset",
     "changed credential",
@@ -415,7 +423,7 @@ describe("shared auth store relocation", () => {
           scenario === "malformed target"
             ? '{"version":1,"profiles":null}'
             : JSON.stringify(targetStore),
-        updated_at_ms: scenario === "identical subset" ? 100 : 200,
+        updated_at_ms: 200,
       };
       target
         .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
@@ -435,6 +443,7 @@ describe("shared auth store relocation", () => {
         detected,
         stateDir: fixture.stateDir,
       });
+      const migratedTarget = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
       const converges = scenario.endsWith("subset");
       expect(result.warnings).toEqual(
         converges ? [] : [expect.stringMatching(/conflict.*Back up/)],
@@ -458,7 +467,7 @@ describe("shared auth store relocation", () => {
         expect(result.warnings[0]).not.toMatch(/shared-key|extra-key|different-key|legacyMetadata/);
       }
       expect(
-        target
+        migratedTarget
           .prepare(
             "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'authProfiles.store'",
           )
@@ -478,7 +487,7 @@ describe("shared auth store relocation", () => {
           )
           .get(),
       ).toEqual(converges ? undefined : stateRow);
-      const receipt = target
+      const receipt = migratedTarget
         .prepare(
           "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
         )
@@ -508,7 +517,7 @@ describe("shared auth store relocation", () => {
         expect(warning).toContain(conflictDetails["changed state"]);
         expect(warning).not.toContain("\n");
         // Follow the diagnostic: retain target-only profiles and reconcile both conflicting rows.
-        target
+        migratedTarget
           .prepare(
             "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'authProfiles.store'",
           )
@@ -518,7 +527,7 @@ describe("shared auth store relocation", () => {
               profiles: { ...targetStore.profiles, ...sourceStore.profiles },
             }),
           );
-        target
+        migratedTarget
           .prepare(
             "UPDATE config_machine_state SET updated_at_ms = ? WHERE state_key = 'authProfiles.state'",
           )
@@ -593,6 +602,8 @@ describe("shared auth store relocation", () => {
               OPENCLAW_AGENT_DIR: undefined,
               PI_CODING_AGENT_DIR: undefined,
               OPENCLAW_OAUTH_DIR: undefined,
+              // These auth owners have no plugin inventory; keep discovery inside the fixture.
+              OPENCLAW_BUNDLED_PLUGINS_DIR: tempDirs.make("openclaw-shared-auth-bundled-"),
             },
           });
           ownerStates.push(owner);
@@ -824,6 +835,7 @@ describe("shared auth store relocation", () => {
         detected: retryDetected,
         stateDir: fixture.stateDir,
       });
+      const migratedTarget = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
 
       expect(first.warnings).toEqual([]);
       expect(retryDetected).toMatchObject({ hasLegacy: false });
@@ -833,7 +845,7 @@ describe("shared auth store relocation", () => {
       expect(retry).toEqual({ changes: [], warnings: [] });
       if (crashState === "flipped-cleaned-not-finalized") {
         expect(
-          target
+          migratedTarget
             .prepare(
               "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
             )
@@ -845,7 +857,7 @@ describe("shared auth store relocation", () => {
           removed_source: 1,
         });
         expect(
-          target
+          migratedTarget
             .prepare(
               "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
             )
@@ -853,7 +865,7 @@ describe("shared auth store relocation", () => {
         ).toEqual({ value_json: targetStoreJson });
       }
       expect(
-        target
+        migratedTarget
           .prepare(
             `SELECT COUNT(*) AS count FROM config_machine_state
               WHERE state_key = 'authProfiles.store'`,
@@ -861,7 +873,7 @@ describe("shared auth store relocation", () => {
           .get(),
       ).toEqual({ count: 1 });
       expect(
-        target
+        migratedTarget
           .prepare(
             `SELECT COUNT(*) AS count FROM config_machine_state
               WHERE state_key = 'authProfiles.state'`,

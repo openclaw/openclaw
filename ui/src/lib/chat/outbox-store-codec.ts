@@ -1,17 +1,25 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
+import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   ChatQueueItem,
   HumanMention,
 } from "./chat-types.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
+import { isChatReplyTarget } from "./reply-target.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
+
+registerChatMessageMetadataEnglish();
 
 export const MAX_STORED_SESSIONS = 20;
 export const MAX_STORED_QUEUE_ITEMS = 50;
@@ -27,6 +35,7 @@ export type StoredComposerSession = {
   draft?: string;
   draftMentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   draftRevision?: number;
   queue?: ChatQueueItem[];
   updatedAt: number;
@@ -35,7 +44,10 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.asyncQuestionItemId === right.asyncQuestionItemId &&
     left.text === right.text &&
+    left.workContextUnavailable === right.workContextUnavailable &&
+    JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
     JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
@@ -45,10 +57,6 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
     left.orderKey === right.orderKey &&
     left.attachmentPayload?.key === right.attachmentPayload?.key
   );
-}
-
-function normalizeOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
@@ -62,6 +70,13 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
     return null;
   }
   const restored: ChatAttachment = { id, mimeType };
+  if (entry.origin === "paste" || entry.origin === "file") {
+    restored.origin = entry.origin;
+  }
+  const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
+  if (selectionAnnotation) {
+    restored.selectionAnnotation = selectionAnnotation;
+  }
   const fileName = normalizeOptionalString(entry.fileName);
   if (fileName) {
     restored.fileName = fileName;
@@ -83,10 +98,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
-  const createdAt =
-    typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
-      ? entry.createdAt
-      : Date.now();
+  const createdAt = asFiniteNumber(entry.createdAt) ?? Date.now();
   if (
     !id ||
     (!text.trim() &&
@@ -102,6 +114,16 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const asyncQuestionItemId = normalizeOptionalString(entry.asyncQuestionItemId);
+  if (asyncQuestionItemId && asyncQuestionItemId.length <= 256) {
+    item.asyncQuestionItemId = asyncQuestionItemId;
+  }
+  if (entry.workContext !== undefined) {
+    item.workContext = readChatWorkContext(entry.workContext);
+    if (!item.workContext) {
+      item.workContextUnavailable = true;
+    }
+  }
   const mentions = readHumanMentions(text, entry.mentions);
   if (mentions) {
     item.mentions = mentions;
@@ -180,9 +202,8 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (attachments.length) {
     item.attachments = attachments;
   }
-  const refreshSessions = normalizeOptionalBoolean(entry.refreshSessions);
-  if (refreshSessions !== undefined) {
-    item.refreshSessions = refreshSessions;
+  if (typeof entry.refreshSessions === "boolean") {
+    item.refreshSessions = entry.refreshSessions;
   }
   const replyToId = normalizeOptionalString(entry.replyToId);
   if (replyToId) {
@@ -190,11 +211,14 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   }
   if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
+  } else if (entry.sendState === "submitting") {
+    item.sendState = "waiting-idle";
   } else if (entry.sendState === "sending") {
     item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
+    entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
   ) {
@@ -203,6 +227,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.sendState = "failed";
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
+  // Keep this before sendAttempts: queue admission compares canonical JSON bytes.
   const sendError = normalizeOptionalString(entry.sendError);
   if (sendError) {
     item.sendError = sendError;
@@ -214,17 +239,11 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }
-  const localCommandArgs = normalizeOptionalString(entry.localCommandArgs);
-  if (localCommandArgs) {
-    item.localCommandArgs = localCommandArgs;
-  }
-  const localCommandName = normalizeOptionalString(entry.localCommandName);
-  if (localCommandName) {
-    item.localCommandName = localCommandName;
-  }
-  const sessionKey = normalizeOptionalString(entry.sessionKey);
-  if (sessionKey) {
-    item.sessionKey = sessionKey;
+  for (const key of ["localCommandArgs", "localCommandName", "sessionKey"] as const) {
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
+    }
   }
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
@@ -235,8 +254,13 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
   ) {
     // A reconnect must not send a different recipient selection after losing its binding.
-    item.sendState = "failed";
+    item.sendState = item.sendState === "held" ? "held" : "failed";
     item.sendError = t("chat.mentions.restoreFailed");
+  }
+  if (entry.workContextUnavailable === true || item.workContextUnavailable) {
+    item.workContextUnavailable = true;
+    item.sendState = item.sendState === "held" ? "held" : "failed";
+    item.sendError = t("chat.messages.attachedContext.restoreFailed");
   }
   return item;
 }
@@ -252,6 +276,10 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     return null;
   }
   const goalMode = entry.goalMode;
+  if (entry.replyTarget !== undefined && !isChatReplyTarget(entry.replyTarget)) {
+    return null;
+  }
+  const replyTarget = entry.replyTarget;
   // Reject oversize input as a whole; migration keeps its source bytes intact.
   if (Array.isArray(entry.queue) && entry.queue.length > MAX_RETAINED_QUEUE_ITEMS) {
     return null;
@@ -270,10 +298,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     : undefined;
   const removedIds = new Set(removedQueueItemIds ?? []);
   const queue = normalizedQueue?.filter((item) => !removedIds.has(item.id));
-  const updatedAt =
-    typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-      ? entry.updatedAt
-      : Date.now();
+  const updatedAt = asFiniteNumber(entry.updatedAt) ?? Date.now();
   const storedDraftRevision =
     typeof entry.draftRevision === "number" && Number.isSafeInteger(entry.draftRevision)
       ? entry.draftRevision
@@ -281,7 +306,13 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   // Legacy rows did not version drafts, so their row timestamp is the best
   // available ordering signal. Queue-only rows must not claim draft ownership.
   const draftRevision = storedDraftRevision ?? (draft ? updatedAt : undefined);
-  if (!draft && !goalMode && draftRevision === undefined && (!queue || queue.length === 0)) {
+  if (
+    !draft &&
+    !goalMode &&
+    !replyTarget &&
+    draftRevision === undefined &&
+    (!queue || queue.length === 0)
+  ) {
     return null;
   }
   return {
@@ -289,6 +320,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     ...(draft ? { draft } : {}),
     ...(draftMentions ? { draftMentions } : {}),
     ...(goalMode ? { goalMode } : {}),
+    ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,

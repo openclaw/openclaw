@@ -190,6 +190,7 @@ export async function collectConfiguredNpmPluginTargets(params: {
   for (const pluginId of pluginIds) {
     const record = context.records[pluginId];
     if (
+      context.operatorManagedPluginIds.has(pluginId) ||
       context.bundledPluginsById.has(pluginId) ||
       (record && (record.source !== "npm" || record.artifactKind || record.sourcePath)) ||
       !resolveEffectiveEnableState({

@@ -9,16 +9,22 @@ describe("SidebarCatalogMenuController", () => {
     const trigger = document.createElement("button");
     const order: string[] = [];
     trigger.addEventListener(SESSION_MENU_OPEN_EVENT, () => order.push("dismiss"));
-    const controller = new SidebarCatalogMenuController({
-      beforeOpen: () => order.push("open"),
-      requestUpdate: vi.fn(),
-      terminalAvailable: () => true,
-      navigate: vi.fn(),
-      beginMutation: vi.fn(),
-      isMutationCurrent: vi.fn(),
-      archive: vi.fn(),
-      afterDelete: vi.fn(),
-    });
+    const controller = new SidebarCatalogMenuController(
+      {
+        basePath: "",
+        getRouteSessionKey: () => "",
+        requestUpdate: vi.fn(),
+        terminalAvailable: true,
+        sessionDataContext: undefined,
+        sessionData: {
+          beginSessionMutation: vi.fn(),
+          isSessionMutationScopeCurrent: vi.fn(),
+          archiveSessionCatalog: vi.fn(),
+          sessionScopeGeneration: 0,
+        },
+      },
+      () => order.push("open"),
+    );
 
     controller.open(
       {

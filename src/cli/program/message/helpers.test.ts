@@ -3,6 +3,10 @@ import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addTestHook, createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "../../json-output-mode.js";
 import { registerMessagePollCommand } from "./register.poll.js";
 import { registerMessageReactionsCommands } from "./register.reactions.js";
 import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
@@ -12,6 +16,9 @@ const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
+
+const ensureConfigReadyMock = vi.fn(async () => {});
+vi.mock("../config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 
 const getChannelPluginMock = vi.fn();
 vi.mock("../../../channels/plugins/index.js", () => ({
@@ -38,7 +45,7 @@ vi.mock("../../../plugins/loader.js", () => ({
 const runGatewayStopMock = vi.fn(
   async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
-const hookErrorMock = vi.fn();
+const hookErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     debug: vi.fn(),
@@ -142,6 +149,18 @@ function expectRegistryLoad(pluginIds: string[]): void {
   expect(loadPluginRegistryHandleMock).toHaveBeenCalledWith(
     expect.objectContaining({ onlyPluginIds: pluginIds, throwOnLoadError: true }),
   );
+  expect(ensureConfigReadyMock).toHaveBeenCalledBefore(loadPluginRegistryHandleMock);
+}
+
+function expectConfigReady(action: string, validateConfigOnly: boolean): void {
+  expect(ensureConfigReadyMock).toHaveBeenCalledExactlyOnceWith({
+    runtime: runtimeMock,
+    commandPath: ["message", action],
+    measure: expect.any(Function),
+    suppressDoctorStdout: false,
+    validateConfigOnly,
+  });
+  expect(ensureConfigReadyMock).toHaveBeenCalledBefore(messageCommandMock);
 }
 
 describe("runMessageAction", () => {
@@ -149,6 +168,7 @@ describe("runMessageAction", () => {
     vi.clearAllMocks();
     getChannelPluginMock.mockReset();
     mockChannelExecutionModes({ telegram: "gateway" });
+    ensureConfigReadyMock.mockReset().mockResolvedValue(undefined);
     messageCommandMock.mockClear().mockResolvedValue(undefined);
     pluginRegistry.typedHooks.length = 0;
     resetGlobalHookRunner();
@@ -161,6 +181,7 @@ describe("runMessageAction", () => {
   it("calls exit(0) after successful message delivery", async () => {
     await runSendAction();
 
+    expectConfigReady("send", false);
     expectRegistryLoad(["discord"]);
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
@@ -223,6 +244,25 @@ describe("runMessageAction", () => {
       ).rejects.toThrow("exit");
 
       expect(exitMock).toHaveBeenCalledWith(exitCode);
+    },
+  );
+
+  it.each(["", "   "])(
+    "rejects an explicitly blank message channel before command startup (%j)",
+    async (channel) => {
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
+      const message = program.command("message");
+      registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+
+      await expect(
+        program.parseAsync(
+          ["message", "send", "--channel", channel, "--target", "channel:123", "--message", "hi"],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("--channel must not be blank");
+
+      expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+      expect(messageCommandMock).not.toHaveBeenCalled();
     },
   );
 
@@ -301,6 +341,7 @@ describe("runMessageAction", () => {
 
     await runSendAction({ target: "channel:12345" });
 
+    expectConfigReady("send", true);
     expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
@@ -321,6 +362,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
+    expectConfigReady("broadcast", false);
     expectRegistryLoad(["telegram"]);
     expectMessageCommandOptions({
       action: "broadcast",
@@ -398,6 +440,7 @@ describe("runMessageAction", () => {
       dryRun: true,
     });
 
+    expectConfigReady("send", false);
     expectRegistryLoad(["telegram"]);
     expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
@@ -427,6 +470,34 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
+  it("preserves JSON config failures before plugin loading or message dispatch", async () => {
+    const error = new Error("config admission failed");
+    ensureConfigReadyMock.mockRejectedValueOnce(error);
+    const runMessageAction = createRunMessageAction();
+
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "message", "send", "--json"],
+      async () => {
+        applyResolvedCommandOutputMode(true);
+        await expect(runMessageAction("send", { ...baseSendOptions, json: true })).rejects.toBe(
+          error,
+        );
+      },
+    );
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledExactlyOnceWith({
+      runtime: runtimeMock,
+      commandPath: ["message", "send"],
+      measure: expect.any(Function),
+      suppressDoctorStdout: true,
+      validateConfigOnly: false,
+    });
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(errorMock).not.toHaveBeenCalled();
+    expect(exitMock).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting poll visibility flags before loading channel plugins", async () => {

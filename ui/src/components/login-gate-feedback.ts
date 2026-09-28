@@ -26,6 +26,7 @@ type LoginFailureKind =
   | "auth-rate-limited"
   | "profile-unavailable"
   | "verified-user-required"
+  | "access-denied"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -154,6 +155,25 @@ export function resolveLoginFailureFeedback(
     });
   }
 
+  if (lastErrorCode === ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED) {
+    return buildFeedback({
+      kind: "access-denied",
+      tone: "warn",
+      rawError,
+      titleKey: "login.failure.accessDenied.title",
+      summaryKey: "login.failure.accessDenied.summary",
+      stepKeys: [
+        "login.failure.accessDenied.stepAdmin",
+        {
+          key: "login.failure.accessDenied.stepFindProfile",
+          commands: ["openclaw users list --json"],
+        },
+        "login.failure.accessDenied.stepReconnect",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
+    });
+  }
+
   if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
     return buildFeedback({
       kind: "build-mismatch",
@@ -238,7 +258,7 @@ export function resolveLoginFailureFeedback(
       kind: "origin-not-allowed",
       rawError,
       docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+        "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.origin.title",
       summaryKey: "login.failure.origin.summary",
       stepKeys: [
@@ -254,7 +274,7 @@ export function resolveLoginFailureFeedback(
       kind: "protocol-mismatch",
       rawError,
       docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+        "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
       refreshAction: { label: t("login.failure.protocol.refresh") },

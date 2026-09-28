@@ -2,26 +2,11 @@ import Foundation
 import SwiftUI
 
 enum MicRefreshSupport {
-    private static let refreshDelayNs: UInt64 = 300_000_000
-
     static func startObserver(_ observer: AudioInputDeviceObserver, triggerRefresh: @escaping @MainActor () -> Void) {
         observer.start {
             Task { @MainActor in
                 triggerRefresh()
             }
-        }
-    }
-
-    @MainActor
-    static func schedule(
-        refreshTask: inout Task<Void, Never>?,
-        action: @escaping @MainActor () async -> Void)
-    {
-        refreshTask?.cancel()
-        refreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: self.refreshDelayNs)
-            guard !Task.isCancelled else { return }
-            await action()
         }
     }
 

@@ -1,9 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-/**
- * Skill Workshop built-in tool.
- *
- * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { AUTONOMOUS_SKILL_MAX_CHARS } from "../../skills/workshop/collection-contracts.js";
@@ -28,13 +23,13 @@ import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
   SkillWorkshopProposalMutationBudget,
-  SkillWorkshopProposalReviewCompletion,
   SkillWorkshopProposalRevisionConstraint,
 } from "../../skills/workshop/types.js";
 import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
 import {
   asToolParamsRecord,
   readToolStringParam,
+  readPositiveIntegerParam,
   ToolInputError,
   type AnyAgentTool,
 } from "./common.js";
@@ -46,16 +41,11 @@ import { buildSkillWorkshopToolDescription } from "./skill-workshop-tool-descrip
 import {
   actionResult,
   assertAutonomousSkillSize,
-  beginProposalReviewMutation,
-  completeProposalReview,
   proposalMutationText,
   proposalResult,
-  readLifecycleProposalIdParam,
-  readListLimitParam,
   readProposalForInspect,
   readProposalStatusParam,
   readSupportFilesParam,
-  skillWorkshopAgentEventActor,
 } from "./skill-workshop-tool-helpers.js";
 import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 import {
@@ -141,15 +131,12 @@ type SkillWorkshopToolOptions = {
   autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
-  /** Optional durable completion latch shared across runner retries. */
-  proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   /** Effective selected-model context used for every model-visible Workshop projection. */
   modelContextWindowTokens?: number;
   /** Exact proposal revision reviewed before this operator-requested revision turn. */
   proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
-/** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   if (options.libraryAuthoring) {
     return createLibrarySkillWorkshopTool(
@@ -181,25 +168,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const rawParams = asToolParamsRecord(args);
       const action = readToolStringParam(rawParams, "action", { required: true });
       const params = bindProposalRevisionConstraint(rawParams, action, options.proposalRevision);
-      const proposalActions = resolveProposalOnlyActions(
-        options.updateProposals === true,
-        options.proposalReviewCompletion !== undefined,
-      );
+      const proposalActions = resolveProposalOnlyActions(options.updateProposals === true);
 
       if (options.proposalOnly === true && !proposalActions.includes(action)) {
         throw new ToolInputError(
           `this Skill Workshop review allows only: ${proposalActions.join(", ")}`,
         );
-      }
-
-      if (action === "complete") {
-        if (!options.proposalReviewCompletion) {
-          throw new ToolInputError("this Skill Workshop session cannot complete a review");
-        }
-        return await completeProposalReview(options.proposalReviewCompletion);
-      }
-      if (options.proposalReviewCompletion && options.proposalReviewCompletion.phase !== "open") {
-        throw new ToolInputError("this Skill Workshop review is already completing or complete");
       }
 
       if (action === "restore_collection") {
@@ -250,7 +224,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           throw new ToolInputError("this Skill Workshop session cannot prepare live skill patches");
         }
         return await executePrepareSkillPatch({
-          workspaceDir: options.workspaceDir,
           config: options.config,
           agentId: options.agentId,
           env: options.env,
@@ -264,7 +237,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "list") {
         const status = readProposalStatusParam(params, SKILL_PROPOSAL_STATUSES);
         const query = readToolStringParam(params, "query");
-        const limit = readListLimitParam(params);
+        const limit = readPositiveIntegerParam(params, "limit") ?? 20;
         const proposals = listProposalEntries({
           proposals: (
             await listSkillProposals({
@@ -320,17 +293,22 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         });
       }
 
+      const proposalContext = {
+        workspaceDir: options.workspaceDir,
+        agentId: options.agentId,
+        eventActor: { type: "agent" as const, ...(options.agentId ? { id: options.agentId } : {}) },
+        config: options.config,
+        env: options.env,
+      };
+      const lifecycleParams = () => ({
+        ...proposalContext,
+        proposalId: readToolStringParam(params, "proposal_id", { required: true }),
+        expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
+        correlationId: readToolStringParam(params, "correlation_id"),
+      });
+
       if (action === "evaluate") {
-        const evaluated = await evaluateSkillProposal({
-          workspaceDir: options.workspaceDir,
-          agentId: options.agentId,
-          eventActor: skillWorkshopAgentEventActor(options.agentId),
-          config: options.config,
-          env: options.env,
-          proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
-          correlationId: readToolStringParam(params, "correlation_id"),
-        });
+        const evaluated = await evaluateSkillProposal(lifecycleParams());
         return textResult(formatProposalEvaluation(evaluated.evaluation, evaluated.record.id), {
           id: evaluated.record.id,
           proposedVersion: evaluated.evaluation.proposedVersion,
@@ -341,14 +319,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
 
       if (action === "apply") {
         const applied = await applySkillProposal({
-          workspaceDir: options.workspaceDir,
-          agentId: options.agentId,
-          eventActor: skillWorkshopAgentEventActor(options.agentId),
-          config: options.config,
-          env: options.env,
-          proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
-          correlationId: readToolStringParam(params, "correlation_id"),
+          ...lifecycleParams(),
           reason: readToolStringParam(params, "reason"),
         });
         return actionResult(applied.record, {
@@ -357,37 +328,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         });
       }
 
-      if (action === "reject") {
-        const rejected = await rejectSkillProposal({
-          workspaceDir: options.workspaceDir,
-          agentId: options.agentId,
-          eventActor: skillWorkshopAgentEventActor(options.agentId),
-          config: options.config,
-          env: options.env,
-          proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
-          correlationId: readToolStringParam(params, "correlation_id"),
+      if (action === "reject" || action === "quarantine") {
+        const transition = action === "reject" ? rejectSkillProposal : quarantineSkillProposal;
+        const record = await transition({
+          ...lifecycleParams(),
           reason: readToolStringParam(params, "reason"),
         });
-        return actionResult(rejected, {
-          contentText: `Rejected skill proposal ${rejected.id}.`,
-        });
-      }
-
-      if (action === "quarantine") {
-        const quarantined = await quarantineSkillProposal({
-          workspaceDir: options.workspaceDir,
-          agentId: options.agentId,
-          eventActor: skillWorkshopAgentEventActor(options.agentId),
-          config: options.config,
-          env: options.env,
-          proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
-          correlationId: readToolStringParam(params, "correlation_id"),
-          reason: readToolStringParam(params, "reason"),
-        });
-        return actionResult(quarantined, {
-          contentText: `Quarantined skill proposal ${quarantined.id}.`,
+        return actionResult(record, {
+          contentText: `${action === "reject" ? "Rejected" : "Quarantined"} skill proposal ${record.id}.`,
         });
       }
 
@@ -412,7 +360,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
       let expectedCurrentContentHash: string | undefined;
       let currentSkillContent: string | undefined;
-      const patchOldString = action === "patch" ? readSkillPatchText(params).oldString : undefined;
+      let patchedSkillContent: string | undefined;
+      const patch = action === "patch" ? readSkillPatchText(params) : undefined;
       const requiresRead = action === "patch" || (action === "update" && options.updateProposals);
       if (requiresRead) {
         // Full rewrites require a complete model read. A targeted patch may instead
@@ -424,15 +373,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const readHash = readSkillHashes.get(target.skillKey);
         const contentHash = sha256Hex(target.content);
         currentSkillContent = target.content;
-        const preparedHash =
-          action === "patch"
-            ? resolveSkillPatchAuthorization({
-                skill: target,
-                oldString: patchOldString ?? "",
-                readHash,
-                preparedSkillPatches,
-              })
-            : undefined;
+        const preparedHash = patch
+          ? resolveSkillPatchAuthorization({
+              skill: target,
+              oldString: patch.oldString,
+              readHash,
+              preparedSkillPatches,
+            })
+          : undefined;
         if (
           !readHash &&
           !preparedHash &&
@@ -457,16 +405,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           );
         }
         expectedCurrentContentHash = readHash ?? preparedHash ?? contentHash;
-        if (action === "patch") {
+        if (patch) {
           assertSkillPatchRunUsage({
             skill: target,
             foregroundRepair,
             runId: options.origin?.runId,
           });
           try {
-            composeSkillBodyPatch(
+            patchedSkillContent = composeSkillBodyPatch(
               stripProposalFrontmatterForSkill(target.content),
-              readSkillPatchText(params),
+              patch,
             );
           } catch (error) {
             throw new ToolInputError(error instanceof Error ? error.message : String(error));
@@ -482,17 +430,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           action === "create"
             ? readToolStringParam(params, "name", { required: true })
             : readToolStringParam(params, "skill_name", { required: true, label: "skill_name" });
-        const content =
-          action === "patch"
-            ? composeSkillBodyPatch(
-                stripProposalFrontmatterForSkill(currentSkillContent ?? ""),
-                readSkillPatchText(params),
-              )
-            : requireProposalContent(proposalContent);
         assertAutonomousSkillSize(
           name,
           readToolStringParam(params, "description"),
-          content,
+          patchedSkillContent ?? requireProposalContent(proposalContent),
           currentSkillContent,
           workshopConfig.maxSkillBytes,
         );
@@ -508,9 +449,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           "this Skill Workshop session has reached its proposal mutation limit",
         );
       }
-      const releaseMutation = reservesMutation
-        ? beginProposalReviewMutation(options.proposalReviewCompletion)
-        : undefined;
       try {
         if (reservesMutation && options.proposalMutationBudget) {
           options.proposalMutationBudget.remaining -= 1;
@@ -520,11 +458,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         let contentText: string;
         if (action === "create") {
           proposal = await proposeCreateSkill({
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            eventActor: skillWorkshopAgentEventActor(options.agentId),
-            config: options.config,
-            env: options.env,
+            ...proposalContext,
             name: readToolStringParam(params, "name", { required: true }),
             description: readToolStringParam(params, "description", { required: true }),
             content: requireProposalContent(proposalContent),
@@ -538,19 +472,15 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           contentText = proposalMutationText("Created skill proposal", proposal.record);
         } else if (action === "update" || action === "patch") {
           proposal = await proposeUpdateSkill({
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            eventActor: skillWorkshopAgentEventActor(options.agentId),
-            config: options.config,
-            env: options.env,
+            ...proposalContext,
             skillName: readToolStringParam(params, "skill_name", {
               required: true,
               label: "skill_name",
             }),
             expectedCurrentContentHash,
             // A patch may only change its exact span, never description or support files.
-            ...(action === "patch"
-              ? { composePatch: readSkillPatchText(params) }
+            ...(patch
+              ? { composePatch: patch }
               : {
                   description: readToolStringParam(params, "description"),
                   content: requireProposalContent(proposalContent),
@@ -585,11 +515,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               readToolStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash;
           }
           proposal = await reviseSkillProposal({
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            eventActor: skillWorkshopAgentEventActor(options.agentId),
-            config: options.config,
-            env: options.env,
+            ...proposalContext,
             proposalId,
             expectedRevisionHash,
             correlationId: readToolStringParam(params, "correlation_id"),
@@ -610,22 +536,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             options.proposalMutationBudget.mutatedProposalIds ?? new Set<string>();
           mutatedProposalIds.add(proposal.record.id);
           options.proposalMutationBudget.mutatedProposalIds = mutatedProposalIds;
-          options.proposalMutationBudget.successfulMutations =
-            (options.proposalMutationBudget.successfulMutations ?? 0) + 1;
-          await options.proposalReviewCompletion?.recordProgress?.({
-            proposalIds: [...mutatedProposalIds],
-            remaining: options.proposalMutationBudget.remaining,
-            successfulMutations: options.proposalMutationBudget.successfulMutations,
-          });
         }
 
         if (foregroundRepair && workshopConfig.autonomous.mode === "auto") {
           const applied = await applySkillProposal({
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            config: options.config,
-            env: options.env,
-            eventActor: skillWorkshopAgentEventActor(options.agentId),
+            ...proposalContext,
             proposalId: proposal.record.id,
             expectedRevisionHash: proposal.revisionHash,
             reason: "Foreground repair of a used skill",
@@ -637,18 +552,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         return proposalResult(proposal, { contentText });
       } catch (error) {
-        if (reservesMutation && options.proposalMutationBudget) {
+        if (
+          reservesMutation &&
+          options.proposalMutationBudget &&
+          error instanceof SkillProposalStaleTargetError
+        ) {
           // A concurrent live edit is not a reviewer mutation. Preserve the budget
           // so the reviewer can re-read the new body and redraft either update form.
-          if (error instanceof SkillProposalStaleTargetError) {
-            options.proposalMutationBudget.remaining += 1;
-          }
-          options.proposalMutationBudget.failedMutations =
-            (options.proposalMutationBudget.failedMutations ?? 0) + 1;
+          options.proposalMutationBudget.remaining += 1;
         }
         throw error;
-      } finally {
-        releaseMutation?.();
       }
     },
   };

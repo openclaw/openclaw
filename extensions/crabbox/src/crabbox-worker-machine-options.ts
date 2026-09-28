@@ -1,5 +1,9 @@
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   type CrabboxMachineShape,
@@ -7,7 +11,6 @@ import {
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
   listCrabboxMachineOptions,
-  nonEmptyString,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
 import { CRABBOX_MACHINE_CATALOG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -19,7 +22,7 @@ type CrabboxCatalog = {
 type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
-  resolveBinary: (explicit?: string) => string;
+  resolveBinary: (explicit?: string) => Promise<string>;
   runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
 };
@@ -100,7 +103,7 @@ export function createCrabboxMachineOptionsResolver(
 
   const resolveCatalog = async (profile: WorkerProfile) => {
     const parsed = parseCrabboxProfile(profile);
-    const binary = dependencies.resolveBinary(parsed.binary);
+    const binary = await dependencies.resolveBinary(parsed.binary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
@@ -114,7 +117,8 @@ export function createCrabboxMachineOptionsResolver(
       });
       machineShapesByBinary.set(binary, shapes);
     }
-    return { parsed, catalog: (await shapes).get(parsed.provider) };
+    const catalog = (await shapes).get(parsed.provider);
+    return { parsed, catalog };
   };
   return {
     async listMachineOptions(profile) {

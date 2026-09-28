@@ -6,6 +6,7 @@ import type {
   GatewayEventFrame,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
@@ -39,12 +40,15 @@ function createGatewayStore() {
     opts: GatewayBrowserClientOptions;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>;
   }> = [];
   const gateway = createApplicationGateway(loadSettings(), "", "", (opts) => {
     const client = {
       opts,
       instanceId: opts.instanceId ?? "",
-      request: vi.fn().mockRejectedValue(new Error("unexpected gateway request")),
+      request: vi
+        .fn<(method: string) => Promise<unknown>>()
+        .mockRejectedValue(new Error("unexpected gateway request")),
       start: vi.fn(),
       stop: vi.fn(),
     };
@@ -81,6 +85,87 @@ describe("application gateway observer ownership", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("retains each usage publication once until its connection retires", () => {
+    const { gateway, current } = createGatewayStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const observed = vi.fn();
+    const stop = gateway.subscribe(observed);
+    observed.mockClear();
+    const publish = (usageUpdatedAt: number, usageRefreshFailed = false, agentId = "main") =>
+      current().opts.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: {
+          agentId,
+          usageUpdatedAt,
+          usageRefreshFailed,
+          modelCatalogChanged: false,
+          authChanged: false,
+        },
+      });
+    for (const usageUpdatedAt of [20, 20, 10]) {
+      publish(usageUpdatedAt);
+    }
+    expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(20);
+    expect(observed).toHaveBeenCalledOnce();
+    publish(21, true);
+    expect(gateway.snapshot.usagePublications?.main).toMatchObject({
+      usageRefreshFailed: true,
+      committedAt: 20,
+    });
+    const failed = gateway.snapshot.usagePublications?.main;
+    publish(22, false, "other");
+    expect(gateway.snapshot.usagePublications?.main).toBe(failed);
+    publish(23);
+    expect(gateway.snapshot.usagePublications?.main?.usageRefreshFailed).toBeUndefined();
+    expect(failed).toMatchObject({ usageUpdatedAt: 21, usageRefreshFailed: true });
+    current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
+    expect(gateway.snapshot.usagePublications).toBeUndefined();
+    current().opts.onHello?.(HELLO);
+    publish(1);
+    expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(1);
+    stop();
+    gateway.stop();
+  });
+
+  it("invalidates palette automation reads before delivering owner events and reconnects", async () => {
+    const { gateway, current } = createGatewayStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const client = gateway.snapshot.client!;
+    current().request.mockImplementation(async (method) =>
+      method === "cron.list" ? { jobs: [{ id: "job", name: "Automation" }] } : { models: [] },
+    );
+    const load = () =>
+      loadCommandPaletteCatalogItems({
+        client,
+        agentId: "main",
+        agents: async () => null,
+        methodAvailable: (method) => method === "cron.list",
+      });
+    const count = () =>
+      current().request.mock.calls.filter(([method]) => method === "cron.list").length;
+    const [first, shared] = await Promise.all([load(), load()]);
+    expect(first).toEqual(shared);
+    expect(first).toContainEqual(expect.objectContaining({ label: "Automation" }));
+    expect(count()).toBe(1);
+    for (const event of ["cron", "config.changed"]) {
+      let pending: ReturnType<typeof load> | undefined;
+      const unsubscribe = gateway.subscribeEvents(() => {
+        pending = load();
+      });
+      current().opts.onEvent?.({ type: "event", event, payload: {} });
+      await pending;
+      unsubscribe();
+    }
+    expect(count()).toBe(3);
+    current().opts.onHello?.({ ...HELLO });
+    await load();
+    expect(count()).toBe(4);
+    gateway.stop();
   });
 
   it("isolates a failing snapshot observer during the actual hello callback", () => {

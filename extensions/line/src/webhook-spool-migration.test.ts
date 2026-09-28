@@ -1,5 +1,6 @@
 // Line tests cover the pre-drain (#109655) spool upgrade migration.
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { migrateLineLegacySpoolRows } from "./webhook-spool-migration.js";
@@ -7,10 +8,18 @@ import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from ".
 import {
   createEvent,
   payloadFor,
+  type SpoolPayload,
   runtime,
   waitForVerdict,
   withQueue,
 } from "./webhook-spool.test-support.js";
+
+function createSpool(
+  queue: ChannelIngressQueue<SpoolPayload>,
+  deliver: Parameters<typeof createLineWebhookSpool>[0]["deliver"],
+) {
+  return createLineWebhookSpool({ accountId: "default", runtime: runtime(), queue, deliver });
+}
 
 describe("LINE webhook spool upgrade migration", () => {
   afterEach(() => {
@@ -29,12 +38,7 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         // The migration rewrites the row into the canonical keyspace; delivery
@@ -43,7 +47,7 @@ describe("LINE webhook spool upgrade migration", () => {
         await waitForVerdict(queue, "message:message-legacy-upgrade-1", "completed");
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(deliver).toHaveBeenCalledWith(
-          event,
+          [event],
           "destination-1",
           expect.objectContaining({ turnAdoptionLifecycle: expect.anything() }),
         );
@@ -63,12 +67,7 @@ describe("LINE webhook spool upgrade migration", () => {
       );
       await migrateLineLegacySpoolRows(queue);
       const deliver = vi.fn(async () => {});
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "legacy-mismatch", "failed");
@@ -96,12 +95,7 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "message:message-legacy-partial", "completed");
@@ -128,12 +122,7 @@ describe("LINE webhook spool upgrade migration", () => {
       // row owes no delivery and must not be reported as one.
       expect(result).toMatchObject({ migrated: 0, reconciled: 1 });
       const deliver = vi.fn(async () => {});
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "legacy-delivered", "completed");
@@ -185,12 +174,7 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "legacy-claimed", "completed");
@@ -220,12 +204,7 @@ describe("LINE webhook spool upgrade migration", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "legacy-buried", "completed");
@@ -309,20 +288,15 @@ describe("LINE webhook spool upgrade migration", () => {
       const delivered: string[] = [];
       const deliver = vi.fn(
         async (
-          event: webhook.Event,
+          events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
-          delivered.push(event.webhookEventId ?? "");
+          delivered.push(...events.map((event) => event.webhookEventId ?? ""));
           await control.turnAdoptionLifecycle.onAdopted();
         },
       );
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "message:message-event-newer", "completed");

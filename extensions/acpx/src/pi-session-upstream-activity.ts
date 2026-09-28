@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import process from "node:process";
+import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isExternalUserText,
   type SessionCatalogContinueProviderResult,
@@ -7,27 +9,9 @@ import {
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readPiSessionFileBaseline } from "./pi-session-store.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
+import { piMessageText, readPiSessionFileBaseline } from "./pi-session-store.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-
-async function readFileRange(
-  handle: Awaited<ReturnType<typeof fs.open>>,
-  position: number,
-  length: number,
-): Promise<Buffer> {
-  const buffer = Buffer.alloc(length);
-  let offset = 0;
-  while (offset < length) {
-    const { bytesRead } = await handle.read(buffer, offset, length - offset, position + offset);
-    if (bytesRead <= 0) {
-      break;
-    }
-    offset += bytesRead;
-  }
-  return offset === length ? buffer : buffer.subarray(0, offset);
-}
 
 function parseCompletePiRows(tail: Buffer): {
   entries: Record<string, unknown>[];
@@ -56,21 +40,6 @@ function parseCompletePiRows(tail: Buffer): {
     lineStart = index + 1;
   }
   return { entries, classifiedBytes };
-}
-
-function textFromContent(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
-    )
-    .join("\n");
-  return text || undefined;
 }
 
 function readFilePath(probe: SessionUpstreamProbe): string | undefined {
@@ -139,7 +108,7 @@ async function checkPiSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_PI_UPSTREAM_SCAN_BYTES);
-    const tail = await readFileRange(handle, markerOffset, readLength);
+    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
     const { entries, classifiedBytes } = parseCompletePiRows(tail);
     if (classifiedBytes === 0) {
       // Never advance past an invalid, partial, or over-cap JSONL row.
@@ -151,15 +120,15 @@ async function checkPiSessionUpstreamActivity(
       if (entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user") {
         continue;
       }
-      const text = textFromContent(entry.message.content);
+      const text = piMessageText(entry.message.content);
       if (!isExternalUserText(probe, text)) {
         continue;
       }
       humanTurns += 1;
       occurredAt = Math.max(
         occurredAt ?? 0,
-        parsePiSessionTimestampMs(entry.message.timestamp) ??
-          parsePiSessionTimestampMs(entry.timestamp) ??
+        parseDateFirstTimestampMs(entry.message.timestamp) ??
+          parseDateFirstTimestampMs(entry.timestamp) ??
           stat.mtimeMs,
       );
     }

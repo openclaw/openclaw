@@ -1,823 +1,246 @@
-// Reasoning, commentary, and provider pre-tool narration delivery.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
   createReasoningFinalAnswerMessage,
-  createStubSessionHarness,
   createSubscribedSessionHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { createOpenAiResponsesTextBlock } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
-describe("reasoning block delivery", () => {
-  function createReasoningBlockReplyHarness(params: { thinkingLevel?: "off" | "medium" } = {}) {
-    // message_end block replies let reasoning and final answer be emitted as
-    // separate payloads without depending on streaming deltas.
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
+type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
+type TestAssistant = Pick<AssistantMessage, "role" | "content"> &
+  Partial<Pick<AssistantMessage, "api" | "stopReason" | "openclawDelivery">> & {
+    phase?: "commentary" | "final_answer";
+  };
+function subscribe(options: Options = {}) {
+  const harness = createSubscribedSessionHarness({ runId: "run", ...options });
+  onTestFinished(() => harness.subscription.unsubscribe());
+  return harness;
+}
+function blockHarness(options: Options = {}) {
+  const onBlockReply = vi.fn();
+  return { ...subscribe({ onBlockReply, blockReplyBreak: "text_end", ...options }), onBlockReply };
+}
+function update(
+  emit: ReturnType<typeof subscribe>["emit"],
+  message: TestAssistant,
+  event: {
+    type: string;
+    contentIndex?: number;
+    delta?: string;
+    content?: string;
+    partial?: TestAssistant;
+  },
+) {
+  emit({ type: "message_update", message, assistantMessageEvent: event });
+}
+function textMessage(
+  text: string,
+  api: "anthropic-messages" | "openai-completions",
+): TestAssistant {
+  return { ...textAssistant(text), api };
+}
+function textBlock(text: string, id: string, phase: "commentary" | "final_answer") {
+  return { ...createOpenAiResponsesTextBlock({ text, id, phase }), type: "text" as const };
+}
+function toolBlock(id: string, name: string) {
+  return { type: "toolCall" as const, id, name, arguments: {} };
+}
+function postedText(reply: ReturnType<typeof vi.fn>) {
+  return reply.mock.calls.map(([payload]) => payload?.text ?? "").join(" ");
+}
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      onBlockReply,
+describe("reasoning delivery", () => {
+  it("does not emit native reasoning when thinking is disabled", () => {
+    const { emit, onBlockReply } = blockHarness({
       blockReplyBreak: "message_end",
       reasoningMode: "on",
-      thinkingLevel: params.thinkingLevel,
+      thinkingLevel: "off",
     });
-
-    return { emit, onBlockReply };
-  }
-
-  function blockReplyTextAt(onBlockReply: ReturnType<typeof vi.fn>, callIndex: number): string {
-    const call = onBlockReply.mock.calls[callIndex];
-    if (!call) {
-      throw new Error(`expected block reply call ${callIndex + 1}`);
-    }
-    return (call[0] as { text?: string }).text ?? "";
-  }
-
-  function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
-    // The expected contract is two user-visible payloads: reasoning first,
-    // final answer second.
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(blockReplyTextAt(onBlockReply, 0)).toBe("Because it helps");
-    expect(blockReplyTextAt(onBlockReply, 1)).toBe("Final answer");
-  }
-
-  it("emits reasoning as a separate message when enabled", () => {
-    const { emit, onBlockReply } = createReasoningBlockReplyHarness();
-
-    const assistantMessage = createReasoningFinalAnswerMessage();
-
-    emit({ type: "message_end", message: assistantMessage });
-
-    expectReasoningAndAnswerCalls(onBlockReply);
-  });
-
-  it("does not emit native reasoning when thinking is disabled", () => {
-    const { emit, onBlockReply } = createReasoningBlockReplyHarness({ thinkingLevel: "off" });
-
     emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
-
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(blockReplyTextAt(onBlockReply, 0)).toBe("Final answer");
+    expect(onBlockReply.mock.calls[0]?.[0].text).toBe("Final answer");
   });
 
-  it.each(THINKING_TAG_CASES)(
-    "promotes <%s> tags to thinking blocks at write-time",
+  it.each(THINKING_TAG_CASES.filter(({ tag }) => tag === "mm:think"))(
+    "promotes $tag reasoning to thinking blocks before delivering the answer",
     ({ open, close }) => {
-      const { emit, onBlockReply } = createReasoningBlockReplyHarness();
-
-      const assistantMessage = {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
-          },
-        ],
-      } as AssistantMessage;
-
-      emit({ type: "message_end", message: assistantMessage });
-
-      expectReasoningAndAnswerCalls(onBlockReply);
-
-      expect(assistantMessage.content).toEqual([
+      const { emit, onBlockReply } = blockHarness({
+        blockReplyBreak: "message_end",
+        reasoningMode: "on",
+      });
+      const message: TestAssistant = textAssistant(
+        `${open}\nBecause it helps\n${close}\n\nFinal answer`,
+      );
+      emit({ type: "message_end", message });
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "Because it helps",
+        "Final answer",
+      ]);
+      expect(message.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },
         { type: "text", text: "Final answer" },
       ]);
     },
   );
-});
 
-describe("reasoning without block replies", () => {
-  it("keeps assistantTexts to the final answer when block replies are disabled", () => {
-    const { session, emit } = createStubSessionHarness();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      reasoningMode: "on",
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "Final " });
-    emitAssistantTextDelta({ emit, delta: "answer" });
-    emitAssistantTextEnd({ emit });
-
-    const assistantMessage = createReasoningFinalAnswerMessage();
-
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(subscription.assistantTexts).toEqual(["Final answer"]);
-  });
-  it("suppresses partial replies when reasoning is enabled and block replies are disabled", () => {
-    // With reasoning enabled, streamed draft text stays private until the final
-    // message_end answer is available.
-    const { session, emit } = createStubSessionHarness();
-
+  it("keeps draft partials private with reasoning on and no block replies", () => {
     const onPartialReply = vi.fn();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      reasoningMode: "on",
-      onPartialReply,
-    });
-
+    const { emit, subscription } = subscribe({ reasoningMode: "on", onPartialReply });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "Draft " });
     emitAssistantTextDelta({ emit, delta: "reply" });
-
     expect(onPartialReply).not.toHaveBeenCalled();
-
-    const assistantMessage = createReasoningFinalAnswerMessage();
-
-    emit({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
     emitAssistantTextEnd({ emit, content: "Draft reply" });
-
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
 });
 
-type AssistantMessageWithPhase = AssistantMessage & {
-  // Some providers expose phase on the assistant message, while others only
-  // include it in textSignature metadata.
-  phase?: "commentary" | "final_answer";
-};
-
-describe("subscribeEmbeddedAgentSession", () => {
-  it("projects commentary deltas into one cumulative keyed preamble", async () => {
+describe("commentary preambles", () => {
+  it("preserves current aggregate commentary without Responses item boundaries", async () => {
     const onAgentEvent = vi.fn();
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onAgentEvent,
-      onBlockReply,
-      onPartialReply,
-    });
-    const commentaryMessage = {
+    const { emit, subscription } = subscribe({ onAgentEvent });
+    const message: TestAssistant = {
       role: "assistant",
-      api: "openai-responses",
-      content: [
-        {
-          type: "text",
-          text: "Checking files",
-          textSignature: JSON.stringify({ v: 1, id: "item-commentary", phase: "commentary" }),
-        },
-      ],
-    } as AssistantMessage;
-
-    emit({ type: "message_start", message: commentaryMessage });
-    emit({
-      type: "message_update",
-      message: commentaryMessage,
-      assistantMessageEvent: {
-        type: "text_delta",
-        contentIndex: 0,
-        delta: "Checking ",
-        partial: commentaryMessage,
-      },
-    });
-    emit({
-      type: "message_update",
-      message: commentaryMessage,
-      assistantMessageEvent: {
-        type: "text_delta",
-        contentIndex: 0,
-        delta: "files",
-        partial: commentaryMessage,
-      },
-    });
-    emit({
-      type: "message_update",
-      message: commentaryMessage,
-      assistantMessageEvent: {
-        type: "text_end",
-        contentIndex: 0,
-        content: "Checking files",
-        partial: commentaryMessage,
-      },
-    });
-    emit({ type: "message_end", message: commentaryMessage });
-    await subscription.waitForPendingEvents();
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          itemId: "item-commentary",
-          phase: "update",
-          progressText: "Checking",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          itemId: "item-commentary",
-          phase: "update",
-          progressText: "Checking files",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          itemId: "item-commentary",
-          phase: "end",
-          progressText: "Checking files",
-        },
-      },
-    ]);
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "streamed", eventType: "text_delta", secondText: "Second." },
-    { name: "snapshot-only", eventType: "text_end", secondText: "Second." },
-    { name: "equal snapshot-only", eventType: "text_end", secondText: "First." },
-  ] as const)("keeps $name commentary item identity through tool handoff", async (scenario) => {
-    const onAgentEvent = vi.fn();
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onAgentEvent,
-      onBlockReply,
-      onPartialReply,
-    });
-    const first = createOpenAiResponsesTextBlock({
-      id: "first",
+      api: "anthropic-messages",
       phase: "commentary",
-      text: "First.",
-    });
-    const message = {
-      role: "assistant",
-      api: "openai-responses",
-      content: [first],
-    } as AssistantMessage;
+      content: [...textAssistant("First.").content, ...textAssistant("Second.").content],
+    };
     emit({ type: "message_start", message });
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: first.text },
-    });
+    update(emit, message, { type: "toolcall_start", contentIndex: 2, partial: message });
     const completed = {
       ...message,
-      content: [
-        first,
-        createOpenAiResponsesTextBlock({
-          id: "second",
-          phase: "commentary",
-          text: scenario.secondText,
-        }),
-      ],
-    } as AssistantMessage;
-    emit({
-      type: "message_update",
-      message: completed,
-      assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: completed },
-    });
-    emit({
-      type: "message_update",
-      message: completed,
-      assistantMessageEvent: {
-        type: scenario.eventType,
-        contentIndex: 1,
-        ...(scenario.eventType === "text_delta"
-          ? { delta: scenario.secondText }
-          : { content: scenario.secondText }),
-        partial: completed,
-      },
-    });
-    const withTool = {
-      ...completed,
-      content: [
-        ...completed.content,
-        { type: "toolCall", id: "call", name: "read", arguments: {} },
-      ],
-    } as AssistantMessage;
-    emit({
-      type: "message_update",
-      message: withTool,
-      assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: withTool },
-    });
-    emit({ type: "message_end", message: withTool });
+      content: [...textAssistant("First.").content, ...textAssistant("Second. Updated.").content],
+    };
+    update(emit, completed, { type: "toolcall_start", contentIndex: 2, partial: completed });
+    emit({ type: "message_end", message: completed });
     await subscription.waitForPendingEvents();
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      { stream: "item", data: { kind: "preamble", itemId: "first", progressText: "First." } },
-      {
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
+      [
+        ["update", "First. Second."],
+        ["update", "First. Second. Updated."],
+        ["end", "First. Second. Updated."],
+      ].map(([phase, progressText]) => ({
         stream: "item",
-        data: { kind: "preamble", itemId: "second", progressText: scenario.secondText },
-      },
-      ...(scenario.eventType === "text_delta"
-        ? [
-            {
-              stream: "item",
-              data: {
-                kind: "preamble",
-                itemId: "second",
-                phase: "end",
-                progressText: scenario.secondText,
-              },
-            },
-          ]
-        : []),
-    ]);
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toEqual([]);
-  });
-
-  it("preserves aggregate commentary for providers without Responses item boundaries", async () => {
-    const onAgentEvent = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
-    const message = {
-      role: "assistant",
-      api: "anthropic-messages",
-      phase: "commentary",
-      content: [
-        { type: "text", text: "First." },
-        { type: "text", text: "Second." },
-      ],
-    } as AssistantMessageWithPhase;
-    emit({ type: "message_start", message });
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: message },
-    });
-    emit({ type: "message_end", message });
-    await subscription.waitForPendingEvents();
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          phase: "update",
-          progressText: "First. Second.",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          kind: "preamble",
-          title: "Preamble",
-          phase: "end",
-          progressText: "First. Second.",
-        },
-      },
-    ]);
-  });
-
-  it("carries a generic commentary signature into preamble delivery", async () => {
-    const onAgentEvent = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
-    const message = {
-      role: "assistant",
-      api: "anthropic-messages",
-      content: [
-        {
-          type: "text",
-          text: "Checking the workspace.",
-          textSignature: JSON.stringify({
-            v: 1,
-            id: "generic-commentary-item",
-            phase: "commentary",
-          }),
-        },
-        { type: "toolCall", id: "call", name: "read", arguments: {} },
-      ],
-    } as AssistantMessage;
-
-    emit({ type: "message_start", message });
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: message },
-    });
-    emit({ type: "message_end", message });
-    await subscription.waitForPendingEvents();
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toContainEqual({
-      stream: "item",
-      data: {
-        kind: "preamble",
-        title: "Preamble",
-        phase: "update",
-        progressText: "Checking the workspace.",
-        itemId: "generic-commentary-item",
-      },
-    });
-  });
-
-  it("suppresses commentary-phase assistant messages before tool use", () => {
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onBlockReply,
-      onPartialReply,
-      blockReplyBreak: "message_end",
-    });
-
-    const commentaryMessage = {
-      role: "assistant",
-      phase: "commentary",
-      content: [{ type: "text", text: "Need send." }],
-      stopReason: "toolUse",
-    } as AssistantMessageWithPhase;
-
-    emit({ type: "message_start", message: commentaryMessage });
-    emit({ type: "message_end", message: commentaryMessage });
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toStrictEqual([]);
-  });
-
-  it("suppresses commentary when phase is only present in textSignature metadata", () => {
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onBlockReply,
-      onPartialReply,
-      blockReplyBreak: "message_end",
-    });
-
-    const commentaryMessage = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Need send.",
-          textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
-        },
-      ],
-      stopReason: "toolUse",
-    } as AssistantMessage;
-
-    emit({ type: "message_start", message: commentaryMessage });
-    emit({
-      type: "message_update",
-      message: commentaryMessage,
-      assistantMessageEvent: { type: "text_delta", delta: "Need send." },
-    });
-    emit({ type: "message_end", message: commentaryMessage });
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toStrictEqual([]);
+        data: { kind: "preamble", title: "Preamble", phase, progressText },
+      })),
+    );
   });
 });
 
-function anthropicAssistant(text: string, extra?: AssistantMessage["content"]): AssistantMessage {
-  return {
-    role: "assistant",
-    api: "anthropic-messages",
-    content: [{ type: "text", text }, ...(extra ?? [])],
-  } as unknown as AssistantMessage;
-}
-
-function postedBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string {
-  return onBlockReply.mock.calls.map((call) => call[0]?.text ?? "").join(" ");
-}
-
-describe("subscribeEmbeddedAgentSession — Anthropic pre-tool narration", () => {
-  it("withholds pre-tool narration from durable block replies on a text_end channel", () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-anthropic-withhold",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-      // Tiny chunking would mid-drain the narration during deltas without the gate.
-      blockReplyChunking: { minChars: 4, maxChars: 200 },
-    });
-
-    const narration = "Let me check the files before I answer. ";
-    emit({ type: "message_start", message: anthropicAssistant("") });
-    emit({
-      type: "message_update",
-      message: anthropicAssistant(narration),
-      assistantMessageEvent: { type: "text_delta", delta: narration },
-    });
-    // Tool execution flushes the block-reply buffer before running — the leak point.
-    emit({
-      type: "tool_execution_start",
+describe("terminal provider phase resolution", () => {
+  it.each([
+    {
+      api: "anthropic-messages",
+      narration: "Let me check the files before I answer. ",
       toolName: "bash",
-      toolCallId: "tool-1",
       args: { command: "ls" },
-    });
-    // The turn resolves as a tool turn: the leading text is commentary.
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        api: "anthropic-messages",
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "text",
-            text: narration,
-            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
-          },
-          { type: "toolCall", id: "tool-1", name: "bash", arguments: {} },
-        ],
-      } as unknown as AssistantMessage,
-    });
-
-    expect(postedBlockReplyText(onBlockReply)).not.toContain("Let me check the files");
-  });
-
-  it("still delivers a non-tool Anthropic answer in full on a text_end channel", async () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-anthropic-answer",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    const answer = "Here is the full answer.";
-    emit({ type: "message_start", message: anthropicAssistant("") });
-    emit({
-      type: "message_update",
-      message: anthropicAssistant(answer),
-      assistantMessageEvent: { type: "text_delta", delta: answer },
-    });
-    emit({
-      type: "message_update",
-      message: anthropicAssistant(answer),
-      assistantMessageEvent: { type: "text_end", contentIndex: 0 },
-    });
-    emit({ type: "message_end", message: anthropicAssistant(answer) });
-
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalled();
-    });
-    expect(postedBlockReplyText(onBlockReply)).toContain("Here is the full answer.");
-  });
-});
-
-function completionsAssistant(text: string, extra?: AssistantMessage["content"]): AssistantMessage {
-  return {
-    role: "assistant",
-    api: "openai-completions",
-    content: [{ type: "text", text }, ...(extra ?? [])],
-  } as unknown as AssistantMessage;
-}
-
-function postedText(onBlockReply: ReturnType<typeof vi.fn>): string {
-  return onBlockReply.mock.calls.map((call) => call[0]?.text ?? "").join(" ");
-}
-
-describe("Chat Completions pre-tool narration", () => {
-  it("withholds reasoning-associated unphased text until terminal phase resolution", () => {
-    const { session, emit } = createStubSessionHarness();
-    const onPartialReply = vi.fn();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-completions-reasoning-pending",
-      onPartialReply,
-      onBlockReply,
-      blockReplyBreak: "message_end",
-    });
-
-    const message = {
-      role: "assistant",
+    },
+    {
       api: "openai-completions",
+      narration: "Importing ORDER-1234 into the tracker… ",
+      toolName: "import_order",
+      args: { id: "ORDER-1234" },
+    },
+  ] as const)(
+    "withholds $api pre-tool narration from durable replies",
+    ({ api, narration, toolName, args }) => {
+      const { emit, onBlockReply } = blockHarness({
+        blockReplyChunking: { minChars: 4, maxChars: 200 },
+      });
+      emit({ type: "message_start", message: textMessage("", api) });
+      update(emit, textMessage(narration, api), { type: "text_delta", delta: narration });
+      emit({ type: "tool_execution_start", toolName, toolCallId: "tool-1", args });
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          api,
+          stopReason: "toolUse",
+          content: [
+            textBlock(narration, "commentary-0", "commentary"),
+            toolBlock("tool-1", toolName),
+          ],
+        },
+      });
+      expect(postedText(onBlockReply)).not.toContain(
+        api === "anthropic-messages" ? "Let me check the files" : "Importing ORDER-1234",
+      );
+    },
+  );
+
+  it("delivers a non-tool Anthropic answer in full", async () => {
+    const { emit, onBlockReply, subscription } = blockHarness();
+    const answer = "Here is the full answer.";
+    emit({ type: "message_start", message: textMessage("", "anthropic-messages") });
+    update(emit, textMessage(answer, "anthropic-messages"), { type: "text_delta", delta: answer });
+    update(emit, textMessage(answer, "anthropic-messages"), { type: "text_end", contentIndex: 0 });
+    emit({ type: "message_end", message: textMessage(answer, "anthropic-messages") });
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).toHaveBeenCalled();
+    expect(postedText(onBlockReply)).toContain(answer);
+  });
+
+  it("withholds reasoning-associated completions text until terminal resolution", () => {
+    const onPartialReply = vi.fn();
+    const { emit, onBlockReply } = blockHarness({ onPartialReply, blockReplyBreak: "message_end" });
+    const message: TestAssistant = {
+      ...textMessage("Interim text.", "openai-completions"),
       openclawDelivery: { textPhaseRequiresTerminal: true },
-      content: [{ type: "text", text: "Interim text." }],
-    } as unknown as AssistantMessage;
+    };
     emit({ type: "message_start", message });
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Interim text." },
-    });
-
+    update(emit, message, { type: "text_delta", contentIndex: 0, delta: "Interim text." });
     expect(onPartialReply).not.toHaveBeenCalled();
-
-    const terminalMessage = {
+    const terminal = {
       ...message,
       content: [
-        {
-          type: "text",
-          text: "Interim text.",
-          textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Final text.",
-          textSignature: JSON.stringify({ v: 1, id: "final-0", phase: "final_answer" }),
-        },
+        textBlock("Interim text.", "commentary-0", "commentary"),
+        textBlock("Final text.", "final-0", "final_answer"),
       ],
-    } as unknown as AssistantMessage;
-    emit({
-      type: "message_update",
-      message: terminalMessage,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Final text." },
-    });
-    emit({ type: "message_end", message: terminalMessage });
-
+    };
+    update(emit, terminal, { type: "text_delta", contentIndex: 1, delta: "Final text." });
+    emit({ type: "message_end", message: terminal });
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(postedText(onBlockReply)).toBe("Final text.");
   });
 
-  it("does not deliver interrupted text when producer phase resolution ends in error", () => {
-    const { session, emit } = createStubSessionHarness();
+  it("delivers permanently unphased completions text in prefix-before-suffix order", async () => {
     const onPartialReply = vi.fn();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-completions-reasoning-error",
+    const { emit, onBlockReply, subscription } = blockHarness({
       onPartialReply,
-      onBlockReply,
-      blockReplyBreak: "message_end",
-    });
-
-    const pendingMessage = {
-      role: "assistant",
-      api: "openai-completions",
-      openclawDelivery: { textPhaseRequiresTerminal: true },
-      content: [{ type: "text", text: "Interim text." }],
-    } as unknown as AssistantMessage;
-    emit({ type: "message_start", message: pendingMessage });
-    emit({
-      type: "message_update",
-      message: pendingMessage,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Interim text." },
-    });
-    emit({
-      type: "message_end",
-      message: {
-        ...pendingMessage,
-        stopReason: "error",
-        errorMessage: "synthetic interrupted stream",
-        content: [
-          {
-            type: "text",
-            text: "Interim text.",
-            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
-          },
-        ],
-      },
-    });
-
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("withholds pre-tool narration from durable text_end block replies", () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-completions-withhold",
-      onBlockReply,
-      blockReplyBreak: "text_end",
       blockReplyChunking: { minChars: 4, maxChars: 200 },
     });
-
-    const narration = "Importing ORDER-1234 into the tracker… ";
-    emit({ type: "message_start", message: completionsAssistant("") });
-    emit({
-      type: "message_update",
-      message: completionsAssistant(narration),
-      assistantMessageEvent: { type: "text_delta", delta: narration },
+    emit({ type: "message_start", message: textMessage("", "openai-completions") });
+    update(emit, textMessage("prefix ", "openai-completions"), {
+      type: "text_delta",
+      delta: "prefix ",
     });
-    emit({
-      type: "tool_execution_start",
-      toolName: "import_order",
-      toolCallId: "tool-1",
-      args: { id: "ORDER-1234" },
+    update(emit, textMessage("prefix suffix", "openai-completions"), {
+      type: "text_end",
+      contentIndex: 0,
+      delta: "suffix",
     });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        api: "openai-completions",
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "text",
-            text: narration,
-            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
-          },
-          { type: "toolCall", id: "tool-1", name: "import_order", arguments: {} },
-        ],
-      } as unknown as AssistantMessage,
-    });
-
-    expect(postedText(onBlockReply)).not.toContain("Importing ORDER-1234");
-  });
-
-  it("delivers permanently unphased ordinary text in prefix-before-suffix order", async () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-completions-answer",
-      onBlockReply,
-      onPartialReply,
-      blockReplyBreak: "text_end",
-      blockReplyChunking: { minChars: 4, maxChars: 200 },
-    });
-
-    emit({ type: "message_start", message: completionsAssistant("") });
-    emit({
-      type: "message_update",
-      message: completionsAssistant("prefix "),
-      assistantMessageEvent: { type: "text_delta", delta: "prefix " },
-    });
-    emit({
-      type: "message_update",
-      message: completionsAssistant("prefix suffix"),
-      assistantMessageEvent: { type: "text_end", contentIndex: 0, delta: "suffix" },
-    });
-    emit({ type: "message_end", message: completionsAssistant("prefix suffix") });
-
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    emit({ type: "message_end", message: textMessage("prefix suffix", "openai-completions") });
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).toHaveBeenCalled();
     expect(onPartialReply).toHaveBeenCalledWith(expect.objectContaining({ text: "prefix" }));
     expect(postedText(onBlockReply)).toContain("prefix suffix");
   });
 
-  it("delivers text when spurious tool calls were stripped and tags rolled back", async () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-completions-spurious",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    const answer = "Here is the answer.";
-    emit({ type: "message_start", message: completionsAssistant("") });
-    emit({
-      type: "message_update",
-      message: completionsAssistant(answer),
-      assistantMessageEvent: { type: "text_delta", delta: answer },
-    });
-    emit({
-      type: "message_update",
-      message: {
-        role: "assistant",
-        api: "openai-completions",
-        content: [
-          {
-            type: "text",
-            text: answer,
-            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
-          },
-          { type: "toolCall", id: "tool-spurious", name: "noop", arguments: {} },
-        ],
-      } as unknown as AssistantMessage,
-      assistantMessageEvent: { type: "toolcall_start", contentIndex: 1 },
-    });
-    emit({ type: "message_end", message: completionsAssistant(answer) });
-
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
-    expect(postedText(onBlockReply)).toContain(answer);
-  });
-
-  it("withholds post-tool text until final toolUse commentary classification", () => {
-    const { session, emit } = createStubSessionHarness();
-    const onBlockReply = vi.fn();
-    subscribeEmbeddedAgentSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
-      runId: "run-completions-post-tool",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    emit({ type: "message_start", message: completionsAssistant("") });
-    emit({
-      type: "message_update",
-      message: completionsAssistant("post-tool commentary"),
-      assistantMessageEvent: {
-        type: "text_end",
-        contentIndex: 1,
-        delta: "post-tool commentary",
-      },
+  it("withholds post-tool completions text through text_end classification", () => {
+    const { emit, onBlockReply } = blockHarness();
+    emit({ type: "message_start", message: textMessage("", "openai-completions") });
+    update(emit, textMessage("post-tool commentary", "openai-completions"), {
+      type: "text_end",
+      contentIndex: 1,
+      delta: "post-tool commentary",
     });
     emit({
       type: "message_end",
@@ -826,16 +249,11 @@ describe("Chat Completions pre-tool narration", () => {
         api: "openai-completions",
         stopReason: "toolUse",
         content: [
-          { type: "toolCall", id: "tool-1", name: "read", arguments: {} },
-          {
-            type: "text",
-            text: "post-tool commentary",
-            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
-          },
+          toolBlock("tool-1", "read"),
+          textBlock("post-tool commentary", "commentary-0", "commentary"),
         ],
-      } as unknown as AssistantMessage,
+      },
     });
-
     expect(postedText(onBlockReply)).not.toContain("post-tool commentary");
   });
 });

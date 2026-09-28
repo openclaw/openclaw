@@ -27,6 +27,11 @@ The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gatewa
 
 For the always-on and laptop setups, prefer keeping `gateway.bind: "loopback"` and using **Tailscale Serve** for the Control UI, or a trusted LAN/Tailnet bind with `gateway.remote.transport: "direct"`. SSH tunnel is the fallback that works from any machine.
 
+Application previews need their own private ingress. A tunnel that forwards only
+the Gateway port does not forward portals. Use [managed private Serve or wildcard
+portal ingress](/gateway/portals#remote-access); the browser and application must
+use the service's returned portal URLs without replacing their host or port.
+
 ## Command flow (what runs where)
 
 One Gateway owns state and channels; nodes are peripherals. Example (Telegram message routed to a node tool):
@@ -49,7 +54,12 @@ With the tunnel up, `openclaw health` and `openclaw status --deep` reach the rem
 To replace per-client SSH tunnels with one private `wss://` endpoint while keeping the Gateway on loopback, follow [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
 
 <Note>
-Replace `18789` with your configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`).
+The first port is local; the final port is the remote Gateway destination. To keep
+the local URL above, replace only the remote destination with your
+configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`). For example,
+`ssh -N -L 18789:127.0.0.1:29443 user@gateway-host` reaches a Gateway on remote port
+`29443` through the same local URL. Discovery and onboarding use the resolved
+Gateway service port for this destination.
 </Note>
 
 <Warning>
@@ -72,7 +82,46 @@ Persist a remote target so CLI commands use it by default:
 }
 ```
 
-When the Gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first. In the macOS app's SSH-tunnel transport, the discovered Gateway hostname goes in `gateway.remote.sshTarget` (`user@host` or `user@host:port`); `gateway.remote.url` stays the local tunnel URL. If the remote port differs from the local one, set `gateway.remote.remotePort`.
+For a manually managed SSH tunnel, keep the URL at `ws://127.0.0.1:18789` and open
+the tunnel first. For a client-managed tunnel, set `gateway.remote.sshTarget`
+(`user@host` or `user@host:port`); `gateway.remote.url` stays the local tunnel URL.
+The macOS app uses the same settings. If the remote port differs from the local
+one, set `gateway.remote.remotePort`.
+
+When the configured loopback remote URL has `gateway.remote.sshTarget` and the
+transport is not `direct`, CLI clients own the SSH tunnel, just as the macOS app does. They
+cache paired-device credentials for the selected SSH target and remote Gateway
+port, independently of the allocated local port. Set `gateway.remote.remotePort`
+when the remote Gateway port differs from the port in the URL. TUI/RPC clients
+and diagnostic probes share that credential scope; after pairing, diagnostics
+do not require a shared token or password on every connection. The client closes
+its tunnel on shutdown and cannot reconnect through a released forwarding port.
+Existing configurations with `sshTarget` adopt this client-managed route on
+upgrade. Set `gateway.remote.transport: "direct"` to retain a manually managed
+forward instead.
+
+Pinned `wss://` loopback endpoints use a credential scope that also includes the
+certificate fingerprint. Unidentified, manually forwarded loopback URLs cannot
+safely reuse a device token saved only for that URL: the same port may now lead
+to another Gateway. Configure the SSH target or TLS pin and enroll the selected
+route using `gateway.remote.token` / `gateway.remote.password`, then approve
+pairing on that Gateway. Historical URL-only entries are left untouched, never
+silently reassigned to the new route. CLI and environment URL overrides retain
+the selected listener instead of starting the configured SSH tunnel, even when
+the URLs match. A CLI `--url` still follows the explicit credential rules above.
+SSH aliases and their OpenSSH configuration remain
+operator-owned route selections, not cryptographic Gateway identifiers.
+Reassigning an enrolled SSH alias keeps its saved-credential scope, so its device
+token can be sent to the newly selected destination. Use a new alias when
+connecting to a different Gateway.
+
+Local diagnostics prefer their local paired-device credential; an origin-cache
+fallback must match the local Gateway's pairing record. Non-loopback remote
+probes retain their existing exact-origin cache. These changes use the existing
+credential tables without adding a schema migration. Reverting just the route
+binding leaves both credential sets intact. If an older binary rejects an
+independently upgraded database schema, restore compatible pre-update state;
+retained token rows alone are not a database downgrade.
 
 Running `openclaw configure --section gateway` or interactive onboarding again
 preserves the remote TLS fingerprint and transport settings when you keep the
@@ -346,3 +395,5 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 
 - [Tailscale](/gateway/tailscale)
 - [Authentication](/gateway/authentication)
+- [Trusted proxy auth](/gateway/trusted-proxy-auth) — authenticating remote access through a reverse proxy
+- [Network](/network) — the hub for how OpenClaw connects, pairs, and secures devices across localhost, LAN, and tailnet

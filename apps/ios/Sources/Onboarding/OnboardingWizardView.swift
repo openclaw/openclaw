@@ -53,6 +53,7 @@ struct OnboardingWizardView: View {
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
     @State private var setupAttemptID: UUID?
+    @State private var manualConnectGeneration: UInt64 = 0
     @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
@@ -1162,7 +1163,7 @@ extension OnboardingWizardView {
     private func advanceFromIntro() {
         // An interrupted first run replays the intro until the user explicitly continues.
         OnboardingStateStore.markFirstRunIntroSeen()
-        self.requestLocalNetworkAccess(reason: "onboarding_continue")
+        self.onRequestLocalNetworkAccess("onboarding_continue")
         self.statusLine = ""
         self.navigate(to: .welcome)
     }
@@ -1170,10 +1171,6 @@ extension OnboardingWizardView {
     private func requestLocalNetworkAccessIfPastIntro(reason: String) {
         // Keep the first-run intro focused; request local-network access when pairing starts.
         guard self.step != .intro else { return }
-        self.requestLocalNetworkAccess(reason: reason)
-    }
-
-    private func requestLocalNetworkAccess(reason: String) {
         self.onRequestLocalNetworkAccess(reason)
     }
 
@@ -1209,6 +1206,7 @@ extension OnboardingWizardView {
 
     private func beginSetupAttempt() -> UUID? {
         guard self.connectingGateway == nil else { return nil }
+        self.manualConnectGeneration &+= 1
         let attemptID = UUID()
         self.setupAttemptID = attemptID
         self.connectingGateway = .setupCode
@@ -1221,6 +1219,7 @@ extension OnboardingWizardView {
     }
 
     private func invalidateSetupAttempt() {
+        self.manualConnectGeneration &+= 1
         self.setupAttemptID = nil
         self.connectingGateway = nil
     }
@@ -1322,13 +1321,19 @@ extension OnboardingWizardView {
     private var gatewayTokenBinding: Binding<String> {
         Binding(
             get: { self.gatewayToken },
-            set: { self.persistGatewayToken($0) })
+            set: { value in
+                self.gatewayToken = value
+                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+            })
     }
 
     private var gatewayPasswordBinding: Binding<String> {
         Binding(
             get: { self.gatewayPassword },
-            set: { self.persistGatewayPassword($0) })
+            set: { value in
+                self.gatewayPassword = value
+                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+            })
     }
 
     private var manualHostBinding: Binding<String> {
@@ -1363,33 +1368,13 @@ extension OnboardingWizardView {
             })
     }
 
-    private func persistGatewayToken(_ value: String) {
-        self.gatewayToken = value
+    private func persistGatewayCredentials(for stableID: String?) {
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
-        self.gatewayCredentialFieldStableID = stableID
-        let saved = GatewaySettingsStore.updateGatewayCredentials(
-            token: value,
-            password: self.gatewayPassword,
-            gatewayStableID: stableID,
-            instanceId: instanceId)
-        self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-                current: self.pendingManualAuthOverride,
-                instanceId: instanceId,
-                targetStableID: stableID,
-                allowManualOverride: true)
-            : nil
-    }
-
-    private func persistGatewayPassword(_ value: String) {
-        self.gatewayPassword = value
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
+        guard !instanceId.isEmpty, let stableID else { return }
         self.gatewayCredentialFieldStableID = stableID
         let saved = GatewaySettingsStore.updateGatewayCredentials(
             token: self.gatewayToken,
-            password: value,
+            password: self.gatewayPassword,
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
@@ -1417,6 +1402,14 @@ extension OnboardingWizardView {
             self.gatewayCredentialFieldStableID = stableID
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
+        } else if let fields = self.pendingManualAuthOverride?.refreshedFieldsAfterHandoff(
+            token: self.gatewayToken,
+            password: self.gatewayPassword,
+            instanceId: instanceId,
+            targetStableID: stableID)
+        {
+            self.gatewayToken = fields.token
+            self.gatewayPassword = fields.password
         }
         self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
             current: self.pendingManualAuthOverride,
@@ -1460,17 +1453,13 @@ extension OnboardingWizardView {
         switch mode {
         case .homeNetwork:
             if hostIsDefaultLike { self.manualHost = "openclaw.local" }
-            self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
             if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
-            self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .developerLocal:
             if hostIsDefaultLike { self.manualHost = "localhost" }
-            self.manualTLS = false
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
+        self.manualTLS = mode != .developerLocal
+        if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
     }
 
     private func connectManual(setupAttemptID: UUID? = nil) async {
@@ -1497,13 +1486,8 @@ extension OnboardingWizardView {
             port: port,
             contextPath: self.manualContextPath)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
-        if GatewayStableIdentifier.matches(
-            self.appModel.activeGatewayConnectConfig?.effectiveStableID,
-            stableID),
-            self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
-        {
-            self.pendingManualAuthOverride = nil
-        }
+        self.manualConnectGeneration &+= 1
+        let generation = self.manualConnectGeneration
         let fieldsMatchTarget = GatewayStableIdentifier.matches(
             self.gatewayCredentialFieldStableID,
             stableID)
@@ -1527,16 +1511,23 @@ extension OnboardingWizardView {
                 suppressStoredDeviceAuth: authOverride?.suppressStoredDeviceAuth == true,
                 instanceId: instanceId)
         }
-        await self.gatewayController.connectManual(
+        let result = await self.gatewayController.connectManual(
             host: host,
             port: port,
             useTLS: self.manualTLS,
             contextPath: self.manualContextPath,
             authOverride: authOverride,
             forceReconnect: forceReconnect)
-        // The controller now owns this attempt's immutable override. A later retry must reload
-        // durable state so a spent bootstrap token cannot be resurrected from the live view.
-        self.pendingManualAuthOverride = nil
+        guard !Task.isCancelled,
+              generation == self.manualConnectGeneration,
+              GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID)
+        else { return }
+        self.pendingManualAuthOverride = authOverride?.unconsumed
+        if case let .failed(message) = result,
+           !self.appModel.hasGatewayPreconnectProblem(for: stableID)
+        {
+            self.setConnectionFailure(message)
+        }
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
@@ -1549,10 +1540,12 @@ extension OnboardingWizardView {
         }
         defer { self.connectingGateway = nil }
 
-        switch GatewaySettingsStore.activeGatewayEntry()?.kind {
+        switch self.gatewayController.pendingGatewayRetryKind ?? GatewaySettingsStore.activeGatewayEntry()?.kind {
         case .discovered:
-            if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
-                self.setConnectionFailure(message)
+            if case let .failed(message) = await self.gatewayController.retryGatewayConnection() {
+                if self.gatewayController.pendingGatewayRetryKind == nil {
+                    self.setConnectionFailure(message)
+                }
             }
         case .manual, .none:
             // connectActiveGateway() replays the persisted endpoint and credentials,
@@ -1580,10 +1573,7 @@ extension OnboardingWizardView {
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
         if problem.suggestsOnboardingReset {
             await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
-            self.gatewayToken = ""
-            self.gatewayPassword = ""
-            self.gatewayCredentialFieldStableID = nil
-            self.pendingManualAuthOverride = nil
+            self.clearManualCredentialFields()
             self.connectingGateway = nil
             self.connectMessage = nil
             self.issue = .none

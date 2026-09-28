@@ -35,52 +35,36 @@ export async function fetchGeminiUsage(
   }
   const buckets =
     isRecord(parsed.data) && Array.isArray(parsed.data.buckets) ? parsed.data.buckets : [];
-  const quotas = new Map<string, number>();
+  const windows: UsageWindow[] = [];
+  const families = [
+    { label: "Pro", match: "pro", remaining: 1, found: false },
+    { label: "Flash", match: "flash", remaining: 1, found: false },
+  ];
+
   for (const bucket of buckets) {
     if (!isRecord(bucket)) {
       continue;
     }
     const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
     const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
-    const current = quotas.get(model);
-    if (current === undefined || frac < current) {
-      quotas.set(model, frac);
-    }
-  }
-
-  const windows: UsageWindow[] = [];
-  let proMin = 1;
-  let flashMin = 1;
-  let hasPro = false;
-  let hasFlash = false;
-
-  for (const [model, frac] of quotas) {
     const lower = normalizeLowercaseStringOrEmpty(model);
-    if (lower.includes("pro")) {
-      hasPro = true;
-      if (frac < proMin) {
-        proMin = frac;
-      }
-    }
-    if (lower.includes("flash")) {
-      hasFlash = true;
-      if (frac < flashMin) {
-        flashMin = frac;
+    for (const family of families) {
+      if (lower.includes(family.match)) {
+        family.found = true;
+        if (frac < family.remaining) {
+          family.remaining = frac;
+        }
       }
     }
   }
 
-  if (hasPro) {
-    windows.push({
-      label: "Pro",
-      usedPercent: clampPercent((1 - proMin) * 100),
-    });
-  }
-  if (hasFlash) {
-    windows.push({
-      label: "Flash",
-      usedPercent: clampPercent((1 - flashMin) * 100),
-    });
+  for (const family of families) {
+    if (family.found) {
+      windows.push({
+        label: family.label,
+        usedPercent: clampPercent((1 - family.remaining) * 100),
+      });
+    }
   }
 
   return {

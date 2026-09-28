@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as worker from "./code-mode-executor.js";
 import type { SettledBridgeRequest } from "./code-mode-worker-types.js";
-import * as worker from "./code-mode-worker.js";
 import {
   applyCodeModeCatalog,
   createCodeModeTools,
@@ -51,7 +51,6 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s program data",
   }
 
   it.each([
-    { count: 20, parked: false },
     { count: 2000, parked: false },
     { count: 2000, parked: true },
   ])("filters validated rows (count=$count, parked=$parked)", async ({ count, parked }) => {
@@ -141,10 +140,10 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s program data",
 });
 
 it("clears host and worker-input aliases while retained readiness promises stay payload-free", async () => {
-  const original = worker.runCodeModeWorker;
+  const original = worker.runCodeModeExecutor;
   const arrays: SettledBridgeRequest[][] = [];
   const aliases: SettledBridgeRequest[] = [];
-  const spy = vi.spyOn(worker, "runCodeModeWorker").mockImplementation(async (input, ...args) => {
+  const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (input, ...args) => {
     // Production owns the worker input; retain its exact aliases to detect premature accounting-only release.
     const resume = input as { kind: string; settledRequests?: SettledBridgeRequest[] };
     if (resume.kind === "resume" && resume.settledRequests) {

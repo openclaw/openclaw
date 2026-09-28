@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -11,18 +12,71 @@ import {
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
+  createRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: session state", () => {
-  it("restarts the active prompt when a live model switch is requested", async () => {
+  it("settles spawned children under the conversation identity while preserving peer policy", async ({
+    onTestFinished,
+  }) => {
+    const subagentRegistry = await import("../../agents/subagents/registry/subagent-registry.js");
+    const { resolveModelFallbackOptions } = await import("./agent-runner-run-params.js");
+    const { resolveModelFallbackOptions: resolveFallbackOptionsForTest } =
+      await import("./agent-runner-utils.js");
+    const resolver = vi.mocked(resolveFallbackOptionsForTest);
+    const previousResolver = resolver.getMockImplementation();
+    resolver.mockImplementation(resolveModelFallbackOptions);
+    onTestFinished(() => {
+      if (previousResolver) {
+        resolver.mockImplementation(previousResolver);
+      }
+    });
+    const settle = vi
+      .spyOn(subagentRegistry, "settleRequesterAfterSessionSpawns")
+      .mockReturnValue(true);
+    onTestFinished(() => settle.mockRestore());
+    state.runEmbeddedAgentEntryMock.mockImplementation(async (params, delegate) => {
+      await params.preparedRunAdmission.admit("embedded");
+      return delegate(params);
+    });
+    const followupRun = createFollowupRun();
+    const policyKey = "agent:main:whatsapp:default:direct:qa-peer";
+    followupRun.run.runtimePolicySessionKey = policyKey;
+    const acceptedSessionSpawns = [
+      {
+        runId: "qa-child",
+        childSessionKey: "agent:main:subagent:qa-child",
+        expectsCompletionMessage: true,
+      },
+    ];
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "Child started." }],
+      acceptedSessionSpawns,
+      meta: {},
+    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
+
+    expect(result.kind).toBe("success");
+    expect(settle).toHaveBeenCalledExactlyOnceWith({
+      requesterSessionKey: "main",
+      requesterAgentId: "main",
+      requesterTurnRunId: expect.any(String),
+      requesterYielded: false,
+      acceptedSessionSpawns,
+    });
+    expect(state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0].harness.sessionKey).toBe(policyKey);
+  });
+
+  it("keeps thinking paired with the winning runtime when a live model switch restarts the prompt", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       const isInitialInvocation = fallbackInvocation++ === 0;
       const provider = isInitialInvocation ? "anthropic" : "openai";
-      const model = isInitialInvocation ? "claude" : "gpt-5.4";
+      const model = isInitialInvocation ? "claude" : "gpt-5.6-luna";
       return {
         result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
         provider,
@@ -34,7 +88,7 @@ describe("executeAgentTurn: session state", () => {
       .mockImplementationOnce(async () => {
         throw new LiveSessionModelSwitchError({
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.6-luna",
           agentRuntimeOverride: "codex",
         });
       })
@@ -45,7 +99,7 @@ describe("executeAgentTurn: session state", () => {
             agentMeta: {
               sessionId: "session",
               provider: "openai",
-              model: "gpt-5.4",
+              model: "gpt-5.6-luna",
             },
           },
         };
@@ -53,35 +107,30 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
+    followupRun.run.thinkLevel = "ultra";
+    followupRun.run.thinkingCatalog?.push({
+      provider: "openai",
+      id: "gpt-5.6-luna",
+      input: ["text"],
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["medium", "high", "max"] },
+    });
+    const staleEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      agentRuntimeOverride: "openclaw",
+    };
     const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createRunAgentTurnParams(followupRun),
+      getActiveSessionEntry: () => staleEntry,
     });
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(followupRun.run.provider).toBe("openai");
-    expect(followupRun.run.model).toBe("gpt-5.4");
+    expect(followupRun.run.model).toBe("gpt-5.6-luna");
     expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "ultra" }),
     );
   });
 
@@ -114,28 +163,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     // After two retries the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
@@ -202,28 +230,7 @@ describe("executeAgentTurn: session state", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     // Two switches (within the limit of 2) then success on third attempt
     expect(result.kind).toBe("success");
@@ -282,16 +289,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -342,16 +340,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -416,16 +405,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -477,16 +457,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -541,16 +512,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",

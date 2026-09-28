@@ -247,19 +247,19 @@ struct DashboardWindowSmokeTests {
     @Test func `dashboard navigation stays on same endpoint`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let staleEndpoint = try #require(URL(string: "http://127.0.0.1:18790/control/chat"))
-        #expect(try DashboardWindowController.shouldAllowNavigation(
+        #expect(try ControlUIDocumentHost.shouldAllowNavigation(
             to: #require(URL(string: "http://127.0.0.1:18789/control/chat")),
             dashboardURL: dashboard,
             isMainFrame: true))
-        #expect(try !DashboardWindowController.shouldAllowNavigation(
+        #expect(try !ControlUIDocumentHost.shouldAllowNavigation(
             to: #require(URL(string: "https://docs.openclaw.ai/")),
             dashboardURL: dashboard,
             isMainFrame: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: staleEndpoint,
             dashboardURL: dashboard,
             isMainFrame: true))
-        #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
+        #expect(!ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
             staleEndpoint,
             navigationType: .backForward,
             buttonNumber: 1))
@@ -277,27 +277,27 @@ struct DashboardWindowSmokeTests {
         let externalHTTPFrame = try #require(URL(string: "http://clickclack.example/embed/thread/T01/M01"))
         let localFile = try #require(URL(string: "file:///tmp/discussion.html"))
 
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: channel, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: thread, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: hostnameAlias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: ipv6Alias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(DashboardWindowController.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: externalHTTPFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: channel, dashboardURL: dashboard, isMainFrame: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
+        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: localFile, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
     }
 
@@ -316,7 +316,7 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
         #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
 
-        try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"))
+        try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"), sessionKey: "")
         let readingWebView = try #require(controller.nativeBrowser.webView(for: "mac-focused"))
         try controller.nativeBrowser.present(
             scope: "focus-test", tabId: "mac-focused",
@@ -355,7 +355,7 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 0)
 
         let link = readerServer.url("/docs/")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
@@ -372,7 +372,7 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 2)
 
         try controller.nativeBrowser.close(tabId: "mac-import")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<10 {
             await Task.yield()
         }
@@ -397,7 +397,7 @@ struct DashboardWindowSmokeTests {
         manager._testSetController(controller)
 
         let link = readerServer.url("/docs/")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where gate.requestCount == 0 {
             await Task.yield()
         }
@@ -445,7 +445,7 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
 
         let link = readerServer.url("/docs/")
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
@@ -458,7 +458,7 @@ struct DashboardWindowSmokeTests {
         }
         #expect(firstRequestApplied == false)
 
-        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
         for _ in 0..<200 where requestCount == 1 {
             await Task.yield()
         }
@@ -487,9 +487,9 @@ struct DashboardWindowSmokeTests {
         defer { other.closeDashboard() }
         #expect(!controller.nativeBrowser.hasTabs)
         let url = server.url("/reader/first")
-        try controller.nativeBrowser.open(tabId: "mac-first", url: url)
-        try controller.nativeBrowser.open(tabId: "mac-second", url: server.url("/reader/second"))
-        try other.nativeBrowser.open(tabId: "mac-first", url: url)
+        try controller.nativeBrowser.open(tabId: "mac-first", url: url, sessionKey: "")
+        try controller.nativeBrowser.open(tabId: "mac-second", url: server.url("/reader/second"), sessionKey: "")
+        try other.nativeBrowser.open(tabId: "mac-first", url: url, sessionKey: "")
         let first = try #require(controller.nativeBrowser.webView(for: "mac-first"))
         let second = try #require(controller.nativeBrowser.webView(for: "mac-second"))
         let otherTab = try #require(other.nativeBrowser.webView(for: "mac-first"))
@@ -564,13 +564,26 @@ struct DashboardWindowSmokeTests {
             "url": "https:hostless",
             "target": "external",
         ]) == nil)
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": "openclaw://dashboard",
+            "target": "external",
+        ]) == nil)
+        for url in ["openclaw://unknown", "file:///tmp/private", "other-app://dashboard"] {
+            #expect(DashboardWindowController.linkRequest(from: [
+                "type": "open-link", "url": url, "target": "external",
+            ]) == nil)
+        }
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link", "url": "openclaw://dashboard", "target": "inline",
+        ]) == nil)
     }
 
     @Test func `dashboard accepts only typed window drag requests`() {
-        #expect(DashboardWindowController.isWindowDragRequest(["type": "window-drag"]))
-        #expect(!DashboardWindowController.isWindowDragRequest(["type": "open-link"]))
-        #expect(!DashboardWindowController.isWindowDragRequest(["type": 1]))
-        #expect(!DashboardWindowController.isWindowDragRequest("window-drag"))
+        #expect(ControlUIDocumentHost.isWindowDragRequest(["type": "window-drag"]))
+        #expect(!ControlUIDocumentHost.isWindowDragRequest(["type": "open-link"]))
+        #expect(!ControlUIDocumentHost.isWindowDragRequest(["type": 1]))
+        #expect(!ControlUIDocumentHost.isWindowDragRequest("window-drag"))
     }
 
     @Test func `dashboard trusts only its main control path for link messages`() throws {
@@ -578,19 +591,19 @@ struct DashboardWindowSmokeTests {
         let trusted = try #require(URL(string: "http://127.0.0.1:18789/control/chat"))
         let wrongPath = try #require(URL(string: "http://127.0.0.1:18789/control-room"))
         let wrongPort = try #require(URL(string: "http://127.0.0.1:18790/control/"))
-        #expect(DashboardWindowController.isTrustedLinkSource(trusted, dashboardURL: dashboard))
-        #expect(!DashboardWindowController.isTrustedLinkSource(wrongPath, dashboardURL: dashboard))
-        #expect(!DashboardWindowController.isTrustedLinkSource(wrongPort, dashboardURL: dashboard))
-        #expect(!DashboardWindowController.isTrustedLinkSource(nil, dashboardURL: dashboard))
-        #expect(DashboardWindowController.shouldAllowEditorURLLaunch(
+        #expect(ControlUIDocumentHost.isTrustedLinkSource(trusted, dashboardURL: dashboard))
+        #expect(!ControlUIDocumentHost.isTrustedLinkSource(wrongPath, dashboardURL: dashboard))
+        #expect(!ControlUIDocumentHost.isTrustedLinkSource(wrongPort, dashboardURL: dashboard))
+        #expect(!ControlUIDocumentHost.isTrustedLinkSource(nil, dashboardURL: dashboard))
+        #expect(ControlUIDocumentHost.shouldAllowEditorURLLaunch(
             from: trusted,
             isMainFrame: true,
             dashboardURL: dashboard))
-        #expect(!DashboardWindowController.shouldAllowEditorURLLaunch(
+        #expect(!ControlUIDocumentHost.shouldAllowEditorURLLaunch(
             from: wrongPath,
             isMainFrame: true,
             dashboardURL: dashboard))
-        #expect(!DashboardWindowController.shouldAllowEditorURLLaunch(
+        #expect(!ControlUIDocumentHost.shouldAllowEditorURLLaunch(
             from: trusted,
             isMainFrame: false,
             dashboardURL: dashboard))
@@ -601,46 +614,46 @@ extension DashboardWindowSmokeTests {
     @Test func `external pointer fallback rejects synthetic link activation`() throws {
         let webURL = try #require(URL(string: "https://docs.openclaw.ai/"))
         let mailURL = try #require(URL(string: "mailto:hello@example.com"))
-        #expect(DashboardWindowController.shouldOpenExternalDashboardNavigation(
+        #expect(ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
             webURL,
             navigationType: .linkActivated,
             buttonNumber: 1))
-        #expect(DashboardWindowController.shouldOpenExternalDashboardNavigation(
+        #expect(ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
             mailURL,
             navigationType: .linkActivated,
             buttonNumber: 1))
-        #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
+        #expect(!ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
             webURL,
             navigationType: .linkActivated,
             buttonNumber: 0))
-        #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
+        #expect(!ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
             mailURL,
             navigationType: .other,
             buttonNumber: 1))
 
-        #expect(DashboardWindowController.targetlessNavigationAction(
+        #expect(ControlUIDocumentHost.targetlessNavigationAction(
             for: webURL,
             navigationType: .linkActivated,
             buttonNumber: 1,
             allowEditorURLs: false) == .allow)
-        #expect(DashboardWindowController.targetlessNavigationAction(
+        #expect(ControlUIDocumentHost.targetlessNavigationAction(
             for: mailURL,
             navigationType: .linkActivated,
             buttonNumber: 1,
             allowEditorURLs: false) == .openExternal)
-        #expect(DashboardWindowController.targetlessNavigationAction(
+        #expect(ControlUIDocumentHost.targetlessNavigationAction(
             for: mailURL,
             navigationType: .linkActivated,
             buttonNumber: 0,
             allowEditorURLs: false) == .cancel)
 
         let editorURL = try #require(URL(string: "vscode://file/workspace/src/foo.ts"))
-        #expect(DashboardWindowController.targetlessNavigationAction(
+        #expect(ControlUIDocumentHost.targetlessNavigationAction(
             for: editorURL,
             navigationType: .other,
             buttonNumber: 0,
             allowEditorURLs: true) == .openExternal)
-        #expect(DashboardWindowController.targetlessNavigationAction(
+        #expect(ControlUIDocumentHost.targetlessNavigationAction(
             for: editorURL,
             navigationType: .other,
             buttonNumber: 0,
@@ -649,7 +662,7 @@ extension DashboardWindowSmokeTests {
 
     @Test func `dashboard origin brackets ipv6 literals`() throws {
         let url = try #require(URL(string: "http://[fd12:3456:789a::1]:18789/control/"))
-        #expect(DashboardWindowController.originString(for: url) == "http://[fd12:3456:789a::1]:18789")
+        #expect(ControlUIDocumentHost.originString(for: url) == "http://[fd12:3456:789a::1]:18789")
     }
 
     @Test func `dashboard native chrome clears both desktop sidebars`() async throws {
@@ -676,12 +689,47 @@ extension DashboardWindowSmokeTests {
         // Keep the injected titlebar height in lockstep with the 52pt unified
         // toolbar in makeWindow(); the two must match for the traffic lights and
         // the hosted web buttons to share one vertical center.
-        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height: 52px"))
+        let titlebarScript = try #require(controller._testUserScripts.first {
+            $0.source.contains("--openclaw-native-titlebar-height: 52px")
+        })
+        #expect(titlebarScript.injectionTime == .atDocumentStart)
+        #expect(titlebarScript.isForMainFrameOnly)
         #expect(!chromeScript.source.contains("max-width: 1100px"))
         #expect(chromeScript.source.contains("openclaw-native-web-chrome"))
         #expect(!chromeScript.source.contains("openclaw-native-nav"))
         #expect(chromeScript.injectionTime == .atDocumentEnd)
         #expect(chromeScript.isForMainFrameOnly)
+    }
+
+    @Test func `dashboard refresh preserves titlebar chrome for the current endpoint and mount`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url("/control/"),
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+
+        for endpoint in [server, replacementServer] {
+            controller.update(url: endpoint.url("/replacement-control/"), auth: auth)
+
+            let titlebarScripts = controller._testUserScripts.filter {
+                $0.source.contains("--openclaw-native-titlebar-height: 52px")
+            }
+            #expect(titlebarScripts.count == 1)
+            let script = try #require(titlebarScripts.first)
+            let source = script.source.replacingOccurrences(of: "\\/", with: "/")
+            #expect(source.contains("\"http://127.0.0.1:\(endpoint.port)\""))
+            #expect(source.contains("\"/replacement-control/\""))
+            #expect(!source.contains("\"/control/\""))
+            #expect(script.injectionTime == .atDocumentStart)
+            #expect(script.isForMainFrameOnly)
+        }
     }
 
     @Test func `dashboard advertises web titlebar chrome before document load`() async throws {

@@ -10,7 +10,7 @@ import {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  isOllamaCloudOrigin,
+  isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -323,13 +323,17 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     throwIfOllamaRequestAborted(opts?.signal);
     const batch = models.slice(index, index + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
-        return mergeOllamaModelShowInfo(model, showInfo);
-      }),
-    );
-    enriched.push(...batchResults);
+    const probes = batch.map(async (model) => {
+      const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
+      return mergeOllamaModelShowInfo(model, showInfo);
+    });
+    try {
+      enriched.push(...(await Promise.all(probes)));
+    } catch (error) {
+      // A canceled probe must join sibling HTTP cleanup before the node becomes idle.
+      await Promise.allSettled(probes);
+      throw error;
+    }
   }
   return enriched;
 }
@@ -453,7 +457,7 @@ export function capLocalOllamaModelContext(
 ): ModelDefinitionConfig {
   // Direct hosted routes use bare model IDs; their context is not a local KV allocation.
   if (
-    isOllamaCloudOrigin(baseUrl) ||
+    isHostedOllamaCloud(baseUrl) ||
     isOllamaCloudModel(model.id) ||
     typeof model.contextWindow !== "number"
   ) {

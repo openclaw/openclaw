@@ -40,4 +40,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec
     ],
     apply: migrateAgentEntries,
   }),
+  defineLegacyConfigMigration({
+    id: "runtime.agents-explicit-ownership",
+    describe: "Persist explicit ownership for markerless multi-agent rosters",
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const entries = getRecord(agents?.entries);
+      if (!agents || agents.ownership !== undefined || !entries) {
+        return;
+      }
+      const roster = Object.values(entries);
+      if (roster.length < 2 || roster.some((entry) => getRecord(entry)?.default === true)) {
+        return;
+      }
+      // Recovery validates the registry's candidate before the later Doctor config flow.
+      agents.ownership = "explicit";
+      changes.push("Stamped the multi-agent roster for explicit per-surface ownership.");
+    },
+  }),
 ];

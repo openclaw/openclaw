@@ -3,22 +3,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileUtf8 } from "./exec-file.js";
+import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
+import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
 
+vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   execBusctlUser: async (env: Record<string, string | undefined>) => ({
     code: 1,
+    termination: "exit",
     stdout: "",
     stderr: `Call failed: Unit ${env.OPENCLAW_SYSTEMD_UNIT}.service not found.`,
   }),
 }));
 
-import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
-
 describe.skipIf(process.platform === "win32")("systemd publication directory creation", () => {
   let root: string;
 
   beforeEach(async () => {
+    vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-unit-mode-")));
   });
 
@@ -32,6 +36,8 @@ describe.skipIf(process.platform === "win32")("systemd publication directory cre
     async (existing) => {
       const env = {
         HOME: path.join(root, "home"),
+        XDG_RUNTIME_DIR: path.join(root, "runtime"),
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${root}/bus`,
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_SYSTEMD_UNIT: "openclaw-mode-proof",
       };

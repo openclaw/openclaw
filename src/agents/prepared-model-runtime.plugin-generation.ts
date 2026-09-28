@@ -1,13 +1,62 @@
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
+  PreparedMediaCapabilityProviderAcquisition,
+  PreparedMediaCapabilityProviderSource,
 } from "./prepared-model-runtime.types.js";
+
+/** Retains the original source and checks its captured authority only for new admission. */
+export function acquirePreparedMediaCapabilityProviders(
+  source: PreparedMediaCapabilityProviderSource,
+  providers: PreparedMediaCapabilityProviderAcquisition["providers"],
+  registry: PreparedMediaCapabilityProviderSource["registry"],
+): PreparedMediaCapabilityProviderAcquisition {
+  const isCurrent = capturePluginLifecycleAuthority(source.registry, undefined, {
+    scopedRuntime: true,
+  });
+  let released = false;
+  const assertOpen = () => {
+    if (released || !isCurrent?.()) {
+      throw new Error(
+        "The media provider setup changed before generation started. Retry the request with the current provider setup.",
+      );
+    }
+  };
+  assertOpen();
+  // Execute through the composed view so nested lookups retain adopted donor registrations.
+  const invocations = source.resources.createInvocationScope(registry);
+  const claim = source.resources.retain();
+  return {
+    providers: {
+      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      imageGenerationProviders: providers.imageGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      videoGenerationProviders: providers.videoGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+      musicGenerationProviders: providers.musicGenerationProviders?.map((provider) =>
+        invocations.wrap(provider),
+      ),
+    },
+    assertOpen,
+    release: () => {
+      released = true;
+      invocations.release();
+      return claim.release();
+    },
+  };
+}
 
 // Lineage is cache identity only. Derived generations still require the exact open
 // parent lease at admission; they never become configured publication authority.
@@ -62,6 +111,7 @@ export function createPreparedPluginGeneration(params: {
   inboundPluginRegistry: PreparedModelRuntimePluginGeneration["inboundPluginRegistry"];
   inlineProviderModels: PreparedModelRuntimePluginGeneration["inlineProviderModels"];
   mediaCapabilityProviders: PreparedModelRuntimePluginGeneration["mediaCapabilityProviders"];
+  mediaCapabilityProviderSource?: PreparedModelRuntimePluginGeneration["mediaCapabilityProviderSource"];
   messageToolCatalog: PreparedModelRuntimePluginGeneration["messageToolCatalog"];
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
@@ -83,15 +133,17 @@ export function createPreparedPluginGeneration(params: {
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       pluginRegistry: params.runtimePluginRegistry,
       mediaCapabilityProviders: params.mediaCapabilityProviders,
+      mediaCapabilityProviderSource: params.mediaCapabilityProviderSource,
       messageToolCatalog: params.messageToolCatalog,
       preparedStaticProviderCatalog: params.preparedStaticProviderCatalog,
     });
     if (params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot) {
       derivedGenerationBases.set(derived, reusable);
     }
+    ownPreparedPluginGeneration(derived);
     return derived;
   }
-  return Object.freeze({
+  const generation = Object.freeze({
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),
@@ -104,6 +156,9 @@ export function createPreparedPluginGeneration(params: {
     ...(params.mediaCapabilityProviders
       ? { mediaCapabilityProviders: params.mediaCapabilityProviders }
       : {}),
+    ...(params.mediaCapabilityProviderSource
+      ? { mediaCapabilityProviderSource: params.mediaCapabilityProviderSource }
+      : {}),
     ...(params.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
       : {}),
@@ -111,9 +166,13 @@ export function createPreparedPluginGeneration(params: {
       ? { providerStaticModels: Object.freeze([...(params.providerStaticModels ?? [])]) }
       : {}),
   });
+  ownPreparedPluginGeneration(generation);
+  return generation;
 }
 
 export async function buildPreparedPluginModelCatalog(params: {
+  includeNative?: boolean;
+  providerIds?: readonly string[];
   agentFacts: {
     credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
     input: PreparedModelRuntimeInput;
@@ -134,11 +193,12 @@ export async function buildPreparedPluginModelCatalog(params: {
       metadataSnapshot,
       providerOutcomes: params.providerOutcomes,
       includeProviderPluginAugmentation: params.catalogMode === "live",
+      providerIds: params.providerIds,
       ...(input.env ? { env: input.env } : {}),
       ...(input.readOnly ? { readOnly: true } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
-    return params.catalogMode === "live"
+    return params.catalogMode === "live" && params.includeNative !== false
       ? await augmentPreparedModelCatalogWithAgentHarness({
           input,
           snapshot,

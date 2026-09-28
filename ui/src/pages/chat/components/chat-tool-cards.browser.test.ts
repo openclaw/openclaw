@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 let container: HTMLDivElement | undefined;
 afterEach(() => {
@@ -52,5 +53,69 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
     ).find((element) => element.textContent === "Yield")!;
     expect(label).toBeDefined();
     expect(label.scrollWidth).toBe(label.clientWidth);
+  });
+});
+
+describe.runIf("__vitest_browser__" in globalThis)("widget action placement", () => {
+  it("mounts and rerenders during resize delivery without observer loop errors", async () => {
+    container = document.body.appendChild(document.createElement("div"));
+    container.className = "chat-thread";
+    container.style.cssText = "width: 420px; height: 300px";
+    const errors: string[] = [];
+    const recordError = (event: ErrorEvent) => {
+      if (event.message.includes("ResizeObserver loop")) {
+        errors.push(event.message);
+      }
+    };
+    window.addEventListener("error", recordError);
+    const draw = () =>
+      render(
+        renderToolPreview(
+          {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            url: "about:blank",
+            sandbox: "strict",
+          },
+          "chat_message",
+          { rawText: "Widget details" },
+        ),
+        container!,
+      );
+    let rerenderObserver: ResizeObserver | undefined;
+    try {
+      draw();
+      const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
+      preview.style.width = "400px";
+      const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
+      await vi.waitFor(() =>
+        expect(actions.getBoundingClientRect().bottom).toBe(preview.getBoundingClientRect().top),
+      );
+      expect(errors).toEqual([]);
+
+      let rerendered = false;
+      rerenderObserver = new ResizeObserver(() => {
+        rerenderObserver?.disconnect();
+        container!.style.width = "480px";
+        draw();
+        rerendered = true;
+      });
+      rerenderObserver.observe(preview);
+      await vi.waitFor(() => {
+        expect(rerendered).toBe(true);
+        expect(actions.getBoundingClientRect().left).toBe(preview.getBoundingClientRect().right);
+      });
+      expect(errors).toEqual([]);
+
+      container.style.width = "420px";
+      await vi.waitFor(() =>
+        expect(actions.getBoundingClientRect().bottom).toBe(preview.getBoundingClientRect().top),
+      );
+      expect(errors).toEqual([]);
+    } finally {
+      rerenderObserver?.disconnect();
+      window.removeEventListener("error", recordError);
+    }
   });
 });

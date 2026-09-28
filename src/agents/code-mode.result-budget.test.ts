@@ -138,8 +138,8 @@ async function dispatch(
   }
 }
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   clearEmbeddedSessionPromptStates([sessionId]);
 });
 
@@ -276,7 +276,20 @@ describe("fresh producer results through persistence and model guards", () => {
         } else if (value === true) {
           expect(details.value).toBe(true);
         } else {
-          expectOriginalCodeModeMarker(details.value, value);
+          if (value === undefined) {
+            throw new Error("Expected the structured-value fixture");
+          }
+          expect(details.value).toMatchObject({
+            truncated: true,
+            reference: { id: expect.any(String), bytes: Buffer.byteLength(JSON.stringify(value)) },
+          });
+          const reference = (details.value as { reference: { id: string } }).reference;
+          const loaded = resultDetails(
+            await tools[0]!.execute("retained", {
+              code: `return (await results.load(${JSON.stringify(reference.id)})).text.length;`,
+            }),
+          );
+          expect(loaded).toMatchObject({ status: "completed", value: value.text.length });
         }
 
         const scope = {
@@ -406,7 +419,7 @@ describe("fresh producer results through persistence and model guards", () => {
         expect(final.terminate).toBe(true);
         for (const result of [first, final]) {
           const rendered = text(result);
-          expect(rendered).toContain("SECURITY NOTICE");
+          expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
           expect(rendered).not.toContain("\n[truncated]");
           const body = rendered
             .split("\n---\n")[1]

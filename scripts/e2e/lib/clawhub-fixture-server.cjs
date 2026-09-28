@@ -11,14 +11,29 @@ const profile = process.argv[2];
 const portFile = process.argv[3];
 const artifactManifestFile = process.argv[4];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
-const packageName = "@openclaw/kitchen-sink";
+const packageName =
+  profile === "plugins" ? "@openclaw/plugin-e2e-fixture" : "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
+
+async function readRequests(baseUrl) {
+  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
+  if (!response.ok) {
+    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!Array.isArray(payload?.requests)) {
+    throw new Error("ClawHub fixture request ledger must contain a requests array");
+  }
+  return payload.requests;
+}
 
 async function assertPrepublishRequests(
   baseUrl,
   requestedPackage,
   version,
-  securityMode = "required",
+  securityMode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE === requestedPackage
+    ? "absent"
+    : "required",
   attempts = "1",
   minimumAttempts = "1",
 ) {
@@ -35,14 +50,7 @@ async function assertPrepublishRequests(
   if (!Number.isInteger(minimumCount) || minimumCount < 1 || minimumCount > 16) {
     throw new Error("assert-prepublish-requests minimum attempts must be an integer from 1 to 16");
   }
-  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
-  if (!response.ok) {
-    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
-  }
-  const payload = await response.json();
-  if (!Array.isArray(payload?.requests)) {
-    throw new Error("ClawHub fixture request ledger must contain a requests array");
-  }
+  const requests = await readRequests(baseUrl);
   const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
   const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
   const expected = [
@@ -53,14 +61,13 @@ async function assertPrepublishRequests(
   ];
   // Multi-command upgrade recovery can stage an artifact in several convergence
   // phases. Every request must still belong to a complete authorized audit sequence.
-  const count =
-    attempts === "complete" ? payload.requests.length / expected.length : Number(attempts);
+  const count = attempts === "complete" ? requests.length / expected.length : Number(attempts);
   if (!Number.isInteger(count) || count < minimumCount || count > 16) {
     throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
   }
   const expectedRequests = Array.from({ length: count }, () => expected).flat();
-  if (JSON.stringify(payload.requests) !== JSON.stringify(expectedRequests)) {
-    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
+  if (JSON.stringify(requests) !== JSON.stringify(expectedRequests)) {
+    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`);
   }
   console.log(`Verified ${count} complete ClawHub artifact audit sequence(s).`);
 }
@@ -69,20 +76,13 @@ async function assertNoRequests(baseUrl) {
   if (!baseUrl) {
     throw new Error("assert-no-requests requires <base-url>");
   }
-  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
-  if (!response.ok) {
-    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
-  }
-  const payload = await response.json();
-  if (!Array.isArray(payload?.requests)) {
-    throw new Error("ClawHub fixture request ledger must contain a requests array");
-  }
+  const requests = await readRequests(baseUrl);
   const legacyPackage = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE;
   if (legacyPackage) {
     const packagePath = `/api/v1/packages/${encodeURIComponent(legacyPackage)}`;
     const artifactPrefix = `GET ${packagePath}/versions/`;
     const artifactSuffix = "/artifact";
-    const artifactRequest = payload.requests[1] ?? "";
+    const artifactRequest = requests[1] ?? "";
     const version =
       artifactRequest.startsWith(artifactPrefix) && artifactRequest.endsWith(artifactSuffix)
         ? decodeURIComponent(artifactRequest.slice(artifactPrefix.length, -artifactSuffix.length))
@@ -92,17 +92,20 @@ async function assertNoRequests(baseUrl) {
       `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact`,
       `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact/download`,
     ];
-    if (!version || JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
-      throw new Error(
-        `unexpected legacy ClawHub fixture requests: ${JSON.stringify(payload.requests)}`,
-      );
+    if (!version || JSON.stringify(requests) !== JSON.stringify(expected)) {
+      throw new Error(`unexpected legacy ClawHub fixture requests: ${JSON.stringify(requests)}`);
     }
     console.log("Verified complete legacy ClawHub artifact audit sequence.");
     return;
   }
-  if (payload.requests.length !== 0) {
-    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
+  if (requests.length !== 0) {
+    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`);
   }
+}
+
+function json(response, value, status = 200) {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(`${JSON.stringify(value)}\n`);
 }
 
 function startPrepublishArtifactServer() {
@@ -163,10 +166,6 @@ function startPrepublishArtifactServer() {
     }),
   );
   const requestLog = [];
-  const json = (response, value, status = 200) => {
-    response.writeHead(status, { "content-type": "application/json" });
-    response.end(`${JSON.stringify(value)}\n`);
-  };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     if (url.pathname === "/__fixture__/requests") {
@@ -363,11 +362,13 @@ const profiles = {
       openclaw: { extensions: ["./index.js"] },
     },
     indexJs: `import isNumber from "is-number";
+import { realpathSync } from "node:fs";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const dependencyUrl = import.meta.resolve("is-number");
-const expectedDependencyBaseUrl = new URL("./node_modules/is-number/", import.meta.url).href;
-if (!dependencyUrl.startsWith(expectedDependencyBaseUrl)) {
+// Captured generations link dependency packages; compare the canonical entry files.
+const expectedDependencyUrl = new URL("./node_modules/is-number/index.js", import.meta.url);
+if (realpathSync(new URL(dependencyUrl)) !== realpathSync(expectedDependencyUrl)) {
   throw new Error(\`kitchen-sink dependency resolved outside plugin root: \${dependencyUrl}\`);
 }
 
@@ -752,10 +753,6 @@ async function main() {
     ...clawpack,
   });
 
-  const json = (response, value, status = 200) => {
-    response.writeHead(status, { "content-type": "application/json" });
-    response.end(`${JSON.stringify(value)}\n`);
-  };
   const artifactResolverDetail = {
     package: versionDetail.package ?? {
       name: packageName,

@@ -59,7 +59,7 @@ describe("Code Mode preflight repair", () => {
     const result = await runCode(
       "try { await contract_target({ count: " +
         (kind === "input" ? '"wrong"' : "1") +
-        " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location }; }",
+        " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location, message: e.message }; }",
       [target],
     );
     expect(result).toMatchObject({
@@ -71,6 +71,63 @@ describe("Code Mode preflight repair", () => {
       },
     });
     expect(target.execute).toHaveBeenCalledTimes(calls);
+    if (kind === "output") {
+      expect(result.value).toMatchObject({
+        message: expect.stringContaining("count: must be number"),
+      });
+      expect(result.value).toMatchObject({
+        message: expect.stringContaining("Check current state before retrying"),
+      });
+    }
+  });
+
+  it("reports bounded output validation details after a mutation without exposing returned values", async () => {
+    let applied = 0;
+    const privateValue = "SYNTHETIC_PRIVATE_OUTPUT";
+    const fields = [
+      "field0",
+      "long_" + "🦞".repeat(600),
+      ...Array.from({ length: 6 }, (_, index) => `field${index + 2}`),
+    ];
+    const target = pluginToolWithExecute(
+      "update_receipt",
+      "Update a synthetic receipt",
+      async () => {
+        applied += 1;
+        return jsonResult({
+          receipt: Object.fromEntries(fields.map((field) => [field, privateValue])),
+        });
+      },
+    );
+    target.outputSchema = Type.Object(
+      {
+        receipt: Type.Object(Object.fromEntries(fields.map((field) => [field, Type.Number()]))),
+      },
+      { additionalProperties: false },
+    );
+
+    const details = await runCode(
+      "try { await update_receipt({}); } catch (e) { return { code:e.code, effectStatus:e.effectStatus, message:e.message }; }",
+      [target],
+    );
+
+    expect(applied).toBe(1);
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        code: "output_contract",
+        effectStatus: "unknown",
+        message: expect.stringContaining("receipt.field0: must be number"),
+      },
+    });
+    const message = JSON.stringify(details.value);
+    expect(message).toContain("tool returned");
+    expect(message).toContain("Check current state before retrying");
+    expect(message).toContain("additional validation issues omitted");
+    expect(message).toContain("[truncated]");
+    expect(message).not.toContain(privateValue);
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThan(2048);
   });
 
   it("rejects stale exec timeout input before starting the command", async () => {

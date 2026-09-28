@@ -1,27 +1,138 @@
 /** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
-import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentEntriesWithSource,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
+import { logConfigWarningsOnce } from "../config/io.warnings.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveCliModelEntry } from "../media-understanding/resolve.js";
 import { isRecord } from "../utils.js";
+import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
-type UnrecognizedKeysIssue = ZodIssue & {
-  code: "unrecognized_keys";
-  keys: PropertyKey[];
-};
+const configLog = createSubsystemLogger("config");
 
-function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
-  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
+export function noteMediaCliModelWarnings(cfg: OpenClawConfig): void {
+  const models = cfg.tools?.media?.models;
+  if (!Array.isArray(models)) {
+    return;
+  }
+  const warnings: string[] = [];
+  models.forEach((entry, index) => {
+    if (!entry || (entry.type ?? (entry.command ? "cli" : "provider")) !== "cli") {
+      return;
+    }
+    const resolved = resolveCliModelEntry(entry);
+    if (!resolved.ok) {
+      const field = resolved.error.reason === "cli-missing-command" ? "command" : "args";
+      warnings.push(
+        `- tools.media.models[${index}].${field}: Invalid CLI media model. ${resolved.error.message} Doctor cannot choose a command or attachment arguments; edit this entry.`,
+      );
+    }
+  });
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Doctor warnings");
+  }
 }
 
-function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
-  return issue.code === "unrecognized_keys";
+export function noteDoctorConfigPreflightIssues(
+  snapshot: ConfigFileSnapshot,
+  options: { invalidConfigNote?: string | false; activeRepair: boolean },
+): void {
+  const invalidConfigNote =
+    options.invalidConfigNote ?? "Config invalid; doctor will run with best-effort config.";
+  if (
+    invalidConfigNote &&
+    snapshot.exists &&
+    !snapshot.valid &&
+    !options.activeRepair &&
+    snapshot.legacyIssues.length === 0
+  ) {
+    note(invalidConfigNote, "Config");
+    noteIncludeConfinementWarning(snapshot);
+  }
+  const warnings = snapshot.warnings ?? [];
+  if (warnings.length > 0) {
+    // Non-interactive Gateway stdout is a log stream; preserve its structured logging contract.
+    if (process.stdout.isTTY) {
+      note(formatConfigIssueLines(warnings, "-").join("\n"), "Config warnings");
+    } else {
+      logConfigWarningsOnce({ configPath: snapshot.path, warnings, logger: configLog });
+    }
+  }
+}
+
+function collectInvalidHookTransformsDirWarnings(
+  cfg: OpenClawConfig,
+  configPath: string,
+): string[] {
+  const transformsDir = cfg.hooks?.transformsDir?.trim();
+  if (!transformsDir) {
+    return [];
+  }
+  const configDir = path.dirname(configPath);
+  const transformsRoot = path.join(configDir, "hooks", "transforms");
+  const resolved = path.isAbsolute(transformsDir)
+    ? path.resolve(transformsDir)
+    : path.resolve(transformsRoot, transformsDir);
+  if (isPathInside(transformsRoot, resolved)) {
+    return [];
+  }
+  return [
+    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
+  ];
+}
+
+function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
+  const unsupportedKeysByEntry = Object.entries(cfg.hooks?.internal?.entries ?? {})
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map(([hookKey, entry]) => {
+      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+        Object.hasOwn(entry, key),
+      );
+      return { hookKey, unsupportedKeys };
+    })
+    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
+
+  return unsupportedKeysByEntry.map(
+    ({ hookKey, unsupportedKeys }) =>
+      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
+  );
+}
+
+export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: string): void {
+  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, configPath);
+  if (hookTransformsDirWarnings.length > 0) {
+    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
+  }
+  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(cfg);
+  if (unsupportedInternalHookEntryWarnings.length > 0) {
+    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  }
+}
+
+export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
+  if (
+    cfg.agents?.ownership === "explicit" &&
+    listAgentEntries(cfg).length > 1 &&
+    !tryResolveLegacyCompatibilityAgentId(cfg)
+  ) {
+    note(
+      `No default agent is designated. Set a configured agent with "${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")}".`,
+      "Agent ownership",
+    );
+  }
 }
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
@@ -97,10 +208,10 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   const next = structuredClone(config);
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
-    if (!isUnrecognizedKeysIssue(issue)) {
+    if (issue.code !== "unrecognized_keys") {
       continue;
     }
-    const issuePath = normalizeIssuePath(issue.path);
+    const issuePath = issue.path.filter((part) => typeof part !== "symbol");
     const target = resolveConfigPathTarget(next, issuePath);
     if (!target || typeof target !== "object" || Array.isArray(target)) {
       continue;
@@ -196,12 +307,16 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const warnings: string[] = [];
-  for (const agent of listAgentEntries(cfg)) {
-    if (!isImplicitFallbackClobber(agent.model)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    if (!agent || !isImplicitFallbackClobber(agent.model)) {
       continue;
     }
+    const id = agent.id?.trim() || (source.kind === "list" ? String(source.index) : source.key);
     const primary = resolvePrimaryStringValue(agent.model);
-    const location = `agents.entries.${agent.id}.model`;
+    const location =
+      source.kind === "entries"
+        ? `agents.entries.${source.key}.model`
+        : `agents.list[${source.index}].model (id=${id})`;
     const modelStr =
       typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
     const shape =
@@ -228,7 +343,7 @@ export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
 }
 
 /** Emits a config include warning when an include path escapes the config directory. */
-export function noteIncludeConfinementWarning(snapshot: {
+function noteIncludeConfinementWarning(snapshot: {
   path?: string | null;
   issues?: Array<{ message: string }>;
 }): void {
@@ -266,7 +381,7 @@ export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
     [
       '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
       "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
-      "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
+      "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see docs/cli/mcp/apps.md).",
     ].join("\n"),
     "Doctor warnings",
   );

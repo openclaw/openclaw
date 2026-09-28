@@ -5,10 +5,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
-import {
-  readNextcloudTalkErrorBody,
-  releaseNextcloudTalkGuardedResponse,
-} from "./guarded-response.js";
+import { readNextcloudTalkErrorBody } from "./guarded-response.js";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "./send.runtime.js";
 
 const BOT_FEATURE_RESPONSE = 2;
@@ -172,7 +169,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         message: `Nextcloud Talk bot "${bot.name ?? bot.id ?? "matching bot"}" has the response feature.`,
       };
     } finally {
-      await releaseNextcloudTalkGuardedResponse({ response, release });
+      await release();
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : formatErrorMessage(error);

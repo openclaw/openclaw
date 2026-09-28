@@ -93,10 +93,9 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return null;
 }
 
-function getModuleLoader(modulePath: string, rootDir: string) {
+function getModuleLoader(modulePath: string) {
   return getCachedPluginModuleLoader({
     modulePath,
-    rootDir,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
@@ -121,12 +120,9 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
   return undefined;
 }
 
-function loadChannelConfigSurfaceModuleSync(
-  modulePath: string,
-  rootDir: string,
-): ChannelConfigSurface | null {
+function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath, rootDir)(modulePath) as Record<string, unknown>;
+    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;
@@ -156,57 +152,36 @@ export function collectBundledChannelConfigsCore(params: {
   }
 
   const surfaceModulePath = resolveChannelConfigSchemaModulePath(params.pluginDir);
-  const surface = surfaceModulePath
-    ? loadChannelConfigSurfaceModuleSync(surfaceModulePath, params.pluginDir)
-    : null;
+  const surface = surfaceModulePath ? loadChannelConfigSurfaceModuleSync(surfaceModulePath) : null;
 
   for (const channelId of channelIds) {
     const existing = existingChannelConfigs[channelId];
     const channelMeta = resolvePackageChannelMeta(params.packageManifest, channelId);
     const preferOver = normalizeBundledPluginStringList(channelMeta?.preferOver);
-    const uiHints: Record<string, PluginConfigUiHint> | undefined =
-      surface?.uiHints || existing?.uiHints
-        ? {
-            ...(surface?.uiHints && Object.keys(surface.uiHints).length > 0 ? surface.uiHints : {}),
-            ...(existing?.uiHints && Object.keys(existing.uiHints).length > 0
-              ? existing.uiHints
-              : {}),
-          }
-        : undefined;
+    const uiHints = { ...surface?.uiHints, ...existing?.uiHints };
 
     if (!surface?.schema && !existing?.schema) {
       continue;
     }
+    const runtime = surface?.runtime ?? existing?.runtime;
+    const label =
+      trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label);
+    const description =
+      trimBundledPluginString(existing?.description) ?? trimBundledPluginString(channelMeta?.blurb);
+    const commands = existing?.commands ?? channelMeta?.commands;
 
     existingChannelConfigs[channelId] = {
       schema: surface?.schema ?? existing?.schema ?? {},
-      ...(uiHints && Object.keys(uiHints).length > 0 ? { uiHints } : {}),
-      ...((surface?.runtime ?? existing?.runtime)
-        ? { runtime: surface?.runtime ?? existing?.runtime }
-        : {}),
-      ...((trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label))
-        ? {
-            label:
-              trimBundledPluginString(existing?.label) ??
-              trimBundledPluginString(channelMeta?.label)!,
-          }
-        : {}),
-      ...((trimBundledPluginString(existing?.description) ??
-      trimBundledPluginString(channelMeta?.blurb))
-        ? {
-            description:
-              trimBundledPluginString(existing?.description) ??
-              trimBundledPluginString(channelMeta?.blurb)!,
-          }
-        : {}),
+      ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
       ...(existing?.preferOver?.length
         ? { preferOver: existing.preferOver }
         : preferOver.length > 0
           ? { preferOver }
           : {}),
-      ...((existing?.commands ?? channelMeta?.commands)
-        ? { commands: existing?.commands ?? channelMeta?.commands }
-        : {}),
+      ...(commands ? { commands } : {}),
     };
   }
 

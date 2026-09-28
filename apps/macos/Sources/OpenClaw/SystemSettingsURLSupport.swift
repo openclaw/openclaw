@@ -24,7 +24,6 @@ enum SystemSettingsURLSupport {
         case .notifications: "Notifications"
         case .accessibility: "Accessibility"
         case .screenRecording: "ScreenCapture"
-        case .appleScript: "Automation"
         case .microphone: "Microphone"
         case .speechRecognition: "SpeechRecognition"
         case .camera: "Camera"

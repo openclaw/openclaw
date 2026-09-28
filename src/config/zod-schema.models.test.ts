@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
+  it("accepts the Radius native message transport in provider config", () => {
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: {
+          radius: {
+            baseUrl: "https://radius.pi.dev/v1",
+            api: "pi-messages",
+            models: [{ id: "balanced", name: "Balanced" }],
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it.each([
     "claude-cli",
     "azure-openai-responses",
@@ -31,6 +45,18 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it.each(["runway", "kie"])(
+    "accepts a SecretRef-only %s overlay without custom provider fields",
+    (providerId) => {
+      const apiKey = { source: "file", provider: "x", id: `/${providerId}` };
+      const result = ModelsConfigSchema.parse({
+        providers: { [providerId]: { apiKey } },
+      });
+
+      expect(result?.providers?.[providerId]?.apiKey).toEqual(apiKey);
+    },
+  );
 
   it.each(["qwen-cli", "qwen-oauth", "qwen-portal"])(
     "rejects retired Qwen Portal provider overlay %s",

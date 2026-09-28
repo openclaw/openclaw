@@ -2,10 +2,9 @@
  * Tests that chat send rejects deleted-agent sessions before dispatch.
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { chatHandlers } from "./chat.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import {
   mockDeletedAgentSession,
   resetDeletedAgentSessionMocks,
@@ -22,10 +21,7 @@ describe("chat.send deleted-agent guard", () => {
 
     const respond = vi.fn() as unknown as RespondFn;
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       req: { id: "req-1" } as never,
       params: { sessionKey: orphanKey, message: "hi", idempotencyKey: "run-1" },
       respond,

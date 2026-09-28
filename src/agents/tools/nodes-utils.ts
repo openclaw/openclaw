@@ -1,4 +1,5 @@
 // Gateway node inventory and explicit/default target resolution.
+import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
@@ -76,8 +77,11 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
-  return ordered[0] ?? null;
+  return candidates.reduce<NodeListNode | null>(
+    (best, node) =>
+      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
+    null,
+  );
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
@@ -131,4 +135,28 @@ export async function resolveAgentNode(
     allowDefault,
     pickDefaultNode,
   });
+}
+
+export async function invokeAgentNodeCommand(params: {
+  gatewayOpts: GatewayCallOptions;
+  nodeId: string;
+  command: string;
+  commandParams: Record<string, unknown>;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const raw = await callGatewayTool<{ payload: unknown }>(
+    "node.invoke",
+    params.gatewayOpts,
+    {
+      nodeId: params.nodeId,
+      command: params.command,
+      params: params.commandParams,
+      timeoutMs: params.timeoutMs,
+      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
+    },
+    { signal: params.signal },
+  );
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
 }

@@ -3,12 +3,13 @@ import {
   projectComputerActResult,
   projectScreenshotResult,
 } from "../agents/tools/computer-tool-result.js";
+import type { ComputerTarget } from "../agents/tools/computer-tool-shared.js";
 import { createNoisyPngBuffer } from "../plugin-sdk/test-helpers/image-fixtures.js";
 import type { ComputerActResult } from "../plugins/computer-use-contract.js";
 import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
 
 describe("worker computer observation persistence", () => {
-  it.each(["screen", "window", "browser"] as const)(
+  it.each(["screen", "window"] as const)(
     "commits a large %s observation with pixels only in image content",
     async (kind) => {
       const base64 = createNoisyPngBuffer(512, 512).toString("base64");
@@ -25,7 +26,7 @@ describe("worker computer observation persistence", () => {
         },
       } satisfies ComputerActResult;
       const original = structuredClone(providerResult);
-      const target = { nodeId: "desktop-node", screenIndex: 0 };
+      const target: ComputerTarget = { host: "node", nodeId: "desktop-node", screenIndex: 0 };
       const { result } =
         kind === "screen"
           ? await projectScreenshotResult({
@@ -45,7 +46,7 @@ describe("worker computer observation persistence", () => {
           : await projectComputerActResult({
               result: providerResult,
               target,
-              action: kind === "window" ? "get_window_state" : "get_browser_state",
+              action: "get_window_state",
               referenceWidth: 1280,
               modelHasVision: true,
             });

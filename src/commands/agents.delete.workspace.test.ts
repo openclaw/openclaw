@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,7 +24,6 @@ const fsSafeMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
-  isGatewayCredentialsRequiredError: vi.fn(),
 }));
 
 const workspaceStateMocks = vi.hoisted(() => ({
@@ -49,12 +48,9 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
-vi.mock("../gateway/call.js", async () => ({
-  ...(await vi.importActual<typeof import("../gateway/transport-error.js")>(
-    "../gateway/transport-error.js",
-  )),
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: gatewayMocks.callGateway,
-  isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
 }));
 
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
@@ -130,6 +126,7 @@ function expectSessionStore(
 
 describe("agents delete workspace lifecycle", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
     fsSafeMocks.movePathToTrash.mockClear();
@@ -137,11 +134,6 @@ describe("agents delete workspace lifecycle", () => {
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
-    gatewayMocks.isGatewayCredentialsRequiredError.mockReset();
-    gatewayMocks.isGatewayCredentialsRequiredError.mockImplementation(
-      (error: unknown) =>
-        error instanceof Error && error.name === "GatewayCredentialsRequiredError",
-    );
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -149,32 +141,8 @@ describe("agents delete workspace lifecycle", () => {
     wizardMocks.createClackPrompter.mockReset();
   });
 
-  it("deletes workspace state after local workspace removal", async () => {
-    await withStateDirEnv("openclaw-agents-delete-workspace-state-", async ({ stateDir }) => {
-      const opsWorkspace = path.join(stateDir, "workspace-ops");
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: opsWorkspace },
-          ],
-        },
-      } satisfies OpenClawConfig;
-      await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        deletedAgentId: "ops",
-        sessions: {},
-      });
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({
-        workspaceDir: opsWorkspace,
-      });
-      const workspaceTrashOrder = fsSafeMocks.movePathToTrash.mock.invocationCallOrder[0];
-      const stateDeleteOrder = workspaceStateMocks.deleteWorkspaceState.mock.invocationCallOrder[0];
-      expect(workspaceTrashOrder).toBeLessThan(stateDeleteOrder ?? 0);
-    });
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("finishes agent-directory cleanup when workspace state deletion fails", async () => {
@@ -420,9 +388,15 @@ describe("agents delete workspace lifecycle", () => {
       expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(expectedOpsWorkspace, {
         allowedRoots: [path.dirname(expectedOpsWorkspace)],
       });
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({
-        workspaceDir: opsWorkspace,
-      });
+      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith(
+        {
+          workspaceDir: opsWorkspace,
+        },
+        { assertCurrent: expect.any(Function) },
+      );
+      expect(fsSafeMocks.movePathToTrash.mock.invocationCallOrder[0]).toBeLessThan(
+        workspaceStateMocks.deleteWorkspaceState.mock.invocationCallOrder[0] ?? 0,
+      );
       expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     });
   });
@@ -453,6 +427,31 @@ describe("agents delete workspace lifecycle", () => {
         ],
         failed: [{ path: opsWorkspace, reason: "trash unavailable" }],
       });
+      expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+    });
+  });
+
+  it("reports local trash failures on the text path", async () => {
+    await withStateDirEnv("openclaw-agents-delete-trash-text-", async ({ stateDir }) => {
+      const opsWorkspace = path.join(stateDir, "workspace-ops");
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: opsWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      fsSafeMocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${opsWorkspace}`,
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
     });
   });

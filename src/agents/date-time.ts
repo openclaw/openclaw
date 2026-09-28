@@ -219,9 +219,9 @@ function detectSystemTimeFormat(): boolean {
   }
 
   try {
-    const sample = new Date(2000, 0, 1, 13, 0);
-    const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);
-    return formatted.includes("13");
+    // Read the declared cycle; localized hour digits need not contain ASCII "13".
+    const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+    return formatter.resolvedOptions().hour12 === false;
   } catch {
     return false;
   }

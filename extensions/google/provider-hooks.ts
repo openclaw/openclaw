@@ -1,8 +1,3 @@
-// Google provider module implements model/runtime integration.
-import type {
-  ProviderDefaultThinkingPolicyContext,
-  ProviderThinkingProfile,
-} from "openclaw/plugin-sdk/core";
 import type {
   ProviderFailoverErrorContext,
   ProviderWrapStreamFnContext,
@@ -46,8 +41,7 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
     family: "google-gemini",
   }),
   ...buildProviderToolCompatFamilyHooks("gemini"),
-  resolveThinkingProfile: (context: ProviderDefaultThinkingPolicyContext) =>
-    resolveGoogleThinkingProfile(context) satisfies ProviderThinkingProfile | undefined,
+  resolveThinkingProfile: resolveGoogleThinkingProfile,
   wrapStreamFn: wrapGoogleThinkingStream,
   classifyFailoverReason: ({ code }: ProviderFailoverErrorContext) =>
     classifyGoogleFailoverCode(code),

@@ -17,7 +17,7 @@ type ResolvedReplyPreview = (MessageReplyTarget & { sourceMessageId: string }) |
 
 type ReplyPreviewProps = Pick<
   ChatThreadProps,
-  "assistantName" | "replyMessageAccess" | "userAvatar" | "userId" | "userName"
+  "assistantName" | "replyMessageAccess" | "userId" | "userName"
 >;
 
 function projectResolvedReplyPreview(
@@ -31,10 +31,8 @@ function projectResolvedReplyPreview(
     return undefined;
   }
   const group = {
-    role: normalized.role,
-    senderLabel: normalized.senderLabel,
-    ...(normalized.sender ? { sender: normalized.sender } : {}),
-    messages: [{ key: replyToId, message }],
+    ...normalized,
+    messages: [{ message }],
   };
   const sourceMessageId = persistedMessageEntryId(message) ?? replyToId;
   return {

@@ -9,6 +9,7 @@ import { extractToolResultText } from "./embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -96,8 +97,6 @@ export function collectMessagingMediaUrlsFromToolResult(result: unknown): string
   return urls;
 }
 
-/** Extract an internal source-reply payload from a completed message tool result. */
-
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
   "apply_patch",
@@ -132,7 +131,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
@@ -162,29 +161,25 @@ function isToolResultMediaTrusted(
   return isCoreToolResultMediaTrustedName(toolName);
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.embeddedSubscribeToolsTestApi")
-  ] = { isToolResultMediaTrusted };
-}
-
-function isTrustedOwnedTtsLocalMedia(
+function getTrustedOwnedTtsLocalMediaUrls(
   toolName: string | undefined,
   result: unknown,
   trustedLocalMediaToolNames?: ReadonlySet<string>,
-): boolean {
+): readonly string[] | undefined {
   if (
     !toolName ||
     !isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames) ||
     normalizeToolPolicyName(toolName) !== "tts"
   ) {
-    return false;
+    return undefined;
   }
   const media = readToolResultDetails(result)?.media;
   if (!media || typeof media !== "object" || Array.isArray(media)) {
-    return false;
+    return undefined;
   }
-  return (media as Record<string, unknown>).trustedLocalMedia === true;
+  return (media as Record<string, unknown>).trustedLocalMedia === true
+    ? getCoreTtsToolResultMediaUrls(result)
+    : undefined;
 }
 
 export function filterToolResultMediaUrls(
@@ -196,26 +191,20 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
+  const trustedOwnedTtsMediaUrls = getTrustedOwnedTtsLocalMediaUrls(
     toolName,
     result,
     trustedLocalMediaToolNames,
   );
   if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
-    // When the current run provides its exact trusted local-media tool names,
-    // require the raw emitted tool name to match one of them before allowing
-    // local media paths.
-    // This blocks normalized aliases and case-variant collisions such as
-    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
-    // registered tool's media trust. TTS-generated local files carry a
-    // separate trusted-media flag from the owned tool result, so they can
-    // survive runs whose exact trusted set omitted the raw tts name.
+    // An omitted raw name needs private core-TTS provenance for each local path.
+    // A result field alone cannot grant that exception to a plugin with a core name.
     if (trustedLocalMediaToolNames !== undefined) {
-      if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
-          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
-        }
+      const registeredName = toolName?.trim();
+      if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+        return mediaUrls.filter(
+          (url) => HTTP_URL_RE.test(url.trim()) || trustedOwnedTtsMediaUrls?.includes(url.trim()),
+        );
       }
     }
     return mediaUrls;
@@ -223,17 +212,6 @@ export function filterToolResultMediaUrls(
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
 }
 
-/**
- * Extract media file paths from a tool result.
- *
- * Strategy (first match wins):
- * 1. Read structured `details.media` attachments from tool details.
- * 2. Fall back to `details.path` when image content exists (legacy imageResult).
- *
- * Returns an empty array when no media is found (e.g. embedded `read` tool
- * returns base64 image data but no file path; those need a different delivery
- * path like saving to a temp file).
- */
 type ToolResultMediaArtifact = {
   mediaUrls: string[];
   attachments?: ReplyMediaAttachment[];
@@ -245,11 +223,9 @@ function readToolResultDetailsMedia(
   result: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const details = readToolResultDetails(result);
-  const media =
-    details?.media && typeof details.media === "object" && !Array.isArray(details.media)
-      ? (details.media as Record<string, unknown>)
-      : undefined;
-  return media;
+  return details?.media && typeof details.media === "object" && !Array.isArray(details.media)
+    ? (details.media as Record<string, unknown>)
+    : undefined;
 }
 
 const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
@@ -328,23 +304,6 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
   };
 }
 
-function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
-  return media.outbound === false;
-}
-
-function hasImageContentBlock(content: unknown[]): boolean {
-  for (const item of content) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const entry = item as Record<string, unknown>;
-    if (entry.type === "image") {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function extractToolResultMediaArtifact(
   result: unknown,
 ): ToolResultMediaArtifact | undefined {
@@ -354,7 +313,7 @@ export function extractToolResultMediaArtifact(
   const record = result as Record<string, unknown>;
   const detailsMedia = readToolResultDetailsMedia(record);
   if (detailsMedia) {
-    if (isNonOutboundToolResultMedia(detailsMedia)) {
+    if (detailsMedia.outbound === false) {
       return undefined;
     }
     const structuredMedia = collectStructuredMedia(detailsMedia);
@@ -374,7 +333,7 @@ export function extractToolResultMediaArtifact(
 
   // Fall back to legacy details.path when image content exists but no
   // structured media details.
-  if (hasImageContentBlock(content)) {
+  if (content.some((item) => item && typeof item === "object" && item.type === "image")) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {

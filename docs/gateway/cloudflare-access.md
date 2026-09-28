@@ -61,6 +61,68 @@ consumes them in the next step:
 - `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
   header is present and non-blank; it does not verify the JWT signature.
 
+### OIDC sign-in and existing people
+
+For OIDC sign-in, configure an Access policy that admits the intended users through
+that identity provider. For example, use a signed role claim maintained by the
+provider. A GitHub organization policy applies to the GitHub identity provider;
+it does not grant access through a separate OIDC provider.
+
+OpenClaw verifies the OIDC identity through Cloudflare Access's identity endpoint
+and requires its email to match the authenticated user header. It then resolves
+that email through the existing person profile. Using the same email retains the
+person's profile and role; a different email requires an existing linked alias to
+resolve to that person. GitHub sign-in continues to verify the immutable GitHub
+account ID. Failed identity verification does not fall back to email matching.
+
+Keep the identity provider responsible for verifying email ownership. Creating an
+OpenClaw person profile does not grant access through Cloudflare Access.
+
+### Verified GitHub credit through OIDC
+
+An OIDC provider can supply a verified GitHub account without changing the sign-in
+email or the account used to publish pull requests. This is optional and disabled
+until you explicitly trust one Access issuer, identity-provider ID, and claim name:
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+        cloudflareAccessOidc: {
+          issuer: "https://example.cloudflareaccess.com",
+          providerId: "your-access-identity-provider-id",
+          githubAccountIdClaim: "https://openclaw.ai/github-account-id",
+        },
+      },
+    },
+  },
+}
+```
+
+The issuer is the Access team origin without a trailing slash. `providerId` is
+the selected integration's ID from Access, not its name or an OIDC user subject.
+The provider must verify ownership of the GitHub account and bind it to the
+verified sign-in email. Its ID token must contain a canonical positive
+decimal-string account ID, such as `"12345"`, within JavaScript's safe-integer
+range. Configure Access to forward that exact [custom OIDC claim](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/generic-oidc/#custom-oidc-claims).
+OpenClaw reads it from `oidc_fields` in the Access identity response and verifies
+the numeric account through GitHub to obtain its current public login.
+
+A missing claim or an unselected issuer/provider keeps ordinary email-only
+resolution. A malformed trusted claim or failed identity verification fails
+identity enrichment instead of inventing credit. Existing email profiles retain
+their identity, role, and saved co-author preference. A conflicting GitHub account
+does not automatically merge profiles or move the email; an administrator must
+resolve it through the existing `users.linkEmail` operation. This also applies
+to a first-time email claiming an account that already belongs to another
+profile: link that email explicitly before it can inherit the profile's role.
+Explicitly linked secondary accounts retain the profile's primary account for public credit.
+See [Gateway profiles and GitHub credit](/concepts/user-model#gateway-profile-and-github-credit).
+
 ## Step 3: Trust those headers in the Gateway
 
 Set `gateway.auth.mode` to `trusted-proxy` and name the Access headers. `allowLoopback`
@@ -71,6 +133,7 @@ otherwise expects a non-loopback proxy.
 {
   gateway: {
     bind: "loopback",
+    publicOrigin: "https://gateway.example",
     trustedProxies: ["127.0.0.1", "::1"],
     auth: {
       mode: "trusted-proxy",
@@ -89,6 +152,12 @@ verification. A local process that can connect to the Gateway can submit both he
 so do not treat this setting as a defense against untrusted local code. The security
 boundary is the locked-down loopback port plus Cloudflare Access and the tunnel being
 the only path for external traffic.
+
+`publicOrigin` supplies external session links, agent link instructions, and the
+browser-origin default when `controlUi.allowedOrigins` is omitted. You only need
+an explicit allowlist for a different browser policy; that list replaces the
+default rather than adding to it. For profile, role, GitHub, and operations setup,
+see [Deploy a team server](/gateway/team-server).
 
 ## Step 4: Decide how nodes and workers get in
 
@@ -117,7 +186,7 @@ worker route. Both enforce their own short-lived credentials — a join code is 
 with a TTL, rate-limited per IP, and answers failures with an opaque 404; worker admission
 carries its own expiring credential. This keeps join links paste-and-go, at the cost of
 making those two routes publicly reachable. Prefer the service token unless you need that
-onboarding flow. See [Nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
+onboarding flow. See [Nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 
 If you do neither, `openclaw connect` fails against the tunnel even though the browser
 works, because the join request is redirected to the Access login page.
@@ -126,6 +195,24 @@ works, because the join request is redirected to the Access login page.
 
 **Control UI.** Open `https://gateway.example` and sign in through Access. With
 trusted-proxy auth the Gateway maps your Access identity to an operator session.
+
+If Access expires while a chat is open, the chat connection can remain active
+while new image and file requests require renewed website access. The Control UI
+first attempts automatic renewal through a hidden, sandboxed browser navigation.
+If your global Cloudflare Access session is still valid and your browser permits
+its cookies, Access can issue a fresh application cookie without another login.
+OpenClaw verifies access before retrying failed attachments, keeping your
+conversation and unsent draft open.
+
+If renewal still requires sign-in, the Control UI opens one **Sign in to continue
+loading content** dialog. An expired global session, an identity-provider challenge,
+or blocked third-party cookies can require this manual step. Automatic renewal
+does not extend the session durations configured in Cloudflare Access.
+Choose **Sign in**, finish authentication in the new tab, and return to the
+conversation. Visible failed attachments retry after access is verified; the
+original conversation and unsent draft stay open. **Check again** repeats the
+access check, and **Not now** dismisses the prompt without interrupting the chat.
+Ordinary network failures and missing files do not trigger this dialog.
 
 **CLI and TUI.** These do not carry browser cookies, so they present an Access token on
 the WebSocket upgrade. Configure `gateway.remote.edgeAuth` as described in

@@ -128,6 +128,17 @@ function validate(
   });
 }
 
+function liveFixture() {
+  const includeFilters = ["scenario:scenario-a"];
+  const lanePlan = plan([FIRST_PAIR], 1, includeFilters);
+  const laneReport = report({ authMode: "live", includeFilters, pairs: [FIRST_PAIR], repeat: 1 });
+  return {
+    laneReport,
+    validateLive: () =>
+      validate(lanePlan, laneReport, { authMode: "live", includeFilters, repeat: 1 }),
+  };
+}
+
 function recordsOf(laneReport: JsonObject): JsonObject[] {
   return laneReport.records as JsonObject[];
 }
@@ -212,43 +223,19 @@ describe("Kova workflow evidence", () => {
   });
 
   it("rejects live records backed by mock-provider evidence", () => {
-    const liveFilters = ["scenario:scenario-a"];
-    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
-    const laneReport = report({
-      authMode: "live",
-      includeFilters: liveFilters,
-      pairs: [FIRST_PAIR],
-      repeat: 1,
-    });
+    const { laneReport, validateLive } = liveFixture();
     const firstRecord = firstRecordOf(laneReport);
     (firstRecord.providerEvidence as JsonObject).source = "mock-provider-log";
 
-    expect(() =>
-      validate(lanePlan, laneReport, {
-        authMode: "live",
-        includeFilters: liveFilters,
-        repeat: 1,
-      }),
-    ).toThrow("live record scenario-a/state-a provider source was mock-provider-log");
+    expect(validateLive).toThrow(
+      "live record scenario-a/state-a provider source was mock-provider-log",
+    );
   });
 
   it("accepts live timeline evidence with observed provider requests", () => {
-    const liveFilters = ["scenario:scenario-a"];
-    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
-    const laneReport = report({
-      authMode: "live",
-      includeFilters: liveFilters,
-      pairs: [FIRST_PAIR],
-      repeat: 1,
-    });
+    const { validateLive } = liveFixture();
 
-    expect(
-      validate(lanePlan, laneReport, {
-        authMode: "live",
-        includeFilters: liveFilters,
-        repeat: 1,
-      }),
-    ).toEqual({
+    expect(validateLive()).toEqual({
       authMode: "live",
       pairCount: 1,
       recordCount: 1,
@@ -257,36 +244,18 @@ describe("Kova workflow evidence", () => {
   });
 
   it("rejects live evidence for a different provider model", () => {
-    const liveFilters = ["scenario:scenario-a"];
-    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
-    const laneReport = report({
-      authMode: "live",
-      includeFilters: liveFilters,
-      pairs: [FIRST_PAIR],
-      repeat: 1,
-    });
+    const { laneReport, validateLive } = liveFixture();
     (firstRecordOf(laneReport).providerEvidence as JsonObject).models = [
       { value: "gpt-5.5", count: 1 },
     ];
 
-    expect(() =>
-      validate(lanePlan, laneReport, {
-        authMode: "live",
-        includeFilters: liveFilters,
-        repeat: 1,
-      }),
-    ).toThrow("live record scenario-a/state-a provider model did not match gpt-5.6");
+    expect(validateLive).toThrow(
+      "live record scenario-a/state-a provider model did not match gpt-5.6",
+    );
   });
 
   it("rejects mixed live provider models", () => {
-    const liveFilters = ["scenario:scenario-a"];
-    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
-    const laneReport = report({
-      authMode: "live",
-      includeFilters: liveFilters,
-      pairs: [FIRST_PAIR],
-      repeat: 1,
-    });
+    const { laneReport, validateLive } = liveFixture();
     const providerEvidence = firstRecordOf(laneReport).providerEvidence as JsonObject;
     providerEvidence.requestCount = 2;
     providerEvidence.models = [
@@ -294,35 +263,20 @@ describe("Kova workflow evidence", () => {
       { value: "gpt-5.5", count: 1 },
     ];
 
-    expect(() =>
-      validate(lanePlan, laneReport, {
-        authMode: "live",
-        includeFilters: liveFilters,
-        repeat: 1,
-      }),
-    ).toThrow("live record scenario-a/state-a provider model evidence was not exact");
+    expect(validateLive).toThrow(
+      "live record scenario-a/state-a provider model evidence was not exact",
+    );
   });
 
   it("rejects live provider model count drift", () => {
-    const liveFilters = ["scenario:scenario-a"];
-    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
-    const laneReport = report({
-      authMode: "live",
-      includeFilters: liveFilters,
-      pairs: [FIRST_PAIR],
-      repeat: 1,
-    });
+    const { laneReport, validateLive } = liveFixture();
     (firstRecordOf(laneReport).providerEvidence as JsonObject).models = [
       { value: MODEL, count: 2 },
     ];
 
-    expect(() =>
-      validate(lanePlan, laneReport, {
-        authMode: "live",
-        includeFilters: liveFilters,
-        repeat: 1,
-      }),
-    ).toThrow("live record scenario-a/state-a provider model count did not match request count");
+    expect(validateLive).toThrow(
+      "live record scenario-a/state-a provider model count did not match request count",
+    );
   });
 
   it("rejects plan and report schema drift", () => {

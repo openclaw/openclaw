@@ -20,8 +20,11 @@ function orderAttachments(
     return attachments.toReversed();
   }
   if (prefer === "path" || prefer === "url") {
-    const preferred = attachments.filter((item) => item[prefer]);
-    const remaining = attachments.filter((item) => !item[prefer]);
+    const preferred: MediaAttachment[] = [];
+    const remaining: MediaAttachment[] = [];
+    for (const item of attachments) {
+      (item[prefer] ? preferred : remaining).push(item);
+    }
     return [...preferred, ...remaining];
   }
   return attachments;
@@ -57,8 +60,11 @@ export function selectAttachments(params: {
   policy?: MediaUnderstandingAttachmentsConfig;
 }): { selected: MediaAttachment[]; droppedAttachmentIndexes: number[] } {
   const { capability, attachments, policy } = params;
-  const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
+  const input = Array.isArray(attachments) ? attachments : [];
   const matches = input.filter((item) => {
+    if (!isAttachmentRecord(item)) {
+      return false;
+    }
     // Preflight audio has already been consumed; rerunning STT would duplicate transcript output.
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;

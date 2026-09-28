@@ -52,6 +52,15 @@ export function migrateLegacyUpdateCheckState(params: {
     stateDir: params.stateDir,
     label: "update-check state",
     normalize: normalizeLegacyUpdateCheckState,
+    recoverableReadFailure(error) {
+      const canonical = readConfigMachineState<LegacyUpdateCheckState>(UPDATE_CHECK_STATE_KEY, {
+        env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+      });
+      // Without canonical state, starting the scheduler would reset rollout and retry timing.
+      return canonical === undefined
+        ? undefined
+        : `Skipped unreadable legacy update-check state; kept canonical update timing. Run openclaw doctor --fix to retry. ${params.detected.sourcePath}: ${String(error)}`;
+    },
     migrate(_db, state) {
       const options = { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } };
       const result = importConfigMachineState([[UPDATE_CHECK_STATE_KEY, state]], options);

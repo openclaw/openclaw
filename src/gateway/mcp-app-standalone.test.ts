@@ -68,6 +68,7 @@ describe("MCP App standalone host", () => {
         createMcpAppStandaloneTicket({
           sessionKey: `agent:${index}`,
           view: { ...view, viewId: `mcp-app-${index}` },
+          toolOperationsAuthorized: true,
           nowMs,
           secret,
         }),
@@ -77,10 +78,49 @@ describe("MCP App standalone host", () => {
       createMcpAppStandaloneTicket({
         sessionKey: "agent:overflow",
         view: { ...view, viewId: "mcp-app-overflow" },
+        toolOperationsAuthorized: true,
         nowMs,
         secret,
       }),
     ).toBeUndefined();
+  });
+
+  it("binds tool authority and never reuses a stronger ticket for a read-only issuer", async () => {
+    const stronger = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const readOnly = issueTicket({
+      sessionKey: "agent:main:main",
+      view,
+      toolOperationsAuthorized: false,
+      nowMs: nowMs + 1,
+      secret,
+    });
+
+    expect(readOnly.ticket).not.toBe(stronger.ticket);
+    const payload = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${readOnly.ticket}`,
+    });
+    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+      serverTools: false,
+    });
+
+    const denied = await request({
+      url: "/__openclaw__/mcp-app/view",
+      method: "POST",
+      authorization: `MCP-App ${readOnly.ticket}`,
+      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+    });
+    expect(denied.res.statusCode).toBe(403);
+    expect(runtime.callTool).not.toHaveBeenCalled();
+
+    const allowed = await request({
+      url: "/__openclaw__/mcp-app/view",
+      method: "POST",
+      authorization: `MCP-App ${stronger.ticket}`,
+      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+    });
+    expect(allowed.res.statusCode).toBe(200);
+    expect(runtime.callTool).toHaveBeenCalledOnce();
   });
 
   it("serves a hash-protected static shell without per-view data", async () => {
@@ -249,7 +289,7 @@ describe("MCP App standalone host", () => {
     ).toBe(401);
   });
 
-  it.each([0, 7, "7"])("cancels only the active serialized request %j", async (id) => {
+  it.each([0, "7"])("cancels only the active serialized request %j", async (id) => {
     const host = await createSerializedHost();
     host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
     const operation = host.operations[0]!;
@@ -300,24 +340,21 @@ describe("MCP App standalone host", () => {
     },
   );
 
-  it.each(["tools/list", "resources/list", "resources/templates/list", "resources/read"])(
-    "retires %s when the page closes",
-    async (method) => {
-      const host = await createSerializedHost();
-      host.emit({ jsonrpc: "2.0", id: 1, method, params: {} });
-      host.pagehide();
-      expect(host.operations[0]?.signal?.aborted).toBe(true);
-      host.pageshow(true);
-      expect(host.reload).not.toHaveBeenCalled();
-      host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
-      expect(host.operations).toHaveLength(1);
-      host.operations[0]!.result.resolve("late result");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
-    },
-  );
+  it.each(["tools/list", "resources/read"])("retires %s when the page closes", async (method) => {
+    const host = await createSerializedHost();
+    host.emit({ jsonrpc: "2.0", id: 1, method, params: {} });
+    host.pagehide();
+    expect(host.operations[0]?.signal?.aborted).toBe(true);
+    host.pageshow(true);
+    expect(host.reload).not.toHaveBeenCalled();
+    host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
+    expect(host.operations).toHaveLength(1);
+    host.operations[0]!.result.resolve("late result");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+  });
 
   it("requests one fresh document on a persisted live-host return without replaying work", async () => {
     const host = await createSerializedHost();

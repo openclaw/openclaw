@@ -62,16 +62,36 @@ export function setCronRunCapacityListener(state: CronServiceState, listener: ()
   state.runAdmission.capacityListener ??= listener;
 }
 
-async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
+async function acquireCronRunAdmission(
+  state: CronServiceState,
+  signal?: AbortSignal,
+): Promise<(() => void) | null> {
   const admission = state.runAdmission;
-  if (state.stopped) {
+  if (state.stopped || signal?.aborted) {
     return null;
   }
   if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
     return acquireCronRunSlot(state);
   }
   return await new Promise<(() => void) | null>((resolve) => {
-    admission.waiters.push(resolve);
+    const settle = (release: (() => void) | null) => {
+      signal?.removeEventListener("abort", cancel);
+      resolve(release);
+    };
+    const cancel = () => {
+      const index = admission.waiters.indexOf(settle);
+      if (index < 0) {
+        return;
+      }
+      admission.waiters.splice(index, 1);
+      settle(null);
+      dispatchWaiters(state);
+    };
+    admission.waiters.push(settle);
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+    }
   });
 }
 
@@ -91,8 +111,9 @@ export async function runWithCronAdmission<T>(
   state: CronServiceState,
   execute: () => Promise<T>,
   acquiredRelease?: () => void,
+  signal?: AbortSignal,
 ): Promise<{ kind: "admitted"; value: T } | { kind: "stopped" }> {
-  const release = acquiredRelease ?? (await acquireCronRunAdmission(state));
+  const release = acquiredRelease ?? (await acquireCronRunAdmission(state, signal));
   if (!release) {
     return { kind: "stopped" };
   }

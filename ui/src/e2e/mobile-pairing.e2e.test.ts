@@ -36,6 +36,60 @@ async function captureUiProof(page: Page, fileName: string) {
   await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
 }
 
+async function expectPairingLayout(page: Page, mode: "node" | "qr") {
+  const layout = await page.evaluate((currentMode) => {
+    const setup = document.querySelector<HTMLElement>(".device-pair-setup")!;
+    const setupBounds = setup.getBoundingClientRect();
+    const elements = document.querySelectorAll<HTMLElement>(
+      `.device-pair-setup, .device-pair-setup__body, .device-pair-setup__access label, .device-pair-setup__meta, .device-pair-setup__fallback, .device-pair-setup__footer, ${
+        currentMode === "node"
+          ? ".device-pair-setup__command, .login-gate__command, .login-gate__command code, .device-pair-setup .chat-copy-btn"
+          : ".device-pair-setup__qr-frame, .device-pair-setup__qr"
+      }`,
+    );
+    const copy = setup.querySelector<HTMLElement>(".chat-copy-btn");
+    const code = setup.querySelector<HTMLElement>(".login-gate__command code");
+    const qr = setup.querySelector<HTMLElement>(".device-pair-setup__qr");
+    const outside = [...elements]
+      .filter((element) => {
+        const bounds = element.getBoundingClientRect();
+        return (
+          element.scrollWidth > element.clientWidth + 1 ||
+          bounds.left < setupBounds.left - 1 ||
+          bounds.right > setupBounds.right + 1
+        );
+      })
+      .map((element) => element.className);
+    if (
+      copy &&
+      code &&
+      code.getBoundingClientRect().right > copy.getBoundingClientRect().left + 1
+    ) {
+      outside.push("copy-overlap");
+    }
+    if (getComputedStyle(setup).overflowX === "hidden") {
+      outside.push("clipped-overflow");
+    }
+    let qrState = qr === null;
+    if (currentMode === "qr") {
+      qrState = qr ? Math.abs(qr.clientWidth - qr.clientHeight) <= 1 : false;
+    }
+    return {
+      accessCards: document.querySelectorAll(".device-pair-setup__access label").length,
+      outside,
+      pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      qrState,
+    };
+  }, mode);
+
+  expect(layout).toEqual({
+    accessCards: 3,
+    outside: [],
+    pageOverflow: false,
+    qrState: true,
+  });
+}
+
 suite.define(() => {
   it("opens pairing from a catalog command without creating a transcript turn", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
@@ -140,13 +194,7 @@ suite.define(() => {
   });
 
   it("retires exact setup credentials across success, expiry, regeneration, and errors", async () => {
-    const setupCode = Buffer.from(
-      JSON.stringify({
-        url: "wss://gateway.example.test",
-        bootstrapToken: "e2e-bootstrap-token",
-      }),
-      "utf8",
-    ).toString("base64url");
+    const setupCode = `eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.${"Ab9_".repeat(54)}.SyntheticSignatureForLayoutOnly`;
     const qrDataUrl = await qrcode.toDataURL(setupCode, { margin: 2, width: 360 });
     const setupResult = (
       setupId: string,
@@ -167,6 +215,7 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
+        permissions: ["clipboard-read", "clipboard-write"],
         serviceWorkers: "block",
         viewport: { height: 844, width: 390 },
       },
@@ -239,6 +288,7 @@ suite.define(() => {
         await gateway.resolveDeferred("device.pair.setupCode", setupResult("setup-full", "full"));
         await qr.waitFor();
         await captureUiProof(page, "03-mobile-waiting.png");
+        await expectPairingLayout(page, "qr");
 
         await gateway.emitGatewayEvent("device.pair.setup.completed", {
           setupId: "setup-unrelated",
@@ -273,6 +323,8 @@ suite.define(() => {
         );
         await page.getByRole("button", { name: "Create setup code" }).click();
         await qr.waitFor();
+        await captureUiProof(page, "04-desktop-waiting.png");
+        await expectPairingLayout(page, "qr");
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "limited",
         });
@@ -414,23 +466,44 @@ suite.define(() => {
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();
         await dialog.waitFor({ state: "hidden" });
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-node", "node", Date.now() + 60_000, "Node_AbC123"),
-        );
-        await pairFromSettings.click();
-        await dialog.waitFor();
-        const nodeAccess = page.locator('input[name="device-pair-access"]').nth(2);
-        await nodeAccess.check();
-        await page.getByRole("button", { name: "Create setup code" }).click();
+        const nodeCommand = `openclaw node run --pair "oc-pair://${setupCode}"`;
+        const setup = page.locator(".device-pair-setup");
+        for (const viewport of [
+          { height: 900, width: 1280 },
+          { height: 844, width: 390 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await gateway.setMethodResponse(
+            "device.pair.setupCode",
+            setupResult(`setup-node-${viewport.width}`, "node", Date.now() + 60_000),
+          );
+          await pairFromSettings.click();
+          await dialog.waitFor();
+          await page.locator('input[name="device-pair-access"]').nth(2).check();
+          await page.getByRole("button", { name: "Create setup code" }).click();
+          await page.getByText(nodeCommand, { exact: true }).waitFor();
+          await captureUiProof(page, `11-node-${viewport.width}.png`);
+          await expectPairingLayout(page, "node");
+          const copy = setup.locator(".chat-copy-btn");
+          await copy.focus();
+          expect(await copy.evaluate((element) => element === document.activeElement)).toBe(true);
+          await page.evaluate(() => navigator.clipboard.writeText("before-copy"));
+          await copy.click();
+          await expect
+            .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+            .toBe(nodeCommand);
+          const manageDevices = page.getByRole("button", { name: "Manage devices" });
+          await manageDevices.scrollIntoViewIfNeeded();
+          await manageDevices.click({ trial: true });
+          if (viewport.width === 1280) {
+            await page.locator(".device-pair-setup__close").click();
+          }
+        }
+        expect(await setup.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "node",
           includeQr: false,
         });
-        await page
-          .getByText('openclaw node run --pair "oc-pair://Node_AbC123"', { exact: true })
-          .waitFor();
-        expect(await qr.count()).toBe(0);
         await page.getByRole("button", { name: "Manage devices" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/devices");
         expect(pageErrors).toEqual([]);

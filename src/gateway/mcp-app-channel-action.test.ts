@@ -96,6 +96,12 @@ describe("materializeMcpAppChannelPresentation", () => {
     });
 
     expect(mocks.createTicket).toHaveBeenCalledOnce();
+    expect(mocks.createTicket).toHaveBeenCalledWith({
+      sessionKey: "agent:main:do-not-emit-session",
+      view,
+      toolOperationsAuthorized: true,
+      nowMs,
+    });
     expect(presentation).toEqual({
       blocks: [
         {

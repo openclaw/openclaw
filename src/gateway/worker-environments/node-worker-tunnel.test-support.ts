@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -9,8 +11,14 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import type { SpawnResult } from "../../process/exec.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import type { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
+import {
+  serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
 
 export const BUILD = {
   bundleHash: "a".repeat(64),
@@ -20,6 +28,8 @@ export const BUILD = {
 
 export function environment(): WorkerEnvironmentRecord {
   return {
+    preparation: null,
+    lastActivatedAtMs: null,
     environmentId: "environment-1",
     providerId: "device",
     profileId: "device:node-1",
@@ -47,6 +57,9 @@ export function environment(): WorkerEnvironmentRecord {
 
 export function transport(): NodeWorkerSupervisorTransport {
   return {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
     hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
       {
@@ -95,14 +108,80 @@ export function startRequest() {
   };
 }
 
-export function workspaceTransfer(): NodeWorkspaceTransferService {
-  return {
-    close: vi.fn(async () => {}),
-    revoke: vi.fn(),
-  } as unknown as NodeWorkspaceTransferService;
+export async function createManager(
+  record: ReturnType<typeof environment>,
+  overrides: Partial<Parameters<typeof createNodeWorkerTunnelManager>[0]> = {},
+) {
+  const { createNodeWorkerTunnelManager } = await import("./node-worker-tunnel.js");
+  return createNodeWorkerTunnelManager({
+    gatewayDeviceId: "gateway-device-1",
+    getEnvironment: () => record,
+    listEnvironments: () => [record],
+    getTransport: transport,
+    launchNodeWorker: vi.fn(),
+    validateWorkerTurn: () => true,
+    workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
 }
 
-export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult>) {
+export function workspaceTransfer(
+  operations: Partial<NodeWorkspaceTransferService> = {},
+): NodeWorkspaceTransferService {
+  const unconfigured = (): never => {
+    throw new Error("Unconfigured workspace transfer operation");
+  };
+  return {
+    initialize: unconfigured,
+    prepareAttachments: unconfigured,
+    prepareRepository: unconfigured,
+    prepareSync: unconfigured,
+    prepareUpload: unconfigured,
+    takeUpload: unconfigured,
+    discardUpload: unconfigured,
+    getSnapshot: unconfigured,
+    publishSnapshot: unconfigured,
+    authorize: unconfigured,
+    isAuthorizationCurrent: unconfigured,
+    authorizationSignal: unconfigured,
+    snapshot: unconfigured,
+    pack: unconfigured,
+    blob: unconfigured,
+    receiveUpload: unconfigured,
+    verifyBlob: unconfigured,
+    fenceEnvironment: unconfigured,
+    closeAll: unconfigured,
+    close: vi.fn(async () => {}),
+    revoke: vi.fn(async () => {}),
+    ...operations,
+  };
+}
+
+export function workspaceSnapshot(
+  root: string,
+  manifest: WorkerWorkspaceManifest = { version: 1, baseCommit: null, entries: [] },
+): NodeWorkspaceTransferSnapshot {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+  const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+  return { manifest, manifestRef, rawManifest, root };
+}
+
+export function unchangedWorkspaceUpload(
+  snapshot: NodeWorkspaceTransferSnapshot,
+  stagingRoot = snapshot.root,
+): ReturnType<NodeWorkspaceTransferService["takeUpload"]> {
+  return {
+    base: snapshot.manifest,
+    baseManifestRef: snapshot.manifestRef,
+    baseRaw: snapshot.rawManifest,
+    current: snapshot.manifest,
+    currentManifestRef: snapshot.manifestRef,
+    currentRaw: snapshot.rawManifest,
+    stagingRoot,
+  };
+}
+
+export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult> = {}) {
   return JSON.stringify({
     workspaceDir,
     stdout: "",
@@ -113,4 +192,53 @@ export function workspaceCommandPayload(workspaceDir: string, result: Partial<Sp
     termination: "exit",
     ...result,
   });
+}
+
+export function manifestCaptureOutput(manifestRef: string): string {
+  return JSON.stringify({
+    version: 1,
+    manifestRef,
+    memo: [],
+    metrics: {
+      contentHashCount: 0,
+      contentHashDurationMs: 0,
+      memoHitCount: 0,
+      memoTruncatedCount: 0,
+      totalDurationMs: 0,
+    },
+  });
+}
+
+export function seedNodeWorkspaceRepositories(
+  localPath: string,
+  remoteWorkspaceDir: string,
+): string {
+  const git = (args: string[]) =>
+    execFileSync("git", args, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    }).trim();
+  git(["init", "--quiet", localPath]);
+  git(["-C", localPath, "add", "."]);
+  git([
+    "-C",
+    localPath,
+    "-c",
+    "user.name=Memo Test",
+    "-c",
+    "user.email=memo@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "base",
+  ]);
+  const baseCommit = git(["-C", localPath, "rev-parse", "HEAD"]);
+  git(["clone", "--quiet", localPath, remoteWorkspaceDir]);
+  return baseCommit;
 }

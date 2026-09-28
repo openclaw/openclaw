@@ -1,7 +1,12 @@
 /** Regular-agent client for the OpenClaw system agent. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
@@ -29,10 +34,7 @@ type OpenClawDelegateResult = {
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
   return sessionKey?.trim()
-    ? `delegate-${createHash("sha256")
-        .update(`${agentId}\0${sessionKey.trim()}`)
-        .digest("hex")
-        .slice(0, 32)}`
+    ? `delegate-${sha256Hex(`${agentId}\0${sessionKey.trim()}`).slice(0, 32)}`
     : `delegate-${randomUUID()}`;
 }
 
@@ -75,16 +77,26 @@ export function createOpenClawDelegateToolsForRun(
   const turnSourceTo =
     options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo;
   const turnSourceThreadId = options.currentThreadTs ?? options.agentThreadId;
+  // Only messaging channels receive approval prompts; Webchat and terminal runs
+  // decide in the Control UI or the OpenClaw apps.
+  const approvalLocation = isDeliverableMessageChannel(
+    normalizeMessageChannel(options.agentChannel) ?? "",
+  )
+    ? "in this chat (approval buttons or `/approve`)"
+    : "in the Control UI or OpenClaw apps";
   const tool: AnyAgentTool = {
     name: "openclaw",
     label: "OpenClaw",
     // Keep human approval in one model tool call; a yielded cell can outlive its turn.
     catalogMode: "direct-only",
     description:
-      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers. " +
+      "Delegate system setup or repair to a separate model turn. " +
+      "Prefer your available tools for routine status and session/workspace checks. " +
+      "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
+      "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
-        : "Changes wait for human approval and return the final outcome."),
+        : `Changes wait for the user to approve ${approvalLocation} and return the final outcome.`),
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args, signal) => {

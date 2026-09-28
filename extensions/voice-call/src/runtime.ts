@@ -1,4 +1,3 @@
-// Voice Call plugin module implements runtime behavior.
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -84,24 +83,6 @@ const loadRealtimeVoiceRuntime = createLazyRuntimeModule(
 
 const loadRealtimeHandler = createLazyRuntimeModule(() => import("./webhook/realtime-handler.js"));
 
-function resolveVoiceCallConsultSessionKey(call: {
-  config: VoiceCallConfig;
-  coreSession?: OpenClawConfig["session"];
-  sessionKey?: string;
-  from?: string;
-  to?: string;
-  direction?: "inbound" | "outbound";
-  callId: string;
-}): string {
-  return resolveVoiceCallSessionKey({
-    config: call.config,
-    callId: call.callId,
-    phone: call.direction === "outbound" ? call.to : call.from,
-    explicitSessionKey: call.sessionKey,
-    coreSession: call.coreSession,
-  });
-}
-
 function mapVoiceCallConsultTranscript(
   call: {
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
@@ -124,20 +105,13 @@ function mapVoiceCallConsultTranscript(
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
   webhookServer: VoiceCallWebhookServer;
+  manager: CallManager;
 }): {
   setTunnelResult: (result: TunnelResult | null) => void;
   stop: (opts?: { suppressErrors?: boolean }) => Promise<void>;
 } {
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | null = null;
-
-  const runStep = async (step: () => Promise<void>, suppressErrors: boolean) => {
-    if (suppressErrors) {
-      await step().catch(() => {});
-      return;
-    }
-    await step();
-  };
 
   return {
     setTunnelResult: (result) => {
@@ -149,17 +123,24 @@ function createRuntimeResourceLifecycle(params: {
       }
       const suppressErrors = opts?.suppressErrors ?? false;
       stopPromise = (async () => {
-        await runStep(async () => {
-          if (tunnelResult) {
-            await tunnelResult.stop();
+        let failure: { error: unknown } | undefined;
+        for (const step of [
+          async () => {
+            await tunnelResult?.stop();
+          },
+          () => cleanupTailscaleExposure(params.config),
+          () => params.webhookServer.stop(),
+          () => params.manager.stop(),
+        ]) {
+          try {
+            await step();
+          } catch (error) {
+            failure ??= { error };
           }
-        }, suppressErrors);
-        await runStep(async () => {
-          await cleanupTailscaleExposure(params.config);
-        }, suppressErrors);
-        await runStep(async () => {
-          await params.webhookServer.stop();
-        }, suppressErrors);
+        }
+        if (failure && !suppressErrors) {
+          throw failure.error;
+        }
       })();
       return stopPromise;
     },
@@ -243,7 +224,7 @@ function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfi
 async function createRealtimeInstructionsResolver(params: {
   config: VoiceCallConfig & { agentId: string };
   coreConfig: OpenClawConfig;
-  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
+  warn: (message: string) => void;
 }): Promise<(call: CallRecord) => string> {
   const genericConfig: VoiceCallConfig = {
     ...params.config,
@@ -256,7 +237,7 @@ async function createRealtimeInstructionsResolver(params: {
     baseInstructions: params.config.realtime.instructions,
     config: genericConfig,
     coreConfig: params.coreConfig,
-    agentRuntime: params.agentRuntime,
+    warn: params.warn,
     agentId: params.config.agentId,
   });
   const entries = await Promise.all(
@@ -265,7 +246,7 @@ async function createRealtimeInstructionsResolver(params: {
         baseInstructions: params.config.realtime.instructions,
         config: { ...params.config, agentId },
         coreConfig: params.coreConfig,
-        agentRuntime: params.agentRuntime,
+        warn: params.warn,
         agentId,
       });
       return [agentId, instructions] as const;
@@ -306,7 +287,7 @@ export async function createVoiceCallRuntime(params: {
     debug: console.debug,
   };
 
-  const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
+  const cfg = fullConfig ?? coreConfig;
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
   const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
 
@@ -329,14 +310,14 @@ export async function createVoiceCallRuntime(params: {
   if (stateRuntime) {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
-  const manager = new CallManager(config, undefined, cfg.session);
+  const manager = new CallManager(config, undefined, cfg.session, stateRuntime);
   const realtimeVoiceRuntime = config.realtime.enabled ? await loadRealtimeVoiceRuntime() : null;
   const webhookServer = new VoiceCallWebhookServer(
     config,
     manager,
     provider,
     coreConfig,
-    fullConfig ?? (coreConfig as OpenClawConfig),
+    cfg,
     agentRuntime,
     log,
   );
@@ -345,7 +326,7 @@ export async function createVoiceCallRuntime(params: {
     const resolveRealtimeInstructions = await createRealtimeInstructionsResolver({
       config,
       coreConfig: cfg,
-      agentRuntime,
+      warn: (message) => log.warn(`[voice-call] ${message}`),
     });
     const realtimeConfig = {
       ...config.realtime,
@@ -360,11 +341,14 @@ export async function createVoiceCallRuntime(params: {
         providerConfigs: effectiveConfig.realtime.providers,
         cfg,
         agentId,
+        surface: "gateway-relay",
+        useProviderDefaultModel: true,
       });
       return {
         agentId,
         provider: resolved.provider,
         providerConfig: resolved.providerConfig,
+        capabilities: resolved.capabilities,
         instructions: resolveRealtimeInstructions(call),
       };
     };
@@ -388,9 +372,11 @@ export async function createVoiceCallRuntime(params: {
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = resolveCallAgentId(call, effectiveConfig);
-          const sessionKey = resolveVoiceCallConsultSessionKey({
-            ...call,
+          const sessionKey = resolveVoiceCallSessionKey({
             config: { ...effectiveConfig, agentId },
+            callId: call.callId,
+            phone: call.direction === "outbound" ? call.to : call.from,
+            explicitSessionKey: call.sessionKey,
             coreSession: cfg.session,
           });
           const requesterSessionKey =
@@ -462,7 +448,7 @@ export async function createVoiceCallRuntime(params: {
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
   }
-  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
+  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer, manager });
 
   const localUrl = await webhookServer.start();
 

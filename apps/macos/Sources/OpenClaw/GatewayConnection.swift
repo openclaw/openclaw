@@ -12,6 +12,12 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// Owns one Gateway websocket shared by its callers. The primary app runtime
 /// uses `.shared`; saved-profile windows use independent connections.
 actor GatewayConnection: Observable {
+    nonisolated let chatSendOwnership = OpenClawChatSendOwnership()
+    var nativeChatSubscriptionOwners: [UUID: OpenClawChatSessionTarget] = [:]
+    var nativeChatSubscribedScopes: Set<OpenClawChatSendOwnership.Scope> = []
+    var nativeChatSubscriptionLease: ServerLease?
+    var nativeChatSubscriptionTail: Task<Void, Error>?
+
     static let shared: GatewayConnection = {
         #if DEBUG
         // Rendered test views can request previews through the shared connection.
@@ -25,9 +31,19 @@ actor GatewayConnection: Observable {
             currentEndpointRevision: { GatewayEndpointStore.shared.routeRevision })
     }()
 
+    @MainActor private weak var approvalQueueStore: ExecApprovalQueueStore?
+
+    @MainActor var approvalQueue: ExecApprovalQueueStore {
+        if let store = self.approvalQueueStore { return store }
+        let store = ExecApprovalQueueStore(gateway: self)
+        self.approvalQueueStore = store
+        return store
+    }
+
     nonisolated static let operatorClientCaps = [
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,
+        OpenClawGatewayClientCapability.modelSelectionPolicy,
         OpenClawGatewayClientCapability.usageRefreshing,
     ]
 
@@ -121,6 +137,7 @@ actor GatewayConnection: Observable {
         let mainSessionKey: String?
         fileprivate let currentOwner: @Sendable () -> Bool
 
+        /// Terminal chat outcomes retain route ownership; RPCs still validate the exact server lease.
         var isCurrent: Bool {
             self.currentOwner()
         }
@@ -144,26 +161,16 @@ actor GatewayConnection: Observable {
 
     enum Method: String {
         case agent
-        case status
         case setHeartbeats = "set-heartbeats"
-        case systemEvent = "system-event"
         case health
         case configGet = "config.get"
         case configSet = "config.set"
-        case configPatch = "config.patch"
-        case wizardStart = "wizard.start"
-        case wizardNext = "wizard.next"
-        case wizardCancel = "wizard.cancel"
-        case wizardStatus = "wizard.status"
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case talkSpeak = "talk.speak"
-        case modelsList = "models.list"
         case agentsList = "agents.list"
         case agentIdentityGet = "agent.identity.get"
-        case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
-        case chatSend = "chat.send"
         case skillsStatus = "skills.status"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
@@ -172,7 +179,6 @@ actor GatewayConnection: Observable {
         case devicePairList = "device.pair.list"
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
-        case execApprovalList = "exec.approval.list"
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
@@ -188,6 +194,8 @@ actor GatewayConnection: Observable {
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
     private var browserSessionExpiryTask: Task<Void, Never>?
+    var sourceResources: (lease: ServerLease, revision: UInt64, loader: OpenClawChatSourceResources)?
+    var sourceResourceRevision: UInt64 = 0
     var managedMediaTransfers: [UUID: Task<(Data, URLResponse), Error>] = [:]
 
     private struct ConfiguredConnection {
@@ -228,9 +236,7 @@ actor GatewayConnection: Observable {
     private(set) var socketGenerationState = GatewaySocketGenerationState()
 
     private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
-    var realtimeTalkSubscribers: [
-        UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]
-    ] = [:]
+    var realtimeTalkSubscribers: [UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]] = [:]
     var lastSnapshot: HelloOk? {
         didSet { self.publishConnectedServerLease() }
     }
@@ -238,6 +244,11 @@ actor GatewayConnection: Observable {
     nonisolated var connectedEndpointRevision: UInt64? {
         guard case let .connected(connection) = self.connectionPublication.value else { return nil }
         return connection.lease.endpointRevision
+    }
+
+    nonisolated var hasConnectedServer: Bool {
+        guard case let .connected(connection) = self.connectionPublication.value else { return false }
+        return self.serverLeaseMatchesCurrentState(connection.lease)
     }
 
     private func publishConnectedServerLease() {
@@ -426,7 +437,7 @@ actor GatewayConnection: Observable {
             try requireCurrentShutdownGeneration(shutdownGeneration)
             switch mode {
             case .local:
-                await MainActor.run { GatewayProcessManager.shared.setActive(true) }
+                await MainActor.run { GatewayProcessManager.shared.setActive(true, source: .recovery) }
                 try requireCurrentShutdownGeneration(shutdownGeneration)
 
                 let lastError: Error
@@ -1242,6 +1253,13 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
+    func sourceResourceBearer(ifCurrentServerLease lease: ServerLease) async throws -> String? {
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        let bearer = await lease.client.httpResourceBearer(ifCurrentConnectionGeneration: lease.socketGeneration)
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        return bearer
+    }
+
     func controlUiAutoAuthToken(config: Config) async -> String? {
         guard let endpoint = try? await currentEndpoint(),
               endpoint.browserSession == nil,
@@ -1326,6 +1344,14 @@ extension GatewayConnection {
         return (true, self.cachedGatewayVersion())
     }
 
+    func currentAttachmentLimits() -> GatewayAttachmentLimits? {
+        // Staging reads the admitted hello; endpoint recovery must not delay local file preparation.
+        guard case let .connected(connection) = self.connectionPublication.value,
+              self.serverLeaseMatchesCurrentState(connection.lease)
+        else { return nil }
+        return self.lastSnapshot?.advertisedAttachmentLimits()
+    }
+
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
         guard await self.isCurrentServerLease(lease) else { return nil }
         return self.cachedGatewayVersion()
@@ -1353,16 +1379,22 @@ extension GatewayConnection {
     func makePushDelivery(_ push: GatewayPush) -> PushDelivery? {
         guard case let .connected(connection) = self.connectionPublication.value else { return nil }
         let lease = connection.lease
+        let terminal = push.isTerminalChatEvent
         return PushDelivery(
             event: .push(push),
             serverLease: lease,
             mainSessionKey: connection.mainSessionKey,
             currentOwner: { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
+                // Accepted outcomes outlive socket recovery, but never their configured route.
+                if terminal {
+                    return self?.serverLeaseMatchesCurrentRoute(lease) == true
+                }
+                return self?.serverLeaseMatchesCurrentState(lease) == true
             })
     }
 
     private func retirePublication(disconnection: PushDelivery.Event?, retiresRoute: Bool) {
+        self.invalidateSourceResources()
         let lease = self.connectionPublication.withValue { publication -> ServerLease? in
             let lease: ServerLease? = switch publication {
             case let .connected(connection): connection.lease
@@ -1396,7 +1428,19 @@ extension GatewayConnection {
         }
     }
 
+    private func invalidateSourceResources() {
+        self.sourceResourceRevision &+= 1
+        let loader = self.sourceResources?.loader
+        self.sourceResources = nil
+        if let loader { Task { await loader.invalidate() } }
+    }
+
     private func broadcast(_ push: GatewayPush) {
+        if case let .event(event) = push,
+           event.event == "chat.metadata.changed" || event.event == "config.changed"
+        {
+            self.invalidateSourceResources()
+        }
         if case let .snapshot(snapshot) = push {
             self.lastSnapshot = snapshot
             if self.canvasPluginSurfaceURL == nil {
@@ -1407,7 +1451,7 @@ extension GatewayConnection {
         for (_, continuation) in self.subscribers {
             continuation.yield(delivery)
         }
-        if let socketGeneration = self.socketGenerationState.activeGeneration {
+        if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
             var terminatedSubscriberIDs: [UUID] = []
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
                 switch continuation.yield(delivery) {
@@ -1478,21 +1522,28 @@ extension GatewayConnection {
         return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
     }
 
+    /// The resolved key belongs to this hello's physical socket. Callers must
+    /// recheck the lease synchronously when presenting it outside this actor.
+    func mainSessionKey(ifCurrentServerLease lease: ServerLease, timeoutMs: Double = 15000) async throws -> String {
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        if let cached = self.cachedMainSessionKey() { return cached }
+        do {
+            let data = try await self.request(
+                method: "config.get", params: nil, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
+            return try Self.mainSessionKey(fromConfigGetData: data)
+        } catch {
+            try Task.checkCancellation()
+            guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+            return "main"
+        }
+    }
+
     func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
             let data = try await request(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
         } catch {
             return "main"
-        }
-    }
-
-    func status() async -> (ok: Bool, error: String?) {
-        do {
-            _ = try await self.requestRaw(method: .status)
-            return (true, nil)
-        } catch {
-            return (false, error.localizedDescription)
         }
     }
 
@@ -1609,6 +1660,16 @@ extension GatewayConnection {
         }
         let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
+    func conversationOwnershipScope(sessionKey: String, agentID: String?) -> OpenClawChatSendOwnership.Scope {
+        let defaults = self.lastSnapshot?.snapshot.sessiondefaults
+        return OpenClawChatSendOwnership.Scope(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            scope: defaults?["scope"]?.value as? String,
+            mainKey: defaults?["mainKey"]?.value as? String,
+            defaultAgentID: defaults?["defaultAgentId"]?.value as? String)
     }
 
     func chatSend(

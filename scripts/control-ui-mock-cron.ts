@@ -5,6 +5,7 @@ import type {
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
+import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -46,7 +47,10 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
   }));
 }
 
-export function buildCronMocks(baseTime: number, options: { richAttention?: boolean } = {}) {
+export function buildCronMocks(
+  baseTime: number,
+  options: { richAttention?: boolean; secondAgentId?: string } = {},
+) {
   const richAttention = options.richAttention === true;
   const minute = 60_000;
   const hour = 60 * minute;
@@ -196,7 +200,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     : [];
   const healthyJob: CronJob = {
     id: "mock-cron-release-digest",
-    agentId: "main",
+    agentId: options.secondAgentId ?? "main",
     name: "Publish release digest",
     description: "Summarize merged changes for the engineering channel.",
     enabled: true,
@@ -278,6 +282,16 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       provider: "openai",
     },
   }));
+  for (const run of queuedRuns) {
+    run.entry.runId = run.runId;
+  }
+  const transcriptRuns = [...runs, ...queuedRuns.map((run) => run.entry)];
+  for (const [index, entry] of transcriptRuns.entries()) {
+    entry.runId ??= `mock-cron-history-${index}`;
+    const agentId = jobs.find((job) => job.id === entry.jobId)?.agentId ?? "main";
+    entry.sessionKey = `agent:${agentId}:cron:${entry.jobId}:run:${entry.runId}`;
+    entry.sessionId = `mock-cron-transcript-${index}`;
+  }
   const status: CronStatus = {
     enabled: true,
     triggersEnabled: true,
@@ -322,30 +336,28 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
 
   return {
     "cron.status": status,
-    "cron.list": {
+    "cron.list": cronListResponseFixture([
       // Cases mirror the concrete queries today's Cron UI issues. Unknown combinations fall back
       // to the full fixture list; dynamic evaluation is intentionally out of scope because the
       // scenario is JSON-serialized into the page rather than installed as a live responder.
-      cases: [
-        {
-          match: { enabled: "enabled", lastRunStatus: "error" },
-          response: listResult(failedJobs, { limit: failedJobs.length }),
-        },
-        { match: { enabled: "disabled" }, response: listResult([]) },
-        ...singleJobListCases(jobs, {
-          enabled: "enabled",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-          limit: 1,
-        }),
-        ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
-        ...sortedJobLists.map((entry) => ({
-          match: entry.match,
-          response: listResult(entry.jobs),
-        })),
-        { response: listResult(jobs) },
-      ],
-    },
+      {
+        match: { enabled: "enabled", lastRunStatus: "error" },
+        response: listResult(failedJobs, { limit: failedJobs.length }),
+      },
+      { match: { enabled: "disabled" }, response: listResult([]) },
+      ...singleJobListCases(jobs, {
+        enabled: "enabled",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+        limit: 1,
+      }),
+      ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
+      ...sortedJobLists.map((entry) => ({
+        match: entry.match,
+        response: listResult(entry.jobs),
+      })),
+      { response: listResult(jobs) },
+    ]),
     "cron.runs": {
       cases: [
         ...queuedRuns.map((run) => ({
@@ -368,6 +380,23 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
         { match: { statuses: ["error"] }, response: runsResult(failedRuns) },
         { response: runsResult(runs) },
       ],
+    },
+    "cron.history": {
+      cases: transcriptRuns.map((entry) => ({
+        match: { id: entry.jobId, runId: entry.runId },
+        response: {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: entry.summary ?? entry.error ?? "Automation completed." },
+              ],
+              timestamp: entry.ts,
+              __openclaw: { id: `cron-result-${entry.runId}` },
+            },
+          ],
+        },
+      })),
     },
     // Writes acknowledge the UI action but intentionally keep the fixture snapshot immutable.
     "cron.add": { id: "mock-cron-created" },

@@ -110,7 +110,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
     | { kind: "nonIdempotent"; useApiErrorLogging?: boolean }
     | { kind: "standard"; shouldRetry?: (err: unknown) => boolean };
 }): Promise<PreparedTelegramOutboundWithMessageId<T>> {
-  const { cfg, account, api } = params.context;
+  const { cfg, api } = params.context;
   const rawTarget = String(params.to);
   const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
@@ -140,14 +140,12 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
     params.request.kind === "nonIdempotent"
       ? createTelegramNonIdempotentRequestWithDiag({
           cfg,
-          account,
           retry: params.opts.retry,
           verbose: params.opts.verbose,
           useApiErrorLogging: params.request.useApiErrorLogging,
         })
       : createTelegramRequestWithDiag({
           cfg,
-          account,
           retry: params.opts.retry,
           verbose: params.opts.verbose,
           shouldRetry: params.request.shouldRetry,
@@ -181,7 +179,7 @@ export async function finalizeTelegramOutbound(params: {
 }): Promise<TelegramSendResult> {
   const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
-  recordSentMessage(params.prepared.chatId, messageId, cfg, {
+  await recordSentMessage(params.prepared.chatId, messageId, cfg, {
     accountId: account.accountId,
     agentId: ownerAgentId,
   });
@@ -195,21 +193,30 @@ export async function finalizeTelegramOutbound(params: {
   const projection = params.promptContextProjectionPlan?.cursor.take(
     params.promptContextProjectionPlan.finalPart,
   );
-  const recorded = await recordOutboundMessageForPromptContext({
-    cfg,
-    ownerAgentId,
-    account,
-    botUserId: params.botUserId,
-    chatId: params.prepared.chatId,
-    message: params.result,
-    messageId,
-    text: params.text,
-    messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
-    successfulSendThread: params.prepared.threadSpec,
-    promptContextProjection: projection,
-  });
-  if (projection && !recorded) {
+  try {
+    const recorded = await recordOutboundMessageForPromptContext({
+      cfg,
+      ownerAgentId,
+      account,
+      botUserId: params.botUserId,
+      chatId: params.prepared.chatId,
+      message: params.result,
+      messageId,
+      text: params.text,
+      messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
+      successfulSendThread: params.prepared.threadSpec,
+      promptContextProjection: projection,
+    });
+    if (projection && !recorded) {
+      params.promptContextProjectionPlan?.cursor.invalidate();
+    }
+  } catch (error) {
     params.promptContextProjectionPlan?.cursor.invalidate();
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: [resultIds.messageId],
+      ...(resultIds.receipt ? { receipt: resultIds.receipt } : {}),
+      visibleReplySent: true,
+    });
   }
   params.beforeActivity?.(resultIds);
   recordChannelActivity({

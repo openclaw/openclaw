@@ -1,0 +1,47 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import type { createUpdateProgress } from "./progress.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import type { StagedPackageInstallUpdate } from "./update-command-package.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+
+export type MutableUpdateExecutionParams = {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  updateInstallKind: "git" | "package" | "unknown";
+  switchToGit: boolean;
+  timeoutMs: number | undefined;
+  updateStepTimeoutMs: number;
+  startedAt: number;
+  progress: ReturnType<typeof createUpdateProgress>["progress"];
+  stop: () => void;
+  channel: "stable" | "extended-stable" | "beta" | "dev";
+  tag: string;
+  opts: UpdateCommandOptions;
+  shouldRestart: boolean;
+  devTarget?: DevUpdateTarget;
+  packageInstallSpec: string | null;
+  packageInstallEnv?: NodeJS.ProcessEnv;
+  packageInstallTarget?: ResolvedGlobalInstallTarget;
+  stagedPackage?: StagedPackageInstallUpdate;
+  packageTargetVersion?: string;
+  packageTargetSchemaVersions?: OpenClawSchemaVersions;
+  packageUpdateNodeRunner?: string;
+  managedServiceNodeRunner?: string;
+  managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  managedServiceRoot?: string;
+  invocationCwd?: string;
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
+  recoveryState: UpdateCommandRecoveryState;
+  prepareMutableUpdate: (
+    env: NodeJS.ProcessEnv | undefined,
+    activationTimeoutMs: number | undefined,
+    admitExecutor: (fence: UpdateRecoveryFence) => void,
+    installTarget?: ResolvedGlobalInstallTarget,
+  ) => Promise<void>;
+  onActivation?: () => void;
+};

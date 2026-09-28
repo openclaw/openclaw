@@ -1,11 +1,11 @@
-import {
-  type createChannelProgressWorkCounter,
-  formatChannelProgressDraftText,
-  type ChannelProgressDraftCompositorSnapshot,
+import type {
+  createChannelProgressWorkCounter,
+  ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
+import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -25,14 +25,12 @@ export function createSlackDraftProgressCardRuntime(params: {
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
   progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter> | undefined;
-  progressSeed: string;
   explicitTitle: string | undefined;
   maxLineChars: number;
   getSnapshot: () => ChannelProgressDraftCompositorSnapshot;
   getThreadTs: () => string | undefined;
 }) {
   const { account, cfg, ctx, prepared, slackClient } = params.setup;
-  let latestFallbackText = "";
   let finalStatus: Exclude<DraftProgressCardState, "working"> | undefined;
 
   const resolveSessionUrl = () => {
@@ -50,8 +48,9 @@ export function createSlackDraftProgressCardRuntime(params: {
     const url = new URL(publicOrigin);
     const path = buildControlUiSessionPath({
       namespace: "chat",
-      sessionKey: prepared.route.sessionKey,
+      sessionKey: prepared.ctxPayload.SessionKey ?? prepared.route.sessionKey,
       fallbackAgentId: prepared.route.agentId,
+      mainKey: cfg.session?.mainKey,
       basePath: cfg.gateway?.controlUi?.basePath,
     });
     if (!path) {
@@ -61,33 +60,35 @@ export function createSlackDraftProgressCardRuntime(params: {
     return url.toString();
   };
 
-  const resolveText = (snapshot: ChannelProgressDraftCompositorSnapshot) =>
-    latestFallbackText ||
-    formatChannelProgressDraftText({
-      entry: account.config,
-      lines: [...snapshot.lines],
-      seed: params.progressSeed,
-      formatLine: formatSlackProgressDraftLine,
-      narration: snapshot.statusHeadline,
-      plan: snapshot.plan,
-      diffStat: snapshot.diffStat,
-    });
-
   const resolvePresentation = (
     snapshot: ChannelProgressDraftCompositorSnapshot,
     state: DraftProgressCardState,
   ) => {
-    const title = params.explicitTitle ?? snapshot.statusHeadline ?? "Working";
+    const title = params.explicitTitle ?? snapshot.statusHeadline;
+    const titleFormat = params.explicitTitle ? undefined : snapshot.statusHeadlineFormat;
     const narration = params.explicitTitle
-      ? combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
-      : snapshot.planExplanation && snapshot.planExplanation !== title
-        ? snapshot.planExplanation
+      ? snapshot.statusHeadlineFormat === "plain" || snapshot.planExplanationFormat === "plain"
+        ? [
+            ...(snapshot.statusHeadline &&
+            (snapshot.statusHeadline !== snapshot.planExplanation ||
+              snapshot.statusHeadlineFormat !== snapshot.planExplanationFormat)
+              ? [{ text: snapshot.statusHeadline, format: snapshot.statusHeadlineFormat }]
+              : []),
+            ...(snapshot.planExplanation
+              ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
+              : []),
+          ]
+        : combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
+      : snapshot.planExplanation &&
+          (snapshot.planExplanation !== title || snapshot.planExplanationFormat !== titleFormat)
+        ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
         : undefined;
     const workCounter = state === "working" ? params.progressWorkCounter : undefined;
     const sessionUrl = state === "working" ? undefined : resolveSessionUrl();
     return buildSlackProgressCardBlocks({
       state,
       title,
+      titleFormat,
       narration,
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),
@@ -102,7 +103,6 @@ export function createSlackDraftProgressCardRuntime(params: {
   const finalize = async (
     status: Exclude<DraftProgressCardState, "working">,
     snapshot = params.getSnapshot(),
-    fallbackText = resolveText(snapshot),
   ): Promise<boolean> => {
     if (!params.draftStream || !params.enabled) {
       return false;
@@ -121,14 +121,15 @@ export function createSlackDraftProgressCardRuntime(params: {
     await params.draftStream.seal();
     try {
       const finalized = await params.draftStream.finalizeMessage(messageId, async () => {
+        const blocks = resolvePresentation(snapshot, terminalStatus);
         await finalizeSlackPreviewEdit({
           client: slackClient,
           token: ctx.botToken,
           accountId: account.accountId,
           channelId,
           messageId,
-          text: fallbackText,
-          blocks: resolvePresentation(snapshot, terminalStatus),
+          text: buildSlackCompleteBlocksFallbackText(blocks),
+          blocks,
           threadTs: params.getThreadTs(),
         });
       });
@@ -144,17 +145,12 @@ export function createSlackDraftProgressCardRuntime(params: {
 
   return {
     resolveSessionUrl,
-    resolveText,
     resolvePresentation,
     finalize,
     get hasTerminalized() {
       return finalStatus !== undefined;
     },
-    setFallbackText(text: string) {
-      latestFallbackText = text;
-    },
     reset() {
-      latestFallbackText = "";
       finalStatus = undefined;
     },
   };

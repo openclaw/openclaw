@@ -1,8 +1,9 @@
-// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   PluginBlobEntry,
@@ -26,10 +27,13 @@ const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const CLEANUP_CONCURRENCY = 4;
 const MAX_DECODED_HTML_BYTES = 64 * 1024 * 1024;
 const ARTIFACT_ID_ATTEMPTS = 8;
 const VIEWER_PREFIX = "/plugins/diffs/view";
 const EMPTY_BLOB = new Uint8Array();
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 type CreateArtifactParams = {
   html: string;
@@ -74,6 +78,7 @@ export class DiffArtifactStore {
   private readonly cleanupIntervalMs: number;
   private readonly renderingFileIds = new Set<string>();
   private cleanupInFlight: Promise<void> | null = null;
+  private cleanupStopped = false;
   private nextCleanupAt = 0;
 
   constructor(params: {
@@ -134,7 +139,7 @@ export class DiffArtifactStore {
     if (!safeEqualSecret(tokenHash, entry.metadata.tokenHash)) {
       return null;
     }
-    const html = await gunzipAsync(entry.bytes, MAX_DECODED_HTML_BYTES);
+    const html = await gunzipAsync(entry.bytes, { maxOutputLength: MAX_DECODED_HTML_BYTES });
     if (html.byteLength !== entry.metadata.decodedBytes) {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
@@ -207,13 +212,36 @@ export class DiffArtifactStore {
     await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
   }
 
-  scheduleCleanup(): void {
-    this.maybeCleanupExpired();
+  startCleanup(): void {
+    this.cleanupStopped = false;
   }
 
-  async cleanupExpired(): Promise<void> {
+  async stopCleanup(): Promise<void> {
+    this.cleanupStopped = true;
+    // Stop background scheduling and join the current sweep. Foreground invocations
+    // remain host-owned and can still request cleanup after awaited work.
+    await this.cleanupInFlight?.catch(() => undefined);
+  }
+
+  cleanupExpired(): Promise<void> {
+    if (!this.cleanupInFlight) {
+      this.cleanupInFlight = this.runCleanupExpired().finally(() => {
+        this.cleanupInFlight = null;
+      });
+    }
+    return this.cleanupInFlight;
+  }
+
+  private async runCleanupExpired(): Promise<void> {
     const expired = await this.blobStore.deleteExpired();
-    await Promise.all(expired.map(async (entry) => await this.deleteExpiredFile(entry)));
+    // Claimed metadata belongs to this sweep: drain every cleanup before reporting failure.
+    const expiredCleanup = await runTasksWithConcurrency({
+      tasks: expired.map((entry) => () => this.deleteExpiredFile(entry)),
+      limit: CLEANUP_CONCURRENCY,
+    });
+    if (expiredCleanup.hasError) {
+      throw expiredCleanup.firstError;
+    }
 
     const entries = await fs
       .readdir(this.rootDir, { withFileTypes: true })
@@ -224,20 +252,28 @@ export class DiffArtifactStore {
         throw error;
       });
     const now = Date.now();
-    await Promise.all(
-      entries
+    const orphanCleanup = await runTasksWithConcurrency({
+      tasks: entries
         .filter((entry) => entry.isDirectory() && DIFF_ARTIFACT_ID_PATTERN.test(entry.name))
-        .map(async (entry) => {
-          if (this.renderingFileIds.has(entry.name) || (await this.blobStore.lookup(entry.name))) {
+        .map((entry) => async () => {
+          if (this.renderingFileIds.has(entry.name)) {
             return;
           }
           const artifactDir = this.artifactDir(entry.name);
           const stats = await fs.stat(artifactDir).catch(() => null);
-          if (stats && now - stats.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
+          if (
+            stats &&
+            now - stats.mtimeMs > SWEEP_FALLBACK_AGE_MS &&
+            !(await this.blobStore.lookup(entry.name))
+          ) {
             await fs.rm(artifactDir, { recursive: true, force: true }).catch(() => {});
           }
         }),
-    );
+      limit: CLEANUP_CONCURRENCY,
+    });
+    if (orphanCleanup.hasError) {
+      throw orphanCleanup.firstError;
+    }
   }
 
   private async registerUnique(
@@ -291,25 +327,17 @@ export class DiffArtifactStore {
     await fs.rm(this.artifactDir(entry.key), { recursive: true, force: true }).catch(() => {});
   }
 
-  private maybeCleanupExpired(): void {
+  scheduleCleanup(): void {
     const now = Date.now();
-    if (this.cleanupInFlight || now < this.nextCleanupAt) {
+    if (this.cleanupStopped || this.cleanupInFlight || now < this.nextCleanupAt) {
       return;
     }
 
     this.nextCleanupAt = now + this.cleanupIntervalMs;
-    const cleanupPromise = this.cleanupExpired()
-      .catch((error: unknown) => {
-        this.nextCleanupAt = 0;
-        this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
-      })
-      .finally(() => {
-        if (this.cleanupInFlight === cleanupPromise) {
-          this.cleanupInFlight = null;
-        }
-      });
-
-    this.cleanupInFlight = cleanupPromise;
+    void this.cleanupExpired().catch((error: unknown) => {
+      this.nextCleanupAt = 0;
+      this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
+    });
   }
 
   private artifactDir(id: string): string {
@@ -408,30 +436,6 @@ function isArtifactContext(value: unknown): value is DiffArtifactContext | undef
   return Object.entries(context).every(
     ([key, entry]) => allowed.has(key) && (entry === undefined || typeof entry === "string"),
   );
-}
-
-async function gzipAsync(input: Uint8Array): Promise<Uint8Array> {
-  return await new Promise<Buffer>((resolve, reject) => {
-    gzip(input, (error, result) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(result);
-    });
-  });
-}
-
-async function gunzipAsync(input: Uint8Array, maxOutputLength: number): Promise<Uint8Array> {
-  return await new Promise<Buffer>((resolve, reject) => {
-    gunzip(input, { maxOutputLength }, (error, result) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(result);
-    });
-  });
 }
 
 function isFileExists(error: unknown): boolean {

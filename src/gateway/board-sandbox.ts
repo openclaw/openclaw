@@ -1,5 +1,7 @@
 import { buildSandboxHostPath } from "../agents/sandbox-host.js";
 import type { BoardWidgetHtmlViewMetadata } from "../boards/board-store.js";
+import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
+import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 
 type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" | "grantState"> & {
   resourceOrigins?: readonly string[];
@@ -19,7 +21,8 @@ export function buildBoardWidgetSandboxPath(document: BoardWidgetSandboxMetadata
     // Best-effort hardening for the documented WebRTC residual; the DOM guard
     // reduces fresh descendant realms but is not an authorization boundary.
     blockDescendantFrames: true,
-    ...(document.resourceOrigins?.length ? { resourceDomains: [...document.resourceOrigins] } : {}),
+    mediaDomains: [...WIDGET_MEDIA_SOURCES, ...(document.resourceOrigins ?? [])],
+    resourceDomains: [...new Set([...WIDGET_CDN_ORIGINS, ...(document.resourceOrigins ?? [])])],
     ...(connectDomains ? { connectDomains } : {}),
   });
 }
@@ -30,12 +33,14 @@ export function buildBoardWidgetContentSecurityPolicy(
 ): string {
   const connectSources = grantedConnectOrigins(document)?.join(" ") ?? "'none'";
   const resourceSources = document.resourceOrigins?.join(" ") ?? "";
+  const cdnSources = WIDGET_CDN_ORIGINS.join(" ");
   return [
     "default-src 'none'",
-    `script-src 'unsafe-inline' ${resourceSources}`.trim(),
-    "style-src 'unsafe-inline'",
+    `script-src 'unsafe-inline' ${cdnSources} ${resourceSources}`.trim(),
+    `style-src 'unsafe-inline' ${cdnSources}`,
+    `font-src data: ${cdnSources}`,
     `img-src data: ${resourceSources}`.trim(),
-    `media-src data: ${resourceSources}`.trim(),
+    `media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")} ${resourceSources}`.trim(),
     `connect-src ${connectSources}`,
     "webrtc 'block'",
     "base-uri 'none'",

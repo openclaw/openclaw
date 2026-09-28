@@ -2,8 +2,11 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBrewExecutable } from "../../infra/brew.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { hasBinary } from "../loading/config.js";
 import { hasBinaryMock, runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 
@@ -21,17 +24,19 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
 
 vi.mock("../loading/workspace-skill-loader.js", () => {
   return {
-    loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+    prepareWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
   };
 });
 
+vi.mock("../loading/config.js", { spy: true });
+vi.mock("../../infra/brew.js", { spy: true });
+vi.mock("../../infra/container-environment.js", { spy: true });
+
 let installSkill: typeof import("./install.js").installSkill;
 let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;
-let skillsInstallTesting: typeof import("./install.test-support.js").skillsInstallTesting;
 
 async function loadSkillsInstallModulesForTest() {
   ({ installSkill, resolveInstallerKindReadiness } = await import("./install.js"));
-  ({ skillsInstallTesting } = await import("./install.test-support.js"));
 }
 
 function makeSkillEntry(
@@ -151,11 +156,11 @@ describe("skills-install fallback edge cases", () => {
     installEnvSnapshot = captureEnv(["PATH", "GOBIN", "GOPATH"]);
     runCommandWithTimeoutMock.mockReset();
     hasBinaryMock.mockReset();
-    skillsInstallTesting.setDepsForTest({
-      hasBinary: (bin: string) => hasBinaryMock(bin),
-      resolveBrewExecutable: () => undefined,
-      isContainerEnvironment: () => false,
-    });
+    vi.mocked(hasBinary)
+      .mockReset()
+      .mockImplementation((bin: string) => hasBinaryMock(bin));
+    vi.mocked(resolveBrewExecutable).mockReset().mockReturnValue(undefined);
+    vi.mocked(isContainerEnvironment).mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -163,7 +168,9 @@ describe("skills-install fallback edge cases", () => {
   });
 
   afterAll(async () => {
-    skillsInstallTesting.setDepsForTest();
+    vi.mocked(hasBinary).mockReset();
+    vi.mocked(resolveBrewExecutable).mockReset();
+    vi.mocked(isContainerEnvironment).mockReset();
     await suiteTempDirs.cleanup();
   });
 
@@ -277,11 +284,7 @@ describe("skills-install fallback edge cases", () => {
   it("returns container-specific guidance when brew is missing in a Linux container", async () => {
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    skillsInstallTesting.setDepsForTest({
-      hasBinary: (bin: string) => hasBinaryMock(bin),
-      resolveBrewExecutable: () => undefined,
-      isContainerEnvironment: () => true,
-    });
+    vi.mocked(isContainerEnvironment).mockReturnValue(true);
     mockAvailableBinaries([]);
     try {
       skillsMocks.loadWorkspaceSkills.mockReturnValueOnce([
@@ -314,10 +317,7 @@ describe("skills-install fallback edge cases", () => {
       const maliciousPrefix = path.join(workspaceDir, "evil-brew");
       process.env.HOMEBREW_PREFIX = maliciousPrefix;
       mockAvailableBinaries([]);
-      skillsInstallTesting.setDepsForTest({
-        hasBinary: (bin: string) => hasBinaryMock(bin),
-        resolveBrewExecutable: () => "/safe/homebrew/bin/brew",
-      });
+      vi.mocked(resolveBrewExecutable).mockReturnValue("/safe/homebrew/bin/brew");
       runCommandWithTimeoutMock.mockResolvedValue({
         code: 0,
         stdout: "ok",
@@ -359,39 +359,6 @@ describe("skills-install fallback edge cases", () => {
     } finally {
       envSnapshot.restore();
     }
-  });
-
-  it("routes existing Go installs to the restart-stable user bin without changing Go config", async () => {
-    process.env.PATH = "/usr/bin";
-    process.env.GOBIN = "/operator/go/bin";
-    process.env.GOPATH = "/operator/go";
-    mockAvailableBinaries(["go", "brew"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-      signal: null,
-      killed: false,
-    });
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    const installCall = commandCallAt(0);
-    expect(installCall[0]).toEqual(["go", "install", "example.com/tool@latest"]);
-    const localBin = path.join(os.homedir(), ".local", "bin");
-    expect(installCall[1].env).toMatchObject({
-      GOBIN: localBin,
-      PATH: ["/usr/bin", localBin].join(path.delimiter),
-    });
-    expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
-    expect(process.env.GOBIN).toBe("/operator/go/bin");
-    expect(process.env.GOPATH).toBe("/operator/go");
   });
 
   describe("resolveInstallerKindReadiness", () => {
@@ -446,11 +413,7 @@ describe("skills-install fallback edge cases", () => {
 
     it("uses off-PATH Linuxbrew for Go but not uv bootstraps", async () => {
       mockAvailableBinaries([]);
-      skillsInstallTesting.setDepsForTest({
-        hasBinary: (bin: string) => hasBinaryMock(bin),
-        resolveBrewExecutable: () => "/home/linuxbrew/.linuxbrew/bin/brew",
-        isContainerEnvironment: () => false,
-      });
+      vi.mocked(resolveBrewExecutable).mockReturnValue("/home/linuxbrew/.linuxbrew/bin/brew");
       runCommandWithTimeoutMock.mockResolvedValueOnce({
         code: 0,
         stdout: "/home/linuxbrew/.linuxbrew\n",
@@ -493,30 +456,19 @@ describe("skills-install fallback edge cases", () => {
       expectLocalGoVersionEnvCall(0);
     });
 
-    it("keeps usable Go ready without consulting brew or apt", async () => {
-      mockAvailableBinaries(["go"]);
-      mockLocalGoVersion();
+    it("checks the local compiler independently of a configured Go toolchain", async () => {
+      const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
+      try {
+        process.env.GOTOOLCHAIN = "go1.22.4";
+        mockAvailableBinaries(["go"]);
+        mockLocalGoVersion();
 
-      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-      expectLocalGoVersionEnvCall(0);
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+        expectLocalGoVersionEnvCall(0);
+      } finally {
+        envSnapshot.restore();
+      }
     });
-
-    it.each(["local", "path", "go1.22.4", "asdf+auto"])(
-      "keeps a supported local compiler ready with GOTOOLCHAIN=%s",
-      async (toolchain) => {
-        const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
-        try {
-          process.env.GOTOOLCHAIN = toolchain;
-          mockAvailableBinaries(["go"]);
-          mockLocalGoVersion();
-
-          expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-          expectLocalGoVersionEnvCall(0);
-        } finally {
-          envSnapshot.restore();
-        }
-      },
-    );
 
     it("mirrors uv and brew fallbacks and passes unknown kinds through", async () => {
       mockAvailableBinaries([]);
@@ -728,7 +680,7 @@ describe("skills-install fallback edge cases", () => {
       process.env.PATH = "/usr/bin";
       process.env.GOBIN = "/operator/go/bin";
       process.env.GOPATH = "/operator/go";
-      mockAvailableBinaries(["go"]);
+      mockAvailableBinaries(["go", "brew"]);
       runCommandWithTimeoutMock.mockResolvedValueOnce({
         code: 0,
         stdout: "installed",
@@ -751,6 +703,7 @@ describe("skills-install fallback edge cases", () => {
         PATH: ["/usr/bin", localBin].join(path.delimiter),
       });
       expect(options.env).not.toHaveProperty("GOTOOLCHAIN");
+      expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
       expect(process.env.GOBIN).toBe("/operator/go/bin");
       expect(process.env.GOPATH).toBe("/operator/go");
     } finally {

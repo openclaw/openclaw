@@ -11,8 +11,14 @@ export interface Skill {
   locationNote?: string;
   /** Prepared instructions for transferred bundles or non-filesystem locators such as node://. */
   readContent?: string;
+  /** Prepared runtime identity of instruction bytes, or the complete delivered bundle tree. */
+  contentHash?: string;
   filePath: string;
   baseDir: string;
+  /** Discovery provenance for collision diagnostics, never read authority. */
+  discoveryRoot?: { path: string; worktree: boolean };
+  /** Assigned by Gateway discovery, never accepted from the workspace provider. */
+  fileHost?: "gateway" | "workspace";
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
   sourceInfo: SourceInfo;
@@ -42,26 +48,6 @@ export function decodeSkillXml(value: string): string {
 }
 
 export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
-const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
-const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
-
-function humanizeSkillIdentifier(value: string): string {
-  return value
-    .trim()
-    .split(/[-_]+/u)
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-}
-
-export function resolveSkillDisplayName(content: string, fallbackName: string): string {
-  const body = content.replace(SKILL_FRONTMATTER_BLOCK, "");
-  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
-  const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
-  // A captured heading can retain the whole skill body in metadata caches.
-  // Copy UTF-16 code units without changing lone surrogates.
-  return Buffer.from(displayName, "utf16le").toString("utf16le");
-}
 
 function truncateSkillDescription(description: string, maxChars: number): string {
   const normalized = description.replace(/\s+/g, " ").trim();
@@ -102,14 +88,16 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
   let lo = 64;
   let hi = COMPACT_DESCRIPTION_MAX_CHARS;
   let result = render(lo);
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const candidate = render(mid);
-    if (candidate.length <= targetChars) {
-      result = candidate;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
+  if (result.length <= targetChars) {
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const candidate = render(mid);
+      if (candidate.length <= targetChars) {
+        result = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
   }
   return result.length < prompt.length ? result : prompt;

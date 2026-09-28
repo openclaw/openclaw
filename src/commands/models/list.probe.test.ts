@@ -219,7 +219,7 @@ describe("runAuthProbes", () => {
       resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
     }));
     vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+      readPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     try {
       const module = await importFreshModule<typeof import("./list.probe.js")>(
@@ -356,7 +356,7 @@ describe("runAuthProbes", () => {
       }),
     }));
     vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+      readPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     const providerConfig = {
       baseUrl: "https://api.openai.com/v1",
@@ -459,7 +459,7 @@ describe("runAuthProbes", () => {
       }),
     }));
     vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+      readPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     const cfg = {
       models: {

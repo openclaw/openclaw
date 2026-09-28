@@ -1,15 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
-  testing as registryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
-import { reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
+import { closeSwarmScheduler, reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionResetPolicy } from "../config/sessions.js";
@@ -17,7 +17,6 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,14 +30,44 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./server-methods/types.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
+
+vi.mock("./server-recovery-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-recovery-runtime-context.js")>()),
+  bindGatewayLifecycleRequest: () => async () => await new Promise<never>(() => {}),
+}));
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: async () => {},
+}));
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
+});
+vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/subagents/registry/subagent-registry-state.js")
+  >()),
+  restoreSubagentRunsFromDisk: () => 0,
+}));
 
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
   let state: OpenClawTestState;
-  let stopLifecycleListener: (() => void) | undefined;
+  let projection: SessionRowProjection;
   const launchedRunIds: string[] = [];
+  const launchSignals = new Map<string, ReturnType<typeof createDeferred<void>>>();
+
+  function waitForLaunch(runId: string) {
+    if (launchedRunIds.includes(runId)) {
+      return Promise.resolve();
+    }
+    const signal = launchSignals.get(runId) ?? createDeferred();
+    launchSignals.set(runId, signal);
+    return signal.promise;
+  }
 
   beforeEach(async () => {
     resetGatewayWorkAdmission();
@@ -54,13 +83,6 @@ export function useQueuedCollectorFixture() {
         defaults: { workspace: state.workspaceDir },
         entries: { main: { workspace: state.workspaceDir } },
       },
-    });
-    registryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      // These collectors own no browser sessions; lifecycle cleanup has separate coverage.
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      callGateway: async () => await new Promise<never>(() => {}),
-      restoreSubagentRunsFromDisk: () => 0,
     });
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
@@ -102,30 +124,37 @@ export function useQueuedCollectorFixture() {
           stream: "lifecycle",
           data: { phase: "start", startedAt: Date.now() },
         });
+        launchSignals.get(runId)?.resolve();
         return { runId, status: "accepted" } as T;
       },
+    });
+    projection = await createSessionRowProjection({
+      cfg: getRuntimeConfig(),
+      getConfig: getRuntimeConfig,
     });
   });
 
   afterEach(async () => {
-    stopLifecycleListener?.();
-    stopLifecycleListener = undefined;
-    flushPendingSessionsChangedEvents();
+    // Keep dispatch dependencies and session state alive until owned launch cleanup settles.
+    await closeSwarmScheduler();
+    await flushPendingSessionsChangedEvents();
     schedulerTesting.reset();
     for (const runId of launchedRunIds.splice(0)) {
       clearAgentRunContext(runId);
     }
+    launchSignals.clear();
     resetSubagentRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest();
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetGatewayWorkAdmission();
+    projection.dispose();
     await state.cleanup();
   });
 
   function requestContext() {
     const context = createChatAbortContext({
       getRuntimeConfig,
+      ...bindSessionRowProjection({}, () => projection),
       loadGatewayModelCatalog: async () => [],
       addChatRun: vi.fn(),
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -173,7 +202,9 @@ export function useQueuedCollectorFixture() {
       respond,
       context,
     });
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[2]).toBeUndefined();
     return respond.mock.calls[0]![1] as SessionsListResult;
   }
 
@@ -181,31 +212,40 @@ export function useQueuedCollectorFixture() {
     labels = ["Collector A", "Collector B"],
     completionOwnerKey?: string,
   ) {
-    const results = await Promise.all(
-      labels.map((label) =>
-        spawnSubagentDirect(
-          {
-            task: "Wait for cancellation",
-            label,
-            collect: true,
-            context: "isolated",
-            lightContext: true,
-          },
-          {
-            agentSessionKey: parentKey,
-            completionOwnerKey,
-            requesterRunId: "parent-turn",
-            requesterTurnRunId: "parent-turn",
-          },
-        ),
-      ),
-    );
-    expect(results.map((result) => result.status)).toEqual(labels.map(() => "accepted"));
-    await vi.waitFor(() => expect(launchedRunIds).toEqual([results[0]?.runId]));
+    const results: Awaited<ReturnType<typeof spawnSubagentDirect>>[] = [];
+    for (const label of labels) {
+      const result = await spawnSubagentDirect(
+        {
+          task: "Wait for cancellation",
+          label,
+          collect: true,
+          context: "isolated",
+          lightContext: true,
+        },
+        {
+          agentSessionKey: parentKey,
+          completionOwnerKey,
+          requesterRunId: "parent-turn",
+          requesterTurnRunId: "parent-turn",
+        },
+      );
+      expect(result.status).toBe("accepted");
+      results.push(result);
+      // Establish occupied capacity before creating the collector expected to queue.
+      if (results.length === 1) {
+        await waitForLaunch(expectDefined(result.runId, "first collector run"));
+      }
+    }
+    expect(launchedRunIds).toEqual([results[0]?.runId]);
     return results;
   }
 
-  async function createQueuedReservation(name = "reserved") {
+  async function createQueuedReservation(
+    name = "reserved",
+    creationPolicy: Parameters<typeof createInitialSubagentSession>[0]["creationPolicy"] = {
+      actor: { type: "agent", id: "main" },
+    },
+  ) {
     const childSessionKey = `agent:main:subagent:${name}`;
     const runId = `${name}-collector`;
     const groupId = `swarm:${parentKey}:parent-turn`;
@@ -219,7 +259,7 @@ export function useQueuedCollectorFixture() {
         incognito: false,
         requesterInternalKey: parentKey,
         completionOwnerSessionKey: parentKey,
-        creationPolicy: { actor: { type: "agent", id: "main" } },
+        creationPolicy,
         modelPatch: {},
         swarmGroupId: groupId,
         collect: true,
@@ -237,25 +277,21 @@ export function useQueuedCollectorFixture() {
       queued: true,
       groupId,
     };
-    registerSubagentRun(registration);
+    await registerSubagentRun(registration);
     return {
       registration,
       entry: expectDefined(subagentRuns.get(runId), "registered reservation"),
     };
   }
 
-  function observeLifecycle(listener: Parameters<typeof onSessionLifecycleEvent>[0]) {
-    stopLifecycleListener = onSessionLifecycleEvent(listener);
-  }
-
   return {
     parentKey,
     launchedRunIds,
+    waitForLaunch,
     requestContext,
     operatorClient,
     listChildren,
     spawnCollectors,
     createQueuedReservation,
-    observeLifecycle,
   };
 }

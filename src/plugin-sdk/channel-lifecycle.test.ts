@@ -2,13 +2,18 @@
  * Tests channel lifecycle hooks and SDK-visible lifecycle dispatch behavior.
  */
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAccountStatusSink,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
 } from "./channel-lifecycle.core.js";
+import {
+  expectPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+} from "./test-helpers/start-account-lifecycle.js";
 
 type FakeServer = EventEmitter & {
   close: (callback?: () => void) => void;
@@ -80,6 +85,19 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
+  it("rejects when an abort cleanup throws synchronously", async () => {
+    const abort = new AbortController();
+    const failure = new Error("abort cleanup failed");
+    const task = waitUntilAbort(abort.signal, () => {
+      throw failure;
+    });
+    const rejected = expect(task).rejects.toBe(failure);
+
+    abort.abort();
+
+    await rejected;
+  });
+
   it("keeps passive account lifecycle pending until abort, then stops once", async () => {
     const abort = new AbortController();
     const stop = vi.fn();
@@ -99,6 +117,84 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it.each(["readiness", "assertion"] as const)(
+    "joins account startup when its %s check fails",
+    async (failurePhase) => {
+      const startup = createDeferredCore<() => void>();
+      const stop = vi.fn();
+      const failure = new Error(`${failurePhase} failed`);
+      const { abort, task, isSettled } = startAccountAndTrackLifecycle({
+        account: { accountId: "default" },
+        startAccount: ({ abortSignal }) =>
+          runPassiveAccountLifecycle({
+            abortSignal,
+            start: () => startup.promise,
+            stop: (unregister) => unregister(),
+          }),
+      });
+      try {
+        await expect(
+          expectPendingUntilAbort({
+            abort,
+            task,
+            isSettled,
+            waitForStarted: async () => {
+              startup.resolve(stop);
+              if (failurePhase === "readiness") {
+                throw failure;
+              }
+            },
+            assertBeforeAbort: () => {
+              throw failure;
+            },
+          }),
+        ).rejects.toBe(failure);
+        expect(abort.signal.aborted).toBe(true);
+        expect(stop).toHaveBeenCalledOnce();
+        expect(isSettled()).toBe(true);
+      } finally {
+        startup.resolve(stop);
+        abort.abort();
+        await task;
+      }
+    },
+  );
+
+  it("reports startup rejection before readiness and joins the failed account", async () => {
+    const readiness = createDeferredCore();
+    const failure = new Error("account startup failed");
+    const assertAfterAbort = vi.fn();
+    const { abort, task, isSettled } = startAccountAndTrackLifecycle({
+      account: { accountId: "default" },
+      startAccount: ({ abortSignal }) =>
+        runPassiveAccountLifecycle({
+          abortSignal,
+          start: async () => {
+            throw failure;
+          },
+        }),
+    });
+    const accountRejection = expect(task).rejects.toBe(failure);
+    const check = expectPendingUntilAbort({
+      abort,
+      task,
+      isSettled,
+      waitForStarted: () => readiness.promise,
+      assertAfterAbort,
+    });
+    const checkRejection = expect(check).rejects.toBe(failure);
+    onTestFinished(async () => {
+      readiness.resolve();
+      await accountRejection;
+      await checkRejection;
+    });
+    await checkRejection;
+    await accountRejection;
+    expect(abort.signal.aborted).toBe(true);
+    expect(isSettled()).toBe(true);
+    expect(assertAfterAbort).not.toHaveBeenCalled();
+  });
+
   it("keeps server task pending until close, then resolves", async () => {
     const server = createFakeServer();
     const task = keepHttpServerTaskAlive({ server });
@@ -107,6 +203,34 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     server.close();
     await expect(task).resolves.toBeUndefined();
   });
+
+  it.each(["success", "throw", "reject"] as const)(
+    "observes synchronous close during already-aborted cleanup: %s",
+    async (outcome) => {
+      const server = new EventEmitter();
+      const failure = new Error("server cleanup failed");
+      const task = keepHttpServerTaskAlive({
+        server,
+        abortSignal: AbortSignal.abort(),
+        onAbort: () => {
+          server.emit("close");
+          if (outcome === "throw") {
+            throw failure;
+          }
+          if (outcome === "reject") {
+            return Promise.reject(failure);
+          }
+          return undefined;
+        },
+      });
+
+      if (outcome === "success") {
+        await expect(task).resolves.toBeUndefined();
+      } else {
+        await expect(task).rejects.toBe(failure);
+      }
+    },
+  );
 
   it("triggers abort hook once and resolves after close", async () => {
     const server = createFakeServer();

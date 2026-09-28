@@ -1,5 +1,6 @@
 {
   "id": "telegram",
+  "categories": ["channels"],
   "name": "Telegram",
   "description": "OpenClaw Telegram channel plugin.",
   "doctorContract": {

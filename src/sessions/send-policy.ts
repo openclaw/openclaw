@@ -1,4 +1,3 @@
-// Session send policy helpers decide when session output can be sent to targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -6,7 +5,7 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
 import {
   hasAmbiguousCanonicalSessionPeerShape,
   parseCanonicalSessionPeerShape,
@@ -26,11 +25,6 @@ export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecis
     return "deny";
   }
   return undefined;
-}
-
-function normalizeMatchValue(raw?: string | null) {
-  const value = normalizeOptionalLowercaseString(raw);
-  return value ? value : undefined;
 }
 
 function stripAgentSessionKeyPrefix(key?: string): string | undefined {
@@ -53,7 +47,7 @@ function deriveChannelFromKey(key?: string) {
   if (!normalizedKey) {
     return undefined;
   }
-  return normalizeMatchValue(parseCanonicalSessionPeerShape(normalizedKey)?.channel);
+  return normalizeOptionalLowercaseString(parseCanonicalSessionPeerShape(normalizedKey)?.channel);
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
@@ -104,8 +98,8 @@ export function resolveSendPolicy(params: {
   let chatType: SessionChatType | undefined;
   const getChannel = () => {
     channel ??=
-      normalizeMatchValue(params.channel) ??
-      normalizeMatchValue(sessionDeliveryChannel(params.entry)) ??
+      normalizeOptionalLowercaseString(params.channel) ??
+      normalizeOptionalLowercaseString(sessionDeliveryChannel(params.entry)) ??
       deriveChannelFromKey(params.sessionKey);
     return channel;
   };
@@ -123,10 +117,10 @@ export function resolveSendPolicy(params: {
     }
     const action = normalizeSendPolicy(rule.action) ?? "allow";
     const match = rule.match ?? {};
-    const matchChannel = normalizeMatchValue(match.channel);
+    const matchChannel = normalizeOptionalLowercaseString(match.channel);
     const matchChatType = normalizeChatType(match.chatType);
-    const matchPrefix = normalizeMatchValue(match.keyPrefix);
-    const matchRawPrefix = normalizeMatchValue(match.rawKeyPrefix);
+    const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+    const matchRawPrefix = normalizeOptionalLowercaseString(match.rawKeyPrefix);
 
     if (matchChannel && matchChannel !== getChannel()) {
       continue;

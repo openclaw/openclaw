@@ -1,6 +1,4 @@
-/**
- * Resolves hook-selected model state and pre-model attachments for a run.
- */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
@@ -28,7 +26,6 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { resolveModelContextWindowProfile } from "../../model-context-window.js";
 import { log } from "../logger.js";
-import { readAgentModelContextTokens } from "../model-context-tokens.js";
 
 type HookContext = {
   agentId?: string;
@@ -174,23 +171,24 @@ export function createNativeModelOwnedRuntimeModel(params: {
   };
 }
 
-/**
- * Resolves context-window policy for the selected runtime model and returns the
- * model shape the session runtime should see. Configured context caps are
- * reflected in `effectiveModel.contextWindow` so auto-compaction uses the same
- * limit as the guard.
- */
-function resolveEffectiveRuntimeModel(params: {
+/** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
+export function resolveEmbeddedRuntimeModelPolicy(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   contextConfigProvider?: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
+  nativeModelOwned: boolean;
   contextWindow?: string;
+  contextTokenBudget?: number;
 }): {
-  ctxInfo: ContextWindowInfo;
+  contextWindowInfo?: ContextWindowInfo;
+  contextTokenBudget?: number;
   effectiveModel: ProviderRuntimeModel;
 } {
+  if (params.nativeModelOwned) {
+    return { effectiveModel: params.runtimeModel };
+  }
   // The session-selected context-window option caps native runs too; the CLI
   // backend maps the option id to argv/env separately, but budget and payload
   // sizing must honor the selection on every runtime path.
@@ -202,7 +200,7 @@ function resolveEffectiveRuntimeModel(params: {
     cfg: params.cfg,
     provider: params.contextConfigProvider ?? params.provider,
     modelId: params.modelId,
-    modelContextTokens: readAgentModelContextTokens(params.runtimeModel),
+    modelContextTokens: asFiniteNumber(params.runtimeModel.contextTokens),
     modelContextWindow: contextWindowProfile.contextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
@@ -219,15 +217,12 @@ function resolveEffectiveRuntimeModel(params: {
 
   // Apply contextTokens cap to model so session runtime's auto-compaction
   // threshold uses the effective limit, not the native context window.
-  const effectiveModel =
+  const windowedModel =
     ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
       ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
       : params.runtimeModel;
   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
-  const runtimeBaseUrl =
-    typeof (params.runtimeModel as { baseUrl?: unknown }).baseUrl === "string"
-      ? (params.runtimeModel as { baseUrl: string }).baseUrl
-      : undefined;
+  const runtimeBaseUrl = params.runtimeModel.baseUrl;
   if (ctxGuard.shouldWarn) {
     log.warn(
       formatContextWindowWarningMessage({
@@ -253,33 +248,22 @@ function resolveEffectiveRuntimeModel(params: {
     });
   }
 
+  const contextTokenBudget = Math.min(ctxInfo.tokens, params.contextTokenBudget ?? ctxInfo.tokens);
+  const contextWindowInfo =
+    contextTokenBudget < ctxInfo.tokens
+      ? {
+          ...ctxInfo,
+          tokens: contextTokenBudget,
+          referenceTokens: ctxInfo.referenceTokens ?? ctxInfo.tokens,
+        }
+      : ctxInfo;
+  const effectiveModel =
+    contextTokenBudget < (windowedModel.contextWindow ?? Infinity)
+      ? { ...windowedModel, contextWindow: contextTokenBudget }
+      : windowedModel;
   return {
-    ctxInfo,
+    contextWindowInfo,
+    contextTokenBudget,
     effectiveModel,
-  };
-}
-
-/** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
-export function resolveEmbeddedRuntimeModelPolicy(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  contextConfigProvider?: string;
-  modelId: string;
-  runtimeModel: ProviderRuntimeModel;
-  nativeModelOwned: boolean;
-  contextWindow?: string;
-}): {
-  contextWindowInfo?: ContextWindowInfo;
-  contextTokenBudget?: number;
-  effectiveModel: ProviderRuntimeModel;
-} {
-  if (params.nativeModelOwned) {
-    return { effectiveModel: params.runtimeModel };
-  }
-  const resolved = resolveEffectiveRuntimeModel(params);
-  return {
-    contextWindowInfo: resolved.ctxInfo,
-    contextTokenBudget: resolved.ctxInfo.tokens,
-    effectiveModel: resolved.effectiveModel,
   };
 }

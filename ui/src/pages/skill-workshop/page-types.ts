@@ -1,4 +1,5 @@
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
+import type { SkillWorkshopProposalDecision } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
 import type { SkillWorkshopPageContext } from "./source-scope.ts";
@@ -16,10 +17,13 @@ export type SkillWorkshopRenderContext = {
   context: SkillWorkshopPageContext;
   revisionRecoveryActive: boolean;
   workshopAgentName: string;
+  onLifecycleAction: (action: "apply" | "reject", decision: SkillWorkshopProposalDecision) => void;
   onEvaluate: (proposalId: string) => void;
   onRevisionSubmit: (proposalId: string) => void;
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
-  onHistoryScan: () => void;
+  learningBusy: boolean;
+  learningError: string | null;
+  onLearn: () => Promise<void>;
   onRetry: () => void;
 };

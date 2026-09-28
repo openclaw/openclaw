@@ -12,8 +12,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import type { FileTransferNodeInvokeCommand } from "./node-invoke-policy-commands.js";
 
-export type FileTransferAuditOp = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
+export type FileTransferAuditOp = FileTransferNodeInvokeCommand;
 
 type FileTransferAuditDecision =
   | "allowed"

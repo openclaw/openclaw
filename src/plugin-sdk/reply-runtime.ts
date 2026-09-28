@@ -29,7 +29,7 @@ export {
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-export { isAbortRequestText } from "../auto-reply/reply/abort.js";
+export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -48,6 +48,7 @@ export {
 export type {
   ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
+  ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
   ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "../auto-reply/reply/reply-dispatcher.types.js";

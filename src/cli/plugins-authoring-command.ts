@@ -1,9 +1,9 @@
 // Plugin authoring commands for init/build/validate manifest generation.
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -19,8 +19,10 @@ import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
+import { formatCliOperatorError } from "./failure-output.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
+import { buildScaffoldTsconfig, type PluginScaffoldType } from "./plugins-scaffold-config.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -46,8 +48,6 @@ export type PluginsInitOptions = {
   name?: string;
   type?: string;
 };
-
-type PluginScaffoldType = "tool" | "provider" | "feature";
 
 type LoadedToolPlugin = {
   entry: unknown;
@@ -115,10 +115,9 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
     modulePath: entryPath,
-    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -144,7 +143,7 @@ export async function loadToolPlugin(params: {
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
+  const entry = await importToolPluginEntry(params.entryPath);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(
@@ -217,12 +216,7 @@ export function buildToolPluginPackageManifest(params: {
   packageManifest: JsonObject;
   entry: string;
 }): JsonObject {
-  const openclaw =
-    params.packageManifest.openclaw &&
-    typeof params.packageManifest.openclaw === "object" &&
-    !Array.isArray(params.packageManifest.openclaw)
-      ? { ...(params.packageManifest.openclaw as JsonObject) }
-      : {};
+  const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
   const existingExtensions = Array.isArray(openclaw.extensions)
     ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
     : [];
@@ -384,10 +378,8 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     if (!opts.json) {
       throw err;
     }
-    result = {
-      valid: false,
-      errors: [err instanceof Error ? err.message : String(err)],
-    };
+    const failure = err instanceof Error ? err : String(err);
+    result = { valid: false, errors: [formatCliOperatorError(failure)] };
   }
 
   if (!result.valid) {
@@ -479,21 +471,6 @@ const createPluginPackageMetadata = (pluginApi: string) => ({
   build: { openclawVersion: VERSION },
 });
 
-function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
-  return {
-    compilerOptions: {
-      target: "ES2022",
-      module: "NodeNext",
-      moduleResolution: "NodeNext",
-      strict: true,
-      declaration: type === "tool",
-      outDir: "dist",
-      skipLibCheck: true,
-    },
-    include: type === "provider" ? ["src/index.ts"] : ["src/**/*.ts"],
-  };
-}
-
 function writeScaffoldVitestConfig(rootDir: string): void {
   fs.writeFileSync(
     path.join(rootDir, "vitest.config.ts"),
@@ -530,7 +507,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
     },
     devDependencies: {
       openclaw: "latest",
-      typescript: "^5.9.0",
+      typescript: "7.0.2",
       vitest: "^3.2.0",
     },
     openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
@@ -627,7 +604,7 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
     devDependencies: {
       clawhub: "latest",
       openclaw: "latest",
-      typescript: "^5.9.0",
+      typescript: "7.0.2",
       vitest: "^3.2.0",
     },
     openclaw: {

@@ -164,6 +164,7 @@ export function loadManifestContractSnapshot(params: {
   return {
     index: snapshot.index,
     plugins: snapshot.plugins,
+    byPluginId: snapshot.byPluginId,
   };
 }
 

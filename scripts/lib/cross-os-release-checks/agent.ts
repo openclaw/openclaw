@@ -1,57 +1,28 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
-import type { AgentOutputOptions } from "./config.ts";
-import { CROSS_OS_AGENT_TURN_OPTIONAL, CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS } from "./config.ts";
-import { readLogTextTail } from "./logs.ts";
+import type { AgentOutputOptions, CommandResult } from "./config.ts";
+import { CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS } from "./config.ts";
+import { readLogFileSize, readLogTextSince, readLogTextTail } from "./logs.ts";
 
-export function maybeBuildOptionalAgentTurnSkipResult(
-  error: unknown,
-  logPath: string,
-  options: { attempt?: number; maxAttempts?: number; optional?: boolean } = {},
-) {
-  const attempt = options.attempt ?? 1;
-  const maxAttempts = options.maxAttempts ?? 2;
-  const optional = options.optional ?? CROSS_OS_AGENT_TURN_OPTIONAL;
-  if (
-    attempt < maxAttempts ||
-    !optional ||
-    !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)
-  ) {
-    return null;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  appendFileSync(
-    logPath,
-    `\n[release-checks] skipping optional cross-OS live agent turn after retryable failure: ${message}\n`,
+export async function runReleaseAgentTurn(
+  params: { label: string; logPath: string },
+  run: (args: string[], timeoutMs: number) => Promise<CommandResult>,
+): Promise<CommandResult> {
+  const sessionId = buildCrossOsReleaseAgentSessionId(params.label);
+  // Only output from this invocation can satisfy the live probe.
+  const logOffset = readLogFileSize(params.logPath);
+  const result = await run(
+    buildReleaseAgentTurnArgs(sessionId),
+    (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
   );
-  return {
-    status: 0,
-    stdout: JSON.stringify({
-      status: "skipped",
-      reason: "cross-os live agent turn unavailable after retry",
-    }),
-    stderr: "",
-  };
+  const logText = readLogTextSince(params.logPath, logOffset);
+  if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
+    throw new Error("Agent output did not contain the expected OK marker.");
+  }
+  return result;
 }
 
-export function shouldSkipOptionalCrossOsAgentTurnError(error: unknown, logPath: string) {
-  const message = error instanceof Error ? error.message : String(error);
-  if (
-    /model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
-      message,
-    )
-  ) {
-    return true;
-  }
-  if (!/Agent output did not contain the expected OK marker/u.test(message)) {
-    return false;
-  }
-  const log = readLogTextTail(logPath);
-  return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
-}
-
-export function buildCrossOsReleaseAgentSessionId(label: string, attempt: number) {
-  return `cross-os-release-check-${label}-${randomUUID()}-${attempt}`;
+export function buildCrossOsReleaseAgentSessionId(label: string) {
+  return `cross-os-release-check-${label}-${randomUUID()}`;
 }
 
 export function buildReleaseAgentTurnArgs(sessionId: string) {
@@ -69,13 +40,6 @@ export function buildReleaseAgentTurnArgs(sessionId: string) {
     String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
     "--json",
   ];
-}
-
-export function shouldRetryCrossOsAgentTurnError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
-    message,
-  );
 }
 
 export function agentOutputHasExpectedOkMarker(stdout: string, options: AgentOutputOptions = {}) {

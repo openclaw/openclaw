@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createGatewayHarness,
   createConfigServerMock,
   createDeferredSetServerMock,
@@ -13,7 +13,7 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("runtime config capability", () => {
-  it("does not stage a default agent after access downgrades", async () => {
+  it("config.set does not stage a default agent after access downgrades", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -30,7 +30,7 @@ describe("runtime config capability", () => {
           issues: [],
         };
       }
-      return { hash: "hash-2" };
+      return {};
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
@@ -236,7 +236,7 @@ describe("runtime config capability", () => {
     const client = { request: server.request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
-    const originalParse = deferred<void>();
+    const originalParse = deferred();
 
     await runtimeConfig.ensureLoaded();
     runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
@@ -319,7 +319,7 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("discards an applied-hash poll superseded by a config write", async () => {
+  it("config.set discards an applied-hash poll superseded by a config write", async () => {
     vi.useFakeTimers();
     const stalePoll = deferred<ConfigSnapshot>();
     let getCount = 0;
@@ -339,7 +339,9 @@ describe("runtime config capability", () => {
           issues: [],
         });
       }
-      return Promise.resolve(method === "config.set" ? { hash: "hash-2" } : {});
+      return Promise.resolve(
+        method === "config.set" ? { config: { count: 2 }, hash: "hash-2" } : {},
+      );
     });
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
@@ -619,7 +621,7 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("reconciles an uncertain in-flight save without autosaving its trailing draft", async () => {
+  it("config.set reconciles an uncertain in-flight save without autosaving its trailing draft", async () => {
     vi.useFakeTimers();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
@@ -645,7 +647,7 @@ describe("runtime config capability", () => {
         }
         committedRaw = (params as { raw: string }).raw;
         hash = "hash-3";
-        return Promise.resolve({ hash });
+        return Promise.resolve({ config: JSON.parse(committedRaw), hash });
       }
       return Promise.resolve({});
     });
@@ -844,7 +846,7 @@ describe("runtime config capability", () => {
     const client = { request: server.request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
-    const originalParse = deferred<void>();
+    const originalParse = deferred();
 
     await runtimeConfig.ensureLoaded();
     runtimeConfig.state.configRawOriginalParsePending = originalParse.promise;
@@ -904,7 +906,7 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("recovers a manual save whose ack was lost to a disconnect", async () => {
+  it("config.set recovers a manual save whose ack was lost to a disconnect", async () => {
     vi.useFakeTimers();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
@@ -928,7 +930,7 @@ describe("runtime config capability", () => {
           return new Promise(() => {});
         }
         hash = "hash-3";
-        return Promise.resolve({ hash });
+        return Promise.resolve({ config: JSON.parse(committedRaw), hash });
       }
       return Promise.resolve({});
     });
@@ -958,7 +960,7 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("retries reconciliation on the next reconnect when the reload fails", async () => {
+  it("config.set retries reconciliation on the next reconnect when the reload fails", async () => {
     vi.useFakeTimers();
     let committedRaw = '{\n  "count": 1\n}\n';
     let hash = "hash-1";
@@ -986,7 +988,7 @@ describe("runtime config capability", () => {
           return new Promise(() => {});
         }
         hash = "hash-3";
-        return Promise.resolve({ hash });
+        return Promise.resolve({ config: JSON.parse(committedRaw), hash });
       }
       return Promise.resolve({});
     });

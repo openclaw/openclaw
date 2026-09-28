@@ -20,7 +20,7 @@ Adds Z.AI model provider support to OpenClaw.
 ## Surface
 
 - Providers: `zai`
-- Contracts: `mediaUnderstandingProviders`, `usageProviders`
+- Contracts: `mediaUnderstandingProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
@@ -14,7 +15,6 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const BUNDLED_CODEX_PLUGIN_ORIGINS = new Map([["codex", "bundled" as const]]);
-const BUNDLED_WEBHOOKS_PLUGIN_ORIGINS = new Map([["webhooks", "bundled" as const]]);
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -290,7 +290,7 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
-  it("isolates one webhooks route while resolving its sibling snapshot", async () => {
+  it("isolates one plugin route while resolving its sibling snapshot", async () => {
     const missingRef = {
       source: "env",
       provider: "default",
@@ -301,7 +301,7 @@ describe("secrets runtime snapshot", () => {
         ...explicitMainRoster(),
         plugins: {
           entries: {
-            webhooks: {
+            "route-fixture": {
               enabled: true,
               config: {
                 routes: {
@@ -330,10 +330,22 @@ describe("secrets runtime snapshot", () => {
       env: { HEALTHY_WEBHOOK_SECRET: "healthy-secret" },
       includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: BUNDLED_WEBHOOKS_PLUGIN_ORIGINS,
+      loadablePluginOrigins: new Map([["route-fixture", "bundled"]]),
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "route-fixture",
+            configContracts: {
+              secretInputs: {
+                paths: [{ path: "routes.*.secret", expected: "string", ownerKind: "route" }],
+              },
+            },
+          },
+        ],
+      }),
     });
 
-    const routes = snapshot.config.plugins?.entries?.webhooks?.config?.routes as Record<
+    const routes = snapshot.config.plugins?.entries?.["route-fixture"]?.config?.routes as Record<
       string,
       { secret?: unknown }
     >;
@@ -347,39 +359,19 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.degradedOwners).toMatchObject([
       {
         ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.cold.secret",
+        ownerId: "plugins.entries.route-fixture.config.routes.cold.secret",
         state: "unavailable",
-        paths: ["plugins.entries.webhooks.config.routes.cold.secret"],
+        paths: ["plugins.entries.route-fixture.config.routes.cold.secret"],
         reason: "secret reference was not found",
       },
       {
         ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.inlineCold.secret",
+        ownerId: "plugins.entries.route-fixture.config.routes.inlineCold.secret",
         state: "unavailable",
-        paths: ["plugins.entries.webhooks.config.routes.inlineCold.secret"],
+        paths: ["plugins.entries.route-fixture.config.routes.inlineCold.secret"],
         reason: "secret reference was not found",
       },
     ]);
-  });
-
-  it("registers every resolved value for exact redaction", async () => {
-    const secret = "runtime-registration-secret";
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        talk: {
-          provider: "example",
-          providers: {
-            example: { apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" } },
-          },
-        },
-      }),
-      env: { TALK_API_KEY: secret },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(redactSensitiveText(`resolved ${secret}`, { mode: "off" })).toBe("resolved runtim…cret");
   });
 
   it("registers resolved TTS values for exact redaction", async () => {

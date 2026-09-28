@@ -1,6 +1,3 @@
-/**
- * Shared result and attempt types for embedded-agent run internals.
- */
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
@@ -12,11 +9,12 @@ import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../conte
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
-import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
+import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
   MessagingToolSend,
@@ -27,6 +25,7 @@ import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
@@ -42,6 +41,13 @@ import type {
 } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
+
+export type StreamRunState = {
+  aborted: boolean;
+  promptError: unknown;
+  timedOut: boolean;
+  yieldDetected: boolean;
+};
 
 export type EmbeddedAttemptExecutionState = {
   beforeAgentRunBlockedBy: string | undefined;
@@ -84,12 +90,6 @@ type EmbeddedRunAttemptBase = Omit<
   | "preparedRunAdmission"
   | "admittedRunContext"
 >;
-
-type EmbeddedRunContextWindowInfo = {
-  tokens: number;
-  referenceTokens?: number;
-  source: "model" | "modelsConfig" | "agentContextTokens" | "default";
-};
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
@@ -137,6 +137,10 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
+  githubPublicationAvailable?: boolean;
+  disableToolSearch?: true;
+  sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
@@ -164,10 +168,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Native model context window before session or operator caps are applied. */
+  modelContextWindow?: number;
   /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
   authoredContextTokenCap?: number;
   /** Source metadata for the resolved model context budget. */
-  contextWindowInfo?: EmbeddedRunContextWindowInfo;
+  contextWindowInfo?: ContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
@@ -203,8 +209,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   runtimePlan?: AgentRuntimePlan;
   /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
   observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
-  /** Host-issued scope for harnesses that mirror native child runs into task state. */
-  agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  /** Host-issued scope for harness-owned child completion. */
+  agentHarnessCompletionScope?: AgentHarnessCompletionScope;
+  /** Host-only originals retained across native image projection. */
+  inputAttachmentMedia?: RunEmbeddedAgentParams["media"];
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -221,6 +229,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptAbort?: () => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */
+  pluginRuntimeRefreshPending?: () => boolean;
+  /** Registers the exact attempt owner able to stop before another model request. */
+  registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
+  /** Completed native attempt results excluded by the original admission read fence. */
+  pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
   permissionChange?: {
     readonly owner: object;
@@ -341,7 +355,10 @@ export type EmbeddedRunAttemptResult = {
   modelIterations?: number;
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
+  /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
+  providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];
+  pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
   settledTurnFinalizationContext?:
     | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
@@ -349,6 +366,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  /** Immutable delivery facts prepared before a remote harness releases its file reader. */
+  preparedReplyMedia?: import("../../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
@@ -378,10 +397,13 @@ export type EmbeddedRunAttemptResult = {
   currentAttemptAssistant?: AssistantMessage | undefined;
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;
+  /** A real model response completed successfully during this attempt, before any later failure. */
+  hasSuccessfulModelResponse?: boolean;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   sourceReplyDelivered?: true;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];

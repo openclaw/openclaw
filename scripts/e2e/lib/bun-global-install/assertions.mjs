@@ -16,7 +16,7 @@ const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 const usage = () => {
   console.error(
-    "Usage: assertions.mjs <run-with-timeout|assert-bun-version|assert-image-providers|assert-openclaw-trusted|assert-release-versions|configure-runtime|assert-agent-turn> [...]",
+    "Usage: assertions.mjs <run-with-timeout|assert-bun-version|assert-image-providers|assert-openclaw-trusted|assert-release-versions|configure-runtime|assert-gateway-diagnostics|assert-agent-turn> [...]",
   );
   process.exit(2);
 };
@@ -304,6 +304,22 @@ if (mode === "configure-runtime") {
   applyMockOpenAiModelConfig(config, { mockPort });
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (mode === "assert-gateway-diagnostics") {
+  const [outputPath] = args;
+  if (!outputPath) {
+    usage();
+  }
+  const { eventLoop } = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+  for (const metric of ["cpuCoreRatio", "utilization", "delayP99Ms", "delayMaxMs", "intervalMs"]) {
+    const value = eventLoop?.[metric];
+    if (!Number.isFinite(value) || value < 0 || (metric === "intervalMs" && value === 0)) {
+      throw new Error(`Gateway status is missing a valid eventLoop.${metric} measurement`);
+    }
+  }
+  console.log("bun-global-install-smoke: Gateway CPU and event-loop diagnostics OK");
   process.exit(0);
 }
 

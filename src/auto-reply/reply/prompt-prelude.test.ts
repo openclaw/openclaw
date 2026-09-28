@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
 function countOccurrences(text: string | undefined, needle: string): number {
@@ -122,95 +123,66 @@ describe("buildReplyPromptEnvelope", () => {
     },
   );
 
-  it("projects room events as context instead of user requests", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "No wtf",
-      BodyStripped: "No wtf",
-      Provider: "telegram",
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      MessageSid: "35676",
-      SenderName: "Keśava",
-    });
+  it.each(["window", "pending", "recent"] as const)(
+    "keeps %s room history in the initial prompt but not the resumed prompt",
+    (historyKind) => {
+      const sessionCtx = finalizeInboundContext({
+        Body: "Current room event",
+        BodyStripped: "Current room event",
+        Provider: "slack",
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        MessageSid: "35676",
+        SenderName: "Alice",
+        InboundHistory: [{ sender: "Bob", body: "Earlier room activity", messageId: "35675" }],
+        SessionTranscriptContext:
+          historyKind === "window" ? undefined : { historyLimit: 20, historyKind },
+      });
+      const inboundUserContext =
+        historyKind === "window"
+          ? [
+              "Conversation info:\nCurrent room metadata",
+              "Conversation context (chronological, selected for current message):\n#35675 Bob: Earlier room activity",
+            ].join("\n\n")
+          : buildInboundUserContextPrefix(sessionCtx);
+      const envelope = buildReplyPromptEnvelope({
+        ctx: sessionCtx,
+        sessionCtx,
+        baseBody: "Current room event",
+        hasUserBody: true,
+        inboundUserContext,
+        isBareSessionReset: false,
+        startupAction: "new",
+        inboundEventKind: "room_event",
+        sourceReplyDeliveryMode: "message_tool_only",
+        threadContextNote: "Thread note",
+        systemEventBlocks: ["System event"],
+      });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "No wtf",
-      hasUserBody: true,
-      inboundUserContext: [
-        "Conversation info:",
-        "```json",
-        JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
-        "```",
-        "",
-        "Conversation context (chronological, selected for current message):",
-        "#35674 Other: I wish I could enjoy 5.5",
-        "#35675 User ->#35674: Are you fr fr",
-      ].join("\n"),
-      isBareSessionReset: false,
-      startupAction: "new",
-      inboundEventKind: "room_event",
-      sourceReplyDeliveryMode: "message_tool_only",
-      threadContextNote: "Thread note",
-      systemEventBlocks: ["System event"],
-    });
-
-    // The active room-event prompt is the attributed transcript row itself, so
-    // the turn replays byte-identically as history instead of swapping a
-    // placeholder marker for the chat line on the next request.
-    expect(envelope.prefixedCommandBody).toBe("#35676 Keśava: No wtf");
-    expect(envelope.queuedBody).toBe("#35676 Keśava: No wtf");
-    expect(envelope.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
-    expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
-    expect(envelope.currentInboundContext?.text).toBe(
-      [
-        "[OpenClaw room event]",
-        [
-          "Room context:",
-          "Conversation info:",
-          "```json",
-          JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
-          "```",
-          "",
-          "Conversation context (chronological, selected for current message):",
-          "#35674 Other: I wish I could enjoy 5.5",
-          "#35675 User ->#35674: Are you fr fr",
-        ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
-        "Thread note",
-        "System event",
-      ].join("\n\n"),
-    );
-    // Each room-event fact appears exactly once per request: kind lives in the
-    // Conversation info JSON, the event line lives in the user turn body.
-    expect(envelope.currentInboundContext?.text).not.toContain("inbound_event_kind: room_event\n");
-    expect(envelope.currentInboundContext?.text).not.toContain("Current event:");
-    expect(envelope.currentInboundContext?.resumableText).toBe(
-      [
-        "[OpenClaw room event]",
-        [
-          "Room context:",
-          "Conversation info:",
-          "```json",
-          JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
-          "```",
-        ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
-        "Thread note",
-        "System event",
-      ].join("\n\n"),
-    );
-    expect(envelope.currentInboundContext?.fragments).toEqual(
-      expect.arrayContaining([
-        { kind: "conversation-data", text: "Thread note" },
-        { kind: "conversation-data", text: "System event" },
-      ]),
-    );
-    expect(envelope.currentInboundContext?.resumableText).not.toContain(
-      "Conversation context (chronological, selected for current message):",
-    );
-  });
+      expect(envelope.prefixedCommandBody).toBe("#35676 Alice: Current room event");
+      expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
+      expect(envelope.transcriptCommandBody).toBe("#35676 Alice: Current room event");
+      expect(countOccurrences(envelope.currentInboundContext?.text, "Earlier room activity")).toBe(
+        1,
+      );
+      expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
+      for (const text of [
+        envelope.currentInboundContext?.text,
+        envelope.currentInboundContext?.resumableText,
+      ]) {
+        expect(text).toContain("Conversation info:");
+        expect(text).toContain("Thread note");
+        expect(text).toContain("System event");
+        expect(text).not.toContain("Current room event");
+      }
+      expect(envelope.currentInboundContext?.fragments).toEqual(
+        expect.arrayContaining([
+          { kind: "conversation-data", text: "Thread note" },
+          { kind: "conversation-data", text: "System event" },
+        ]),
+      );
+    },
+  );
 
   it("uses attributed coalesced room-event lines for current event and transcript", () => {
     const ambientTranscriptBody = ["#35676 Keśava: No wtf", "#35677 Ayaan: fr"].join("\n");
@@ -276,6 +248,150 @@ describe("buildReplyPromptEnvelope", () => {
       "your final text here stays private",
     );
     expect(envelope.queuedBody).not.toContain("[Chat history]");
+  });
+
+  it("keeps completed audio transcripts in room-event bodies", () => {
+    const transcript = "turn left at the next light";
+    const agentText = `[Audio]\nTranscript:\n${transcript}`;
+    const transportEnvelope = "[Discord channel #ambient]\n[media attached: voice-message.ogg]";
+    const ctx = finalizeInboundContext({
+      Body: transportEnvelope,
+      BodyForAgent: agentText,
+      RawBody: transportEnvelope,
+      CommandBody: transportEnvelope,
+      Transcript: transcript,
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: transcript,
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2003",
+      SenderName: "Alice",
+    });
+    const sessionCtx = finalizeInboundContext({ ...ctx });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx,
+      baseBody: sessionCtx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe(`#2003 Alice: ${agentText}`);
+    expect(envelope.transcriptCommandBody).toBe(envelope.queuedBody);
+    expect(envelope.queuedBody).not.toContain(transportEnvelope);
+  });
+
+  it("does not infer room-event transcript ownership from matching text", () => {
+    const ctx = finalizeInboundContext({
+      Body: "typed message",
+      BodyForAgent: "look at the book",
+      CommandBody: "typed message",
+      Transcript: "ok",
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2004",
+      SenderName: "Alice",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx: finalizeInboundContext({ ...ctx }),
+      baseBody: ctx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2004 Alice: typed message");
+  });
+
+  it("does not borrow audio provenance from a different room-event projection", () => {
+    const ctx = finalizeInboundContext({
+      Body: "current typed message",
+      BodyForAgent: "current agent text",
+      CommandBody: "current typed message",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "previous transcript",
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2005",
+      SenderName: "Alice",
+    });
+    const sessionCtx = finalizeInboundContext({
+      ...ctx,
+      BodyForAgent: "unrelated session projection",
+      agentText: "unrelated session projection",
+      MediaUnderstanding: undefined,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx,
+      baseBody: sessionCtx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2005 Alice: current typed message");
+  });
+
+  it("requires an exact canonical audio body match", () => {
+    const agentText = "[Audio]\nTranscript:\nok";
+    const ctx = finalizeInboundContext({
+      Body: "typed message",
+      BodyForAgent: agentText,
+      CommandBody: "typed message",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "ok",
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2006",
+      SenderName: "Alice",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx: finalizeInboundContext({ ...ctx }),
+      baseBody: ` ${agentText}`,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2006 Alice: typed message");
   });
 
   it("keeps media-only notes in ordinary user request transcripts", () => {

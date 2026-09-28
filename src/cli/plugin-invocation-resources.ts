@@ -1,12 +1,13 @@
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 
-type RegistryAcquisition = { registry: PluginRegistry; release: () => Promise<void> };
+type ReleasableResource = { release: () => Promise<void> };
+type RegistryAcquisition = ReleasableResource & { registry: PluginRegistry };
 
 /** The executable owns installed command callbacks until their actual work and cleanup settle. */
 export class CliPluginInvocationResources {
   private readonly work = new AsyncWorkScope();
-  private readonly acquisitions = new Set<RegistryAcquisition>();
+  private readonly resources = new Set<ReleasableResource>();
   private readonly registrations = new Set<Promise<void>>();
   private readonly registrationErrors: unknown[] = [];
   private closing = false;
@@ -19,11 +20,18 @@ export class CliPluginInvocationResources {
     return this.work.track(run);
   }
 
+  adopt(resource: ReleasableResource): void {
+    if (this.closing) {
+      throw new Error("Plugin CLI invocation is closed");
+    }
+    this.resources.add(resource);
+  }
+
   acquire(load: () => Promise<RegistryAcquisition>): Promise<PluginRegistry> {
     return this.run(async () => {
       const acquisition = await load();
       // Release owns late acquisitions too, even when admission closed during the load.
-      this.acquisitions.add(acquisition);
+      this.resources.add(acquisition);
       if (this.closing) {
         throw new Error("Plugin CLI invocation closed during registry acquisition");
       }
@@ -69,11 +77,11 @@ export class CliPluginInvocationResources {
     this.work.beginClose();
     const results = await this.work.runWhenIdle(() =>
       Promise.allSettled(
-        [...this.acquisitions].map((acquisition) => this.work.track(() => acquisition.release())),
+        [...this.resources].map((acquisition) => this.work.track(() => acquisition.release())),
       ),
     );
     await this.work.drain();
-    this.acquisitions.clear();
+    this.resources.clear();
     const failures = results.filter((result) => result.status === "rejected");
     if (failures.length > 0) {
       throw new AggregateError(

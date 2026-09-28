@@ -1,4 +1,3 @@
-// Telegram plugin module implements request timeouts behavior.
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,

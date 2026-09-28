@@ -1,9 +1,18 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
   createTrustedCronScheduledToolPolicy,
+  normalizeCronScheduledToolCallerOrigin,
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronToolsAllowProvenance,
+  resolveCronAuthenticatedCallerOrigin,
+  resolveCronAuthenticatedChannelRequester,
+} from "../tools-allow-provenance.js";
 import { cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
   CronStoredJob,
@@ -11,12 +20,207 @@ import type {
   CronToolsAllowExecTargetRequirement,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type { CronAddOptions, CronUpdateOptions } from "./state.js";
+
+function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
+  const policy = resolveCronScheduledToolPolicy({
+    toolsAllow: job.payload.toolsAllow,
+    scheduledToolPolicy: job.scheduledToolPolicy,
+    owner: job.owner,
+  });
+  return cronJobUsesToolRuntime(job) &&
+    policy &&
+    isRuntimeToolAllowed("message", job.payload.toolsAllow)
+    ? policy
+    : undefined;
+}
+
+/** Snapshots the permissions used by all scheduled message actions. */
+export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  return policy ? { policy } : undefined;
+}
+
+/** Snapshots the normalized permissions used by scheduled message access. */
+export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  if (!policy) {
+    return undefined;
+  }
+  const channelRequester = resolveCronAuthenticatedChannelRequester(job);
+  const callerOrigin = normalizeCronScheduledToolCallerOrigin(
+    job.toolsAllowProvenance?.callerOrigin,
+  );
+  return {
+    policy,
+    ...(policy.mode === "account"
+      ? {
+          callerOrigin,
+          ...(channelRequester || callerOrigin.kind !== "unknown"
+            ? {
+                ...(channelRequester ? { channelRequester } : {}),
+                executableRevision: resolveCronRequesterExecutionRevision(job),
+              }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+export function cronJobMessageToolAuthorityInputsEqual(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+): boolean {
+  return isDeepStrictEqual(
+    resolveCronJobMessageToolAuthorityInputs(previous),
+    resolveCronJobMessageToolAuthorityInputs(next),
+  );
+}
+
+export function cronJobMessageActionAuthorityInputsEqual(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+): boolean {
+  return isDeepStrictEqual(
+    resolveCronJobMessageActionAuthorityInputs(previous),
+    resolveCronJobMessageActionAuthorityInputs(next),
+  );
+}
+
+/** Binds native requester authority to executable inputs using the canonical storage projection. */
+function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+  const {
+    description: _description,
+    displayName: _displayName,
+    createdActor: _createdActor,
+    toolsAllowProvenance: _toolsAllowProvenance,
+    ...executableJob
+  } = job;
+  return resolveCronJobConfigRevision(executableJob);
+}
+
+/** Rebinds or clears authenticated requester facts after the complete mutation is known. */
+export function reconcileCronChannelRequesterAuthority(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** An explicit executable resave may refresh identity without changing the definition. */
+  reauthorize?: boolean;
+  /** Explicit cap replacement may refresh caller origin without changing the definition. */
+  reauthorizeCallerOrigin?: boolean;
+}): void {
+  const { job, previousJob } = params;
+  if (
+    !job.toolsAllowProvenance?.callerOrigin &&
+    !job.toolsAllowProvenance?.channelRequester &&
+    !previousJob?.toolsAllowProvenance?.callerOrigin &&
+    !previousJob?.toolsAllowProvenance?.channelRequester &&
+    !params.toolsAllowProvenance?.callerOrigin &&
+    !params.toolsAllowProvenance?.channelRequester
+  ) {
+    return;
+  }
+  const captured = normalizeCronToolsAllowProvenance(params.toolsAllowProvenance);
+  const current = normalizeCronToolsAllowProvenance(job.toolsAllowProvenance);
+  const previous = normalizeCronToolsAllowProvenance(previousJob?.toolsAllowProvenance);
+  const unchangedCap =
+    previousJob !== undefined &&
+    isDeepStrictEqual(previousJob.payload.toolsAllow, job.payload.toolsAllow) &&
+    (previousJob.payload.toolsAllowIsDefault === true) ===
+      (job.payload.toolsAllowIsDefault === true);
+  const fullSurface =
+    current?.source === "final-executable-surface"
+      ? current
+      : unchangedCap && previous?.source === "final-executable-surface"
+        ? previous
+        : undefined;
+
+  const executionUnchanged =
+    previousJob !== undefined &&
+    resolveCronRequesterExecutionRevision(previousJob) ===
+      resolveCronRequesterExecutionRevision(job) &&
+    isDeepStrictEqual(previousJob.state.triggerState, job.state.triggerState);
+  const acceptsCapture = !executionUnchanged || params.reauthorize === true;
+  const acceptsCallerOriginCapture = !executionUnchanged || params.reauthorizeCallerOrigin === true;
+  let callerOrigin =
+    cronJobUsesToolRuntime(job) && acceptsCallerOriginCapture
+      ? resolveCronAuthenticatedCallerOrigin({ ...job, toolsAllowProvenance: captured })
+      : undefined;
+  if (
+    !callerOrigin &&
+    (!acceptsCallerOriginCapture || params.toolsAllowProvenance?.callerOrigin === undefined) &&
+    previousJob &&
+    cronJobUsesToolRuntime(job) &&
+    executionUnchanged
+  ) {
+    callerOrigin = resolveCronAuthenticatedCallerOrigin({
+      ...job,
+      toolsAllowProvenance: previous,
+    });
+  }
+  let channelRequester =
+    cronJobUsesToolRuntime(job) && acceptsCapture
+      ? resolveCronAuthenticatedChannelRequester({ ...job, toolsAllowProvenance: captured })
+      : undefined;
+  if (
+    !channelRequester &&
+    (!acceptsCapture || params.toolsAllowProvenance?.channelRequester === undefined) &&
+    previousJob &&
+    cronJobUsesToolRuntime(job) &&
+    executionUnchanged
+  ) {
+    channelRequester = resolveCronAuthenticatedChannelRequester({
+      ...job,
+      toolsAllowProvenance: previous,
+    });
+  }
+
+  if (fullSurface) {
+    const {
+      callerOrigin: _previousOrigin,
+      channelRequester: _previousRequester,
+      ...provenance
+    } = fullSurface;
+    job.toolsAllowProvenance = {
+      ...provenance,
+      callerOrigin: callerOrigin ?? { kind: "unknown" },
+      ...(channelRequester ? { channelRequester } : {}),
+    };
+  } else if (callerOrigin) {
+    job.toolsAllowProvenance = {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin,
+      ...(channelRequester ? { channelRequester } : {}),
+    };
+  } else if (channelRequester) {
+    job.toolsAllowProvenance = { version: 1, source: "authenticated-requester", channelRequester };
+  } else {
+    delete job.toolsAllowProvenance;
+  }
+}
+
+export function consumeRuntimeAuthorityMutationOptions(
+  opts: CronAddOptions | CronUpdateOptions | undefined,
+): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
+  // Validation-only guards must not look like an empty fresh capture: that
+  // would erase an existing runtime ceiling during an otherwise routine edit.
+  opts?.commitGuard?.();
+  return {
+    captured: opts?.captureRuntimeAuthority !== undefined,
+    runtimeAuthority: opts?.captureRuntimeAuthority?.(),
+  };
+}
 
 function stampScheduledToolPolicy(
   job: CronStoredJob,
-  scheduledToolPolicy: CronScheduledToolPolicy | undefined,
+  scheduledToolPolicy: CronScheduledToolPolicy | null | undefined,
 ): void {
-  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
+  if (
+    !cronJobUsesToolRuntime(job) ||
+    job.payload.toolsAllow === undefined ||
+    scheduledToolPolicy === null
+  ) {
     delete job.scheduledToolPolicy;
     return;
   }
@@ -35,18 +239,24 @@ function reconcileScheduledToolPolicy(params: {
   job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
   explicitlyMutatesToolsAllow: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolPolicy?: CronScheduledToolPolicy | null;
 }): void {
   const { job } = params;
-  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
-    delete job.scheduledToolPolicy;
-    return;
-  }
   const current = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
+    toolsAllow: job.payload.toolsAllow ?? [],
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
+  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
+    // A dormant account binding is still its ceiling. Dropping it would let
+    // a later operator payload conversion silently adopt trusted authority.
+    if (current?.mode === "account") {
+      job.scheduledToolPolicy = current;
+    } else {
+      delete job.scheduledToolPolicy;
+    }
+    return;
+  }
   if (current) {
     job.scheduledToolPolicy = current;
     return;
@@ -102,7 +312,8 @@ function reconcileToolsAllowProvenance(params: {
     return;
   }
   if (
-    params.job.payload.toolsAllowIsDefault === true &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow !== undefined &&
     params.toolsAllowProvenance?.version === 1 &&
     params.toolsAllowProvenance.source === "final-executable-surface"
   ) {
@@ -158,7 +369,7 @@ export function reconcileToolsAllowAuthority(params: {
   job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
   explicitlyMutatesToolsAllow: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolPolicy?: CronScheduledToolPolicy | null;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
 }): void {

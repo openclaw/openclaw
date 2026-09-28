@@ -1,12 +1,16 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -57,7 +61,171 @@ async function createLinkedPackageSwapFixture(base: string, relative = false) {
   };
 }
 
+async function createLinkedGitSwapFixture(base: string, relative = false) {
+  const fixture = await createLinkedPackageSwapFixture(base, relative);
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-C", fixture.checkout, "-c", `core.hooksPath=${path.join(base, "no-hooks")}`, ...args],
+      { encoding: "utf8" },
+    ).trim();
+  const commit = () =>
+    git(
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    );
+  git("init", "--quiet", "--template=");
+  commit();
+  const sha = git("rev-parse", "HEAD");
+  const dist = path.join(fixture.checkout, "dist");
+  await fs.mkdir(path.join(dist, "control-ui"));
+  for (const [name, contents] of [
+    ["entry.js", "export {};\n"],
+    ["control-ui/index.html", "ready"],
+    ["build-info.json", JSON.stringify({ commit: sha, buildId: "original-build" })],
+    [".buildstamp", JSON.stringify({ head: sha })],
+    [".runtime-postbuildstamp", JSON.stringify({ head: sha })],
+  ] as const) {
+    await fs.writeFile(path.join(dist, name), contents);
+  }
+  return { ...fixture, dist, sha, commit };
+}
+
 describe("retained npm package integrity", () => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(process.platform === "darwin" ? [0o700, 0o755] : [0o777])(
+    "preserves distinct launcher targets and permissions through rollback (mode %i)",
+    async (mode) => {
+      await withTestDir({ prefix: "openclaw-rollback-launcher-target-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const oldTarget = "../lib/node_modules/openclaw/old-launcher.mjs";
+        const candidateTarget = "../lib/node_modules/openclaw/new-launcher.mjs";
+        const stagedLauncher = path.join(params.stage.layout.binDir, "openclaw");
+        for (const { root, shim, filename, contents, linkMode } of [
+          {
+            root: packageRoot,
+            shim: launcher,
+            filename: "old-launcher.mjs",
+            contents: "old launcher\n",
+            linkMode: mode,
+          },
+          {
+            root: params.stage.packageRoot,
+            shim: stagedLauncher,
+            filename: "new-launcher.mjs",
+            contents: "candidate launcher\n",
+            linkMode: mode === 0o700 ? 0o755 : 0o700,
+          },
+        ]) {
+          await fs.writeFile(path.join(root, filename), contents);
+          await fs.chmod(path.join(root, filename), 0o751);
+          await fs.unlink(shim);
+          await fs.symlink(`../lib/node_modules/openclaw/${filename}`, shim);
+          if (process.platform === "darwin") {
+            await fs.lchmod(shim, linkMode);
+          }
+        }
+        const original = await fs.lstat(launcher);
+        const candidate = await fs.lstat(stagedLauncher);
+        const transaction = await retain(params);
+        expect(await fs.readlink(launcher)).toBe(candidateTarget);
+        expect((await fs.lstat(launcher)).mode).toBe(candidate.mode);
+        expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+        expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
+
+        expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
+        expect(await fs.readlink(launcher)).toBe(oldTarget);
+        const restored = await fs.lstat(launcher);
+        expect([restored.mode, restored.uid, restored.gid]).toEqual([
+          original.mode,
+          original.uid,
+          original.gid,
+        ]);
+        expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+        expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a staged relative npm link on its canonical checkout through activation and rollback",
+    async () => {
+      await withTestDir({ prefix: "openclaw-stage-relative-link-" }, async (base) => {
+        const fixture = await createPackageSwapFixture(base);
+        const checkout = path.join(base, "candidate-checkout");
+        const stagedRoot = fixture.params.stage.packageRoot;
+        await fs.rename(stagedRoot, checkout);
+        await fs.symlink(path.relative(path.dirname(stagedRoot), checkout), stagedRoot);
+        const transaction = await retain(fixture.params);
+        await expect(fs.realpath(fixture.packageRoot)).resolves.toBe(checkout);
+        await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+        expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
+        await expect(fs.readFile(path.join(checkout, "package.json"), "utf8")).resolves.toContain(
+          '"version":"2.0.0"',
+        );
+        await expect(
+          fs.readFile(path.join(fixture.packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"1.0.0"');
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "preserves the retained npm link if its executor is revoked after observation (relative=%s)",
+    async (relative) => {
+      await withTestDir({ prefix: "openclaw-link-retirement-owner-" }, async (base) => {
+        const fixture = await createLinkedPackageSwapFixture(base, relative);
+        const transaction = await retain(fixture.params);
+        let current = true;
+        let targetRead = false;
+        const assertCurrent = () => {
+          if (!current) {
+            throw new Error("link retirement executor lost");
+          }
+        };
+        const readlink = fs.readlink.bind(fs);
+        vi.spyOn(fs, "readlink").mockImplementation(async (...args) => {
+          const target = await readlink(...args);
+          if (String(args[0]) === transaction.backupRoot) {
+            targetRead = true;
+          }
+          return target;
+        });
+        const lstat = fs.lstat.bind(fs);
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
+          if (String(args[0]) === transaction.backupRoot && targetRead) {
+            current = false;
+          }
+          return stat;
+        });
+        const unlink = vi.spyOn(fs, "unlink");
+        await expect(
+          transaction.complete({ activationVerified: true }, assertCurrent),
+        ).rejects.toThrow("link retirement executor lost");
+        await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toThrow(
+          "link retirement executor lost",
+        );
+        expect(unlink).not.toHaveBeenCalled();
+        expect((await fs.lstat(transaction.backupRoot)).ino).toBe(fixture.linkIdentity);
+        expect(await fs.readlink(transaction.backupRoot)).toBe(fixture.target);
+        expect((await fs.stat(fixture.checkout)).ino).toBe(fixture.checkoutIdentity);
+        await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+      });
+    },
+  );
+
   it.each(["changed launcher", "unchanged launcher", "verified activation"] as const)(
     "handles an absent old package with %s",
     async (outcome) => {
@@ -66,7 +234,9 @@ describe("retained npm package integrity", () => {
         await fs.rm(packageRoot, { recursive: true });
         const transaction = await retain(params);
         if (outcome === "verified activation") {
-          expect(await transaction.complete({ activationVerified: true })).toBeUndefined();
+          expect(
+            await transaction.complete({ activationVerified: true }, () => {}),
+          ).toBeUndefined();
           await expectCandidateIntact(packageRoot, launcher);
           expect((await fs.readdir(globalRoot)).filter((name) => name.startsWith("."))).toEqual([]);
           return;
@@ -76,7 +246,7 @@ describe("retained npm package integrity", () => {
             name.startsWith(".openclaw.shim-backup-"),
           )!;
           await fs.writeFile(path.join(globalRoot, backup, "openclaw"), "altered launcher\n");
-          expect(await transaction.rollback()).toMatchObject({
+          expect(await transaction.rollback(() => {})).toMatchObject({
             exitCode: 1,
             activePackageRoot: packageRoot,
           });
@@ -84,7 +254,7 @@ describe("retained npm package integrity", () => {
           await expect(fs.stat(path.join(globalRoot, backup))).resolves.toBeDefined();
         } else {
           // Restoring package absence is not a verified previous runtime.
-          expect(await transaction.rollback()).toMatchObject({
+          expect(await transaction.rollback(() => {})).toMatchObject({
             exitCode: 1,
             activePackageRoot: null,
           });
@@ -108,7 +278,7 @@ describe("retained npm package integrity", () => {
           path.join(fixture.checkout, "operator.txt"),
           "independent operator edit\n",
         );
-        expect(await transaction.complete({ activationVerified: true })).toBeUndefined();
+        expect(await transaction.complete({ activationVerified: true }, () => {})).toBeUndefined();
         await expect(fs.lstat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await fs.stat(fixture.checkout)).ino).toBe(fixture.checkoutIdentity);
         expect(await fs.readFile(path.join(fixture.checkout, "operator.txt"), "utf8")).toBe(
@@ -122,6 +292,221 @@ describe("retained npm package integrity", () => {
   );
 
   it.each([false, true])(
+    "restores the same built Git runtime and retires only remaining backups (relative=%s)",
+    async (relative) => {
+      await withTestDir({ prefix: "openclaw-linked-git-recovery-" }, async (base) => {
+        const fixture = await createLinkedGitSwapFixture(base, relative);
+        const transaction = await retain(fixture.params);
+        await fs.writeFile(path.join(fixture.checkout, "operator.txt"), "local edit\n");
+        expect(transaction.assertRollbackSafe).toBeTypeOf("function");
+        await transaction.assertRollbackSafe?.();
+        const rollback = await transaction.rollback(() => {});
+        expect(rollback).toMatchObject({ exitCode: 0, activePackageRoot: fixture.packageRoot });
+        expect(await fs.realpath(fixture.packageRoot)).toBe(fixture.checkout);
+        expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
+        expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+        expect(
+          (await fs.readdir(fixture.globalRoot)).filter((name) => name.startsWith(".")),
+        ).toEqual([]);
+        expect(await fs.readFile(path.join(fixture.checkout, "operator.txt"), "utf8")).toBe(
+          "local edit\n",
+        );
+      });
+    },
+  );
+
+  it.each([
+    "build ID",
+    "version",
+    "HEAD",
+    "build stamp",
+    "runtime stamp",
+    "entry",
+    "UI",
+    "checkout identity",
+    "canonical target",
+  ] as const)("refuses changed linked Git %s before rollback mutation", async (change) => {
+    await withTestDir({ prefix: "openclaw-linked-git-changed-" }, async (base) => {
+      const fixture = await createLinkedGitSwapFixture(base);
+      const transaction = await retain(fixture.params);
+      const { dist, checkout, sha } = fixture;
+      if (change === "build ID") {
+        await fs.writeFile(
+          path.join(dist, "build-info.json"),
+          JSON.stringify({ commit: sha, buildId: "replacement" }),
+        );
+      } else if (change === "version") {
+        await fs.writeFile(
+          path.join(checkout, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "1.0.1" }),
+        );
+      } else if (change === "HEAD") {
+        fixture.commit();
+      } else if (change === "build stamp" || change === "runtime stamp") {
+        await fs.writeFile(
+          path.join(dist, change === "build stamp" ? ".buildstamp" : ".runtime-postbuildstamp"),
+          JSON.stringify({ head: "changed" }),
+        );
+      } else if (change === "entry" || change === "UI") {
+        await fs.unlink(path.join(dist, change === "entry" ? "entry.js" : "control-ui/index.html"));
+      } else {
+        const moved = `${checkout}.original`;
+        await fs.rename(checkout, moved);
+        if (change === "checkout identity") {
+          await fs.cp(moved, checkout, { recursive: true, verbatimSymlinks: true });
+        } else {
+          await fs.symlink(moved, checkout, process.platform === "win32" ? "junction" : "dir");
+        }
+      }
+      expect(transaction.assertRollbackSafe).toBeTypeOf("function");
+      await expect(transaction.assertRollbackSafe?.()).rejects.toThrow("Git runtime changed");
+      const rename = vi.spyOn(fs, "rename");
+      const rollback = await transaction.rollback(() => {});
+      expect(rollback).toMatchObject({ exitCode: 1, activePackageRoot: fixture.packageRoot });
+      expect(rename).not.toHaveBeenCalled();
+      await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+      expect((await fs.lstat(transaction.backupRoot)).ino).toBe(fixture.linkIdentity);
+      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
+        exitCode: 1,
+      });
+      expect(await fs.readFile(path.join(checkout, "operator.txt"), "utf8")).toBe(
+        "operator-owned checkout\n",
+      );
+    });
+  });
+
+  it("refuses a linked Git rebuild during service preparation before activation", async () => {
+    await withTestDir({ prefix: "openclaw-linked-git-preparation-" }, async (base) => {
+      const fixture = await createLinkedGitSwapFixture(base);
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({
+        ...fixture.params,
+        onLiveMutation,
+        beforeActivate: async () => {
+          await fs.writeFile(
+            path.join(fixture.dist, "build-info.json"),
+            JSON.stringify({ commit: fixture.sha, buildId: "replacement" }),
+          );
+        },
+      });
+      expect(result).toMatchObject({ status: "failed", packageRollbackVerified: false });
+      expect(result.step.stderrTail).toContain("Git runtime changed");
+      expect(onLiveMutation).not.toHaveBeenCalled();
+      expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
+      expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+    });
+  });
+
+  it.each([false, true])(
+    "rechecks linked Git recovery after failed verification (changed=%s)",
+    async (changed) => {
+      await withTestDir({ prefix: "openclaw-linked-git-postverify-" }, async (base) => {
+        const fixture = await createLinkedGitSwapFixture(base);
+        const result = await swapStagedPackageInstall({
+          ...fixture.params,
+          postVerifyStep: async () => {
+            if (changed) {
+              await fs.unlink(path.join(fixture.dist, "entry.js"));
+            }
+            return {
+              name: "verification",
+              command: "verify",
+              cwd: base,
+              durationMs: 0,
+              exitCode: 1,
+            };
+          },
+        });
+        expect(result).toMatchObject({
+          status: "failed",
+          packageRollbackVerified: !changed,
+          step: { exitCode: changed ? 1 : 0 },
+        });
+        if (changed) {
+          await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+          expect(result.step.stderrTail).toContain("current package unchanged");
+        } else {
+          expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
+          expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+          expect(result.step.stdoutTail).toContain("managed Gateway remains stopped");
+        }
+      });
+    },
+  );
+
+  it.each(["build ID", "runtime stamp"] as const)(
+    "does not grant recovery to an initially unverified Git %s",
+    async (missing) => {
+      await withTestDir({ prefix: "openclaw-linked-git-unverified-" }, async (base) => {
+        const fixture = await createLinkedGitSwapFixture(base);
+        await fs.unlink(
+          path.join(
+            fixture.dist,
+            missing === "build ID" ? "build-info.json" : ".runtime-postbuildstamp",
+          ),
+        );
+        const transaction = await retain(fixture.params);
+        expect(transaction.assertRollbackSafe).toBeUndefined();
+        expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 1 });
+        expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
+          exitCode: 1,
+        });
+        await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
+      });
+    },
+  );
+
+  it("refuses an identical checkout replaced during runtime verification", async () => {
+    await withTestDir({ prefix: "openclaw-linked-git-mid-verification-" }, async (base) => {
+      const fixture = await createLinkedGitSwapFixture(base);
+      const transaction = await retain(fixture.params);
+      const stat = fs.stat.bind(fs);
+      let replaced = false;
+      vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const observed = await stat(...args);
+        if (String(args[0]) === fixture.checkout && !replaced) {
+          replaced = true;
+          const retainedCheckout = `${fixture.checkout}.original`;
+          await fs.rename(fixture.checkout, retainedCheckout);
+          await fs.cp(retainedCheckout, fixture.checkout, {
+            recursive: true,
+            verbatimSymlinks: true,
+          });
+        }
+        return observed;
+      });
+      await expect(transaction.assertRollbackSafe?.()).rejects.toThrow("Git runtime changed");
+      expect(replaced).toBe(true);
+      await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
+      expect((await fs.lstat(transaction.backupRoot)).ino).toBe(fixture.linkIdentity);
+    });
+  });
+
+  it("does not certify a linked runtime changed during restoration", async () => {
+    await withTestDir({ prefix: "openclaw-linked-git-restoration-" }, async (base) => {
+      const fixture = await createLinkedGitSwapFixture(base);
+      const transaction = await retain(fixture.params);
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        if (String(args[0]) === transaction.backupRoot) {
+          await fs.unlink(path.join(fixture.dist, "entry.js"));
+        }
+        return rename(...args);
+      });
+      expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 1 });
+      expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
+      expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+      await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
+      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
+        exitCode: 1,
+      });
+    });
+  });
+
+  it.each([false, true])(
     "restores only the owned npm link without granting runtime recovery (relative=%s)",
     async (relative) => {
       await withTestDir({ prefix: "openclaw-linked-package-rollback-" }, async (base) => {
@@ -131,7 +516,7 @@ describe("retained npm package integrity", () => {
           path.join(fixture.checkout, "operator.txt"),
           "independent operator edit\n",
         );
-        const rollback = await transaction.rollback();
+        const rollback = await transaction.rollback(() => {});
         expect(rollback).toMatchObject({ exitCode: 1, activePackageRoot: fixture.packageRoot });
         expect(rollback.stderrTail).toContain("external checkout runtime integrity is unverified");
         expect(rollback.stdoutTail).toBeNull();
@@ -142,11 +527,11 @@ describe("retained npm package integrity", () => {
           "independent operator edit\n",
         );
         expect((await fs.stat(fixture.checkout)).ino).toBe(fixture.checkoutIdentity);
-        expect(await transaction.complete({ activationVerified: false })).toMatchObject({
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
           exitCode: 1,
         });
         await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
-        expect(await transaction.rollback()).toEqual(rollback);
+        expect(await transaction.rollback(() => {})).toEqual(rollback);
       });
     },
   );
@@ -185,8 +570,8 @@ describe("retained npm package integrity", () => {
             return stat;
           });
         }
-        expect(await transaction.complete({ activationVerified: true })).toMatchObject({
-          name: "global install backup retention",
+        expect(await transaction.complete({ activationVerified: true }, () => {})).toMatchObject({
+          name: "package-backup-retention",
           exitCode: 1,
         });
         expect(replaced).toBe(true);
@@ -275,14 +660,16 @@ describe("retained npm package integrity", () => {
           transaction.backupRoot,
           process.platform === "win32" ? "junction" : "dir",
         );
-        const rollback = await transaction.rollback();
+        const rollback = await transaction.rollback(() => {});
         expect(rollback).toMatchObject({ exitCode: 1, activePackageRoot: fixture.packageRoot });
         expect(rollback.stderrTail).toContain("retained package");
+        expect(rollback.stderrTail).toContain(`changed at ${transaction.backupRoot}`);
+        expect(rollback.stderrTail).toContain("before retrying recovery");
         await expectCandidateIntact(fixture.packageRoot, fixture.launcher);
         expect(await fs.readFile(path.join(fixture.checkout, "operator.txt"), "utf8")).toBe(
           "operator-owned checkout\n",
         );
-        expect(await transaction.complete({ activationVerified: false })).toMatchObject({
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
           exitCode: 1,
         });
       });
@@ -366,11 +753,16 @@ describe("retained npm package integrity", () => {
     await withTestDir({ prefix: "openclaw-rollback-linked-launcher-" }, async (base) => {
       const { params, launcher } = await createPackageSwapFixture(base);
       const alias = `${launcher}.alias`;
+      await fs.chmod(launcher, 0o751);
       await fs.link(launcher, alias);
       const transaction = await retain(params);
-      expect(await transaction.rollback()).toMatchObject({ exitCode: 0 });
+      expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
       await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
       await expect(fs.readFile(alias, "utf8")).resolves.toBe("old launcher\n");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(launcher)).mode & 0o777).toBe(0o751);
+        expect((await fs.stat(alias)).mode & 0o777).toBe(0o751);
+      }
     });
   });
 
@@ -431,10 +823,14 @@ describe("retained npm package integrity", () => {
         )!;
         await fs.writeFile(path.join(globalRoot, shimBackup, "openclaw"), "altered launcher\n");
       }
-      const result = await transaction.rollback();
+      const result = await transaction.rollback(() => {});
       expect(result).toMatchObject({ exitCode: 1, activePackageRoot: packageRoot });
+      if (change !== "launcher") {
+        expect(result.stderrTail).toContain(`retained package tree changed at ${backup}`);
+        expect(result.stderrTail).toContain("before retrying recovery");
+      }
       await expectCandidateIntact(packageRoot, launcher);
-      expect(await transaction.complete({ activationVerified: false })).toMatchObject({
+      expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
         exitCode: 1,
       });
       await expect(fs.stat(backup)).resolves.toBeDefined();
@@ -451,7 +847,7 @@ describe("retained npm package integrity", () => {
       await fs.symlink(`${entry}/missing`, path.join(packageRoot, "dangling"));
       const transaction = await retain(params);
       const retained = await fs.stat(transaction.backupRoot);
-      expect(await transaction.rollback()).toMatchObject({
+      expect(await transaction.rollback(() => {})).toMatchObject({
         exitCode: 0,
         activePackageRoot: packageRoot,
       });
@@ -461,9 +857,9 @@ describe("retained npm package integrity", () => {
         (await fs.stat(path.join(packageRoot, "peer.js"))).ino,
       );
       await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-      expect(await transaction.complete({ activationVerified: false })).toBeUndefined();
+      expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
       expect((await fs.readdir(globalRoot)).filter((name) => name.startsWith("."))).toEqual([]);
-      expect(await transaction.rollback()).toMatchObject({ exitCode: 1 });
+      expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 1 });
     });
   });
 
@@ -480,14 +876,14 @@ describe("retained npm package integrity", () => {
           }
           return rename(...args);
         });
-        expect(await transaction.rollback()).toMatchObject({
+        expect(await transaction.rollback(() => {})).toMatchObject({
           exitCode: 1,
           activePackageRoot: packageRoot,
         });
         expect(copy).not.toHaveBeenCalled();
         await expectCandidateIntact(packageRoot, launcher);
         await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
-        expect(await transaction.complete({ activationVerified: true })).toMatchObject({
+        expect(await transaction.complete({ activationVerified: true }, () => {})).toMatchObject({
           exitCode: 1,
         });
       });
@@ -510,14 +906,16 @@ describe("retained npm package integrity", () => {
           }
           return rename(...args);
         });
-        expect(await transaction.rollback()).toMatchObject({ exitCode: 1 });
+        const rollback = await transaction.rollback(() => {});
+        expect(rollback).toMatchObject({ exitCode: 1 });
+        expect(rollback.stderrTail).toContain(`restored package tree changed at ${packageRoot}`);
         expect(wrote).toBe(true);
         // Observation is not exclusion: the same-principal fd survives rename.
         // Never call this result verified or discard the retained candidate.
         await expect(fs.readFile(entry, "utf8")).resolves.toContain("changed");
         await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
         await expect(fs.stat(`${transaction.backupRoot}.candidate`)).resolves.toBeDefined();
-        expect(await transaction.complete({ activationVerified: false })).toMatchObject({
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
           exitCode: 1,
         });
       } finally {
@@ -526,13 +924,31 @@ describe("retained npm package integrity", () => {
     });
   });
 
-  it.each(["external link", "oversized file", "unavailable inode"] as const)(
-    "refuses an unverifiable %s before service preparation or live mutation",
-    async (shape) => {
+  it.each([
+    { shape: "external link", cause: "Package rollback symlink leaves the retained tree" },
+    {
+      shape: "sibling dependency link",
+      cause: "Package rollback symlink leaves the retained tree",
+    },
+    { shape: "oversized file", cause: "Package rollback verification byte limit exceeded" },
+    { shape: "unavailable inode", cause: "Package rollback filesystem identity is unavailable" },
+    { shape: "timed-out scan", cause: "Package rollback verification timed out" },
+  ] as const)(
+    "records the baseline scan failure for $shape before service preparation or live mutation",
+    async ({ shape, cause }) => {
       await withTestDir({ prefix: "openclaw-rollback-admission-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
         if (shape === "external link") {
           await fs.symlink(base, path.join(packageRoot, "external"));
+        }
+        if (shape === "sibling dependency link") {
+          const dependency = path.join(globalRoot, "fixture-dependency");
+          await fs.mkdir(dependency);
+          await fs.writeFile(path.join(dependency, "index.js"), "export default 42;\n");
+          await fs.mkdir(path.join(packageRoot, "node_modules"));
+          const link = path.join(packageRoot, "node_modules", "fixture-dependency");
+          await fs.symlink("../../fixture-dependency", link);
+          expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
         }
         if (shape === "oversized file") {
           const file = path.join(packageRoot, "oversized.bin");
@@ -549,6 +965,20 @@ describe("retained npm package integrity", () => {
             return stat;
           });
         }
+        if (shape === "timed-out scan") {
+          let timedOut = false;
+          const lstat = fs.lstat.bind(fs);
+          vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+            if (timedOut && String(args[0]) === packageRoot) {
+              throw new Error("identity fallback unavailable");
+            }
+            return lstat(...args);
+          });
+          vi.spyOn(fs, "open").mockImplementation(async () => {
+            timedOut = true;
+            throw new PackageIntegrityTimeoutError(40);
+          });
+        }
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const result = await swapStagedPackageInstall({
@@ -557,6 +987,32 @@ describe("retained npm package integrity", () => {
           onLiveMutation,
         });
         expect(result.status).toBe("failed");
+        expect(result.step.stderrTail).not.toContain("package tree changed");
+        expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");
+        const steps = updateRunStepsFromResultStep(result.step);
+        expect(steps[0]).toMatchObject({
+          detail: expect.stringContaining("Baseline package scan failed"),
+          failureFacts: [
+            {
+              check: "package-swap",
+              code: "baseline-scan-failed",
+              message: expect.stringContaining(cause),
+            },
+          ],
+        });
+        const report = await prepareUpdateFailureReport(
+          {
+            attemptId: "baseline-failure",
+            result: { mode: "npm", status: "error", steps: [], durationMs: 0 },
+            recordedRun: { runId: "baseline-failure", steps },
+          },
+          { env: {}, stateDir: base },
+        );
+        expect(report.body).toContain("baseline-scan-failed");
+        expect(report.body).toContain(cause);
+        expect(report.body).not.toContain("identity fallback unavailable");
+        expect(report.body).not.toContain(base);
+        expect(result).toMatchObject({ packageRollbackVerified: false });
         expect(beforeActivate).not.toHaveBeenCalled();
         expect(onLiveMutation).not.toHaveBeenCalled();
         await expect(

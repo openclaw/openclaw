@@ -54,7 +54,7 @@ OpenClaw host:
   | tail -200
 ```
 
-Useful excerpts usually include `openai/gpt-5.6-sol` or `openai/gpt-5.6-luna`,
+Useful excerpts usually include `openai/gpt-6-astra` or `openai/gpt-5.6-luna`,
 `Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
 `candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
 `No API key` result. A corrected run should show the OpenAI OAuth path
@@ -75,6 +75,31 @@ is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
 
+**The resident catalog reports a spawn failure:** a missing executable
+(`ENOENT`), missing execute permission (`EACCES`), or incompatible CPU
+(`EBADARCH`, sometimes shown as macOS errno `-86`) stops that catalog's
+automatic retries and records one advisory. Repair the installation, then
+restart the Gateway to retry. Unrelated configuration reloads do not retry the
+failed executable. Disabling the
+plugin through config reload retires its catalog refresh loop.
+
+Managed passive catalogs use the plugin's installed Codex package and do not fall back
+to macOS desktop app bundles. OpenClaw runs
+its launcher with the Gateway's interpreter so Codex selects the platform
+package matching that interpreter's architecture without a `node` PATH lookup.
+At debug or trace log level, `Codex app-server spawn` records the executable,
+launcher, and resolved native binary paths without arguments or credentials.
+Use `file <path>` on macOS to inspect the failing executable's architecture.
+Check the managed native binary with
+`openclaw doctor --lint --only codex/managed-app-server --json`, including when
+Codex is enabled only for its session catalog.
+
+Directories named `openclaw-model-catalog-*` contain OpenClaw plugin source
+captures, not native Codex sessions. Current captures are bounded by worker
+generations and retired with their workers. Doctor reports older captures
+outside managed custody with an offline cleanup command; it does not delete
+those legacy directories automatically.
+
 **The Codex app-server uses too much memory:** distinguish the two processes
 first. OpenClaw runs the local Codex app-server as a separate Rust child.
 `NODE_OPTIONS=--max-old-space-size=...` changes only the Gateway's Node.js V8
@@ -82,6 +107,27 @@ heap; it does not cap or enlarge Codex. Managed Gateway installs already choose
 an adaptive V8 heap, and raising it can leave less host memory for Codex. Use
 [Gateway memory troubleshooting](/gateway/troubleshooting#gateway-exits-during-high-memory-use)
 for Gateway pressure, and inspect host or container memory for the Codex child.
+
+Large catalog replies use a decoder worker in the Gateway. After a complete
+reply, OpenClaw releases that worker after one minute without further worker
+decoding. The native app-server connection and its warm conversation threads stay
+connected. A later large reply starts a new decoder, so its first response can
+take longer; small replies do not require a worker. Incomplete replies retain
+their decoder until recovery completes or the connection closes.
+
+**"Cannot inspect Codex processes":** this error comes from local process
+inspection before model inference. For a deadline error, retry after host
+responsiveness recovers. For a permissions error, check access to `/proc` on
+Linux or `ps` on macOS.
+
+**A new turn fails during cleanup after a Gateway restart:** OpenClaw checks
+registered Codex processes before starting a replacement. Registrations for
+processes that have exited or whose PID has been reused are removed automatically,
+without scanning unrelated processes. Boot cleanup and new connections serialize
+recovery so they cannot stop or resume the same orphan concurrently. Live orphaned
+processes still require verified descendant cleanup before replacement work starts.
+If cleanup remains blocked, check Gateway logs and host process-inspection access;
+do not delete process registrations to bypass recovery.
 
 The bundled Codex has no heap or RSS limit and no configurable idle-unload
 delay. After the last client unsubscribes, an inactive thread can remain loaded

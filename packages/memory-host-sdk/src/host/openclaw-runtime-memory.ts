@@ -30,8 +30,4 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../../../../src/plugins/memory-state.js";
-export {
-  resolveCanonicalRootMemoryFile,
-  shouldSkipRootMemoryAuxiliaryPath,
-} from "../../../../src/memory/root-memory-files.js";
 export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";

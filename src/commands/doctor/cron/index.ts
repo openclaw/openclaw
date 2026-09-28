@@ -15,13 +15,14 @@ import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
-import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   type LegacyCronRepairResult,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
+import { collectCronNativeToolAdvisories } from "./native-tool-advisory.js";
 import {
   formatLegacyIssuePreview,
   formatIncompleteInheritedAuthorityAdvisory,
@@ -38,10 +39,6 @@ export {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
-
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
   return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
@@ -251,6 +248,17 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
+  for (const message of collectCronNativeToolAdvisories({ cfg: params.cfg, jobs: rawJobs })) {
+    findings.push(
+      legacyCronStoreFinding({
+        message,
+        path: sqliteStorePath,
+        requirement: "cron-native-tool-cap-review",
+        fixHint:
+          "Review the job's tools from an authorized session; Doctor will not add native tools.",
+      }),
+    );
+  }
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
@@ -324,17 +332,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
         message: `${pluralize(notifyCount, "job")} still uses legacy notify webhook fallback.`,
         path: sqliteStorePath,
         requirement: "legacy-notify-fallback",
-      }),
-    );
-  }
-
-  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
-  if (dreamingStaleCount > 0) {
-    findings.push(
-      legacyCronStoreFinding({
-        message: `${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape.`,
-        path: sqliteStorePath,
-        requirement: "legacy-dreaming-payload",
       }),
     );
   }
@@ -414,6 +411,23 @@ export async function maybeRepairLegacyCronStore(params: {
       "Cron",
     );
   }
+  const storagePreviewLines: string[] = [];
+  if (legacyRunLogDetected) {
+    storagePreviewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
+  if (legacyQuarantine) {
+    storagePreviewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+  }
+  if (invalidConfigRows.length > 0) {
+    storagePreviewLines.push(
+      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+    );
+  }
+  if (revalidatableQuarantineCount > 0) {
+    storagePreviewLines.push(
+      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
+    );
+  }
   if (rawJobs.length === 0) {
     if (
       !legacyStoreDetected &&
@@ -428,22 +442,7 @@ export async function maybeRepairLegacyCronStore(params: {
     if (legacyStoreDetected) {
       previewLines.push("- legacy JSON cron store will be archived after SQLite migration");
     }
-    if (legacyRunLogDetected) {
-      previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
-    }
-    if (legacyQuarantine) {
-      previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
-    }
-    if (invalidConfigRows.length > 0) {
-      previewLines.push(
-        `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-      );
-    }
-    if (revalidatableQuarantineCount > 0) {
-      previewLines.push(
-        `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
-      );
-    }
+    previewLines.push(...storagePreviewLines);
     const noteHeading =
       legacyStoreDetected || legacyRunLogDetected || legacyQuarantine
         ? `Legacy cron storage detected at ${shortenHomePath(storePath)}.`
@@ -474,6 +473,9 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
   noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
+  for (const message of collectCronNativeToolAdvisories({ cfg: params.cfg, jobs: rawJobs })) {
+    note(message, "Cron");
+  }
 
   const inFlightCount = countInFlightCronJobs(rawJobs);
   if (inFlightCount > 0) {
@@ -526,33 +528,20 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
-  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
   // --fix preview so the repair note does not promise a fix that never lands (#94655).
-  const commandPromptAdvisory = formatUnresolvedCommandPromptAdvisory(
-    normalized.unresolvedAgentTurnCommandPromptJobs,
-  );
-  if (commandPromptAdvisory) {
-    note(commandPromptAdvisory, "Cron");
-  }
-  const shellPromptAdvisory = formatUnresolvedShellPromptAdvisory(
-    normalized.unresolvedAgentTurnShellToolPromptJobs,
-  );
-  if (shellPromptAdvisory) {
-    note(shellPromptAdvisory, "Cron");
-  }
-  const scheduledToolPolicyAdvisory = formatScheduledToolPolicyAdvisory({
-    legacyJobs: normalized.legacyScheduledToolPolicyJobs,
-    invalidJobs: normalized.invalidScheduledToolPolicyJobs,
-  });
-  if (scheduledToolPolicyAdvisory) {
-    note(scheduledToolPolicyAdvisory, "Cron");
-  }
-  const legacyGatewayExecAdvisory = formatLegacyGatewayExecAdvisory(
-    normalized.legacyGatewayExecJobs,
-  );
-  if (legacyGatewayExecAdvisory) {
-    note(legacyGatewayExecAdvisory, "Cron");
+  for (const advisory of [
+    formatUnresolvedCommandPromptAdvisory(normalized.unresolvedAgentTurnCommandPromptJobs),
+    formatUnresolvedShellPromptAdvisory(normalized.unresolvedAgentTurnShellToolPromptJobs),
+    formatScheduledToolPolicyAdvisory({
+      legacyJobs: normalized.legacyScheduledToolPolicyJobs,
+      invalidJobs: normalized.invalidScheduledToolPolicyJobs,
+    }),
+    formatLegacyGatewayExecAdvisory(normalized.legacyGatewayExecJobs),
+  ]) {
+    if (advisory) {
+      note(advisory, "Cron");
+    }
   }
   const staticMcpByAgentWorkspace = new Map<string, boolean>();
   const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(
@@ -616,30 +605,10 @@ export async function maybeRepairLegacyCronStore(params: {
         : "- legacy JSON cron store will be archived after SQLite migration",
     );
   }
-  if (legacyRunLogDetected) {
-    previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
-  }
-  if (legacyQuarantine) {
-    previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
-  }
-  if (invalidConfigRows.length > 0) {
-    previewLines.push(
-      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-    );
-  }
-  if (revalidatableQuarantineCount > 0) {
-    previewLines.push(
-      `- ${pluralize(revalidatableQuarantineCount, "quarantined automation")} will be revalidated and restored only if current validation passes`,
-    );
-  }
+  previewLines.push(...storagePreviewLines);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
-    );
-  }
-  if (dreamingStaleCount > 0) {
-    previewLines.push(
-      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
   if (previewLines.length === 0 && !legacyStoreDetected) {

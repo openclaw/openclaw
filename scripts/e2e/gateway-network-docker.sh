@@ -9,17 +9,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
-FROZEN_CONTEXT=0
-openclaw_prepare_frozen_target_context "$SOURCE_ROOT" && FROZEN_CONTEXT=1 || {
-  context_status=$?
-  [ "$context_status" -eq 1 ] || exit "$context_status"
-}
-LEGACY_GATEWAY_LIB=""
-if [[ "$FROZEN_CONTEXT" == "1" ]] &&
-  openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mjs &&
-  ! openclaw_frozen_target_source_has_path "$SOURCE_ROOT" scripts/e2e/lib/gateway-network/client.mts; then
-  LEGACY_GATEWAY_LIB="$SOURCE_ROOT/scripts/e2e/lib"
-fi
+openclaw_resolve_frozen_gateway_network_layout "$SOURCE_ROOT"
+LEGACY_GATEWAY_LIB="$OPENCLAW_FROZEN_TARGET_GATEWAY_NETWORK_LEGACY_LIB"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 

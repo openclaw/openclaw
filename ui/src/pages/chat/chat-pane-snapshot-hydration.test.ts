@@ -5,6 +5,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   createInitializationContext,
@@ -31,16 +32,24 @@ import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 import "./chat-pane.ts";
 
+const transcriptOnlyHello = gatewayHelloForMethods(["chat.history"]);
+
 describe("stored chat snapshot hydration", () => {
   afterEach(resetTranscriptTestDom);
 
-  function createMountedPane(targetSessionKey: string, sharedMessages: ChatMessageCache) {
+  function createMountedPane(
+    targetSessionKey: string,
+    sharedMessages: ChatMessageCache,
+    client?: GatewayBrowserClient,
+  ) {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
     vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
-    pane.context = createInitializationContext();
+    pane.context = createInitializationContext(client);
+    pane.context.gateway.snapshot.hello = transcriptOnlyHello;
+    vi.spyOn(pane.context.sessions, "listBranches").mockResolvedValue([]);
     return pane;
   }
 
@@ -83,8 +92,9 @@ describe("stored chat snapshot hydration", () => {
         request,
         addEventListener: vi.fn(() => vi.fn()),
       } as unknown as GatewayBrowserClient;
-      const context = createInitializationContext();
-      context.gateway.snapshot.client = client;
+      const context = createInitializationContext(client);
+      context.gateway.snapshot.hello = transcriptOnlyHello;
+      vi.spyOn(context.sessions, "listBranches").mockResolvedValue([]);
       context.chatSubmissions.retain(
         buildInitialChatSubmission(
           targetSessionKey,
@@ -169,14 +179,19 @@ describe("stored chat snapshot hydration", () => {
         // jsdom has no decoder; deliver the loaded-preview boundary before custody.
         Object.defineProperty(displayed, "naturalWidth", { value: 1 });
         displayed.dispatchEvent(new Event("load"));
-        const expectRenderedInput = (text: string, author: string) => {
+        const expectRenderedInput = (text: string, author: string | undefined) => {
           expect(container.querySelectorAll(".chat-bubble")).toHaveLength(1);
           expect(container.querySelectorAll(".chat-message-image")).toHaveLength(1);
           expect(container.querySelector(".chat-message-image")).toBe(displayed);
           expect(displayed.getAttribute("src")).toBe(dataUrl);
           expect(container.querySelector('[aria-busy="true"]')).toBeNull();
           expect(container.textContent).toContain(text);
-          expect(container.querySelector(".chat-sender-name")?.textContent?.trim()).toBe(author);
+          const sender = container.querySelector(".chat-sender-name");
+          if (author === undefined) {
+            expect(sender).toBeNull();
+          } else {
+            expect(sender?.textContent?.trim()).toBe(author);
+          }
         };
         expectRenderedInput("Keep the attributed initial image", "Local Author");
         const metadata = {
@@ -201,7 +216,7 @@ describe("stored chat snapshot hydration", () => {
         expect(
           getChatPendingInputs(remounted.state)?.page.items.map((item) => item.message),
         ).toEqual([custodyMessage]);
-        expectRenderedInput(custodyMessage.content, senderName ?? "You");
+        expectRenderedInput(custodyMessage.content, senderName);
         expect(container.textContent).not.toContain("Keep the attributed initial image");
         expect(custodyMessage["__openclaw"]).toBe(metadata);
         const canonicalMessage = {
@@ -223,7 +238,7 @@ describe("stored chat snapshot hydration", () => {
         await loadChatHistory(remounted.state);
         renderPane();
         expect(remounted.state.chatMessages).toEqual([canonicalMessage]);
-        expectRenderedInput(canonicalMessage.content, senderName ?? "You");
+        expectRenderedInput(canonicalMessage.content, senderName);
         expect(container.textContent).not.toContain(custodyMessage.content);
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {
@@ -250,7 +265,7 @@ describe("stored chat snapshot hydration", () => {
     const store = new SessionSnapshotStore(sharedMessages);
     store.connect();
     observeChatCache(sharedMessages, store);
-    const pane = createMountedPane(targetSessionKey, sharedMessages);
+    const pane = createMountedPane(targetSessionKey, sharedMessages, client);
     pane.sessionSnapshotStore = store;
     const stopAfterAttach = new Error("stop after attach");
     let attachedState: ChatPageHost | undefined;
@@ -268,6 +283,7 @@ describe("stored chat snapshot hydration", () => {
       expect(request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: targetSessionKey }),
+        { signal: expect.any(AbortSignal) },
       );
       await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
 
@@ -297,7 +313,7 @@ describe("stored chat snapshot hydration", () => {
     const store = new SessionSnapshotStore(sharedMessages);
     store.connect();
     observeChatCache(sharedMessages, store);
-    const pane = createMountedPane(targetSessionKey, sharedMessages);
+    const pane = createMountedPane(targetSessionKey, sharedMessages, client);
     pane.sessionSnapshotStore = store;
     const stopAfterAttach = new Error("stop after attach");
     let attachedState: ChatPageHost | undefined;

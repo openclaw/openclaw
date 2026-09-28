@@ -40,6 +40,7 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
 
 vi.mock("../commands/doctor-auth.js", () => ({
   noteAuthProfileHealth: vi.fn(async () => undefined),
+  noteCopilotAmbientToken: vi.fn(),
   noteLegacyCodexProviderOverride: vi.fn(() => undefined),
   noteSharedAuthStoreStatus: vi.fn(() => undefined),
 }));
@@ -140,12 +141,12 @@ function loadMigratedStore(state: OpenClawTestState) {
   );
 }
 
-function authProfilesContribution() {
+function authProfileMigrationContribution() {
   const contribution = resolveDoctorHealthContributions().find(
-    (entry) => entry.id === "doctor:auth-profiles",
+    (entry) => entry.id === "doctor:auth-profile-migration",
   );
   if (!contribution) {
-    throw new Error("doctor:auth-profiles contribution is not registered");
+    throw new Error("doctor:auth-profile-migration contribution is not registered");
   }
   return contribution;
 }
@@ -192,7 +193,7 @@ describe("interactive Doctor auth migration", () => {
       });
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
-      await authProfilesContribution().run(ctx);
+      await authProfileMigrationContribution().run(ctx);
 
       const output = stripVTControlCharacters(
         stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
@@ -236,7 +237,7 @@ describe("interactive Doctor auth migration", () => {
       configPath: path.join(state.stateDir, "openclaw.json"),
     });
 
-    await authProfilesContribution().run(ctx);
+    await authProfileMigrationContribution().run(ctx);
 
     expect(loadMigratedStore(state)).toMatchObject({
       profiles: {
@@ -265,7 +266,7 @@ describe("interactive Doctor auth migration", () => {
       configPath: path.join(state.stateDir, "openclaw.json"),
     });
 
-    await authProfilesContribution().run(ctx);
+    await authProfileMigrationContribution().run(ctx);
 
     expect(ctx.cfg).toEqual(cfg);
     expect(fs.existsSync(authPath)).toBe(true);

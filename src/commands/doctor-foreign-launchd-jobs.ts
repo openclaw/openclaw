@@ -9,12 +9,12 @@ import {
   type ForeignLaunchdJob,
 } from "../daemon/launchd-foreign-jobs.js";
 import { readGatewayForcedRestartSummary } from "../daemon/restart-storm.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
   resolveServiceRepairPolicy,
+  isServiceRepairDeferred,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 
@@ -59,9 +59,8 @@ export async function noteMacForeignLaunchdJobs(
   }
   if (
     !isDefaultInstallIdentity(env) ||
-    resolveServiceRepairPolicy(env) === "external" ||
-    !(await shouldManageGatewayService(env)) ||
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS)
+    isServiceRepairDeferred(resolveServiceRepairPolicy(env)) ||
+    !(await shouldManageGatewayService(env))
   ) {
     runtime.log(
       "Foreign launchd job repair skipped: this Doctor invocation does not own service repair or an update is in progress. No jobs were removed.",

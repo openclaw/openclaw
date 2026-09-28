@@ -83,6 +83,7 @@ export const WorktreesBranchesResultSchema = closedObject({
   defaultBranch: Type.Optional(NonEmptyString),
   headBranch: Type.Optional(NonEmptyString),
   repositoryStatus: Type.Optional(WorktreeRepositoryStatusSchema),
+  branchesUnavailable: Type.Optional(Type.Boolean()),
 });
 
 export const WorktreesRestoreParamsSchema = closedObject({ id: NonEmptyString });

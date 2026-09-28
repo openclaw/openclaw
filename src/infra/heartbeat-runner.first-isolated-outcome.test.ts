@@ -253,14 +253,14 @@ it.each(
           expect(store[sessionKey]?.sessionId).toBe("existing-user-session");
         }
         const params = { ...scope, runId: "first-user-run" };
-        expect(claimHeartbeatOutcomeForRun(params)).toMatchObject({
+        expect(await claimHeartbeatOutcomeForRun(params)).toMatchObject({
           sessionKey,
           runSessionKey: runKey,
           summary,
         });
-        expect(claimHeartbeatOutcomeForRun(params)).toBeDefined();
+        expect(await claimHeartbeatOutcomeForRun(params)).toBeDefined();
         expect(
-          claimHeartbeatOutcomeForRun({ ...params, runId: "second-user-run" }),
+          await claimHeartbeatOutcomeForRun({ ...params, runId: "second-user-run" }),
         ).toBeUndefined();
         if (agentId === "ops") {
           const physicalPath =

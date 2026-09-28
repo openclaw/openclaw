@@ -11,6 +11,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 const tempHomes: string[] = [];
+const reloadedStateDatabaseClosers = new Set<() => void>();
 
 function useTempHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-runtime-"));
@@ -42,11 +43,18 @@ async function importRuntimeTokenModule(): Promise<
   typeof import("./operator-approval-runtime-token.js")
 > {
   vi.resetModules();
-  return await import("./operator-approval-runtime-token.js");
+  const runtimeToken = await import("./operator-approval-runtime-token.js");
+  const stateDb = await import("../state/openclaw-state-db.js");
+  reloadedStateDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
+  return runtimeToken;
 }
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  for (const closeDatabase of reloadedStateDatabaseClosers) {
+    closeDatabase();
+  }
+  reloadedStateDatabaseClosers.clear();
   execApprovalsStoreTesting.reset();
   vi.resetModules();
   envSnapshot.restore();

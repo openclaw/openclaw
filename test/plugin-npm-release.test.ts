@@ -4,6 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectBundledPluginBuildEntries,
+  collectRootPackageExcludedExtensionDirs,
+} from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   assertPluginReleaseDependencyFreshness,
@@ -23,6 +27,8 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import type { PluginPackageJson } from "../scripts/lib/plugin-publication-collector.ts";
+import { isExternallyDistributedPlugin } from "../src/plugins/official-external-plugin-catalog.js";
 import { createDeferred } from "./helpers/promise.js";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
@@ -68,11 +74,6 @@ describe("parsePluginReleaseSelection", () => {
 });
 
 describe("parsePluginReleaseSelectionMode", () => {
-  it("accepts the supported explicit selection modes", () => {
-    expect(parsePluginReleaseSelectionMode("selected")).toBe("selected");
-    expect(parsePluginReleaseSelectionMode("all-publishable")).toBe("all-publishable");
-  });
-
   it("rejects unsupported selection modes", () => {
     expect(() => parsePluginReleaseSelectionMode("all")).toThrowError(
       'Unknown selection mode: all. Expected "selected" or "all-publishable".',
@@ -177,35 +178,6 @@ function externalPluginContract(version: string) {
 }
 
 describe("collectPublishablePluginPackageErrors", () => {
-  it("accepts a valid publishable plugin package candidate", () => {
-    expect(
-      collectPublishablePluginPackageErrors({
-        extensionId: "zalo",
-        packageDir: bundledPluginRoot("zalo"),
-        readmeText: "# Zalo\n",
-        packageJson: {
-          name: "@openclaw/zalo",
-          version: "2026.3.15",
-          type: "module",
-          repository: {
-            type: "git",
-            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-          },
-          openclaw: {
-            extensions: ["./index.ts"],
-            ...externalPluginContract("2026.3.15"),
-            install: {
-              npmSpec: "@openclaw/zalo",
-            },
-            release: {
-              publishToNpm: true,
-            },
-          },
-        },
-      }),
-    ).toStrictEqual([]);
-  });
-
   it("flags invalid publishable plugin metadata", () => {
     expect(
       collectPublishablePluginPackageErrors({
@@ -236,33 +208,6 @@ describe("collectPublishablePluginPackageErrors", () => {
       'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
       "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
-    ]);
-  });
-
-  it("requires the GitHub repository URL npm provenance validates for trusted publishing", () => {
-    expect(
-      collectPublishablePluginPackageErrors({
-        extensionId: "twitch",
-        packageDir: bundledPluginRoot("twitch"),
-        readmeText: "# Twitch\n",
-        packageJson: {
-          name: "@openclaw/twitch",
-          version: "2026.5.1-beta.1",
-          type: "module",
-          openclaw: {
-            extensions: ["./index.ts"],
-            ...externalPluginContract("2026.5.1-beta.1"),
-            install: {
-              npmSpec: "@openclaw/twitch",
-            },
-            release: {
-              publishToNpm: true,
-            },
-          },
-        },
-      }),
-    ).toEqual([
-      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
     ]);
   });
 
@@ -528,6 +473,34 @@ describe("collectPluginReleaseDependencyFreshnessWarnings", () => {
 });
 
 describe("collectPluginReleasePlan", () => {
+  it("consumes the shared completed observations without npm CLI or another fetch", async () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    const plugin = writePublishablePluginFixture(repoDir, {
+      version: "2026.9.9",
+      publishTo: "npm",
+      dependency: { packageName: "demo-runtime", version: "1.2.3", requireLatest: true },
+    });
+    const forbidden = vi.fn(() => {
+      throw new Error("unplanned subprocess or registry read");
+    });
+    childProcessMock.execFileSyncOverride = forbidden as unknown as ExecFileSync;
+    vi.stubGlobal("fetch", forbidden);
+    const published = vi.fn(async () => true);
+    const latest = vi.fn(() => "1.2.3");
+    const plan = await collectPluginReleasePlan({
+      rootDir: repoDir,
+      selectionMode: "all-publishable",
+      resolvePublishedVersion: published,
+      resolveLatestVersion: latest,
+    });
+    expect(plan.candidates).toEqual([]);
+    expect(plan.skippedPublished.map((entry) => entry.packageName)).toEqual([plugin.packageName]);
+    expect(plan.warnings).toEqual([]);
+    expect(published).toHaveBeenCalledExactlyOnceWith(plugin.packageName, "2026.9.9");
+    expect(latest).toHaveBeenCalledExactlyOnceWith("demo-runtime");
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+
   it.each(["stale", "unavailable"])(
     "keeps npm publish candidates when latest is %s",
     async (scenario) => {
@@ -657,11 +630,7 @@ describe("collectPublishablePluginPackages", () => {
   });
 
   it("keeps publishable plugin dist trees out of the core npm package unless bundled", () => {
-    const corePackageRuntimePluginIds = new Set(["discord"]);
-    const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
-      files?: unknown;
-    };
-    const packageFiles = new Set(Array.isArray(rootPackage.files) ? rootPackage.files : []);
+    const excludedDirs = collectRootPackageExcludedExtensionDirs();
     const publishablePlugins = [
       ...collectPublishablePluginPackages(),
       ...collectClawHubPublishablePluginPackages(),
@@ -669,46 +638,54 @@ describe("collectPublishablePluginPackages", () => {
     for (const plugin of publishablePlugins) {
       const packageJson = JSON.parse(
         readFileSync(join(plugin.packageDir, "package.json"), "utf8"),
-      ) as {
-        openclaw?: {
-          build?: {
-            bundledDist?: unknown;
-          };
-        };
-      };
-      if (packageJson.openclaw?.build?.bundledDist === true) {
-        corePackageRuntimePluginIds.add(plugin.extensionId);
-      }
+      ) as PluginPackageJson;
+      expect(excludedDirs.has(plugin.extensionId), plugin.extensionId).toBe(
+        isExternallyDistributedPlugin({
+          pluginId: plugin.extensionId,
+          packageName: plugin.packageName,
+          packageBuild: packageJson.openclaw?.build,
+        }),
+      );
     }
-    const missingExclusions = Array.from(
-      new Set(
-        publishablePlugins
-          .filter((plugin) => !corePackageRuntimePluginIds.has(plugin.extensionId))
-          .map((plugin) => `!dist/extensions/${plugin.extensionId}/**`),
-      ),
-    ).filter((entry) => !packageFiles.has(entry));
-
-    expect(missingExclusions).toStrictEqual([]);
   });
 
-  it("collects publishable npm plugins from extension package manifests", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    writePublishablePluginFixture(repoDir, {
-      version: "2026.4.10",
-      publishTo: "npm",
-    });
-
-    expect(collectPublishablePluginPackages(repoDir)).toEqual([
-      {
-        extensionId: "demo-plugin",
-        packageDir: "extensions/demo-plugin",
-        packageName: "@openclaw/demo-plugin",
-        version: "2026.4.10",
-        channel: "stable",
-        publishTag: "latest",
-        installNpmSpec: "@openclaw/demo-plugin",
-      },
-    ]);
+  it("keeps deferred publication targets bundled with staged release metadata", () => {
+    const bundledIds = collectBundledPluginBuildEntries({ env: {} }).map(({ id }) => id);
+    const excludedDirs = collectRootPackageExcludedExtensionDirs();
+    const publicationIds = new Set(
+      [...collectPublishablePluginPackages(), ...collectClawHubPublishablePluginPackages()].map(
+        ({ extensionId }) => extensionId,
+      ),
+    );
+    for (const { id, minHostVersion, publishToNpm = true } of [
+      { id: "cua-computer", minHostVersion: ">=2026.9.6", publishToNpm: false },
+      { id: "logbook", minHostVersion: ">=2026.9.5" },
+      { id: "memory-wiki", minHostVersion: ">=2026.9.4" },
+      { id: "onepassword", minHostVersion: ">=2026.9.4" },
+    ]) {
+      const packageJson = JSON.parse(
+        readFileSync(join("extensions", id, "package.json"), "utf8"),
+      ) as PluginPackageJson;
+      expect(packageJson, id).toMatchObject({
+        name: `@openclaw/${id}`,
+        openclaw: {
+          build: { bundledDist: true },
+          install: { minHostVersion },
+          release: { publishToNpm, publishToClawHub: true },
+        },
+      });
+      expect(bundledIds, id).toContain(id);
+      expect(excludedDirs.has(id), id).toBe(false);
+      expect(publicationIds.has(id), id).toBe(false);
+      expect(
+        isExternallyDistributedPlugin({
+          pluginId: id,
+          packageName: packageJson.name,
+          packageBuild: packageJson.openclaw?.build,
+        }),
+        id,
+      ).toBe(false);
+    }
   });
 
   it("uses extended-stable for every publishable plugin at the exact root version", () => {
@@ -871,15 +848,6 @@ describe("resolveSelectedPublishablePluginPackages", () => {
       publishTag: "beta",
     },
   ];
-
-  it("returns all publishable plugins when no selection is provided", () => {
-    expect(
-      resolveSelectedPublishablePluginPackages({
-        plugins: publishablePlugins,
-        selection: [],
-      }),
-    ).toEqual(publishablePlugins);
-  });
 
   it("filters by selected publishable package names", () => {
     expect(

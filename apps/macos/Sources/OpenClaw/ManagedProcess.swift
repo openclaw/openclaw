@@ -82,12 +82,6 @@ final class ManagedProcess: @unchecked Sendable {
         func finish() {
             self.lock.withLock { self.finished = true }
         }
-
-        static func hasExited(_ processIdentifier: pid_t) -> Bool {
-            var info = siginfo_t()
-            return waitid(P_PID, id_t(processIdentifier), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-                info.si_pid != 0
-        }
     }
 
     private let state: State
@@ -151,7 +145,7 @@ final class ManagedProcess: @unchecked Sendable {
                     }
                     exitSource.setEventHandler(handler: didExit)
                     exitSource.resume()
-                    if State.hasExited(pid) { didExit() }
+                    if ChildProcessExit.hasExited(pid) { didExit() }
                     var wakeIterator = wakeEvents.makeAsyncIterator()
                     let wakeReason = await wakeIterator.next() ?? .terminate(gracefully: true)
                     exitSource.cancel()
@@ -161,7 +155,7 @@ final class ManagedProcess: @unchecked Sendable {
                         try? await Task.sleep(for: .milliseconds(50))
                     }
 
-                    guard !State.hasExited(pid),
+                    guard !ChildProcessExit.hasExited(pid),
                           case let .terminate(gracefully: graceful) = wakeReason
                     else {
                         // The unreaped leader pins the group identity while descendants are killed.
@@ -255,7 +249,7 @@ final class ManagedProcess: @unchecked Sendable {
     {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
-            if State.hasExited(processIdentifier) { return true }
+            if ChildProcessExit.hasExited(processIdentifier) { return true }
             if state?.shouldAbortGracefulTermination == true { return false }
             do {
                 try await Task.sleep(for: .milliseconds(10))
@@ -263,6 +257,6 @@ final class ManagedProcess: @unchecked Sendable {
                 return false
             }
         }
-        return State.hasExited(processIdentifier)
+        return ChildProcessExit.hasExited(processIdentifier)
     }
 }

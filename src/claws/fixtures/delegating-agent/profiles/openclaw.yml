@@ -1,0 +1,8 @@
+schemaVersion: 1
+agent:
+  model:
+    primary: acme/primary
+    fallbacks: [acme/fallback]
+  subagents:
+    allowAgents: [researcher, writer]
+    delegationMode: prefer

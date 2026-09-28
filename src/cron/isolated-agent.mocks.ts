@@ -4,7 +4,7 @@
 import "../utils/usage-format.js";
 import { vi } from "vitest";
 
-const loadPreparedModelCatalog = vi.hoisted(() => vi.fn());
+const readPreparedModelCatalog = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
@@ -16,15 +16,15 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
   const { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
   return {
-    loadPreparedModelCatalog,
+    readPreparedModelCatalog,
     loadPreparedModelCatalogSnapshot: vi.fn(async (params) => ({
-      entries: (await loadPreparedModelCatalog(params)) ?? [],
+      entries: (await readPreparedModelCatalog(params)) ?? [],
       routeVariants: [],
     })),
     loadProviderScopedThinkingCatalog: vi.fn(
-      async (params) => (await loadPreparedModelCatalog(params)) ?? [],
+      async (params) => (await readPreparedModelCatalog(params)) ?? [],
     ),
-    loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
+    loadPublishedPreparedModelCatalog: readPreparedModelCatalog,
     publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
       owner.agentId === agentId.trim().toLowerCase(),
     loadResolvedPublishedModelCatalogOwner: vi.fn(
@@ -42,7 +42,7 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
           workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
           config,
           modelCatalog: {
-            entries: (await loadPreparedModelCatalog(params)) ?? [],
+            entries: (await readPreparedModelCatalog(params)) ?? [],
             routeVariants: [],
           },
         };
@@ -65,9 +65,18 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
-vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn(),
-}));
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return {
+    loadAgentRuntimePluginRegistryHandle: vi.fn(),
+    acquireAgentRuntimePluginRegistry: vi.fn<
+      typeof import("../agents/runtime-plugins.js").acquireAgentRuntimePluginRegistry
+    >(async () => {
+      const registry = createEmptyPluginRegistry();
+      return { registry, primaryRegistry: registry };
+    }),
+  };
+});
 
 vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),

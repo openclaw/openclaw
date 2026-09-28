@@ -1,5 +1,5 @@
-// Qa Lab plugin module implements gateway rpc client behavior.
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
@@ -15,6 +15,7 @@ type QaGatewayRpcRequestOptions = {
 };
 
 type QaGatewayRpcClient = {
+  readonly evidenceIdentity: { protocol: number; version: string } | null;
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
 };
@@ -29,15 +30,10 @@ type QaGatewayConnectionGate = {
 const QA_GATEWAY_RPC_TIMEOUT_MS = 20_000;
 
 function createQaGatewayConnectionGate(): QaGatewayConnectionGate {
-  let resolvePromise!: () => void;
-  let rejectPromise!: (error: Error) => void;
-  const promise = new Promise<void>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
+  const { promise, resolve, reject } = createDeferred<void>();
   // A terminal reconnect error can arrive without an active request waiter.
   void promise.catch(() => {});
-  return { connected: false, promise, reject: rejectPromise, resolve: resolvePromise };
+  return { connected: false, promise, reject, resolve };
 }
 
 function formatQaGatewayRpcError(error: unknown, logs: () => string) {
@@ -83,6 +79,7 @@ export async function startQaGatewayRpcClient(params: {
   const wrapError = (error: unknown) => formatQaGatewayRpcError(error, params.logs);
   let stopped = false;
   let connection = createQaGatewayConnectionGate();
+  let evidenceIdentity: QaGatewayRpcClient["evidenceIdentity"] = null;
   const assertNotStopped = () => {
     if (stopped) {
       throw new Error("gateway rpc client already stopped");
@@ -99,16 +96,20 @@ export async function startQaGatewayRpcClient(params: {
     ...(params.deviceIdentity ? { sharedStateMode: "read-only" as const } : {}),
     mode: "backend",
     scopes: params.scopes ?? ["operator.admin"],
-    onHelloOk: () => {
+    onHelloOk: (hello) => {
+      // Retain only target-observed protocol/version, never hello auth or tokens.
+      evidenceIdentity = { protocol: hello.protocol, version: hello.server.version };
       connection.connected = true;
       connection.resolve();
     },
     onClose: () => {
+      evidenceIdentity = null;
       if (!stopped && connection.connected) {
         connection = createQaGatewayConnectionGate();
       }
     },
     onReconnectPaused: (info) => {
+      evidenceIdentity = null;
       const error = new Error(
         `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,
       );
@@ -135,6 +136,9 @@ export async function startQaGatewayRpcClient(params: {
   }
 
   return {
+    get evidenceIdentity() {
+      return evidenceIdentity ? { ...evidenceIdentity } : null;
+    },
     async request(method, rpcParams, opts) {
       try {
         assertNotStopped();
@@ -178,6 +182,7 @@ export async function startQaGatewayRpcClient(params: {
     },
     async stop() {
       stopped = true;
+      evidenceIdentity = null;
       connection.reject(new Error("gateway rpc client stopped"));
       await client.stopAndWait();
     },

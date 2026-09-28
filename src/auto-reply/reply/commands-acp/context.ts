@@ -8,15 +8,21 @@ import {
   resolveConversationBindingThreadIdFromMessage,
 } from "../conversation-binding-input.js";
 
-export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
+export function resolveAcpCommandChannel(
+  params: Pick<HandleCommandsParams, "ctx" | "command">,
+): string {
   return resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
 }
 
-export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
+export function resolveAcpCommandThreadId(
+  params: Pick<HandleCommandsParams, "ctx">,
+): string | undefined {
   return resolveConversationBindingThreadIdFromMessage(params.ctx);
 }
 
-export function resolveAcpCommandBindingContext(params: HandleCommandsParams): {
+export function resolveAcpCommandBindingContext(
+  params: Parameters<typeof resolveConversationBindingContextFromAcpCommand>[0],
+): {
   channel: string;
   accountId: string;
   threadId?: string;

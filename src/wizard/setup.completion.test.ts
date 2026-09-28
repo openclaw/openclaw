@@ -13,20 +13,6 @@ import { setupWizardShellCompletion } from "./setup.completion.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function withLocale(locale: string, run: () => Promise<void>): Promise<void> {
-  const previousLocale = process.env.OPENCLAW_LOCALE;
-  process.env.OPENCLAW_LOCALE = locale;
-  try {
-    await run();
-  } finally {
-    if (previousLocale === undefined) {
-      delete process.env.OPENCLAW_LOCALE;
-    } else {
-      process.env.OPENCLAW_LOCALE = previousLocale;
-    }
-  }
-}
-
 function createPrompter(confirmValue = false) {
   return {
     confirm: vi.fn(async () => confirmValue),
@@ -85,53 +71,42 @@ describe("setupWizardShellCompletion", () => {
     expect(prompter.note).not.toHaveBeenCalled();
   });
 
-  describe.each(["en", "zh-CN", "zh-TW"])("%s permission recovery", (locale) => {
-    it.each([
-      {
-        description: "upgrading a slow shell profile",
-        profileInstalled: true,
-        usesSlowPattern: true,
-      },
-      {
-        description: "installing a new shell profile",
-        profileInstalled: false,
-        usesSlowPattern: false,
-      },
-    ])(
-      "offers session recovery when $description fails",
-      async ({ profileInstalled, usesSlowPattern }) => {
-        await withLocale(locale, async () => {
-          const failedPath = "/tmp/read-only/.openclaw-completion-profile-stage";
-          const prompter = createPrompter();
-          const deps = createDeps();
-          vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
-            shell: "zsh",
-            profileInstalled,
-            cacheExists: false,
-            cachePath: "/tmp/openclaw.zsh",
-            usesSlowPattern,
-          });
-          vi.mocked(deps.installCompletion!).mockRejectedValue(
-            wrappedFsError("EACCES", failedPath),
-          );
-
-          await expect(
-            setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
-          ).resolves.not.toThrow();
-
-          expect(prompter.note).toHaveBeenCalledTimes(1);
-          expect(prompter.note).toHaveBeenCalledWith(
-            expect.stringContaining("source /tmp/openclaw.zsh"),
-            "Shell completion",
-          );
-          expect(prompter.note).toHaveBeenCalledWith(
-            expect.stringContaining(failedPath),
-            "Shell completion",
-          );
+  it.each([
+    { locale: "en", profileInstalled: true, usesSlowPattern: true },
+    { locale: "zh-CN", profileInstalled: false, usesSlowPattern: false },
+    { locale: "zh-TW", profileInstalled: false, usesSlowPattern: false },
+  ])(
+    "offers session recovery after a profile permission error ($locale, upgrade=$usesSlowPattern)",
+    async ({ locale, profileInstalled, usesSlowPattern }) => {
+      await withEnvAsync({ OPENCLAW_LOCALE: locale }, async () => {
+        const failedPath = "/tmp/read-only/.openclaw-completion-profile-stage";
+        const prompter = createPrompter();
+        const deps = createDeps();
+        vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
+          shell: "zsh",
+          profileInstalled,
+          cacheExists: false,
+          cachePath: "/tmp/openclaw.zsh",
+          usesSlowPattern,
         });
-      },
-    );
-  });
+        vi.mocked(deps.installCompletion!).mockRejectedValue(wrappedFsError("EACCES", failedPath));
+
+        await expect(
+          setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+        ).resolves.not.toThrow();
+
+        expect(prompter.note).toHaveBeenCalledTimes(1);
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining("source /tmp/openclaw.zsh"),
+          "Shell completion",
+        );
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining(failedPath),
+          "Shell completion",
+        );
+      });
+    },
+  );
 
   it("re-throws unexpected completion installation errors", async () => {
     const prompter = createPrompter();
@@ -190,7 +165,7 @@ describe("setupWizardShellCompletion", () => {
   );
 
   it("localizes advanced prompts and install notes", async () => {
-    await withLocale("zh-CN", async () => {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       const prompter = createPrompter(true);
       const deps = createDeps();
 
@@ -271,9 +246,7 @@ describe("setupWizardShellCompletion", () => {
   });
 
   it("shows a concrete PowerShell profile reload command after setup", async () => {
-    const previousHome = process.env.HOME;
-    process.env.HOME = "/Users/ada";
-    try {
+    await withEnvAsync({ HOME: "/Users/ada" }, async () => {
       const prompter = createPrompter();
       const deps = createDeps("powershell");
 
@@ -284,12 +257,6 @@ describe("setupWizardShellCompletion", () => {
         "Shell completion installed. Restart your shell or run: . '/Users/ada/.config/powershell/Microsoft.PowerShell_profile.ps1'",
         "Shell completion",
       );
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-    }
+    });
   });
 });

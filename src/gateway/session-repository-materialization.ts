@@ -1,6 +1,7 @@
 import os from "node:os";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
   readProjectCheckoutRemoteHead,
   ProjectCloneError,
@@ -21,7 +22,7 @@ import { withSessionRepositoryCheckpoint } from "./worker-environments/session-r
 import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
-/** Called only by an explicit Gateway move, after the source result is accepted. */
+/** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
 export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;
@@ -155,11 +156,14 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     }
   }
   const prepared = await prepareSessionWorktree({
+    cfg: params.cfg,
     target: {
       agentId: params.agentId,
       key: initial.canonicalKey,
       storePath: initial.storePath,
       entry: initial.entry,
+      projectId: project.id,
+      sandboxRequired: initial.entry.sandbox === "required",
     },
     workspace: project.repoRoot,
     name: repository.workspaceId,
@@ -180,7 +184,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   const git = (args: string[]) =>
     command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
       cwd: root,
-      env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+      env: { GIT_CONFIG_GLOBAL: gitNullConfigPath(), GIT_CONFIG_SYSTEM: gitNullConfigPath() },
     });
   const alignPublication = async () => {
     if (published?.pushed_head_commit) {
@@ -209,6 +213,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
           assertCurrent();
           const applied = await applyStagedWorkerWorkspace({
             ...snapshot,
+            acceptance: { kind: "reconcile" },
             root,
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.
@@ -241,29 +246,35 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     } else {
       await alignPublication();
     }
-    const entry = await patchSessionEntryCore(
-      { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
-      (current) => {
-        assertCurrent();
-        return {
-          ...current,
-          repositoryWorkspaceId: undefined,
-          projectId: project.id,
-          spawnedCwd: workspace.spawnedCwd,
-          sessionRoot: workspace.sessionRoot,
-          worktree: workspace.worktree,
-        };
-      },
-      {
-        replaceEntry: true,
-        assertCommitAllowed: assertCurrent,
-        requireWriteSuccess: true,
-        skipMaintenance: true,
-        onCommitted: () => {
-          bound = true;
+    const bind = async (assertSourceCurrent: () => void) =>
+      await patchSessionEntryCore(
+        { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
+        (current) => {
+          assertCurrent();
+          assertSourceCurrent();
+          return {
+            ...current,
+            repositoryWorkspaceId: undefined,
+            projectId: project.id,
+            spawnedCwd: workspace.spawnedCwd,
+            sessionRoot: workspace.sessionRoot,
+            worktree: workspace.worktree,
+          };
         },
-      },
-    );
+        {
+          replaceEntry: true,
+          assertCommitAllowed: () => {
+            assertCurrent();
+            assertSourceCurrent();
+          },
+          requireWriteSuccess: true,
+          skipMaintenance: true,
+          onCommitted: () => {
+            bound = true;
+          },
+        },
+      );
+    const entry = workspace.withCommit ? await workspace.withCommit(bind) : await bind(() => {});
     if (!entry) {
       throw new Error("Session disappeared before repository materialization committed");
     }

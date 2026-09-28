@@ -34,7 +34,7 @@ describe("PR refresh emission receipts", () => {
     emit();
     emit();
     expect(refresh).toHaveBeenCalledTimes(2);
-    expect(refresh).toHaveBeenLastCalledWith({ refresh: true });
+    expect(refresh).toHaveBeenLastCalledWith({ refresh: true, automatic: true });
   });
 
   it("does not consume a final before its refresh callback is installed", () => {

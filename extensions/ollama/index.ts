@@ -1,4 +1,3 @@
-// Ollama plugin entrypoint registers its OpenClaw integration.
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -504,12 +503,11 @@ function collectConfiguredOllamaModelIds(params: {
     const trimmedName = typeof name === "string" ? name.trim() : "";
     const existing = models.get(trimmed);
     if (existing) {
-      if ((!existing.api && api) || (!existing.name && trimmedName)) {
-        models.set(trimmed, {
-          ...existing,
-          ...(api && !existing.api ? { api } : {}),
-          ...(trimmedName && !existing.name ? { name: trimmedName } : {}),
-        });
+      if (!existing.api && api) {
+        existing.api = api;
+      }
+      if (!existing.name && trimmedName) {
+        existing.name = trimmedName;
       }
       return;
     }
@@ -1024,7 +1022,7 @@ export default definePluginEntry({
             config: ctx.config ?? {},
             env: process.env,
             value: providerConfig.apiKey,
-            path: `models.providers.${ctx.provider}.apiKey`,
+            path: `models.providers[${JSON.stringify(ctx.provider)}].apiKey`,
             unresolvedReasonStyle: "detailed",
           });
           if (resolved.unresolvedRefReason) {

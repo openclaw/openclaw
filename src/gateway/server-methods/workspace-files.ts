@@ -13,6 +13,7 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
   decodeUtf8Strict,
   listWorkspacePath,
@@ -25,8 +26,6 @@ import {
   sortWorkspaceEntries,
   statWorkspacePath,
   toUpdatedAtMs,
-  WORKSPACE_PREVIEW_MAX_BYTES,
-  workspaceStatKind,
   type WorkspaceDirEntry,
   type WorkspaceRoot,
   updateWorkspaceFile,
@@ -40,7 +39,6 @@ export type LoadedSessionFiles = {
   diffCwd?: string;
   files: TouchedFile[];
 };
-type FileKind = TouchedFile["kind"];
 const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
@@ -113,10 +111,6 @@ export function resolveFileRoot(params: {
   return isPathInside(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
 }
 
-function relevanceForKind(kind: FileKind): SessionFileRelevance {
-  return kind;
-}
-
 function mergeRelevance(
   current: SessionFileRelevance | undefined,
   next: SessionFileRelevance | undefined,
@@ -138,7 +132,7 @@ function buildSessionRelevanceMap(
   const relevance = new Map<string, SessionFileRelevance>();
   if (!root) {
     for (const file of files) {
-      relevance.set(normalizeRelativePath(file.path), relevanceForKind(file.kind));
+      relevance.set(normalizeRelativePath(file.path), file.kind);
     }
     return relevance;
   }
@@ -147,7 +141,7 @@ function buildSessionRelevanceMap(
     if (!resolved) {
       continue;
     }
-    relevance.set(toDisplayPath(root, resolved), relevanceForKind(file.kind));
+    relevance.set(toDisplayPath(root, resolved), file.kind);
   }
   return relevance;
 }
@@ -234,7 +228,11 @@ async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
   fileRoot: string | undefined,
-  opts: { includeContent?: boolean; workspaceRoot?: WorkspaceRoot } = {},
+  opts: {
+    includeContent?: boolean;
+    workspaceRoot?: WorkspaceRoot;
+    assertCurrent?: () => void;
+  } = {},
 ): Promise<SessionFileEntry> {
   const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
   const base = {
@@ -246,8 +244,12 @@ async function toSessionFileEntry(
     return { ...base, missing: true };
   }
   const browserPath = toDisplayPath(root!, resolved);
-  const stat = await statWorkspacePath(opts.workspaceRoot ?? root!, browserPath);
-  if (!stat || workspaceStatKind(stat) !== "file") {
+  const stat = await statWorkspacePath(
+    opts.workspaceRoot ?? root!,
+    browserPath,
+    opts.assertCurrent,
+  );
+  if (!stat?.isFile) {
     return { ...base, missing: true };
   }
   const entry: SessionFileEntry = {
@@ -261,7 +263,7 @@ async function toSessionFileEntry(
     return entry;
   }
   if (stat.size <= MAX_PREVIEW_BYTES) {
-    const read = await readWorkspaceFile(root!, browserPath);
+    const read = await readWorkspaceFile(root!, browserPath, { assertCurrent: opts.assertCurrent });
     if (!read) {
       return { ...base, missing: true };
     }
@@ -272,9 +274,15 @@ async function toSessionFileEntry(
     entry.size = read.stat.size;
     entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
     await populateSessionFilePreview(entry, read.buffer);
+    if (read.readOnly) {
+      delete entry.hash;
+    }
     return entry;
   }
   const prefix = await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
+  if (prefix === "unsupported") {
+    return entry;
+  }
   if (!prefix) {
     return { ...base, missing: true };
   }
@@ -299,13 +307,12 @@ function resolveSessionFileCandidates(params: {
   });
 }
 
-async function toBrowserEntry(
+function toBrowserEntry(
   browserPath: string,
   dirent: WorkspaceDirEntry,
   relevance: ReadonlyMap<string, SessionFileRelevance>,
-): Promise<SessionFileBrowserEntry | undefined> {
-  const statKind = workspaceStatKind(dirent);
-  const kind = statKind === "directory" ? "directory" : statKind === "file" ? "file" : null;
+): SessionFileBrowserEntry | undefined {
+  const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : null;
   if (!kind) {
     return undefined;
   }
@@ -329,6 +336,7 @@ function matchesSearch(entryPath: string, name: string, query: string): boolean 
 }
 
 async function searchBrowserEntries(params: {
+  assertCurrent?: () => void;
   root: string | WorkspaceRoot;
   query: string;
   relevance: ReadonlyMap<string, SessionFileRelevance>;
@@ -347,7 +355,7 @@ async function searchBrowserEntries(params: {
     if (shouldStop()) {
       return;
     }
-    const dirents = await listWorkspacePath(params.root, dir);
+    const dirents = await listWorkspacePath(params.root, dir, params.assertCurrent);
     if (!dirents) {
       return;
     }
@@ -358,12 +366,12 @@ async function searchBrowserEntries(params: {
       visitedEntries += 1;
       const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
       if (matchesSearch(browserPath, dirent.name, params.query)) {
-        const entry = await toBrowserEntry(browserPath, dirent, params.relevance);
+        const entry = toBrowserEntry(browserPath, dirent, params.relevance);
         if (entry) {
           entries.push(entry);
         }
       }
-      if (workspaceStatKind(dirent) === "directory" && !SEARCH_SKIP_DIRS.has(dirent.name)) {
+      if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
         await visit(browserPath);
       }
     }
@@ -373,6 +381,7 @@ async function searchBrowserEntries(params: {
 }
 
 async function buildBrowserResult(params: {
+  assertCurrent?: () => void;
   root: string | undefined;
   workspaceRoot?: WorkspaceRoot;
   fileRoot: string | undefined;
@@ -390,6 +399,7 @@ async function buildBrowserResult(params: {
       root: params.workspaceRoot ?? params.root,
       query: search,
       relevance,
+      assertCurrent: params.assertCurrent,
     });
     return {
       path: "",
@@ -403,24 +413,29 @@ async function buildBrowserResult(params: {
   if (!resolved) {
     return undefined;
   }
-  const stat = await statWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
-  if (!stat || workspaceStatKind(stat) !== "directory") {
+  const stat = await statWorkspacePath(
+    params.workspaceRoot ?? params.root,
+    browserPath,
+    params.assertCurrent,
+  );
+  if (!stat?.isDirectory) {
     return undefined;
   }
-  const dirents = await listWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
+  const dirents = await listWorkspacePath(
+    params.workspaceRoot ?? params.root,
+    browserPath,
+    params.assertCurrent,
+  );
   if (!dirents) {
     return undefined;
   }
-  const entries = (
-    await Promise.all(
-      sortDirents(dirents)
-        .slice(0, MAX_BROWSER_ENTRIES + 1)
-        .map((dirent) => {
-          const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
-          return toBrowserEntry(entryPath, dirent, relevance);
-        }),
-    )
-  ).filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
+  const entries = sortDirents(dirents)
+    .slice(0, MAX_BROWSER_ENTRIES + 1)
+    .map((dirent) => {
+      const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
+      return toBrowserEntry(entryPath, dirent, relevance);
+    })
+    .filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
   const parent = path.dirname(browserPath);
   return {
     path: browserPath,
@@ -434,6 +449,7 @@ export async function listSessionWorkspaceFiles(
   params: LoadedSessionFiles & {
     path?: string;
     search?: string;
+    assertCurrent?: () => void;
   },
 ): Promise<{
   root?: string;
@@ -443,8 +459,13 @@ export async function listSessionWorkspaceFiles(
 }> {
   const loaded = params;
   const root = loaded.root;
-  const gitCheckout = loaded.diffCwd ? insideGitCheckout(loaded.diffCwd) : undefined;
   const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
+  const gitCheckout =
+    workspaceRoot && "access" in workspaceRoot
+      ? undefined
+      : loaded.diffCwd
+        ? insideGitCheckout(loaded.diffCwd)
+        : undefined;
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
@@ -452,7 +473,10 @@ export async function listSessionWorkspaceFiles(
     : loaded.files;
   const files = await Promise.all(
     workspaceFiles.map((file) =>
-      toSessionFileEntry(file, loaded.root, loaded.fileRoot, { workspaceRoot }),
+      toSessionFileEntry(file, loaded.root, loaded.fileRoot, {
+        workspaceRoot,
+        assertCurrent: params.assertCurrent,
+      }),
     ),
   );
   const browser = await buildBrowserResult({
@@ -462,6 +486,7 @@ export async function listSessionWorkspaceFiles(
     path: params.path,
     search: params.search,
     files: workspaceFiles,
+    assertCurrent: params.assertCurrent,
   });
   return {
     ...(root ? { root } : {}),
@@ -472,7 +497,7 @@ export async function listSessionWorkspaceFiles(
 }
 
 export async function getSessionWorkspaceFile(
-  params: LoadedSessionFiles & { path: string },
+  params: LoadedSessionFiles & { path: string; assertCurrent?: () => void },
 ): Promise<{ root?: string; file?: SessionFileEntry }> {
   const loaded = params;
   const exactTouched = loaded.files.find((file) => file.path === params.path);
@@ -481,6 +506,7 @@ export async function getSessionWorkspaceFile(
       ...(loaded.root ? { root: loaded.root } : {}),
       file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
         includeContent: true,
+        assertCurrent: params.assertCurrent,
       }),
     };
   }
@@ -507,6 +533,7 @@ export async function getSessionWorkspaceFile(
     };
     const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
       includeContent: true,
+      assertCurrent: params.assertCurrent,
     });
     if (!file.missing) {
       return { root: loaded.root, file };
@@ -553,7 +580,7 @@ export async function setSessionWorkspaceFile(params: {
   for (const candidate of candidates) {
     const candidatePath = toDisplayPath(params.root, candidate);
     const stat = await statWorkspacePath(params.root, candidatePath);
-    if (stat && workspaceStatKind(stat) === "file") {
+    if (stat?.isFile) {
       browserPath = candidatePath;
       break;
     }

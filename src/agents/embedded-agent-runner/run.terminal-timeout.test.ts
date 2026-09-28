@@ -1,8 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logModelFallbackChainStopped } from "../model-fallback-observation.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+vi.mock("../model-fallback-observation.js", () => ({
+  logModelFallbackChainStopped: vi.fn(),
+}));
+
+beforeEach(() => vi.clearAllMocks());
 
 function makeTimedOutAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
@@ -84,6 +91,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
         fallbackSafe: false,
       });
       expect(result?.meta.replayInvalid).toBe(false);
+      expect(result?.meta.modelFallbackStopReason).toBe("agent_run_terminal_timeout");
       expect(
         classifyEmbeddedAgentRunResultForModelFallback({
           provider: "openai",
@@ -93,6 +101,12 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
       ).toBeNull();
     },
   );
+
+  it("does not report a fallback stop outside the fallback owner", () => {
+    const result = resolveEmbeddedRunTerminalTimeout(makeTimeoutInput(makeTimedOutAttempt()));
+    expect(result?.meta.error?.fallbackSafe).toBe(false);
+    expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
+  });
 
   it("preserves an accepted child spawn while surfacing the parent timeout", () => {
     const acceptedSessionSpawns = [
@@ -118,6 +132,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
         }),
       ),
     ).toBeUndefined();
+    expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
   });
 
   it("prefers harness timeout metadata while retaining terminal attribution", () => {

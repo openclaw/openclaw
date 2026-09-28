@@ -1,5 +1,6 @@
 // Provider/account summary helpers for `openclaw agents list`.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -149,7 +150,7 @@ async function resolveReadOnlyAccount(params: {
   if (params.plugin.config.inspectAccount) {
     return await Promise.resolve(params.plugin.config.inspectAccount(params.cfg, params.accountId));
   }
-  return params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  return resolveChannelAccount(params);
 }
 
 /** Inspect configured provider accounts and classify their display state. */
@@ -330,7 +331,7 @@ export function listProvidersForAgent(params: {
   providerStatus: Map<string, ProviderAccountStatus>;
   providerMetadata?: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
 }): string[] {
-  const allProviderEntries = [...params.providerStatus.values()];
+  let allProviderEntries: ProviderAccountStatus[] | undefined;
   const metadataByProvider =
     params.providerMetadata ?? buildProviderSummaryMetadataIndex(params.cfg);
   if (params.bindings.length > 0) {
@@ -347,7 +348,9 @@ export function listProvidersForAgent(params: {
       const accountId = resolveBindingAccountId(binding);
       const statuses =
         accountId === "*"
-          ? allProviderEntries.filter((entry) => entry.provider === channel)
+          ? (allProviderEntries ??= [...params.providerStatus.values()]).filter(
+              (entry) => entry.provider === channel,
+            )
           : [params.providerStatus.get(providerAccountKey(channel, accountId))];
       for (const status of statuses.length > 0 ? statuses : [undefined]) {
         linesByAccount.set(
@@ -368,7 +371,7 @@ export function listProvidersForAgent(params: {
   const providerLines: string[] = [];
   if (params.summaryIsDefault) {
     const seenProviders = new Set<ChannelId>();
-    for (const entry of allProviderEntries) {
+    for (const entry of params.providerStatus.values()) {
       if (shouldShowProviderEntry({ entry, cfg: params.cfg, metadataByProvider })) {
         providerLines.push(formatProviderEntry(entry));
         seenProviders.add(entry.provider);

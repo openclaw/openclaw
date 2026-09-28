@@ -16,40 +16,13 @@ import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-pol
 import { resolveGatewayAuthForConfig, type ResolvedGatewayAuth } from "./auth-resolve.js";
 import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { trimToUndefined } from "./credentials.js";
-import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  getTrustedProxyPasswordRedactionWarning,
+} from "./known-weak-gateway-secrets.js";
 
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
   "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
-
-/** Merge sparse runtime auth overrides into persisted Gateway auth config. */
-export function mergeGatewayAuthConfig(
-  base?: GatewayAuthConfig,
-  override?: GatewayAuthConfig,
-): GatewayAuthConfig {
-  const merged: GatewayAuthConfig = { ...base };
-  if (!override) {
-    return merged;
-  }
-  if (override.mode !== undefined) {
-    merged.mode = override.mode;
-  }
-  if (override.token !== undefined) {
-    merged.token = override.token;
-  }
-  if (override.password !== undefined) {
-    merged.password = override.password;
-  }
-  if (override.allowTailscale !== undefined) {
-    merged.allowTailscale = override.allowTailscale;
-  }
-  if (override.rateLimit !== undefined) {
-    merged.rateLimit = override.rateLimit;
-  }
-  if (override.trustedProxy !== undefined) {
-    merged.trustedProxy = override.trustedProxy;
-  }
-  return merged;
-}
 
 /** Merge sparse runtime Tailscale overrides into persisted Gateway Tailscale config. */
 export function mergeGatewayTailscaleConfig(
@@ -252,6 +225,10 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride?.token ?? params.cfg.gateway?.auth?.token,
     authOverride?.password ?? params.cfg.gateway?.auth?.password,
   );
+  const optionalPasswordWarning = getTrustedProxyPasswordRedactionWarning(resolved);
+  if (optionalPasswordWarning) {
+    params.warn?.(optionalPasswordWarning);
+  }
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
     warnHooksTokenReuseGatewayAuth({ cfg: params.cfg, auth: resolved, warn: params.warn });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };

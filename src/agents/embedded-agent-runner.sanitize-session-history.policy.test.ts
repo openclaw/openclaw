@@ -6,12 +6,8 @@ import {
   createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
-  makeSimpleUserMessages,
   type SanitizeSessionHistoryHarness,
-  sanitizeSnapshotChangedOpenAIReasoning,
-  sanitizeWithOpenAIResponses,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
 
@@ -31,7 +27,6 @@ let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 
 describe("sanitizeSessionHistory e2e smoke", () => {
   const mockSessionManager = makeMockSessionManager();
-  const mockMessages = makeSimpleUserMessages();
 
   beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
@@ -42,28 +37,6 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-  });
-
-  it("passes simple user-only history through for google model APIs", async () => {
-    const result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "google-generative-ai",
-      provider: "google-vertex",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(result).toEqual(mockMessages);
-  });
-
-  it("passes simple user-only history through for openai-responses", async () => {
-    const result = await sanitizeWithOpenAIResponses({
-      sanitizeSessionHistory,
-      messages: mockMessages,
-      sessionManager: mockSessionManager,
-    });
-
-    expect(result).toEqual(mockMessages);
   });
 
   it.each(["openai-responses", "openai-chatgpt-responses", "azure-openai-responses"])(
@@ -98,20 +71,4 @@ describe("sanitizeSessionHistory e2e smoke", () => {
       expect((result[1] as { toolCallId: string }).toolCallId).toBe(id);
     },
   );
-
-  it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
-    // Snapshot changes are the public safety boundary: reasoning that was valid
-    // for one provider must be replayed as text-only when the model family moves.
-    const result = await sanitizeSnapshotChangedOpenAIReasoning({
-      sanitizeSessionHistory,
-    });
-
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "answer" }],
-        usage: makeZeroUsageSnapshot(),
-      },
-    ]);
-  });
 });

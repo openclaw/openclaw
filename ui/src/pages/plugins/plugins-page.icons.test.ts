@@ -1,12 +1,19 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginListResult } from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { ModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
+import type { ModelSetupPageState } from "../model-setup/state.ts";
+import { PluginsPageIcons } from "./plugins-page-icons.ts";
 import {
   createClient,
   createContext,
+  createDiscoveryDetail,
+  createInspectResult,
   createGateway,
   createPlugin,
   createPluginsRouteData,
@@ -22,6 +29,157 @@ describe("PluginsPage icon routing", () => {
   });
 
   afterEach(resetPluginsPageTestState);
+
+  const requestResult = async (method: string) => {
+    if (method === "plugins.catalog.categories") {
+      return { categories: [] };
+    }
+    if (method === "plugins.catalog.browse") {
+      return { items: [] };
+    }
+    return createResult();
+  };
+
+  it("loads artwork for rendered category cards and expands without per-card metadata reads", async () => {
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:publisher");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("image", {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const items: PluginDiscoveryEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      id: `catalog-${index}`,
+      catalog: {
+        name: `Plugin ${index}`,
+        official: false,
+        categories: ["web"],
+        imageUrl: `https://cdn.example.com/publisher-${index}.png`,
+      },
+      local: {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
+      },
+    }));
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.catalog.browse") {
+        return { items, categories: [{ slug: "web", label: "Web", icon: "globe", order: 1 }] };
+      }
+      return requestResult(method);
+    });
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(),
+        createPluginsRouteLocation("/plugins"),
+      ),
+    );
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card").length).toBeGreaterThan(0),
+    );
+    const visible = page.querySelectorAll(".plugin-catalog-card").length;
+    expect(visible).toBeLessThan(items.length);
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(visible));
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card img")).toHaveLength(visible),
+    );
+    page
+      .querySelector<HTMLButtonElement>(
+        '[data-catalog-section="web"] .plugin-catalog-section__view-all',
+      )!
+      .click();
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card")).toHaveLength(items.length),
+    );
+    await waitForFast(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card img")).toHaveLength(items.length),
+    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("plugins.catalog.get");
+  });
+
+  it.each([404, 200])(
+    "uses late publisher enrichment after package status %s without retrying the package",
+    async (status) => {
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = vi.fn((blob: Blob) =>
+            blob.size === 1 ? "blob:package" : "blob:author",
+          );
+          static override revokeObjectURL = vi.fn();
+        },
+      );
+      const authorUrl = "https://cdn.example.com/publisher.png";
+      const fetchMock = vi.fn(async (url: string) =>
+        url.includes("/plugin-icon/")
+          ? new Response(status === 200 ? "p" : null, {
+              status,
+              headers: { "content-type": "image/png" },
+            })
+          : new Response("author", { headers: { "content-type": "image/png" } }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const plugin = createPlugin({ hasIcon: true, catalogId: "catalog:workboard" });
+      const detail = createDiscoveryDetail(plugin);
+      detail.detail.author = { handle: "publisher", imageUrl: authorUrl };
+      const catalog = deferred<typeof detail>();
+      const result = createResult(plugin);
+      const { client } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          return createInspectResult();
+        }
+        if (method === "plugins.catalog.get") {
+          return catalog.promise;
+        }
+        if (method === "plugins.list") {
+          return result;
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const harness = createGateway(client);
+      harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(
+          harness.gateway,
+          result,
+          createPluginsRouteLocation("/settings/plugins/workboard"),
+        ),
+      );
+      const image = () => page.querySelector(".plugin-catalog-detail__hero img");
+      await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await waitForFast(() =>
+        status === 200
+          ? expect(image()?.getAttribute("src")).toBe("blob:package")
+          : expect(
+              page.querySelector(".plugin-catalog-detail__hero .plugins-tile.skeleton"),
+            ).not.toBeNull(),
+      );
+      catalog.resolve(detail);
+      await waitForFast(() =>
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+          "/__openclaw__/plugin-icon/workboard",
+          `/__openclaw__/catalog-icon/${encodeURIComponent(authorUrl)}`,
+        ]),
+      );
+      await waitForFast(() =>
+        expect(image()?.getAttribute("src")).toBe(status === 200 ? "blob:package" : "blob:author"),
+      );
+    },
+  );
 
   it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
     const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
@@ -54,7 +212,7 @@ describe("PluginsPage icon routing", () => {
         ),
       );
     vi.stubGlobal("fetch", fetchMock);
-    const { client } = createClient(async () => createResult());
+    const { client } = createClient(requestResult);
     const harness = createGateway(client);
     harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
     harness.gateway.connection.token = "first";
@@ -87,13 +245,95 @@ describe("PluginsPage icon routing", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
   });
 
-  it("uses bundled art for scoped first-party catalog ids", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+  it("renders installed package icons or a placeholder when unavailable in unified catalog cards", async () => {
+    const createObjectURL = vi.fn(() => "blob:package-icon");
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith("%40openclaw%2Fdiscord")) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      return Promise.resolve(
+        new Response(
+          new Blob(
+            [
+              new Uint8Array([
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
+                0, 0, 0, 2, 0, 0, 0, 1,
+              ]),
+            ],
+            { type: "image/png" },
+          ),
+          {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          },
+        ),
+      );
+    });
     vi.stubGlobal("fetch", fetchMock);
-    const { client } = createClient(async () => createResult());
+    const discoveryEntries = [
+      {
+        id: "ch_brave",
+        catalog: {
+          name: "Brave Search",
+          official: true,
+          categories: ["web"],
+        },
+        local: {
+          present: true,
+          installed: true,
+          enabled: false,
+          state: "disabled",
+          pluginId: "@openclaw/brave-plugin",
+          action: "manage",
+        },
+      },
+      {
+        id: "ch_discord",
+        catalog: {
+          name: "Discord",
+          official: true,
+          categories: ["channels"],
+        },
+        local: {
+          present: true,
+          installed: true,
+          enabled: false,
+          state: "disabled",
+          pluginId: "@openclaw/discord",
+          action: "manage",
+        },
+      },
+    ] satisfies PluginDiscoveryEntry[];
+    const { client } = createClient(async (method, params) => {
+      if (method === "plugins.catalog.browse") {
+        return (params as { intent?: string }).intent === "featured"
+          ? { items: [] }
+          : {
+              items: discoveryEntries,
+              categories: [
+                { slug: "web", label: "Web", description: "Web tools", icon: "globe", order: 1 },
+                {
+                  slug: "channels",
+                  label: "Channels",
+                  description: "Messaging",
+                  icon: "messageSquare",
+                  order: 2,
+                },
+              ],
+            };
+      }
+      return requestResult(method);
+    });
     const harness = createGateway(client);
     harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    const catalogPlugin = (
+    const installedPlugin = (
       id: string,
       name: string,
       origin: "official" | "registry" = "official",
@@ -103,17 +343,70 @@ describe("PluginsPage icon routing", () => {
         name,
         origin,
         hasIcon: true,
-        installed: false,
+        installed: true,
         enabled: false,
-        state: "not-installed",
+        state: "disabled",
       });
     const result = {
       plugins: [
-        catalogPlugin("@openclaw/brave-plugin", "Brave Search"),
-        catalogPlugin("@openclaw/deepseek-provider", "DeepSeek"),
-        catalogPlugin("@openclaw/discord", "Discord"),
-        catalogPlugin("@vendor/brave-plugin", "Vendor Brave", "registry"),
+        installedPlugin("@openclaw/brave-plugin", "Brave Search"),
+        installedPlugin("@openclaw/deepseek-provider", "DeepSeek"),
+        installedPlugin("@openclaw/discord", "Discord"),
+        installedPlugin("@vendor/brave-plugin", "Vendor Brave", "registry"),
       ],
+      diagnostics: [],
+      mutationAllowed: true,
+    } satisfies PluginListResult;
+
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation("/plugins")),
+    );
+
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/__openclaw__/plugin-icon/%40openclaw%2Fbrave-plugin",
+      "/__openclaw__/plugin-icon/%40openclaw%2Fdiscord",
+    ]);
+    await waitForFast(() =>
+      expect(
+        page.querySelector('[data-plugin-id="ch_brave"] img.plugins-icon')?.getAttribute("src"),
+      ).toBe("blob:package-icon"),
+    );
+    expect(page.querySelector('[data-plugin-id="ch_discord"] img')).toBeNull();
+    expect(
+      page
+        .querySelector('[data-plugin-id="ch_discord"] .plugins-tile--fallback')
+        ?.textContent?.trim(),
+    ).toBe("DI");
+  });
+
+  it("fetches package icons for installed settings rows", async () => {
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn();
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { client } = createClient(requestResult);
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const plugins = Array.from({ length: 12 }, (_, index) => {
+      const suffix = String(index).padStart(2, "0");
+      return createPlugin({
+        id: `bounded-icon-${suffix}`,
+        name: `Bounded Icon ${suffix}`,
+        hasIcon: true,
+        installed: true,
+        enabled: false,
+        state: "disabled",
+      });
+    });
+    const result = {
+      plugins,
       diagnostics: [],
       mutationAllowed: true,
     } satisfies PluginListResult;
@@ -123,23 +416,15 @@ describe("PluginsPage icon routing", () => {
       createPluginsRouteData(
         harness.gateway,
         result,
-        createPluginsRouteLocation("/settings/plugins/discover"),
+        createPluginsRouteLocation("/settings/plugins"),
       ),
     );
 
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalled());
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/plugin-icon/%40vendor%2Fbrave-plugin",
-    ]);
-    expect(
-      page.querySelector('[data-plugin-id="@openclaw/brave-plugin"] img')?.getAttribute("src"),
-    ).toBe("/plugin-art/brave.webp");
-    expect(
-      page.querySelector('[data-plugin-id="@openclaw/deepseek-provider"] img')?.getAttribute("src"),
-    ).toBe("/plugin-art/deepseek.webp");
-    expect(
-      page.querySelector('[data-plugin-id="@openclaw/discord"] img')?.getAttribute("src"),
-    ).toBe("/plugin-art/discord.webp");
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(12));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+      plugins.map((plugin) => `/__openclaw__/plugin-icon/${plugin.id}`),
+    );
+    expect(page.querySelectorAll(".plugins-settings-row")).toHaveLength(12);
   });
 
   it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
@@ -165,7 +450,7 @@ describe("PluginsPage icon routing", () => {
         ),
       );
     vi.stubGlobal("fetch", fetchMock);
-    const { client } = createClient(async () => createResult());
+    const { client } = createClient(requestResult);
     const harness = createGateway(client);
     harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
     const result = createResult(
@@ -177,10 +462,248 @@ describe("PluginsPage icon routing", () => {
       createPluginsRouteData(harness.gateway, result),
     );
 
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitForFast(() =>
+      expect(
+        page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
+      ).toContain("UI"),
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(createObjectURL).not.toHaveBeenCalled();
-    expect(
-      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
-    ).toContain("UI");
+  });
+});
+
+describe("Model Setup icon lifecycle through the shared proxy", () => {
+  const iconUrl = "https://cdn.example.com/lifecycle.png";
+  let loader: ModelSetupIconLoader | undefined;
+  let installedIcons: PluginsPageIcons | undefined;
+
+  afterEach(() => {
+    loader?.reset();
+    loader = undefined;
+    installedIcons?.reset();
+    installedIcons = undefined;
+    resetPluginsPageTestState();
+  });
+
+  function setupIcons() {
+    const { client } = createClient(async () => createResult());
+    const gateway = createGateway(client);
+    gateway.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const context = createContext(gateway.gateway);
+    const ready: Extract<ModelSetupPageState, { phase: "ready" }> = {
+      phase: "ready",
+      result: {
+        candidates: [],
+        manualProviders: [],
+        workspace: "/tmp/icon-fixture",
+        setupComplete: false,
+        recommendedInstalls: [
+          {
+            id: "fixture",
+            label: "Fixture",
+            hint: "Fixture",
+            website: "https://example.com",
+            icon: iconUrl,
+          },
+        ],
+      },
+    };
+    let pageState: ModelSetupPageState = ready;
+    const published = vi.fn<(urls: Record<string, string>) => void>();
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    let sequence = 0;
+    const revoke = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => `blob:icon-${++sequence}`);
+        static override revokeObjectURL = revoke;
+      },
+    );
+    const currentLoader = new ModelSetupIconLoader(
+      () => context,
+      () => pageState,
+      published,
+    );
+    loader = currentLoader;
+    return {
+      loader: currentLoader,
+      fetchMock,
+      published,
+      revoke,
+      gateway,
+      context,
+      eligible: (present: boolean) => {
+        pageState = present
+          ? ready
+          : {
+              phase: "ready",
+              result: { ...ready.result, recommendedInstalls: [] },
+            };
+      },
+    };
+  }
+
+  function iconResponse() {
+    return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+  }
+
+  it.each(["key", "connection"] as const)(
+    "rejects a settled icon after its %s becomes unavailable before reconciliation",
+    async (scope) => {
+      const fixture = setupIcons();
+      const response = deferred<Response>();
+      fixture.fetchMock.mockReturnValueOnce(response.promise);
+      fixture.loader.reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledOnce();
+      if (scope === "key") {
+        fixture.eligible(false);
+      } else {
+        fixture.gateway.emit(null, false);
+      }
+      response.resolve(iconResponse());
+      await waitForFast(() =>
+        expect(
+          fixture.revoke.mock.calls.length + fixture.published.mock.calls.length,
+        ).toBeGreaterThan(0),
+      );
+      expect(fixture.revoke).toHaveBeenCalledWith("blob:icon-1");
+      expect(fixture.published).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a replacement icon when an older same-key request settles last", async () => {
+    const fixture = setupIcons();
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fixture.fetchMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    fixture.loader.reconcile();
+    fixture.loader.reset();
+    fixture.loader.reconcile();
+    expect(fixture.fetchMock).toHaveBeenCalledTimes(2);
+    expect(fixture.fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    second.resolve(iconResponse());
+    await waitForFast(() =>
+      expect(fixture.published).toHaveBeenLastCalledWith({
+        [iconUrl]: "blob:icon-1",
+      }),
+    );
+    first.resolve(iconResponse());
+    await waitForFast(() =>
+      expect(fixture.revoke.mock.calls.length + fixture.published.mock.calls.length).toBe(3),
+    );
+    expect(fixture.revoke).toHaveBeenCalledWith("blob:icon-2");
+    expect(fixture.published.mock.calls).toEqual([[{}], [{ [iconUrl]: "blob:icon-1" }]]);
+  });
+
+  it.each([
+    { family: "catalog", message: "catalog icon fetch timed out" },
+    { family: "plugin", message: "plugin icon fetch timed out" },
+  ] as const)(
+    "$family times out at ten seconds and retries a missed key only after removal and re-add",
+    async ({ family, message }) => {
+      vi.useFakeTimers();
+      const fixture = setupIcons();
+      const key = family === "plugin" ? "fixture-plugin" : iconUrl;
+      const pluginIcons =
+        family === "plugin"
+          ? new PluginsPageIcons({
+              getContext: () => fixture.context,
+              isConnected: () => fixture.gateway.gateway.snapshot.phase === "connected",
+              onInstalledUrlsChange: fixture.published,
+              onCatalogUrlsChange: vi.fn(),
+            })
+          : undefined;
+      installedIcons = pluginIcons;
+      const iconView = document.createDocumentFragment();
+      const iconTile = document.createElement("span");
+      iconTile.dataset.pluginIconId = key;
+      iconView.append(iconTile);
+      let present = true;
+      const reconcile = () => {
+        if (!pluginIcons) {
+          fixture.loader.reconcile();
+          return;
+        }
+        const result = createResult(present ? [createPlugin({ id: key, hasIcon: true })] : []);
+        pluginIcons.reconcileInstalled(result);
+        pluginIcons.syncInstalled(result, iconView);
+      };
+      const eligible = (value: boolean) => {
+        present = value;
+        fixture.eligible(value);
+      };
+      fixture.fetchMock
+        .mockImplementationOnce(
+          (_input, init) =>
+            new Promise<Response>((_resolve, reject) => {
+              const signal = init?.signal;
+              if (!signal) {
+                throw new Error("Expected the icon request abort signal");
+              }
+              signal.addEventListener(
+                "abort",
+                () => reject(new Error("fixture fetch aborted", { cause: signal.reason })),
+                { once: true },
+              );
+            }),
+        )
+        .mockResolvedValueOnce(iconResponse());
+      reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledOnce();
+      const signal = fixture.fetchMock.mock.calls[0]?.[1]?.signal;
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toBeInstanceOf(DOMException);
+      expect(signal?.reason).toMatchObject({
+        name: "TimeoutError",
+        message,
+      });
+      reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledOnce();
+      eligible(false);
+      reconcile();
+      eligible(true);
+      reconcile();
+      expect(fixture.fetchMock).toHaveBeenCalledTimes(2);
+      await waitForFast(() =>
+        expect(fixture.published).toHaveBeenLastCalledWith({
+          [key]: "blob:icon-1",
+        }),
+      );
+    },
+  );
+
+  it("revokes before invalidation publication and publishes both empty resets", async () => {
+    const fixture = setupIcons();
+    fixture.fetchMock.mockResolvedValueOnce(iconResponse());
+    fixture.loader.reconcile();
+    await waitForFast(() => expect(fixture.published).toHaveBeenCalledOnce());
+    fixture.loader.invalidate(iconUrl);
+    expect(fixture.revoke).toHaveBeenCalledWith("blob:icon-1");
+    expect(fixture.revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        fixture.published.mock.invocationCallOrder[1],
+        "invalidation publication order",
+      ),
+    );
+    fixture.loader.reconcile();
+    expect(fixture.fetchMock).toHaveBeenCalledOnce();
+    fixture.loader.reset();
+    fixture.loader.reset();
+    expect(fixture.published.mock.calls).toEqual([
+      [{ [iconUrl]: "blob:icon-1" }],
+      [{}],
+      [{}],
+      [{}],
+    ]);
   });
 });

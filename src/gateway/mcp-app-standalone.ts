@@ -36,10 +36,14 @@ type StandaloneTicketBinding = {
   sessionKey: string;
   sessionId: string;
   viewId: string;
+  toolOperationsAuthorized: boolean;
   expiresAtMs: number;
 };
 
 type StandaloneTicket = { ticket: string; url: string; expiresAtMs: number };
+type StandaloneTicketActiveView = McpAppActiveView & {
+  toolOperationsAuthorized: boolean;
+};
 
 const ticketBindings = new Map<string, StandaloneTicketBinding>();
 
@@ -68,6 +72,7 @@ function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): string 
 export function createMcpAppStandaloneTicket(params: {
   sessionKey: string;
   view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs">;
+  toolOperationsAuthorized: boolean;
   nowMs?: number;
   secret?: Buffer;
 }): StandaloneTicket | undefined {
@@ -82,7 +87,8 @@ export function createMcpAppStandaloneTicket(params: {
     if (
       binding.sessionKey === params.sessionKey &&
       binding.sessionId === params.view.sessionId &&
-      binding.viewId === params.view.viewId
+      binding.viewId === params.view.viewId &&
+      binding.toolOperationsAuthorized === params.toolOperationsAuthorized
     ) {
       if (binding.expiresAtMs > params.view.expiresAtMs) {
         ticketBindings.delete(binding.nonce);
@@ -116,6 +122,7 @@ export function createMcpAppStandaloneTicket(params: {
     sessionKey: params.sessionKey,
     sessionId: params.view.sessionId,
     viewId: params.view.viewId,
+    toolOperationsAuthorized: params.toolOperationsAuthorized,
     expiresAtMs,
   };
   ticketBindings.set(nonce, binding);
@@ -174,7 +181,7 @@ function resolveTicketActiveView(
   value: string,
   nowMs: number,
   secret: Buffer,
-): McpAppActiveView | undefined {
+): StandaloneTicketActiveView | undefined {
   const binding = verifyMcpAppStandaloneTicket(value, { nowMs, secret });
   if (!binding) {
     return undefined;
@@ -193,7 +200,7 @@ function resolveTicketActiveView(
   ) {
     return undefined;
   }
-  return { runtime, view };
+  return { runtime, view, toolOperationsAuthorized: binding.toolOperationsAuthorized };
 }
 
 function ticketFromRequest(req: IncomingMessage): string | undefined {
@@ -206,11 +213,15 @@ function ticketFromRequest(req: IncomingMessage): string | undefined {
 }
 
 function supportsStandaloneToolOperations(
-  view: Pick<McpAppViewLease, "allowedAppToolNames" | "readOnly">,
+  active: Pick<StandaloneTicketActiveView, "toolOperationsAuthorized" | "view">,
 ): boolean {
-  // The ticket is the short-lived grant. Tool authority still requires the
-  // originating run's explicit allowlist and is revalidated on every request.
-  return view.allowedAppToolNames !== undefined && view.readOnly !== true;
+  // Tool authority is the intersection of the ticket issuer's Gateway scope and
+  // the originating run's live App-tool grant, revalidated on every request.
+  return (
+    active.toolOperationsAuthorized &&
+    active.view.allowedAppToolNames !== undefined &&
+    active.view.readOnly !== true
+  );
 }
 
 async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
@@ -373,7 +384,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         }
         if (
           (operation.method === "tools/call" || operation.method === "tools/list") &&
-          !supportsStandaloneToolOperations(current.view)
+          !supportsStandaloneToolOperations(current)
         ) {
           sendJson(res, 403, { ok: false, error: "MCP App tool bridge is unavailable" });
           return;
@@ -405,7 +416,7 @@ export async function handleMcpAppStandaloneHttpRequest(
         ...(view.csp ? { csp: view.csp } : {}),
         toolInput: view.toolInput,
         toolResult: view.toolResult,
-        serverTools: supportsStandaloneToolOperations(view),
+        serverTools: supportsStandaloneToolOperations(active),
         serverResources,
       });
       return true;

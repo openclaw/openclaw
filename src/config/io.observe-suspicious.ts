@@ -1,4 +1,5 @@
 import { isRecord } from "../utils.js";
+import type { ConfigHealthEntry, ConfigHealthFingerprint } from "./io.health-state.types.js";
 
 type ConfigObserveSuspiciousBaseline = {
   bytes: number;
@@ -47,4 +48,27 @@ export function resolveConfigObserveSuspiciousReasons(params: {
     reasons.push("update-channel-only-root");
   }
   return reasons;
+}
+
+export function resolveConfigReadRecoveryContext(params: {
+  current: ConfigHealthFingerprint;
+  parsed: unknown;
+  entry: ConfigHealthEntry;
+  backupBaseline?: ConfigHealthFingerprint;
+}): { suspicious: string[]; suspiciousSignature: string } | null {
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: params.current.bytes,
+    hasMeta: params.current.hasMeta,
+    gatewayMode: params.current.gatewayMode,
+    parsed: params.parsed,
+    lastKnownGood: params.backupBaseline,
+  });
+  if (suspicious.length === 0) {
+    return null;
+  }
+  const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;
+  if (params.entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+    return null;
+  }
+  return { suspicious, suspiciousSignature };
 }

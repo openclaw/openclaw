@@ -5,31 +5,20 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import "./installed-plugin-index-record-reader.js";
 import {
-  clearLoadInstalledPluginIndexInstallRecordsCache,
-  loadInstalledPluginIndexInstallRecords,
-  loadInstalledPluginIndexInstallRecordsSync,
-  readPersistedInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecordsSync,
-} from "./installed-plugin-index-record-reader.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
-import {
-  refreshPersistedInstalledPluginIndex,
-  refreshPersistedInstalledPluginIndexSync,
   refreshPersistedInstalledPluginIndexWithLeaseSync,
   type InstalledPluginIndexWriteLease,
   type InstalledPluginIndexWriteReceipt,
 } from "./installed-plugin-index-store-write.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
 import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
-
 export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecordsSync,
-};
+} from "./installed-plugin-index-record-reader.js";
 
 /** Config path for legacy plugin install records kept for migration/doctor flows. */
 export const PLUGIN_INSTALLS_CONFIG_PATH = ["plugins", "installs"] as const;
@@ -46,26 +35,6 @@ type InstalledPluginIndexRecordRefreshOptions = InstalledPluginIndexRecordStoreO
     now?: () => Date;
   };
 
-/** Resolves the installed plugin index record store path. */
-export function resolveInstalledPluginIndexRecordsStorePath(
-  options: InstalledPluginIndexRecordStoreOptions = {},
-): string {
-  return resolveInstalledPluginIndexStorePath(options);
-}
-
-/** Refreshes persisted installed plugin index records asynchronously. */
-export async function writePersistedInstalledPluginIndexInstallRecords(
-  records: Record<string, PluginInstallRecord>,
-  options: InstalledPluginIndexRecordRefreshOptions = {},
-): Promise<string> {
-  await refreshPersistedInstalledPluginIndex({
-    ...options,
-    reason: "source-changed",
-    installRecords: records,
-  });
-  return resolveInstalledPluginIndexRecordsStorePath(options);
-}
-
 /** Refresh persisted install records while holding the plugin lifecycle lease. */
 export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(
   records: Record<string, PluginInstallRecord>,
@@ -78,19 +47,6 @@ export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(
     reason: "source-changed",
     installRecords: records,
   });
-}
-
-/** Refreshes persisted installed plugin index records synchronously. */
-export function writePersistedInstalledPluginIndexInstallRecordsSync(
-  records: Record<string, PluginInstallRecord>,
-  options: InstalledPluginIndexRecordRefreshOptions = {},
-): string {
-  refreshPersistedInstalledPluginIndexSync({
-    ...options,
-    reason: "source-changed",
-    installRecords: records,
-  });
-  return resolveInstalledPluginIndexRecordsStorePath(options);
 }
 
 /** Returns config with plugin install records attached at the canonical config path. */

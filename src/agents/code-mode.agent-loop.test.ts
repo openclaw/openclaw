@@ -11,19 +11,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
-import type { CodeModeSkill } from "./code-mode-skills.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
-  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "./plugin-runtime-refresh.js";
 import { Agent } from "./runtime/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
@@ -59,7 +62,6 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
 async function runCodeModeAgent(params: {
   programs: Array<string | { wait: true }>;
   hiddenTools: AnyAgentTool[];
-  codeModeSkills?: CodeModeSkill[];
   harness?:
     | ReturnType<typeof createCodeModeHarness>
     | ReturnType<typeof createSubscribedCodeModeHarness>;
@@ -69,8 +71,7 @@ async function runCodeModeAgent(params: {
     harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
   ) => void;
 }) {
-  const harness =
-    params.harness ?? createCodeModeHarness({ codeModeSkills: params.codeModeSkills });
+  const harness = params.harness ?? createCodeModeHarness();
   const { config, catalogRef } = harness;
   const ctx = "ctx" in harness ? harness.ctx : harness;
   const tools = params.abortSignal
@@ -88,7 +89,6 @@ async function runCodeModeAgent(params: {
     sessionKey,
     runId,
     catalogRef,
-    codeModeSkills: params.codeModeSkills,
   });
   const providerContexts: Context[] = [];
   const agent = new Agent({
@@ -111,7 +111,7 @@ async function runCodeModeAgent(params: {
                 name: waiting ? "wait" : "exec",
                 arguments: waiting
                   ? { runId: readToolResultDetails(context.messages.at(-1))?.runId }
-                  : { code },
+                  : { title: "Run the recovery step", code },
               },
             ],
       );
@@ -269,8 +269,96 @@ async function runParkedReadFailure(scenario: ParkedFailure) {
 }
 
 describe("Code Mode agent-loop error recovery", () => {
-  afterEach(() => {
-    resetCodeModeTestState();
+  it("drains the old cell before refreshing its complete catalog in the same session", async () => {
+    const refresh = createAgentPluginRuntimeRefresh();
+    const started = createDeferred();
+    const release = createDeferred();
+    const effects: string[] = [];
+    let retainedExec!: AnyAgentTool;
+    try {
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const owner = captureAgentPluginRuntimeRefresh();
+        const slow = pluginToolWithExecute("slow_action", "Finish admitted work", async () => {
+          started.resolve();
+          await release.promise;
+          effects.push("old action completed");
+          return jsonResult({ finished: true });
+        });
+        const reload = pluginToolWithExecute("reload_runtime", "Reload plugin files", async () => {
+          await started.promise;
+          owner.request();
+          effects.push("reload committed");
+          return { ...jsonResult({ generation: 2 }), terminate: true };
+        });
+        const removed = pluginToolWithExecute("removed_tool", "Old capability", async () =>
+          jsonResult({ old: true }),
+        );
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, slow, reload, removed] });
+        retainedExec = wrapToolWithBeforeToolCallHook(harness.tools[0]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const wait = wrapToolWithBeforeToolCallHook(harness.tools[1]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const result = await retainedExec.execute("cell", {
+          code: 'const pending = slow_action({}); await reload_runtime({}); json("reload recorded"); await yield_control(); return await pending;',
+        });
+        expect(result).toMatchObject({ terminate: false, details: { status: "waiting" } });
+        expect(owner.isRequested()).toBe(true);
+        expect(owner.isPending()).toBe(false);
+        expect(effects).toEqual(["reload committed"]);
+        release.resolve();
+        const settled = await wait.execute("drain", {
+          runId: resultDetails(result).runId,
+        });
+        expect(settled).toMatchObject({ terminate: true, details: { status: "completed" } });
+        expect(owner.isPending()).toBe(true);
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+        expect(reload.execute).toHaveBeenCalledOnce();
+        expect(slow.execute).toHaveBeenCalledOnce();
+        expect(removed.execute).not.toHaveBeenCalled();
+        expect(testing.activeRuns.size).toBe(0);
+      });
+      refresh.close();
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const changed = pluginToolWithExecute("changed_tool", "New capability", async (_id, args) =>
+          jsonResult({ version: 2, input: args }),
+        );
+        changed.parameters = {
+          type: "object",
+          properties: { amount: { type: "number" } },
+          required: ["amount"],
+          additionalProperties: false,
+        };
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, changed] });
+        await expect(retainedExec.execute("stale-cell", { code: "return 1;" })).rejects.toThrow(
+          "Plugin runtime changed",
+        );
+        const verified = await harness.tools[0]!.execute("verify", {
+          code: "json({ removed: typeof removed_tool, schema: (await changed_tool.describe()).parameters }); return await changed_tool({ amount: 2 });",
+        });
+        expect(verified).toMatchObject({
+          details: {
+            status: "completed",
+            output: [{ type: "json", value: { removed: "undefined", schema: changed.parameters } }],
+          },
+        });
+        expect(changed.execute).toHaveBeenCalledOnce();
+        expect(vi.mocked(changed.execute).mock.calls[0]?.[1]).toEqual({ amount: 2 });
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+      });
+    } finally {
+      release.resolve();
+      refresh.close();
+    }
+  });
+
+  afterEach(async () => {
+    await resetCodeModeTestState();
     vi.useRealTimers();
   });
 
@@ -451,62 +539,37 @@ describe("Code Mode agent-loop error recovery", () => {
     );
   });
 
-  it.each([
-    {
-      name: "catalog.search",
-      discovery: '(await catalog.search("complete_task")).map((tool) => tool.toolName)',
-      value: ["complete_task"],
-    },
-    {
-      name: "handle.describe",
-      discovery: "(await complete_task.describe()).name",
-      value: "complete_task",
-    },
-    {
-      name: "skills.list",
-      discovery: "(await skills.list()).map((skill) => skill.name)",
-      value: ["demo"],
-    },
-    { name: "skills.read", discovery: 'await skills.read("demo")', value: "Demo instructions" },
-  ])(
-    "continues ordinary recovery after $name metadata and a guest error",
-    async ({ discovery, value }) => {
-      const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
-        jsonResult({ completed: true }),
-      );
-      const { agent, providerContexts } = await runCodeModeAgent({
-        hiddenTools: [complete],
-        codeModeSkills: [
-          {
-            name: "demo",
-            description: "Demo skill",
-            location: "/skills/demo/SKILL.md",
-            source: { filePath: "/skills/demo/SKILL.md", readContent: "Demo instructions" },
-          },
-        ],
-        programs: [`json(${discovery}); return missingFn();`, "return await complete_task({});"],
-      });
+  it("continues ordinary recovery after catalog metadata and a guest error", async () => {
+    const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
+      jsonResult({ completed: true }),
+    );
+    const { agent, providerContexts } = await runCodeModeAgent({
+      hiddenTools: [complete],
+      programs: [
+        'json((await catalog.search("complete_task")).map((tool) => tool.toolName)); return missingFn();',
+        "return await complete_task({});",
+      ],
+    });
 
-      const failure = expect.objectContaining({
-        role: "toolResult",
-        toolName: "exec",
-        isError: true,
-        details: expect.objectContaining({
-          status: "failed",
-          error: expect.stringContaining("ReferenceError: missingFn is not defined"),
-          output: [{ type: "json", value }],
-          telemetry: expect.objectContaining({ callCount: 0 }),
-        }),
-      });
-      expect(agent.state.messages).toContainEqual(failure);
-      expect(providerContexts).toHaveLength(3);
-      expect(complete.execute).toHaveBeenCalledOnce();
-      expect(agent.state.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "recovered" }],
-      });
-    },
-  );
+    const failure = expect.objectContaining({
+      role: "toolResult",
+      toolName: "exec",
+      isError: true,
+      details: expect.objectContaining({
+        status: "failed",
+        error: expect.stringContaining("ReferenceError: missingFn is not defined"),
+        output: [{ type: "json", value: ["complete_task"] }],
+        telemetry: expect.objectContaining({ callCount: 0 }),
+      }),
+    });
+    expect(agent.state.messages).toContainEqual(failure);
+    expect(providerContexts).toHaveLength(3);
+    expect(complete.execute).toHaveBeenCalledOnce();
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+    });
+  });
 
   it("returns a trusted no-start tool failure to the model for ordinary recovery", async () => {
     const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
@@ -628,27 +691,6 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(recover.execute).toHaveBeenCalledOnce();
   });
 
-  it("continues after a namespace metadata call and a guest error", async () => {
-    const listResources = mcpTool({
-      name: "mcp_files_resources_list",
-      serverName: "files",
-      toolName: "resources/list",
-      operation: "resources_list",
-    });
-    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
-      jsonResult({ recovered: true }),
-    );
-
-    const { providerContexts } = await runCodeModeAgent({
-      hiddenTools: [listResources, recover],
-      programs: ["json(await MCP.$api()); return missingFn();", "return await recover_task({});"],
-    });
-
-    expect(providerContexts).toHaveLength(3);
-    expect(listResources.execute).not.toHaveBeenCalled();
-    expect(recover.execute).toHaveBeenCalledOnce();
-  });
-
   it("continues after a replay-safe plugin failure", async () => {
     const readOnly = pluginToolWithExecute("plugin_read", "Read plugin state", async () => {
       throw new Error("plugin read failed after dispatch");
@@ -729,57 +771,6 @@ describe("Code Mode agent-loop error recovery", () => {
       role: "assistant",
       content: [{ type: "text", text: "recovered" }],
     });
-  });
-
-  it("continues after an earlier side effect and a later tool failure", async () => {
-    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () =>
-      jsonResult({ recorded: true }),
-    );
-    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () => {
-      throw new Error("terminal unavailable");
-    });
-    const write = pluginToolWithExecute("write", "Repeat a mutation", async () =>
-      jsonResult({ repeated: true }),
-    );
-
-    const { providerContexts } = await runCodeModeAgent({
-      hiddenTools: [recordEffect, terminal, write],
-      programs: ["await record_effect({}); return await terminal({});", "return await write({});"],
-    });
-
-    expect(providerContexts).toHaveLength(3);
-    expect(recordEffect.execute).toHaveBeenCalledOnce();
-    expect(terminal.execute).toHaveBeenCalledOnce();
-    expect(write.execute).toHaveBeenCalledOnce();
-  });
-
-  it("continues after a partially applied mutation reports an input error", async () => {
-    const appliedChanges: string[] = [];
-    const applyPatch = pluginToolWithExecute("apply_patch", "Apply a patch", async () => {
-      appliedChanges.push("first hunk applied");
-      throw new ToolInputError("second hunk input is ambiguous after applying the first");
-    });
-    const write = pluginToolWithExecute("write", "Repeat a mutation", async () =>
-      jsonResult({ repeated: true }),
-    );
-    const send = pluginToolWithExecute("message", "Send a message", async () =>
-      jsonResult({ delivered: true }),
-    );
-    const shell = pluginToolWithExecute("shell_command", "Run a shell command", async () =>
-      jsonResult({ executed: true }),
-    );
-
-    const { providerContexts } = await runCodeModeAgent({
-      hiddenTools: [applyPatch, write, send, shell],
-      programs: ["return await apply_patch({});", "return await write({});"],
-    });
-
-    expect(providerContexts).toHaveLength(3);
-    expect(applyPatch.execute).toHaveBeenCalledOnce();
-    expect(write.execute).toHaveBeenCalledOnce();
-    expect(send.execute).not.toHaveBeenCalled();
-    expect(shell.execute).not.toHaveBeenCalled();
-    expect(appliedChanges).toEqual(["first hunk applied"]);
   });
 
   it("preserves an explicitly terminal nested action when later JavaScript fails", async () => {

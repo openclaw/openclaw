@@ -9,7 +9,6 @@ import {
 } from "./session-observer.test-utils.js";
 
 const runtimeMocks = vi.hoisted(() => ({
-  prepareDirect: vi.fn(),
   completeDirect: vi.fn(),
   selectModel: vi.fn(),
   prepareUtility: vi.fn(),
@@ -17,7 +16,6 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: runtimeMocks.prepareDirect,
   completeWithPreparedSimpleCompletionModel: runtimeMocks.completeDirect,
   resolveSimpleCompletionSelectionForAgent: runtimeMocks.selectModel,
 }));
@@ -55,11 +53,6 @@ describe("session observer model preparation", () => {
         agentId: "main",
         agentDir: "/tmp/agent",
       };
-      runtimeMocks.prepareDirect.mockResolvedValue({
-        selection: { provider, modelId: prepared.model, agentDir: prepared.agentDir },
-        model: { provider, id: prepared.model, maxTokens: 8192 },
-        auth: { apiKey: "openclaw:claude-cli-native-auth", mode: "oauth" },
-      });
       runtimeMocks.completeDirect
         .mockReset()
         .mockRejectedValue(new Error("HTTP 401 invalid credential"));

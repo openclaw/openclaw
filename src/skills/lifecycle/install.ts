@@ -1,27 +1,31 @@
-// Skill install service coordinates skill installation from archives, URLs, and registries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../../infra/brew.js";
-import { isContainerEnvironment as defaultIsContainerEnvironment } from "../../infra/container-environment.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  evaluateSkillInstallPolicy,
-  type SkillInstallSpecMetadata,
-} from "../../plugins/install-security-scan.js";
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveBrewExecutable } from "../../infra/brew.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  hasBinary as defaultHasBinary,
-  resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
-} from "../loading/config.js";
+import { hasBinary, resolveSkillsInstallPreferences } from "../loading/config.js";
+import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
-import { loadWorkspaceSkills as defaultLoadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
-import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
+import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import type { SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
+import {
+  findInstallSpec,
+  normalizeSkillInstallSpec,
+  withSkillInstallPolicySource,
+} from "./install-policy-source.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
+import type { WorkspaceSkillLifecycle } from "./workspace-types.js";
 
 type SkillInstallRequest = {
   workspaceDir: string;
@@ -33,30 +37,6 @@ type SkillInstallRequest = {
 };
 export type { SkillInstallSkipReason } from "./install-types.js";
 
-type SkillsInstallDeps = {
-  hasBinary: (bin: string) => boolean;
-  loadWorkspaceSkills: typeof defaultLoadWorkspaceSkills;
-  resolveNodeInstallStateDir: () => string;
-  resolveBrewExecutable: () => string | undefined;
-  isContainerEnvironment: () => boolean;
-  resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
-};
-
-const defaultSkillsInstallDeps: SkillsInstallDeps = {
-  hasBinary: defaultHasBinary,
-  loadWorkspaceSkills: defaultLoadWorkspaceSkills,
-  resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
-  resolveBrewExecutable: defaultResolveBrewExecutable,
-  isContainerEnvironment: defaultIsContainerEnvironment,
-  resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
-};
-
-let skillsInstallDeps = defaultSkillsInstallDeps;
-
-function getSkillsInstallDeps(): SkillsInstallDeps {
-  return skillsInstallDeps;
-}
-
 function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInstallResult {
   if (warnings.length === 0) {
     return result;
@@ -67,67 +47,25 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
   };
 }
 
-function resolveInstallId(spec: SkillInstallSpec, index: number): string {
-  return (spec.id ?? `${spec.kind}-${index}`).trim();
-}
-
-function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
-  const specs = entry.metadata?.install ?? [];
-  for (const [index, spec] of specs.entries()) {
-    if (resolveInstallId(spec, index) === installId) {
-      return spec;
-    }
-  }
-  return undefined;
-}
-
-function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMetadata {
-  return {
-    ...(spec.id ? { id: spec.id } : {}),
-    kind: spec.kind,
-    ...(spec.label ? { label: spec.label } : {}),
-    ...(spec.bins ? { bins: spec.bins.slice() } : {}),
-    ...(spec.os ? { os: spec.os.slice() } : {}),
-    ...(spec.formula ? { formula: spec.formula } : {}),
-    ...(spec.package ? { package: spec.package } : {}),
-    ...(spec.module ? { module: spec.module } : {}),
-    ...(spec.url ? { url: spec.url } : {}),
-    ...(spec.sha256 ? { sha256: spec.sha256 } : {}),
-    ...(spec.archive ? { archive: spec.archive } : {}),
-    ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
-    ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
-    ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
-  };
-}
-
-function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
+function buildNodeInstallCommand(prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
-      return ["pnpm", "add", "-g", "--ignore-scripts", packageName];
+      return ["pnpm", "add", "-g", "--ignore-scripts"];
     case "yarn":
-      return ["yarn", "global", "add", "--ignore-scripts", packageName];
+      return ["yarn", "global", "add", "--ignore-scripts"];
     case "bun":
-      return ["bun", "add", "-g", "--ignore-scripts", packageName];
+      return ["bun", "add", "-g", "--ignore-scripts"];
     default:
-      return ["npm", "install", "-g", "--ignore-scripts", packageName];
+      return ["npm", "install", "-g", "--ignore-scripts"];
   }
 }
 
-function resolveDefaultNodeInstallStateDir({
-  cwd = process.cwd(),
-  getuid = process.getuid?.bind(process),
-  homedir = os.homedir,
-  platform = process.platform,
-}: {
-  cwd?: string;
-  getuid?: () => number;
-  homedir?: () => string;
-  platform?: NodeJS.Platform;
-} = {}): string {
-  if (platform !== "win32" && getuid?.() === 0) {
+function resolveDefaultNodeInstallStateDir(): string {
+  const cwd = process.cwd();
+  if (process.platform !== "win32" && process.getuid?.() === 0) {
     return path.join(path.parse(cwd).root, "var", "lib", "openclaw");
   }
-  return path.join(homedir(), ".openclaw");
+  return path.join(os.homedir(), ".openclaw");
 }
 
 async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<NodeJS.ProcessEnv> {
@@ -135,7 +73,7 @@ async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<Nod
     return {};
   }
 
-  const stateDir = getSkillsInstallDeps().resolveNodeInstallStateDir();
+  const stateDir = resolveDefaultNodeInstallStateDir();
   const prefix = path.join(stateDir, "tools", "node", "npm");
   await fs.promises.mkdir(prefix, { recursive: true, mode: 0o700 });
   return {
@@ -151,15 +89,23 @@ const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
 const SAFE_UV_PACKAGE =
   /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
 
-function assertSafeInstallerValue(value: string, kind: string, pattern: RegExp): string | null {
+function buildValidatedInstallCommand(
+  value: string | undefined,
+  kind: string,
+  pattern: RegExp,
+  command: readonly string[],
+): { argv: string[] | null; error?: string } {
+  if (!value) {
+    return { argv: null, error: `missing ${kind}` };
+  }
   const trimmed = value.trim();
   if (!trimmed || trimmed.startsWith("-")) {
-    return `${kind} value is empty or starts with a dash`;
+    return { argv: null, error: `${kind} value is empty or starts with a dash` };
   }
   if (!pattern.test(trimmed)) {
-    return `${kind} value contains invalid characters: ${trimmed}`;
+    return { argv: null, error: `${kind} value contains invalid characters: ${trimmed}` };
   }
-  return null;
+  return { argv: [...command, trimmed] };
 }
 
 function buildInstallCommand(
@@ -170,48 +116,29 @@ function buildInstallCommand(
   error?: string;
 } {
   switch (spec.kind) {
-    case "brew": {
-      if (!spec.formula) {
-        return { argv: null, error: "missing brew formula" };
-      }
-      const err = assertSafeInstallerValue(spec.formula, "brew formula", SAFE_BREW_FORMULA);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["brew", "install", spec.formula.trim()] };
-    }
-    case "node": {
-      if (!spec.package) {
-        return { argv: null, error: "missing node package" };
-      }
-      const err = assertSafeInstallerValue(spec.package, "node package", SAFE_NODE_PACKAGE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return {
-        argv: buildNodeInstallCommand(spec.package.trim(), prefs),
-      };
-    }
-    case "go": {
-      if (!spec.module) {
-        return { argv: null, error: "missing go module" };
-      }
-      const err = assertSafeInstallerValue(spec.module, "go module", SAFE_GO_MODULE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["go", "install", spec.module.trim()] };
-    }
-    case "uv": {
-      if (!spec.package) {
-        return { argv: null, error: "missing uv package" };
-      }
-      const err = assertSafeInstallerValue(spec.package, "uv package", SAFE_UV_PACKAGE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["uv", "tool", "install", spec.package.trim()] };
-    }
+    case "brew":
+      return buildValidatedInstallCommand(spec.formula, "brew formula", SAFE_BREW_FORMULA, [
+        "brew",
+        "install",
+      ]);
+    case "node":
+      return buildValidatedInstallCommand(
+        spec.package,
+        "node package",
+        SAFE_NODE_PACKAGE,
+        buildNodeInstallCommand(prefs),
+      );
+    case "go":
+      return buildValidatedInstallCommand(spec.module, "go module", SAFE_GO_MODULE, [
+        "go",
+        "install",
+      ]);
+    case "uv":
+      return buildValidatedInstallCommand(spec.package, "uv package", SAFE_UV_PACKAGE, [
+        "uv",
+        "tool",
+        "install",
+      ]);
     case "download": {
       return { argv: null, error: "download install handled separately" };
     }
@@ -237,8 +164,7 @@ async function resolveBrewPrefixBinDir(
 }
 
 async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
-  const deps = getSkillsInstallDeps();
-  const exe = brewExe ?? (deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable());
+  const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
   if (!exe) {
     return undefined;
   }
@@ -249,22 +175,14 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
   }
 
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(candidate)) {
+      return candidate;
     }
   }
   return undefined;
 }
 
-type CommandResult = {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-};
+type CommandResult = Pick<SkillInstallResult, "code" | "stdout" | "stderr">;
 
 function createInstallFailure(params: {
   message: string;
@@ -298,12 +216,7 @@ async function runCommandSafely(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<CommandResult> {
   try {
-    const result = await runCommandWithTimeout(argv, optionsOrTimeout);
-    return {
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+    return await runCommandWithTimeout(argv, optionsOrTimeout);
   } catch (err) {
     return {
       code: null,
@@ -314,8 +227,14 @@ async function runCommandSafely(
 }
 
 function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
+  if (process.platform === "freebsd") {
+    return createInstallFailure({
+      message:
+        "brew not installed — Homebrew is not supported on FreeBSD. Install the required binaries on the Gateway host using pkg or Ports, then run `openclaw skills check` (use `--agent <id>` for a specific agent) to verify readiness.",
+    });
+  }
   const formula = spec.formula ?? "this package";
-  if (process.platform === "linux" && getSkillsInstallDeps().isContainerEnvironment()) {
+  if (process.platform === "linux" && isContainerEnvironment()) {
     return createInstallFailure({
       message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
     });
@@ -332,7 +251,7 @@ async function ensureUvInstalled(params: {
   brewExe?: string;
   timeoutMs: number;
 }): Promise<SkillInstallResult | undefined> {
-  if (params.spec.kind !== "uv" || getSkillsInstallDeps().hasBinary("uv")) {
+  if (params.spec.kind !== "uv" || hasBinary("uv")) {
     return undefined;
   }
 
@@ -343,15 +262,21 @@ async function ensureUvInstalled(params: {
     });
   }
 
-  const brewResult = await runCommandSafely([params.brewExe, "install", "uv"], {
-    timeoutMs: params.timeoutMs,
-  });
+  return installPrerequisiteViaBrew("uv", params.brewExe, params.timeoutMs);
+}
+
+async function installPrerequisiteViaBrew(
+  name: "uv" | "go",
+  brewExe: string,
+  timeoutMs: number,
+): Promise<SkillInstallResult | undefined> {
+  const brewResult = await runCommandSafely([brewExe, "install", name], { timeoutMs });
   if (brewResult.code === 0) {
     return undefined;
   }
 
   return createInstallFailure({
-    message: "Failed to install uv (brew)",
+    message: `Failed to install ${name} (brew)`,
     ...brewResult,
   });
 }
@@ -433,7 +358,7 @@ async function resolveAptCommandAccess(): Promise<AptCommandAccess> {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return { available: true, prefix: [] };
   }
-  if (!getSkillsInstallDeps().hasBinary("sudo")) {
+  if (!hasBinary("sudo")) {
     return { available: false, reason: "sudo-missing" };
   }
   for (const argv of SUDO_APT_GO_CHECK_ARGVS) {
@@ -545,24 +470,15 @@ async function ensureGoInstalled(params: {
   brewExe?: string;
   timeoutMs: number;
 }): Promise<SkillInstallResult | undefined> {
-  if (params.spec.kind !== "go" || getSkillsInstallDeps().hasBinary("go")) {
+  if (params.spec.kind !== "go" || hasBinary("go")) {
     return undefined;
   }
 
   if (params.brewExe) {
-    const brewResult = await runCommandSafely([params.brewExe, "install", "go"], {
-      timeoutMs: params.timeoutMs,
-    });
-    if (brewResult.code === 0) {
-      return undefined;
-    }
-    return createInstallFailure({
-      message: "Failed to install go (brew)",
-      ...brewResult,
-    });
+    return installPrerequisiteViaBrew("go", params.brewExe, params.timeoutMs);
   }
 
-  if (getSkillsInstallDeps().hasBinary("apt-get")) {
+  if (hasBinary("apt-get")) {
     return installGoViaApt(params.timeoutMs);
   }
 
@@ -605,7 +521,7 @@ function isGoToolchainPrerequisiteFailure(result: SkillInstallResult): boolean {
 }
 
 async function canBootstrapGoViaApt(): Promise<boolean> {
-  if (!getSkillsInstallDeps().hasBinary("apt-get")) {
+  if (!hasBinary("apt-get")) {
     return false;
   }
   const access = await resolveAptCommandAccess();
@@ -622,20 +538,19 @@ async function canBootstrapGoViaApt(): Promise<boolean> {
  * into the child and current PATH. Brew recipes swap argv[0] to the resolved path.
  */
 export async function resolveInstallerKindReadiness(kind: string): Promise<SkillInstallReadiness> {
-  const deps = getSkillsInstallDeps();
-  const brewOnPath = deps.hasBinary("brew");
-  const brewExe = brewOnPath ? "brew" : deps.resolveBrewExecutable();
+  const brewOnPath = hasBinary("brew");
+  const brewExe = brewOnPath ? "brew" : resolveBrewExecutable();
   switch (kind) {
     case "brew":
       return brewExe ? { ready: true } : { ready: false, reason: "brew" };
     case "uv": {
-      if (deps.hasBinary("uv")) {
+      if (hasBinary("uv")) {
         return { ready: true };
       }
       return brewOnPath ? { ready: true } : { ready: false, reason: "uv" };
     }
     case "go": {
-      if (deps.hasBinary("go")) {
+      if (hasBinary("go")) {
         return (await isGoUsableForAutoInstall())
           ? { ready: true }
           : { ready: false, reason: "go" };
@@ -681,61 +596,54 @@ async function executeInstallCommand(params: {
 export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
-  const deps = getSkillsInstallDeps();
   // Match status inventory: operators can install dependencies for hidden skills.
-  const entries = deps.loadWorkspaceSkills(workspaceDir, {
+  const entries = await prepareWorkspaceSkills(workspaceDir, {
     config: params.config,
     agentId: params.agentId,
     agentSkillFilter: "ignore",
   });
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {
-    return {
-      ok: false,
-      message: `Skill not found: ${params.skillName}`,
-      stdout: "",
-      stderr: "",
-      code: null,
-    };
+    return createInstallFailure({ message: `Skill not found: ${params.skillName}` });
   }
 
   const spec = findInstallSpec(entry, params.installId);
   const warnings: string[] = [];
   const skillSource = resolveSkillSource(entry.skill);
   const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
-  const scanResult = await evaluateSkillInstallPolicy({
-    config: params.config,
-    installId: params.installId,
-    ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
-    logger: {
-      warn: (message) => warnings.push(message),
-    },
-    origin: {
-      type: skillSource,
-      skillName: params.skillName,
-      installId: params.installId,
-    },
-    source:
-      skillSource === "openclaw-bundled"
-        ? { kind: "bundled", authority: "openclaw", mutable: false, network: false }
-        : skillSource === "openclaw-managed" || skillSource === "openclaw-extra"
-          ? { kind: "managed", authority: "openclaw", mutable: false, network: false }
-          : { kind: "workspace", authority: "user", mutable: true, network: false },
-    requestedSpecifier: `${params.skillName}:${params.installId}`,
-    skillName: params.skillName,
-    sourceDir: path.resolve(entry.skill.baseDir),
-  });
-  if (scanResult?.blocked) {
-    return withWarnings(
-      {
-        ok: false,
-        message: scanResult.blocked.reason,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
+  const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access && !access.installSkillDependencies) {
+    throw new WorkspaceAccessUnavailableError(
+      "Remote skill dependency installation is unavailable",
     );
+  }
+  const scanResult = await withSkillInstallPolicySource(entry.skill, access, (sourceDir) =>
+    evaluateSkillInstallPolicy({
+      config: params.config,
+      installId: params.installId,
+      ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
+      logger: {
+        warn: (message) => warnings.push(message),
+      },
+      origin: {
+        type: skillSource,
+        skillName: params.skillName,
+        installId: params.installId,
+      },
+      source:
+        skillSource === "openclaw-bundled"
+          ? { kind: "bundled", authority: "openclaw", mutable: false, network: false }
+          : skillSource === "openclaw-managed" || skillSource === "openclaw-extra"
+            ? { kind: "managed", authority: "openclaw", mutable: false, network: false }
+            : { kind: "workspace", authority: "user", mutable: true, network: false },
+      requestedSpecifier: `${params.skillName}:${params.installId}`,
+      skillName: params.skillName,
+      sourceDir,
+    }),
+  );
+  if (scanResult?.blocked) {
+    return withWarnings(createInstallFailure({ message: scanResult.blocked.reason }), warnings);
   }
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
@@ -747,50 +655,51 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   if (!spec) {
     return withWarnings(
-      {
-        ok: false,
-        message: `Installer not found: ${params.installId}`,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
+      createInstallFailure({ message: `Installer not found: ${params.installId}` }),
       warnings,
     );
   }
+  const request = {
+    skillKey: resolveSkillKey(entry.skill, entry),
+    spec,
+    preferences: resolveSkillsInstallPreferences(params.config),
+    timeoutMs,
+  };
+  const result = access
+    ? await access.installSkillDependencies!(request)
+    : await installSkillDependencies(request);
+  return withWarnings(result, warnings);
+}
+
+/** Runs only the approved recipe on the host that owns the Harness tools directory. */
+export async function installSkillDependencies(
+  params: Parameters<WorkspaceSkillLifecycle["installSkillDependencies"]>[0],
+): Promise<SkillInstallResult> {
+  const { skillKey, spec, preferences: prefs } = params;
+  const timeoutMs = Math.min(Math.max(params.timeoutMs, 1_000), 900_000);
   if (spec.kind === "download") {
-    const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
-    return withWarnings(downloadResult, warnings);
+    return installDownloadSpec({ skillKey, spec, timeoutMs });
   }
 
-  const prefs = deps.resolveSkillsInstallPreferences(params.config);
   const command = buildInstallCommand(spec, prefs);
   if (command.error) {
-    return withWarnings(
-      {
-        ok: false,
-        message: command.error,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
+    return createInstallFailure({ message: command.error });
   }
 
-  const brewExe = deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable();
+  const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
-    return withWarnings(resolveBrewMissingFailure(spec), warnings);
+    return resolveBrewMissingFailure(spec);
   }
 
   const uvInstallFailure = await ensureUvInstalled({ spec, brewExe, timeoutMs });
   if (uvInstallFailure) {
-    return withWarnings(uvInstallFailure, warnings);
+    return uvInstallFailure;
   }
 
-  const goWasAlreadyInstalled = spec.kind === "go" && deps.hasBinary("go");
+  const goWasAlreadyInstalled = spec.kind === "go" && hasBinary("go");
   const goInstallFailure = await ensureGoInstalled({ spec, brewExe, timeoutMs });
   if (goInstallFailure) {
-    return withWarnings(goInstallFailure, warnings);
+    return goInstallFailure;
   }
 
   const argv = command.argv ? [...command.argv] : null;
@@ -819,25 +728,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     // Keep the just-installed command discoverable without requiring a gateway restart.
     process.env.PATH = envOverrides.PATH;
   }
-  const normalizedResult =
-    spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
-      ? { ...installResult, skipReason: "go" as const }
-      : installResult;
-  return withWarnings(normalizedResult, warnings);
+  return spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
+    ? { ...installResult, skipReason: "go" as const }
+    : installResult;
 }
-
-const testing = {
-  resolveDefaultNodeInstallStateDir,
-  setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
-    skillsInstallDeps = {
-      ...defaultSkillsInstallDeps,
-      ...overrides,
-    };
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsInstallTestApi")] =
-    testing;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -41,6 +41,19 @@ vi.mock("./shared-client.js", async (importOriginal) => {
   };
 });
 
+function scheduledStartOptions(sessionFile: string, cwd: string) {
+  return {
+    params: createParams(sessionFile, cwd),
+    cwd,
+    dynamicTools: [],
+    appServer: createAppServerOptions(),
+    configuredMcpOwnershipVersion: 1 as const,
+    mcpServersFingerprintEvaluated: true,
+    nativeCodeModeEnabled: false,
+    userMcpServersEnabled: false,
+  };
+}
+
 describe("startOrResumeThread — configured MCP ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tempDir = "";
@@ -73,6 +86,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       ...binding,
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         // The successor is not authoritative until its exact-predecessor CAS commits.
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
@@ -85,62 +101,12 @@ describe("startOrResumeThread — configured MCP ownership", () => {
 
     await startOrResumeThread({
       client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      configuredMcpOwnershipVersion: 1,
-      mcpServersFingerprintEvaluated: true,
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
+      ...scheduledStartOptions(sessionFile, workspaceDir),
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
       threadId: "thread-scheduled-v1",
-      configuredMcpOwnershipVersion: 1,
-    });
-  });
-
-  it("replaces the single persistent main binding when scheduled MCP takes ownership", async () => {
-    const sessionFile = path.join(tempDir, "session-main.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-main");
-    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:main");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-main-ordinary",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      mcpServersFingerprint: "mcp-v1",
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method !== "thread/start") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-        threadId: "thread-main-ordinary",
-      });
-      return threadStartResult("thread-main-scheduled");
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.sessionKey = "agent:main:main";
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      configuredMcpOwnershipVersion: 1,
-      mcpServersFingerprintEvaluated: true,
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
-      threadId: "thread-main-scheduled",
       configuredMcpOwnershipVersion: 1,
     });
   });
@@ -181,6 +147,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
 
     const successorIds = ["thread-scheduled-v1", "thread-ordinary-new", "thread-scheduled-v2"];
     const currentRequest = vi.fn(async (method: string, requestParams?: { threadId?: string }) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
           threadId:
@@ -298,6 +267,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       dynamicToolsFingerprint: "[]",
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         throw new Error("successor start failed");
       }
@@ -317,14 +289,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     await expect(
       startOrResumeThread({
         client,
-        params: createParams(sessionFile, workspaceDir),
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createAppServerOptions(),
-        configuredMcpOwnershipVersion: 1,
-        mcpServersFingerprintEvaluated: true,
-        nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
+        ...scheduledStartOptions(sessionFile, workspaceDir),
       }),
     ).rejects.toThrow("successor start failed");
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
@@ -352,6 +317,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         dynamicToolsFingerprint: "[]",
       });
       const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult("thread-uncommitted");
         }
@@ -387,19 +355,13 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         startOrResumeThreadImpl({
           bindingStore,
           client,
-          params: createParams(sessionFile, workspaceDir),
-          cwd: workspaceDir,
-          dynamicTools: [],
-          appServer: createAppServerOptions(),
-          configuredMcpOwnershipVersion: 1,
-          mcpServersFingerprintEvaluated: true,
-          nativeCodeModeEnabled: false,
-          userMcpServersEnabled: false,
+          ...scheduledStartOptions(sessionFile, workspaceDir),
         }),
       ).rejects.toThrow(
         caseName === "error" ? "lost replacement lease" : "Codex thread binding changed",
       );
       expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
         "thread/start",
         "thread/delete",
       ]);
@@ -428,6 +390,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     });
     const controller = new AbortController();
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         controller.abort("test abort");
         return threadStartResult("thread-uncommitted");
@@ -451,18 +416,15 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     await expect(
       startOrResumeThread({
         client,
-        params: createParams(sessionFile, workspaceDir),
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createAppServerOptions(),
-        configuredMcpOwnershipVersion: 1,
-        mcpServersFingerprintEvaluated: true,
-        nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
+        ...scheduledStartOptions(sessionFile, workspaceDir),
         signal: controller.signal,
       }),
     ).rejects.toThrow();
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/delete"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "thread/start",
+      "thread/delete",
+    ]);
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-legacy",
     });

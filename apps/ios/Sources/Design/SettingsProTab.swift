@@ -45,6 +45,7 @@ struct SettingsProTab: View {
     @State var setupStatusText: String?
     @State var gatewayActionStatusText: String?
     @State var setupAttemptID: UUID?
+    @State var manualConnectGeneration: UInt64 = 0
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()

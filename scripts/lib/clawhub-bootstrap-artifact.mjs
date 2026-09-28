@@ -586,6 +586,32 @@ function assertExactPackageSet(entries, expectedPlugins) {
   }
 }
 
+function readBootstrapIdentity(options) {
+  return {
+    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
+    targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
+    workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
+    runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
+    runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
+    artifactName: requireString(options.artifactName, "artifactName"),
+    clawhubToolchainIntegrity: requirePattern(
+      options.clawhubToolchainIntegrity,
+      SHA512_INTEGRITY_PATTERN,
+      "clawhubToolchainIntegrity",
+    ),
+    clawhubToolchainSha256: requirePattern(
+      options.clawhubToolchainSha256,
+      SHA256_PATTERN,
+      "clawhubToolchainSha256",
+    ),
+    clawhubToolchainVersion: requirePattern(
+      options.clawhubToolchainVersion,
+      TOOLCHAIN_VERSION_PATTERN,
+      "clawhubToolchainVersion",
+    ),
+  };
+}
+
 export async function createClawHubBootstrapArtifactManifest(options) {
   const artifactRoot = resolve(options.artifactRoot);
   const matrix = JSON.parse(
@@ -619,27 +645,7 @@ export async function createClawHubBootstrapArtifactManifest(options) {
 
   const manifest = {
     schemaVersion: 1,
-    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
-    targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
-    workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
-    runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
-    runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
-    artifactName: requireString(options.artifactName, "artifactName"),
-    clawhubToolchainIntegrity: requirePattern(
-      options.clawhubToolchainIntegrity,
-      SHA512_INTEGRITY_PATTERN,
-      "clawhubToolchainIntegrity",
-    ),
-    clawhubToolchainSha256: requirePattern(
-      options.clawhubToolchainSha256,
-      SHA256_PATTERN,
-      "clawhubToolchainSha256",
-    ),
-    clawhubToolchainVersion: requirePattern(
-      options.clawhubToolchainVersion,
-      TOOLCHAIN_VERSION_PATTERN,
-      "clawhubToolchainVersion",
-    ),
+    ...readBootstrapIdentity(options),
     requestedPlugins: expectedPlugins,
     entries: manifestEntries,
   };
@@ -651,29 +657,7 @@ export async function createClawHubBootstrapArtifactManifest(options) {
 export async function verifyClawHubBootstrapArtifactManifest(options) {
   const artifactRoot = resolve(options.artifactRoot);
   const manifest = readClawHubBootstrapManifest(options.manifestPath);
-  const expected = {
-    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
-    targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
-    workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
-    runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
-    runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
-    artifactName: requireString(options.artifactName, "artifactName"),
-    clawhubToolchainIntegrity: requirePattern(
-      options.clawhubToolchainIntegrity,
-      SHA512_INTEGRITY_PATTERN,
-      "clawhubToolchainIntegrity",
-    ),
-    clawhubToolchainSha256: requirePattern(
-      options.clawhubToolchainSha256,
-      SHA256_PATTERN,
-      "clawhubToolchainSha256",
-    ),
-    clawhubToolchainVersion: requirePattern(
-      options.clawhubToolchainVersion,
-      TOOLCHAIN_VERSION_PATTERN,
-      "clawhubToolchainVersion",
-    ),
-  };
+  const expected = readBootstrapIdentity(options);
   for (const [key, value] of Object.entries(expected)) {
     if (manifest[key] !== value) {
       fail(`Bootstrap artifact manifest ${key} mismatch.`);
@@ -681,24 +665,11 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
   }
 
   const expectedPlugins = parsePlugins(options.plugins);
-  if (!Array.isArray(manifest.requestedPlugins)) {
-    fail("Bootstrap artifact manifest requestedPlugins must be an array.");
-  }
   if (JSON.stringify(manifest.requestedPlugins) !== JSON.stringify(expectedPlugins)) {
     fail("Bootstrap artifact manifest requestedPlugins mismatch.");
   }
-  if (
-    !Array.isArray(manifest.entries) ||
-    manifest.entries.length === 0 ||
-    manifest.entries.length > MAX_BOOTSTRAP_PACKAGES
-  ) {
-    fail("Bootstrap artifact manifest entries must be a non-empty array.");
-  }
-
-  const entries = [];
   const allowedFiles = new Set([relative(artifactRoot, options.manifestPath).split(sep).join("/")]);
-  for (const [index, rawEntry] of manifest.entries.entries()) {
-    const entry = normalizeBootstrapManifestEntry(rawEntry, index);
+  for (const entry of manifest.entries) {
     const { artifactPath } = entry;
     const filePath = await resolveRegularArtifactFile(artifactRoot, artifactPath);
     const identity = await hashFile(filePath);
@@ -706,12 +677,7 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
       fail(`${entry.packageName} packed artifact hash or size mismatch.`);
     }
     allowedFiles.add(artifactPath);
-    entries.push({ ...entry, artifactPath, ...identity });
   }
-  if (new Set(entries.map((entry) => entry.packageName)).size !== entries.length) {
-    fail("Bootstrap artifact manifest must not contain duplicate package names.");
-  }
-  assertExactPackageSet(entries, expectedPlugins);
 
   const inventory = await listFiles(artifactRoot);
   const expectedInventory = [...allowedFiles].toSorted(compareCodeUnits);
@@ -720,7 +686,7 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
       `Bootstrap artifact inventory mismatch: expected ${expectedInventory.join(",")}, found ${inventory.join(",")}.`,
     );
   }
-  return { ...manifest, entries };
+  return manifest;
 }
 
 function parseArgs(argv) {

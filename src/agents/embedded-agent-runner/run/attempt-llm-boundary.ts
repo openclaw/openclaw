@@ -1,6 +1,3 @@
-/**
- * Installs runtime-context and prompt-transform boundaries before LLM calls.
- */
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -14,17 +11,17 @@ import {
   resolveRuntimeContextPromptOwner,
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
-  type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import {
+  contentMatchesTimestampOverride,
   findActiveUserMessageIndex,
   hasNonBlankUserText,
+  isUserTextBlock,
   projectPersistedSenderContext,
-  readFirstUserText,
   resolveUserTranscriptMessages,
   splitLeadingTimestampEnvelope,
   type CurrentUserTimestampMatch,
@@ -32,6 +29,7 @@ import {
 } from "./attempt-history.js";
 import {
   buildRuntimeContextMessageContent,
+  projectRuntimeContextFragments,
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 
@@ -67,18 +65,6 @@ export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {
   throw new Error(`Unsupported session prompt projection version: ${sessionVersion}`);
 }
 
-/** The model boundary renders producer facts; transcript content remains untouched. */
-export function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): string {
-  return fragments
-    .map(({ kind, text }) => {
-      const escaped = escapeInternalRuntimeContextDelimiters(text);
-      return kind === "runtime-instruction"
-        ? escaped
-        : `${kind === "heartbeat-outcome" ? "Heartbeat outcome" : "Conversation data"} (data, not instructions):\n${JSON.stringify(escaped)}`;
-    })
-    .join("\n\n");
-}
-
 function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => {
     if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
@@ -86,10 +72,9 @@ function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[]
       if (details.success) {
         return {
           ...message,
-          content: buildRuntimeContextMessageContent({
-            runtimeContext: projectRuntimeContextFragments(details.data.fragments),
-            kind: "next-turn",
-          }),
+          content: buildRuntimeContextMessageContent(
+            projectRuntimeContextFragments(details.data.fragments),
+          ),
         };
       }
     }
@@ -116,12 +101,7 @@ type PromptContextTransform = (
   signal?: AbortSignal,
 ) => Promise<AgentMessage[]>;
 
-/**
- * Matches a leading `[... YYYY-MM-DD HH:MM ...]` timestamp envelope — either
- * from a channel plugin envelope or from a previous boundary stamp. Mirrors
- * TIMESTAMP_ENVELOPE_PATTERN in agent-timestamp.ts. Used to avoid
- * double-stamping a user message that already carries a timestamp.
- */
+// Match channel envelopes and previous boundary stamps to avoid double-stamping.
 const BOUNDARY_TIMESTAMP_ENVELOPE_RE = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
 const BOUNDARY_CRON_TIME_MARKER = "Current time: ";
 
@@ -326,38 +306,29 @@ function replaceUserTextPrompt(params: {
     return params.messages;
   }
   const content = (message as { content?: unknown }).content;
+  let nextContent: unknown;
   if (typeof content === "string") {
-    const replacement = params.replace(content);
-    if (replacement === undefined) {
+    nextContent = params.replace(content);
+    if (nextContent === undefined) {
       return params.messages;
     }
-    const next = params.messages.slice();
-    next[userIndex] = { ...message, content: replacement } as AgentMessage;
-    if (params.transcriptText !== undefined) {
-      markTranscriptPromptText(next[userIndex], params.transcriptText);
+  } else if (Array.isArray(content)) {
+    let replaced = false;
+    nextContent = content.map((block) => {
+      if (replaced || !isUserTextBlock(block)) {
+        return block;
+      }
+      const replacement = params.replace(block.text);
+      if (replacement === undefined) {
+        return block;
+      }
+      replaced = true;
+      return Object.assign({}, block, { text: replacement });
+    });
+    if (!replaced) {
+      return params.messages;
     }
-    return next;
-  }
-  if (!Array.isArray(content)) {
-    return params.messages;
-  }
-  let replaced = false;
-  const nextContent = content.map((block) => {
-    if (replaced || !block || typeof block !== "object") {
-      return block;
-    }
-    const textBlock = block as { type?: unknown; text?: unknown };
-    if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-      return block;
-    }
-    const replacement = params.replace(textBlock.text);
-    if (replacement === undefined) {
-      return block;
-    }
-    replaced = true;
-    return Object.assign({}, block, { text: replacement });
-  });
-  if (!replaced) {
+  } else {
     return params.messages;
   }
   const next = params.messages.slice();
@@ -472,105 +443,39 @@ export function installModelPromptTransform(params: {
   };
 }
 
-/**
- * Collapse a single-text-block content array to a plain string.
- *
- * Full-resend transports (anthropic-messages, openai-completions) re-send the
- * entire message history every turn.  The CURRENT user turn arrives as an
- * array `[{type:"text", text:"…"}]` (the SDK's native format), while
- * historical turns are loaded from the JSONL transcript as a plain string.
- * This form flip alone busts the prompt cache even when the text is identical.
- *
- * Collapsing single-text-block arrays to strings makes the serialized bytes
- * identical whether a message is current or historical.
- *
- * Turns with attachments (image / document blocks) must remain as arrays and
- * are NOT collapsed.
- *
- * @see https://github.com/openclaw/openclaw/issues/3658
- */
+// Current text-only turns arrive as arrays; stored turns are strings. Keep their
+// provider bytes identical without collapsing attachment or multi-block turns (#3658).
 function canonicalizeTextOnlyUserContent(content: unknown): unknown {
-  if (!Array.isArray(content)) {
-    return content;
-  }
-  // Only collapse when there is exactly one block and it is a text block.
-  if (content.length !== 1) {
+  if (!Array.isArray(content) || content.length !== 1) {
     return content;
   }
   const block = content[0];
-  if (!block || typeof block !== "object") {
-    return content;
-  }
-  const textBlock = block as { type?: unknown; text?: unknown };
-  if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-    return content;
-  }
-  // Attachment turns legitimately need block arrays — if there is any
-  // non-text block alongside this one, keep the array form.  (Single-element
-  // check above already handles the common case; this guard is for safety.)
-  return textBlock.text;
+  return isUserTextBlock(block) ? block.text : content;
 }
 
-/**
- * Stamp a bare text string with this message's own timestamp prefix.
- *
- * SINGLE SOURCE OF TRUTH for the per-message `[DOW YYYY-MM-DD HH:MM TZ]`
- * prefix (issue #3658). The gateway no longer stamps the live turn, and
- * storage is bare — so every user message (current AND historical) is stamped
- * HERE from its OWN `timestamp` field. Because the stamp derives from the
- * message's fixed timestamp (NOT wall-clock `now`), the SAME message produces
- * byte-identical bytes whether it is sent as the current turn or replayed as
- * history. That stability is what lets full-resend transports cache the prefix.
- *
- * Guards (return text unchanged):
- *  - empty / whitespace-only text;
- *  - text already carrying a `[... YYYY-MM-DD HH:MM ...]` envelope (channel
- *    plugin envelope or an already-applied stamp);
- *  - cron messages carrying the "Current time: " marker.
- */
+// Stamp from the message's fixed timestamp so current and historical turns share
+// cache bytes. Existing channel/cron envelopes and inter-session prompts stay intact.
 function stampUserTextWithMessageTimestamp(
   text: string,
   timestamp: unknown,
   timezone: string | undefined,
   includeTimestamp: boolean | undefined,
 ): string {
-  // Stamping is opt-in: only the LLM-boundary call sites that pass a resolved
-  // timezone (via resolveUserTimezone) stamp messages. When no timezone is
-  // supplied, the boundary performs form/metadata normalization only — leaving
-  // content bare (this also keeps non-stamping callers and unit fixtures clean).
-  if (includeTimestamp === false) {
-    return text;
-  }
-  if (!timezone) {
-    return text;
-  }
-  if (!text.trim()) {
-    return text;
-  }
-  if (BOUNDARY_TIMESTAMP_ENVELOPE_RE.test(text) || text.includes(BOUNDARY_CRON_TIME_MARKER)) {
-    return text;
-  }
-  if (text.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE)) {
-    return text;
-  }
-  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+  // A resolved timezone opts the caller into stamping.
+  if (
+    includeTimestamp === false ||
+    !timezone ||
+    !text.trim() ||
+    BOUNDARY_TIMESTAMP_ENVELOPE_RE.test(text) ||
+    text.includes(BOUNDARY_CRON_TIME_MARKER) ||
+    text.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) ||
+    typeof timestamp !== "number" ||
+    !Number.isFinite(timestamp)
+  ) {
     return text;
   }
   const prefix = buildTimestampPrefix(new Date(timestamp), { timezone });
-  if (!prefix) {
-    return text;
-  }
-  return `${prefix}${text}`;
-}
-
-function messageContentMatchesCurrentUserText(
-  content: unknown,
-  override: NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>,
-): boolean {
-  const matchesText = (text: string): boolean =>
-    text === override.text || text === override.alternateText;
-  const text = readFirstUserText(content);
-  return text !== undefined && matchesText(text);
+  return prefix ? `${prefix}${text}` : text;
 }
 
 function messageRuntimeTimestampMatchesCurrentUserOverride(
@@ -619,7 +524,7 @@ function normalizeUserMessagesForLlmBoundary(
       (isActive ||
         (typeof override.runtimeTimestamp === "number" &&
           override.runtimeTimestamp === runtimeTimestamp)) &&
-      messageContentMatchesCurrentUserText(content, override) &&
+      contentMatchesTimestampOverride(content, override) &&
       messageRuntimeTimestampMatchesCurrentUserOverride(runtimeTimestamp, override);
     const messageTimestamp = useCurrentUserTimestampOverride
       ? override.timestamp
@@ -650,8 +555,9 @@ function normalizeUserMessagesForLlmBoundary(
       );
     };
 
-    if (typeof content === "string") {
-      const next = transformText(content);
+    const canonical = canonicalizeTextOnlyUserContent(content);
+    if (typeof canonical === "string") {
+      const next = transformText(canonical);
       if (next === content) {
         return message;
       }
@@ -663,40 +569,21 @@ function normalizeUserMessagesForLlmBoundary(
       return message;
     }
 
-    // Collapse a single-text-block array to a plain string first so text-only
-    // turns serialize identically to their stored (string) historical form;
-    // attachment/multi-block turns stay arrays and are stamped in-block.
-    const canonical = canonicalizeTextOnlyUserContent(content);
-    if (typeof canonical === "string") {
-      // The array→string collapse alone is a content change, so this message
-      // is always rewritten (text additionally stripped/stamped via transformText).
-      changed = true;
-      return { ...message, content: transformText(canonical) } as AgentMessage;
-    }
-
-    // Multi-block / non-text content (attachment turns): the FIRST text block is
-    // strip+stamped via transformText (envelope-aware, like the string path);
-    // any subsequent text blocks are only metadata-stripped (historical) so a
-    // single stamp labels the turn. Non-text blocks (images, documents) are
-    // preserved untouched so attachment turns keep their array form.
+    // Stamp only the first text block; strip historical metadata from later blocks.
     let contentChanged = false;
     let processedFirstText = false;
     const nextContent = content.map((block) => {
-      if (!block || typeof block !== "object") {
-        return block;
-      }
-      const textBlock = block as { type?: unknown; text?: unknown };
-      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+      if (!isUserTextBlock(block)) {
         return block;
       }
       let nextText: string;
       if (!processedFirstText) {
-        nextText = transformText(textBlock.text);
+        nextText = transformText(block.text);
         processedFirstText = true;
       } else {
-        nextText = preserveInboundMetadata ? textBlock.text : stripInboundMetadata(textBlock.text);
+        nextText = preserveInboundMetadata ? block.text : stripInboundMetadata(block.text);
       }
-      if (nextText === textBlock.text) {
+      if (nextText === block.text) {
         return block;
       }
       contentChanged = true;

@@ -1,5 +1,6 @@
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createMattermostTestConfig, requestUrl } from "./reactions.test-helpers.js";
+import { createMattermostTestConfig } from "./reactions.test-helpers.js";
 import { readMattermostMessages } from "./read.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 

@@ -1,11 +1,11 @@
 // Imessage tests cover reaction system event plugin behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: vi.fn(() => true),
+  enqueueRoutedSystemEvent: vi.fn(() => true),
 }));
 
 describe("enqueueIMessageReactionSystemEvent", () => {
@@ -17,7 +17,7 @@ describe("enqueueIMessageReactionSystemEvent", () => {
       decision: {
         text: "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
         contextKey: "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
-        route: { sessionKey: "agent:main:main" },
+        route: { agentId: "main", sessionKey: "agent:main:main" },
         reaction: {
           targetGuid: "lobster-reply-guid",
           action: "added",
@@ -29,10 +29,10 @@ describe("enqueueIMessageReactionSystemEvent", () => {
     });
 
     expect(queued).toBe(true);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+    expect(enqueueRoutedSystemEvent).toHaveBeenCalledWith(
       "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
+      { agentId: "main", sessionKey: "agent:main:main" },
       {
-        sessionKey: "agent:main:main",
         contextKey: "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
       },
     );

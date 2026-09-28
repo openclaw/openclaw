@@ -1,4 +1,11 @@
-// Device Pair plugin module implements pair command auth behavior.
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type ResolveAuthLabelResult = {
+  label?: "token" | "password" | "trusted-proxy";
+  error?: string;
+};
+
 type PairingCommandAuthParams = {
   channel: string;
   gatewayClientScopes?: readonly string[] | null;
@@ -17,6 +24,40 @@ const COMMAND_OWNER_PAIRING_SCOPES = ["operator.pairing"] as const;
 const PAIRING_SCOPE = "operator.pairing";
 const ADMIN_SCOPE = "operator.admin";
 const TALK_SECRETS_SCOPE = "operator.talk.secrets";
+
+export function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
+  const mode = cfg.gateway?.auth?.mode;
+  const token =
+    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+    normalizeOptionalString(cfg.gateway?.auth?.token);
+  const password =
+    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
+    normalizeOptionalString(cfg.gateway?.auth?.password);
+
+  if (mode === "token" || mode === "password") {
+    return resolveRequiredAuthLabel(mode, { token, password });
+  }
+  if (token) {
+    return { label: "token" };
+  }
+  if (password) {
+    return { label: "password" };
+  }
+  // Issuer authorization and bootstrap grants stay separate from ingress auth.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
+  return { error: "Gateway auth is not configured (no token or password)." };
+}
+
+function resolveRequiredAuthLabel(
+  mode: "token" | "password",
+  values: { token?: string; password?: string },
+): ResolveAuthLabelResult {
+  return values[mode]
+    ? { label: mode }
+    : { error: `Gateway auth is set to ${mode}, but no ${mode} is configured.` };
+}
 
 function isInternalGatewayPairingCaller(params: PairingCommandAuthParams): boolean {
   return params.channel === "webchat" || Array.isArray(params.gatewayClientScopes);

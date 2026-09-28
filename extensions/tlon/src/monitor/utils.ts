@@ -1,20 +1,17 @@
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import {
   formatAgentEnvelope,
-  implicitMentionKindWhen,
   resolveEnvelopeFormatOptions,
-  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveChannelImplicitMentions,
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-  type StableChannelIngressIdentityParams,
+import type {
+  ChannelIngressContextBinding,
+  StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip } from "../targets.js";
 
 export interface ParsedCite {
@@ -35,11 +32,18 @@ export function extractCites(content: unknown): ParsedCite[] {
   const cites: ParsedCite[] = [];
 
   for (const verse of content) {
-    if (verse?.block?.cite && typeof verse.block.cite === "object") {
-      const cite = verse.block.cite;
+    const verseRecord = asNullableRecord(verse);
+    const block = asNullableRecord(verseRecord?.block);
+    const cite = asNullableRecord(block?.cite);
+    if (cite) {
+      const chan = asNullableRecord(cite.chan);
+      const group = readStringField(cite, "group");
+      const desk = asNullableRecord(cite.desk);
+      const bait = asNullableRecord(cite.bait);
 
-      if (cite.chan && typeof cite.chan === "object") {
-        const { nest, where } = cite.chan;
+      if (chan) {
+        const nest = readStringField(chan, "nest");
+        const where = readStringField(chan, "where");
         const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
         cites.push({
           type: "chan",
@@ -48,16 +52,20 @@ export function extractCites(content: unknown): ParsedCite[] {
           author: whereMatch?.[1],
           postId: whereMatch?.[2],
         });
-      } else if (cite.group && typeof cite.group === "string") {
-        cites.push({ type: "group", group: cite.group });
-      } else if (cite.desk && typeof cite.desk === "object") {
-        cites.push({ type: "desk", flag: cite.desk.flag, where: cite.desk.where });
-      } else if (cite.bait && typeof cite.bait === "object") {
+      } else if (group) {
+        cites.push({ type: "group", group });
+      } else if (desk) {
+        cites.push({
+          type: "desk",
+          flag: readStringField(desk, "flag"),
+          where: readStringField(desk, "where"),
+        });
+      } else if (bait) {
         cites.push({
           type: "bait",
-          group: cite.bait.group,
-          nest: cite.bait.graph,
-          where: cite.bait.where,
+          group: readStringField(bait, "group"),
+          nest: readStringField(bait, "graph"),
+          where: readStringField(bait, "where"),
         });
       }
     }
@@ -133,6 +141,18 @@ export function stripBotMention(messageText: string, botShipName: string): strin
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
+export function extractDmPartnerShip(whom: unknown): string {
+  const raw =
+    typeof whom === "string"
+      ? whom
+      : whom && typeof whom === "object" && "ship" in whom && typeof whom.ship === "string"
+        ? whom.ship
+        : "";
+  const normalized = normalizeShip(raw);
+  // Keep DM routing strict: accept only patp-like values.
+  return /^~?[a-z-]+$/i.test(normalized) ? normalized : "";
+}
+
 const tlonIngressIdentity = {
   key: "sender-ship",
   normalize: normalizeShip,
@@ -163,7 +183,7 @@ export async function resolveTlonMessageIngress(params: {
   groupPolicy?: "open" | "allowlist";
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
     channelId: "tlon",
     accountId: params.accountId ?? "default",
     identity: tlonIngressIdentity,
@@ -183,7 +203,7 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
   useAccessGroups: boolean;
 }) {
   const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
-  return await resolveStableChannelMessageIngress({
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
     channelId: "tlon",
     accountId: "default",
     identity: tlonIngressIdentity,
@@ -201,37 +221,6 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
     groupPolicy: "open",
     allowFrom: normalizedOwner ? [normalizedOwner] : [],
     command: {},
-  });
-}
-
-export function resolveTlonGroupMentionDecision(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  wasMentioned: boolean;
-  botParticipatedInThread: boolean;
-}) {
-  const implicitMentions = resolveChannelImplicitMentions({
-    cfg: params.cfg,
-    channel: "tlon",
-    accountId: params.accountId,
-  });
-  return resolveInboundMentionDecision({
-    facts: {
-      canDetectMention: true,
-      wasMentioned: params.wasMentioned,
-      implicitMentionKinds: implicitMentionKindWhen(
-        "bot_thread_participant",
-        params.botParticipatedInThread,
-      ),
-    },
-    policy: {
-      isGroup: true,
-      requireMention: true,
-      implicitMentions,
-      allowTextCommands: false,
-      hasControlCommand: false,
-      commandAuthorized: false,
-    },
   });
 }
 

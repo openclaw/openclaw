@@ -75,7 +75,7 @@ function inspectMonitors(
   const cfg = context.getRuntimeConfig();
   const specs = [
     ...resolveHeartbeatMonitorPlan(cfg, jobs).specs,
-    ...resolveSkillCollectionReviewMonitorSpecs(cfg),
+    ...resolveSkillCollectionReviewMonitorSpecs(cfg, jobs),
   ].filter((spec) => spec.agentId === agentId);
   const storeKey = cronStoreKey(context.cronStorePath);
   return readAttachedCronJobs(agentId, {}).flatMap((row) => {
@@ -128,7 +128,11 @@ function assertDeletionFence(agentId: string, operationId: string, config: OpenC
   return journal;
 }
 
-function isDrained(context: ClawMonitorContext, agentId: string, requireConfigRemoval: boolean) {
+function isLocallyDrained(
+  context: ClawMonitorContext,
+  agentId: string,
+  requireConfigRemoval: boolean,
+) {
   return (
     (!requireConfigRemoval ||
       (context.isConfigReloadSettled() &&
@@ -136,7 +140,6 @@ function isDrained(context: ClawMonitorContext, agentId: string, requireConfigRe
     !hasActiveCronJobsForAgent(agentId) &&
     getSuspensionVisibleCronTaskRunCount({ agentId }) === 0 &&
     !hasPendingCronSessionCleanupForAgent(agentId) &&
-    !hasActiveCronRunReceiptsForAgent(agentId) &&
     (!requireConfigRemoval || readAttachedCronJobs(agentId, {}).length === 0)
   );
 }
@@ -150,8 +153,12 @@ async function waitForDrain(
   const deadline = performance.now() + 5_000;
   do {
     assertCurrent();
-    if (isDrained(context, agentId, requireConfigRemoval)) {
-      return;
+    if (isLocallyDrained(context, agentId, requireConfigRemoval)) {
+      const activeReceipts = await hasActiveCronRunReceiptsForAgent(agentId);
+      assertCurrent();
+      if (!activeReceipts && isLocallyDrained(context, agentId, requireConfigRemoval)) {
+        return;
+      }
     }
     await sleep(50);
   } while (performance.now() < deadline);
@@ -249,13 +256,25 @@ export const clawsMonitorHandlers = {
       }
       await waitForDrain(context, input.agentId, input.phase === "drain", assertCurrent);
       const journal = assertCurrent();
-      if (!isDrained(context, input.agentId, input.phase === "drain")) {
+      if (!isLocallyDrained(context, input.agentId, input.phase === "drain")) {
         throw new Error(
-          "Gateway cleanup state changed before drainage was acknowledged; retry Claw removal.",
+          "Gateway cleanup state changed before database preparation; retry Claw removal.",
         );
       }
       if (input.phase === "quiesce") {
-        prepareAgentDeleteDatabases(context.getRuntimeConfig(), input.agentId, journal.agentDir);
+        await prepareAgentDeleteDatabases(
+          context.getRuntimeConfig(),
+          input.agentId,
+          journal.agentDir,
+        );
+        assertCurrent();
+      }
+      const activeReceipts = await hasActiveCronRunReceiptsForAgent(input.agentId);
+      assertCurrent();
+      if (activeReceipts || !isLocallyDrained(context, input.agentId, input.phase === "drain")) {
+        throw new Error(
+          "Gateway cleanup state changed before drainage was acknowledged; retry Claw removal.",
+        );
       }
       respond(true, { drained: true }, undefined);
     } catch (error) {

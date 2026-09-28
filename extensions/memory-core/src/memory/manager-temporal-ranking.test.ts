@@ -147,13 +147,23 @@ describe("memory source temporal ranking", () => {
       });
       if (ftsUnavailable) {
         await manager.close();
+        // Matching row counts must not make a non-FTS view look like an available index.
         openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
           DROP TABLE memory_index_chunks_fts;
           CREATE VIEW memory_index_chunks_fts AS
             SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks;
         `);
         manager = await fixture.getFreshManager(cfg, "cli");
-        expect(manager.status().fts).toMatchObject({ enabled: true, available: false });
+        expect(manager.status().fts).toMatchObject({
+          enabled: true,
+          available: false,
+          error: expect.stringContaining("view"),
+        });
+        expect(
+          openOpenClawAgentDatabase({ agentId: "main" })
+            .db.prepare("SELECT type FROM sqlite_schema WHERE name = ?")
+            .get("memory_index_chunks_fts"),
+        ).toEqual({ type: "view" });
       }
 
       const searchOptions = {

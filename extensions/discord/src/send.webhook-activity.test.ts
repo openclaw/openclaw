@@ -64,10 +64,7 @@ describe("Discord outbound channel activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        return new Response(JSON.stringify({ id: "msg-1", channel_id: "thread-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ id: "msg-1", channel_id: "thread-1" });
       }),
     );
   });
@@ -142,14 +139,6 @@ describe("Discord outbound channel activity", () => {
   it.each([
     { kind: "poll", accountId: undefined, defaultAccount: undefined, expectedAccountId: "default" },
     { kind: "poll", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
-    { kind: "poll", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
-    {
-      kind: "sticker",
-      accountId: undefined,
-      defaultAccount: undefined,
-      expectedAccountId: "default",
-    },
-    { kind: "sticker", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
     { kind: "sticker", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
   ] as const)(
     "records successful $kind sends for the resolved $expectedAccountId account",

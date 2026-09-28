@@ -136,10 +136,15 @@ describe("diagnostic stability bundles", () => {
     expect(fs.existsSync(path.join(tempDir, "logs", "stability"))).toBe(false);
   });
 
-  it("writes failure bundles even when the recorder snapshot is empty", () => {
+  it("writes redacted failure stacks even when the recorder snapshot is empty", () => {
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(new Error("raw startup config payload"), {
+      code: "ERR_CONFIG_PARSE",
+      stack: `Error: OPENAI_API_KEY=${secret}\n    at finishPosixAuthority (relay-host.js:12:3)`,
+    });
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      Object.assign(new Error("raw startup config payload"), { code: "ERR_CONFIG_PARSE" }),
+      error,
       {
         stateDir: tempDir,
         now: new Date("2026-04-22T12:00:00.000Z"),
@@ -156,17 +161,29 @@ describe("diagnostic stability bundles", () => {
       name: "Error",
       code: "ERR_CONFIG_PARSE",
       message: "raw startup config payload",
+      stack: expect.stringContaining("\n    at finishPosixAuthority (relay-host.js:12:3)"),
     });
     expect(bundle.snapshot.count).toBe(0);
     expect(bundle.snapshot.events).toEqual([]);
-    expect(raw).not.toContain("stack");
+    expect(raw).not.toContain(secret);
+    const readback = readDiagnosticStabilityBundleFileSync(result.path);
+    expect(readback.status).toBe("found");
+    if (readback.status === "found") {
+      expect(readback.bundle.error?.stack).toContain(
+        "\n    at finishPosixAuthority (relay-host.js:12:3)",
+      );
+      expect(readback.bundle.error?.stack).not.toContain(secret);
+    }
   });
 
-  it("keeps bounded failure messages UTF-16 safe", () => {
+  it("keeps bounded failure messages and stacks UTF-16 safe", () => {
     const prefix = "a".repeat(499);
+    const stackPrefix = "a".repeat(7_999);
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      new Error(`${prefix}😀${"b".repeat(500)}`),
+      Object.assign(new Error(`${prefix}😀${"b".repeat(500)}`), {
+        stack: `${stackPrefix}😀${"b".repeat(1_000)}`,
+      }),
       { stateDir: tempDir },
     );
 
@@ -175,6 +192,78 @@ describe("diagnostic stability bundles", () => {
       return;
     }
     expect(readBundle(result.path).error?.message).toBe(`${prefix}...`);
+    expect(readBundle(result.path).error).toHaveProperty("stack", stackPrefix);
+  });
+
+  it("preserves redacted shutdown causes and stacks through bundle readback", () => {
+    const secret = "sk-1234567890abcdef";
+    const cause = new TypeError(`fixture close failed: OPENAI_API_KEY=${secret}`);
+    cause.stack = `${cause.name}: ${cause.message}\n    at closeOwner (fixture.js:12:3)`;
+    const stepError = new Error("shutdown step failed (gateway lifetime sidecars)", { cause });
+    const error = new AggregateError([stepError], "Gateway shutdown did not complete cleanly");
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_close_failed",
+      error,
+      {
+        stateDir: tempDir,
+        shutdownStep: "gateway-server-close",
+      },
+    );
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readback = readDiagnosticStabilityBundleFileSync(result.path);
+    expect(readback.status).toBe("found");
+    if (readback.status !== "found") {
+      return;
+    }
+    expect(readback.bundle.evidence?.shutdown).toMatchObject({
+      step: "gateway-server-close",
+      errors: [
+        { name: "AggregateError", message: "Gateway shutdown did not complete cleanly" },
+        { name: "Error", message: "shutdown step failed (gateway lifetime sidecars)" },
+        {
+          name: "TypeError",
+          message: expect.stringContaining("fixture close failed"),
+          stack: expect.stringContaining("at closeOwner (fixture.js:12:3)"),
+        },
+      ],
+    });
+    expect(fs.readFileSync(result.path, "utf8")).not.toContain(secret);
+    expect(JSON.stringify(readback.bundle)).not.toContain(secret);
+  });
+
+  it("bounds cyclic shutdown error graphs and stack text without losing non-Error throws", () => {
+    const error = new AggregateError(
+      Array.from({ length: 100 }, (_, index) => new Error(`failure ${index}`)),
+      "shutdown failures",
+    );
+    error.cause = error;
+    error.stack = "a".repeat(7_999) + "😀" + "b".repeat(1_000);
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.stop_close_failed",
+      error,
+      shutdownStep: "gateway-server-close",
+      stateDir: tempDir,
+      includeEmpty: true,
+    });
+    expect(result.status).toBe("written");
+    if (result.status !== "written") {
+      return;
+    }
+    expect(result.bundle.evidence?.shutdown?.errors.length).toBeLessThanOrEqual(32);
+    expect(result.bundle.evidence?.shutdown?.errors[0]?.stack).toBe("a".repeat(7_999));
+    const nonError = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.stop_close_failed",
+      error: "fixture string failure",
+      shutdownStep: "startup-operations",
+      stateDir: tempDir,
+      includeEmpty: true,
+    });
+    expect(nonError.status === "written" && nonError.bundle.evidence?.shutdown).toEqual({
+      step: "startup-operations",
+      errors: [{ message: "fixture string failure" }],
+    });
   });
 
   it("registers a fatal hook only while installed", () => {
@@ -307,6 +396,80 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
+  it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "diagnostic.memory.sample",
+      uptimeMs: 1000,
+      memory: {
+        rssBytes: 4096,
+        heapTotalBytes: 1024,
+        heapUsedBytes: 512,
+        externalBytes: 32,
+        arrayBuffersBytes: 16,
+        workerCount: 2,
+        workerHeapSampledCount: 1,
+        workerHeapTotalBytes: 2048,
+        workerHeapUsedBytes: 1024,
+        workerExternalBytes: 1024,
+        workerArrayBuffersBytes: 512,
+        workerArrayBuffersSampledCount: 1,
+        workerMemoryScope: "direct",
+        workerMemoryCoverage: "partial",
+        workerHeaps: [
+          {
+            script: "prepared-model-catalog.worker.js",
+            threadId: 2,
+            heapUsed: 1024,
+            heapTotal: 2048,
+            external: 1024,
+            arrayBuffers: 512,
+            sampleAgeMs: 20,
+          },
+        ],
+        workerMemoryMissing: [
+          { script: "/private/secret-worker.js", threadId: 3, reason: "stale" },
+        ],
+      },
+    });
+    const written = writeDiagnosticStabilityBundleSync({
+      reason: "uncaught_exception",
+      stateDir: tempDir,
+    });
+    expect(written.status).toBe("written");
+    if (written.status !== "written") {
+      throw new Error("Expected exported diagnostics");
+    }
+    const readback = readDiagnosticStabilityBundleFileSync(written.path);
+    expect(readback.status).toBe("found");
+    if (readback.status !== "found") {
+      throw new Error("Expected readable diagnostics");
+    }
+    expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+      workerCount: 2,
+      workerHeapSampledCount: 1,
+      workerHeapUsedBytes: 1024,
+      workerExternalBytes: 1024,
+      workerArrayBuffersBytes: 512,
+      workerArrayBuffersSampledCount: 1,
+      workerMemoryScope: "direct",
+      workerMemoryCoverage: "partial",
+      workerHeaps: [
+        {
+          script: "prepared-model-catalog.worker.js",
+          threadId: 2,
+          heapUsed: 1024,
+          heapTotal: 2048,
+          external: 1024,
+          arrayBuffers: 512,
+          sampleAgeMs: 20,
+        },
+      ],
+      workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
+    });
+    expect(JSON.stringify(readback.bundle)).not.toContain("secret-worker");
+  });
+
   it("sanitizes imported bundles before returning them", () => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
@@ -428,6 +591,7 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.error?.code).toBe("ERR_TEST");
     expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
     expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
+    expect(result.bundle.error).not.toHaveProperty("stack");
     expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
       "agents/<agent>/sessions/<session>.jsonl",
     );

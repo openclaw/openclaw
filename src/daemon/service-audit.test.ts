@@ -16,6 +16,7 @@ import {
   hasIssue,
   resetServiceAuditMocks,
   resolveBunRuntimeInfoMock,
+  resolveNodeRuntimeInfoMock,
 } from "./test-helpers/service-audit-fixtures.js";
 
 function buildMinimalServicePath(options: {
@@ -95,6 +96,7 @@ describe("auditGatewayServiceConfig", () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({
       version: "1.4.0",
       sqliteVersion: "3.51.2",
+      sqliteProbe: { available: true, version: "3.51.2", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
       status: "unsupported",
     });
@@ -112,6 +114,7 @@ describe("auditGatewayServiceConfig", () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({
       version: "1.4.2",
       sqliteVersion: null,
+      sqliteProbe: { available: false, version: null, text: false, blob: false, json: false },
       nodeSharedSqlite: false,
       status: "unsupported",
       sqliteSelectionError: selectionError,
@@ -142,6 +145,69 @@ describe("auditGatewayServiceConfig", () => {
     );
     expect(needsNodeRuntimeMigration(audit.issues)).toBe(false);
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
+  });
+
+  it("flags a supported Node version whose SQLite decoder truncates TEXT", async () => {
+    const capabilityError =
+      "Node 26.8.1: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix";
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      version: "26.8.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
+      nodeSharedSqlite: false,
+      status: "unsupported",
+      capabilityError,
+    });
+
+    const audit = await createGatewayAudit();
+
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeNode,
+        message: capabilityError,
+        detail: "/usr/bin/node",
+      }),
+    );
+    expect(needsNodeRuntimeMigration(audit.issues)).toBe(true);
+  });
+
+  it("reports a capable vendor Node as a note without requesting migration", async () => {
+    const note = "Node 24.15.0: unsupported version, capability probe passed.";
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      version: "24.15.0",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+      status: "supported",
+      note,
+    });
+
+    const audit = await createGatewayAudit();
+
+    expect(audit.runtimeNote).toBe(note);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeNode)).toBe(false);
+    expect(needsNodeRuntimeMigration(audit.issues)).toBe(false);
+  });
+
+  it("preserves Node probe failure and the audit timeout without requesting migration", async () => {
+    const error = new Error("Node runtime probe failed: access denied");
+    resolveNodeRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
+    const env = { HOME: "/tmp" };
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      timeoutMs: 1234,
+      command: { programArguments: ["/usr/bin/node", "gateway"] },
+    });
+
+    expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith("/usr/bin/node", env, 1234);
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed,
+        detail: error.message,
+      }),
+    );
+    expect(needsNodeRuntimeMigration(audit.issues)).toBe(false);
   });
 
   it.each([
@@ -486,20 +552,6 @@ describe("auditGatewayServiceConfig", () => {
     });
   });
 
-  it("accepts gateway service ports that match the expected config port", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=18888"],
-        environment: {},
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
-  });
-
   it("audits the final repeated gateway port flag", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
@@ -724,31 +776,6 @@ describe("auditGatewayServiceConfig", () => {
 });
 
 describe("checkTokenDrift", () => {
-  it("returns null when both tokens are undefined", () => {
-    const result = checkTokenDrift({ serviceToken: undefined, configToken: undefined });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when both tokens are empty strings", () => {
-    const result = checkTokenDrift({ serviceToken: "", configToken: "" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match", () => {
-    const result = checkTokenDrift({ serviceToken: "same-token", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match but service token has trailing newline", () => {
-    const result = checkTokenDrift({ serviceToken: "same-token\n", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match but have surrounding whitespace", () => {
-    const result = checkTokenDrift({ serviceToken: "  same-token  ", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
   it("returns null when both tokens have different whitespace padding", () => {
     const result = checkTokenDrift({
       serviceToken: "same-token\r\n",

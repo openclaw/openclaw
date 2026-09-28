@@ -16,6 +16,7 @@ import {
 } from "../infra/outbound/channel-target-prefix.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
+import type { SessionBindingPlacement } from "../infra/outbound/session-binding.types.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getLoadedChannelPluginForRead } from "./plugins/registry-loaded.js";
 import {
@@ -81,24 +82,17 @@ function resolveChannelId(raw?: string | null): string | null {
   );
 }
 
-function shouldDefaultParentConversationToSelf(plugin?: ChannelPlugin): boolean {
-  return plugin?.bindings?.selfParentConversationByDefault === true;
-}
-
-function normalizeResolutionTarget(params: {
-  channel: string;
-  accountId: string;
-  conversation: { conversationId?: string; parentConversationId?: string } | null | undefined;
-  threadId?: string;
-  plugin?: ChannelPlugin;
-}): ConversationResolution | null {
-  const conversationId = normalizeOptionalString(params.conversation?.conversationId);
+function normalizeResolutionTarget(
+  params: { channel: string; accountId: string; threadId?: string; plugin?: ChannelPlugin },
+  conversation: { conversationId?: string; parentConversationId?: string } | null | undefined,
+): ConversationResolution | null {
+  const conversationId = normalizeOptionalString(conversation?.conversationId);
   if (!conversationId) {
     return null;
   }
-  const parentConversationId = normalizeOptionalString(params.conversation?.parentConversationId);
+  const parentConversationId = normalizeOptionalString(conversation?.parentConversationId);
   const defaultParentToSelf =
-    shouldDefaultParentConversationToSelf(params.plugin) &&
+    params.plugin?.bindings?.selfParentConversationByDefault === true &&
     !params.threadId &&
     !parentConversationId;
   const normalized = normalizeConversationTargetRef({
@@ -244,6 +238,25 @@ export function resolveChannelDefaultBindingPlacement(
 }
 
 /**
+ * Placement for a binding created by an agent-spawned worker. Only "child" (a new thread)
+ * is admissible: "current" would hand the user's conversation to the worker.
+ */
+export function resolveSpawnThreadBindingPlacement(
+  rawChannel: string,
+  supportedPlacements: readonly SessionBindingPlacement[],
+): SessionBindingPlacement {
+  return (
+    resolveChannelDefaultBindingPlacement(rawChannel) ??
+    (supportedPlacements.includes("child") ? "child" : "current")
+  );
+}
+
+/** Explicit spawn discovery is separate from automatic command placement. */
+export function supportsThreadBindingSpawn(rawChannel: string): boolean {
+  return resolveChannelDefaultBindingPlacement(rawChannel) === "child";
+}
+
+/**
  * Resolves command context into a canonical channel/account/conversation tuple.
  */
 export function resolveCommandConversationResolution(
@@ -260,6 +273,7 @@ export function resolveCommandConversationResolution(
     cfg: params.cfg,
   });
   const threadId = stringifyRouteThreadId(params.threadId);
+  const resolutionScope = { channel, accountId, threadId, plugin };
 
   const commandParams: ChannelCommandConversationContext = {
     accountId,
@@ -276,13 +290,7 @@ export function resolveCommandConversationResolution(
   };
 
   const resolvedByProvider = plugin?.bindings?.resolveCommandConversation?.(commandParams);
-  const providerResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: resolvedByProvider,
-    threadId,
-    plugin,
-  });
+  const providerResolution = normalizeResolutionTarget(resolutionScope, resolvedByProvider);
   if (providerResolution) {
     return providerResolution;
   }
@@ -299,13 +307,7 @@ export function resolveCommandConversationResolution(
       nativeChannelId: normalizeOptionalString(params.nativeChannelId),
     }),
   });
-  const focusedResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: focusedBinding,
-    threadId,
-    plugin,
-  });
+  const focusedResolution = normalizeResolutionTarget(resolutionScope, focusedBinding);
   if (focusedResolution) {
     return focusedResolution;
   }
@@ -325,16 +327,7 @@ export function resolveCommandConversationResolution(
   if (!conversationId) {
     return null;
   }
-  return normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: {
-      conversationId,
-      parentConversationId,
-    },
-    threadId,
-    plugin,
-  });
+  return normalizeResolutionTarget(resolutionScope, { conversationId, parentConversationId });
 }
 
 /**
@@ -354,6 +347,7 @@ export function resolveInboundConversationResolution(
     cfg: params.cfg,
   });
   const threadId = stringifyRouteThreadId(params.threadId);
+  const resolutionScope = { channel, accountId, threadId, plugin };
   const resolverParams = {
     from: normalizeOptionalString(params.from),
     to: normalizeOptionalString(params.to),
@@ -367,13 +361,7 @@ export function resolveInboundConversationResolution(
   };
 
   const providerConversation = plugin?.messaging?.resolveInboundConversation?.(resolverParams);
-  const providerResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: providerConversation,
-    threadId,
-    plugin,
-  });
+  const providerResolution = normalizeResolutionTarget(resolutionScope, providerConversation);
   if (providerResolution || providerConversation === null) {
     // A null provider response is an explicit rejection, not a signal to try
     // bundled/fallback parsing for the same inbound target.
@@ -384,13 +372,7 @@ export function resolveInboundConversationResolution(
     channelId: channel,
     ...resolverParams,
   });
-  const artifactResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: artifactConversation,
-    threadId,
-    plugin,
-  });
+  const artifactResolution = normalizeResolutionTarget(resolutionScope, artifactConversation);
   if (artifactResolution || artifactConversation === null) {
     // Lightweight bundled artifacts can also reject targets before full plugin loading.
     return artifactResolution;
@@ -416,14 +398,8 @@ export function resolveInboundConversationResolution(
   if (!genericConversationId) {
     return null;
   }
-  return normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: {
-      conversationId: genericConversationId,
-      parentConversationId: threadId != null ? parentConversationId : undefined,
-    },
-    threadId,
-    plugin,
+  return normalizeResolutionTarget(resolutionScope, {
+    conversationId: genericConversationId,
+    parentConversationId: threadId != null ? parentConversationId : undefined,
   });
 }

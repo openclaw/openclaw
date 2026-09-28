@@ -650,7 +650,7 @@ struct DashboardWindowOwnershipTests {
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
         #expect(controller._testDashboardDataStore === dataStore)
         #expect(!controller._testDashboardDataStore.isPersistent)
-        try controller.nativeBrowser.open(tabId: "mac-first", url: server.url("/reader/first"))
+        try controller.nativeBrowser.open(tabId: "mac-first", url: server.url("/reader/first"), sessionKey: "")
         #expect(try #require(controller.nativeBrowser.webView(for: "mac-first"))
             .configuration.websiteDataStore === dataStore)
 
@@ -670,7 +670,7 @@ struct DashboardWindowOwnershipTests {
         #expect(recovered !== failure)
         #expect(recovered._testDashboardDataStore === dataStore)
         #expect(recovered.window?.frameAutosaveName == autosaveName)
-        try recovered.nativeBrowser.open(tabId: "mac-recovered", url: server.url("/reader/recovered"))
+        try recovered.nativeBrowser.open(tabId: "mac-recovered", url: server.url("/reader/recovered"), sessionKey: "")
         #expect(try #require(recovered.nativeBrowser.webView(for: "mac-recovered"))
             .configuration.websiteDataStore === dataStore)
     }

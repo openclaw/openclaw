@@ -129,6 +129,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
     public var query: String?
     public var depth: Int?
     public var maxElements: Int?
+    public var includeScreenshot: Bool?
     public var app: String?
     public var value: String?
     public var path: [String]?
@@ -160,6 +161,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
         query: String? = nil,
         depth: Int? = nil,
         maxElements: Int? = nil,
+        includeScreenshot: Bool? = nil,
         app: String? = nil,
         value: String? = nil,
         path: [String]? = nil,
@@ -190,6 +192,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
         self.query = query
         self.depth = depth
         self.maxElements = maxElements
+        self.includeScreenshot = includeScreenshot
         self.app = app
         self.value = value
         self.path = path

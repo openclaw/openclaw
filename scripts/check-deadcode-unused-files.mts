@@ -3,7 +3,7 @@
 import { fileURLToPath } from "node:url";
 import {
   isLikelyRepoFilePath,
-  runKnip,
+  runKnipScans,
   type KnipRunResult,
   uniqueSorted,
 } from "./deadcode-knip-runner.mts";
@@ -80,20 +80,6 @@ export function checkKnipUnusedFileScanResult(result: KnipRunResult) {
   return { ok: check.ok, failureReason: "", message: check.message };
 }
 
-async function main() {
-  // The scans are independent Knip child processes over separate configs;
-  // running them concurrently halves the lane's serial wall clock.
-  const results = await Promise.all(
-    KNIP_SCANS.map(async (scan) => {
-      const result = await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name });
-      return reportUnusedFileScan(scan, result);
-    }),
-  );
-  if (results.includes(false)) {
-    process.exitCode = 1;
-  }
-}
-
 function reportUnusedFileScan(scan: (typeof KNIP_SCANS)[number], result: KnipRunResult) {
   const validation = checkKnipUnusedFileScanResult(result);
   if (validation.failureReason) {
@@ -118,5 +104,5 @@ function reportUnusedFileScan(scan: (typeof KNIP_SCANS)[number], result: KnipRun
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main();
+  await runKnipScans(KNIP_SCANS, KNIP_COMMON_ARGS, reportUnusedFileScan);
 }

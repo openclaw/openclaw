@@ -54,6 +54,9 @@ setCliRunnerExecuteTestDeps({
         // was requested; replay it through callbacks once to match production.
         const wrappedParams = {
           ...params,
+          ...(params.mode === "child" && params.resolveArgs
+            ? { argv: [...params.argv, ...params.resolveArgs()] }
+            : {}),
           onStdout: params.onStdout
             ? (chunk: string) => {
                 stdoutDelivered = true;

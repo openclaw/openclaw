@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { assignSessionOwner, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -20,6 +21,7 @@ describe("creator namespace authorization", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const caller = ensureProfileForEmail("cached-caller@example.test");
       const other = ensureProfileForEmail("cached-other@example.test");
+      using _ = { [Symbol.dispose]: retainUserProfileCatalog() };
       const actor = { type: "human", source: "profile", id: other.id } as const;
       const db = openOpenClawStateDatabase().db;
       const prepare = vi.spyOn(db, "prepare");
@@ -27,15 +29,15 @@ describe("creator namespace authorization", () => {
         expect(isSessionCreatorProfile({ ...actor, source: "channel" }, caller.id)).toBe(false);
         expect(prepare).not.toHaveBeenCalled();
         expect(isSessionCreatorProfile(actor, caller.id)).toBe(false);
-        const coldQueries = prepare.mock.calls.length;
-        expect(coldQueries).toBeGreaterThan(0);
         for (let row = 0; row < 100; row++) {
           expect(isSessionCreatorProfile(actor, caller.id)).toBe(false);
         }
-        expect(prepare).toHaveBeenCalledTimes(coldQueries);
+        expect(prepare).not.toHaveBeenCalled();
         linkEmail("cached-other@example.test", caller.id);
+        prepare.mockClear();
         expect(isSessionCreatorProfile(actor, caller.id)).toBe(true);
         expect(isSessionCreatorProfile({ ...actor, source: "unknown" }, caller.id)).toBe(false);
+        expect(prepare).not.toHaveBeenCalled();
       } finally {
         prepare.mockRestore();
       }

@@ -20,12 +20,12 @@ train. Continue an existing beta train with its next `beta.N` when appropriate,
 otherwise increment the highest stable/beta patch and start at `beta.1`.
 Prefer `-beta.N`, never new numeric-only beta suffixes.
 
-| Track           | Branch/version                                                 | Registry selector                                                |
-| --------------- | -------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Regular beta    | `release/YYYY.M.PATCH`, `YYYY.M.PATCH-beta.N`                  | `beta`                                                           |
-| Regular stable  | `release/YYYY.M.PATCH`, `YYYY.M.PATCH`                         | `beta` by default; intentional publication/promotion to `latest` |
-| Extended stable | `extended-stable/YYYY.M.33`, trailing completed month's `.33+` | `extended-stable`                                                |
-| Development     | moving main                                                    | not a release                                                    |
+| Track           | Branch/version                                                        | Registry selector                                                |
+| --------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Regular beta    | `release/YYYY.M.PATCH`, `YYYY.M.PATCH-beta.N`                         | `beta`                                                           |
+| Regular stable  | `release/YYYY.M.PATCH`, `YYYY.M.PATCH`                                | `beta` by default; intentional publication/promotion to `latest` |
+| Extended stable | `extended-stable/YYYY.M.33`, either trailing completed month's `.33+` | `extended-stable`                                                |
+| Development     | moving main                                                           | not a release                                                    |
 
 Use the release preparation controller before manual version edits:
 
@@ -46,7 +46,7 @@ macOS needs a strictly higher numeric `APP_BUILD`.
 
 Android is independently pinned in `apps/android/version.json`. If the stable
 release should include its APK, prepare it before tagging with `--android` or
-`scripts/mobile-release-version.ts --prepare --version YYYY.M.PATCH --write`.
+`pnpm android:version:pin -- --version YYYY.M.PATCH`.
 An older pin causes candidate/publish to skip Android; an immutable tag cannot
 be repaired later to add that platform.
 
@@ -84,7 +84,10 @@ editorial grouping, renderer limits, and verification. Generate the complete
 history manifest and notes during preparation; editorial work may overlap
 Code validation. Refresh them for actual source changes, not tooling retries.
 Beta notes use the stable-base
-`## YYYY.M.PATCH` section, with Highlights, Changes and Fixes. Canonical PR
+`## YYYY.M.PATCH` section in `CHANGELOG/YYYY.M.PATCH.md`, with Highlights,
+Changes and Fixes. `CHANGELOG.md` is the generated index; the matching
+`CHANGELOG/records/YYYY.M.PATCH.md` retains the complete contribution record.
+Use the shared resolver and writer documented in the changelog skill. Canonical PR
 provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine
 release prep or prefill a future changelog section.
@@ -92,8 +95,21 @@ release prep or prefill a future changelog section.
 When final notes were already included in the qualified Code SHA, retain that
 same commit as Release SHA. If notes change afterward, commit only the release
 changelog and optionally reuse Code evidence: the complete Code-to-Release
-diff must be exactly `CHANGELOG.md`, with fresh qualification of the changed
-package bytes. Any other delta reenters product validation. Use the canonical
+diff must include the selected release entry and only that entry, its matching
+record, and root index, without renames or deletions. This records
+`split-changelog-release-v1`, with fresh qualification of the changed package
+bytes. Any other delta reenters product validation. Use the canonical
 release-note renderer and verifier before
 publication and closeout. The publish workflow owns GitHub page finalization
 only after postpublish evidence succeeds.
+
+## Correction release artifacts
+
+Validate the frozen SHA with `--target-ref release/YYYY.M.PATCH-N` before tagging,
+or the exact `vYYYY.M.PATCH-N` context afterward (`target_context_ref` in the
+workflow). Artifacts must be prepared for that correction tag. Base-package
+and Android APK reuse is allowed only when the correction and base tags resolve
+to the same source commit; retain the APK's verification and add a record tying
+it to the correction tag. Different-source corrections need their own package
+validation and a higher Android `versionCode`. A base-tag validation run alone
+does not authorize correction-tag publication.

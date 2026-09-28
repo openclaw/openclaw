@@ -17,7 +17,7 @@ import { VERSION } from "../../version.js";
 import {
   isEmptyDir,
   isGitCheckout,
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveGitInstallDir,
   resolveUpdateRoot,
   type UpdateWizardOptions,
@@ -33,10 +33,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
   const [updateStatus, configSnapshot] = await Promise.all([
@@ -90,7 +87,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     initialValue: "keep",
   });
 
-  if (isCancel(pickedChannel)) {
+  if (typeof pickedChannel === "symbol") {
     defaultRuntime.log(theme.muted("Update cancelled."));
     defaultRuntime.exit(0);
     return;
@@ -132,7 +129,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     message: stylePromptMessage("Restart the gateway service after update?"),
     initialValue: true,
   });
-  if (isCancel(restart)) {
+  if (typeof restart === "symbol") {
     defaultRuntime.log(theme.muted("Update cancelled."));
     defaultRuntime.exit(0);
     return;
@@ -141,6 +138,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   try {
     const { updateCommand } = await import("./update-command.js");
     await updateCommand({
+      runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
       channel: requestedChannel ?? undefined,
       restart,
       timeout: opts.timeout,

@@ -41,9 +41,11 @@ vi.mock("./model-auth-env-vars.js", () => ({
   }),
 }));
 
-let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.test-support.js").planOpenClawModelsJsonWithDeps;
+let planModelsJsonForTest: typeof import("./models-config.plan.test-support.js").planModelsJsonForTest;
+let modelsConfigProviders: typeof import("./models-config.providers.js");
+let resolveImplicitProvidersSpy: MockInstance | undefined;
 let loadPluginManifestRegistrySpy: MockInstance | undefined;
-let loadBundledPluginPublicArtifactModuleSyncSpy: MockInstance | undefined;
+let loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy: MockInstance | undefined;
 let bundledPluginsDir: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -59,11 +61,11 @@ beforeAll(async () => {
     .spyOn(manifestRegistryModule, "loadPluginManifestRegistryCore")
     .mockReturnValue(manifestRegistry as never);
   const publicSurfaceLoader = await import("../plugins/public-surface-loader.js");
-  loadBundledPluginPublicArtifactModuleSyncSpy = vi
-    .spyOn(publicSurfaceLoader, "loadBundledPluginPublicArtifactModuleSync")
+  loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy = vi
+    .spyOn(publicSurfaceLoader, "loadBundledPluginPublicArtifactModuleFromCandidatesSync")
     .mockImplementation(({ dirName }: { dirName: string }) => {
       if (dirName !== "xai") {
-        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+        return null;
       }
       return {
         normalizeConfig: ({
@@ -76,12 +78,14 @@ beforeAll(async () => {
         }),
       };
     });
-  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.test-support.js"));
+  ({ planModelsJsonForTest } = await import("./models-config.plan.test-support.js"));
+  modelsConfigProviders = await import("./models-config.providers.js");
 });
 
 afterAll(() => {
+  resolveImplicitProvidersSpy?.mockRestore();
   loadPluginManifestRegistrySpy?.mockRestore();
-  loadBundledPluginPublicArtifactModuleSyncSpy?.mockRestore();
+  loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy?.mockRestore();
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -97,7 +101,7 @@ afterAll(() => {
 describe("models-config provider policy registry", () => {
   it("does not reload manifests while resolving an alias-owned provider policy", async () => {
     loadPluginManifestRegistrySpy?.mockClear();
-    loadBundledPluginPublicArtifactModuleSyncSpy?.mockClear();
+    loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy?.mockClear();
     const pluginMetadataSnapshot = {
       index: { plugins: [] },
       manifestRegistry,
@@ -111,34 +115,32 @@ describe("models-config provider policy registry", () => {
       "index" | "manifestRegistry" | "owners" | "pluginIds"
     >;
 
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-provider-policy-registry-test/agent",
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
-        pluginMetadataSnapshot,
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          "x-ai": {
-            baseUrl: "https://mock.example/v1",
-            api: "openai-responses",
-            apiKey: "OPENAI_API_KEY",
-            models: [],
-          },
-        }),
-      },
-    );
+    resolveImplicitProvidersSpy = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({
+        "x-ai": {
+          baseUrl: "https://mock.example/v1",
+          api: "openai-responses",
+          apiKey: "OPENAI_API_KEY",
+          models: [],
+        },
+      });
+    const plan = await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-provider-policy-registry-test/agent",
+      env: {},
+      existingRaw: "",
+      existingParsed: null,
+      pluginMetadataSnapshot,
+    });
 
     expect(plan.action).toBe("write");
     expect(
       plan.action === "write" ? JSON.parse(plan.contents).providers["x-ai"].baseUrl : null,
     ).toBe("https://normalized.example/v1");
-    expect(loadBundledPluginPublicArtifactModuleSyncSpy).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncSpy).toHaveBeenCalledWith({
       dirName: "xai",
-      artifactBasename: "provider-policy-api.js",
+      artifactCandidates: ["provider-policy-api.js"],
     });
     expect(loadPluginManifestRegistrySpy).not.toHaveBeenCalled();
   });

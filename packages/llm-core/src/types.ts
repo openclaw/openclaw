@@ -23,6 +23,7 @@ export type KnownApi =
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
+  | "google-interactions"
   | "google-vertex";
 
 /** Provider API id; custom providers can use ids outside the built-in set. */
@@ -220,6 +221,8 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
+  /** Optional processing tier; only providers supporting these tiers apply it. */
+  serviceTier?: "default" | "priority";
   reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
@@ -356,6 +359,8 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
 export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+/** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
+export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
 /** User turn in a text-model conversation. */
 export interface UserMessage {
@@ -368,6 +373,8 @@ export interface UserMessage {
    * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
+  /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
+  runtimeContextCarrierRetained?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -401,9 +408,11 @@ export interface AssistantMessage {
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
-  diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
+  diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime completion, failure, and recovery diagnostics.
   usage: Usage;
   stopReason: StopReason;
+  /** A completed provider response can explicitly request another inference with false. */
+  endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
   errorType?: string;
@@ -521,6 +530,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
   reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
@@ -559,12 +570,16 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */
+  supportsStrictMode?: boolean;
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
   /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
   supportsReasoningEffort?: boolean;
   /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
   supportedReasoningEfforts?: string[];
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -573,6 +588,15 @@ export interface OpenAIResponsesCompat {
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /**
+   * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
+   * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
+   * connection is eligible by default; a custom endpoint carries no trust signal of
+   * its own, so this is the only path to eligibility there — set it once you've
+   * verified the backend correctly resolves `previous_response_id` and persists
+   * `store: true` turns. Default: false.
+   */
+  supportsResponsesContinuation?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -685,7 +709,11 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
+    : TApi extends
+          | "openai-responses"
+          | "azure-openai-responses"
+          | "openai-chatgpt-responses"
+          | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

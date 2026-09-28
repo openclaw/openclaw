@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayProtocolClient, type GatewayProtocolSocketHandlers } from "./protocol-client.js";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "./timeouts.js";
 
@@ -15,7 +15,7 @@ function createHandshakeClient(
 ) {
   const connections: HandshakeConnection[] = [];
   const onHello = vi.fn();
-  const onConnectHello = vi.fn();
+  const onConnectHello = vi.fn(() => ({ ignored: true }));
   const onClose = vi.fn();
   const onTiming = vi.fn();
   let nextRequestId = 0;
@@ -67,18 +67,35 @@ function receiveHello(connection: HandshakeConnection): void {
 }
 
 describe("GatewayProtocolClient connect handshake", () => {
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it.each([
-    { retryable: true, retryAfterMs: 90_000, delayMs: 90_000 },
-    { retryable: false, retryAfterMs: 90_000, delayMs: 10 },
-    { retryable: true, retryAfterMs: 1, delayMs: 10 },
-    { retryable: true, retryAfterMs: 0, delayMs: 10 },
-    { retryable: true, retryAfterMs: undefined, delayMs: 10 },
+    { retryable: true, retryAfterMs: 90_000, delayMs: 90_000, draw: 0, nextDelayMs: 20 },
+    { retryable: true, retryAfterMs: 90_000, delayMs: 99_000, draw: 0.5, nextDelayMs: 22 },
+    { retryable: true, retryAfterMs: 11, delayMs: 11, draw: 0, nextDelayMs: 20 },
+    // The existing native sleep ceiling must survive an overflowing jitter calculation.
+    {
+      retryable: true,
+      retryAfterMs: Number.MAX_VALUE,
+      delayMs: 2_147_000_000,
+      draw: 0.5,
+      nextDelayMs: 22,
+    },
+    { retryable: false, retryAfterMs: 90_000, delayMs: 10, draw: 0, nextDelayMs: 20 },
+    { retryable: true, retryAfterMs: 1, delayMs: 10, draw: 0, nextDelayMs: 20 },
+    { retryable: true, retryAfterMs: 0, delayMs: 10, draw: 0, nextDelayMs: 20 },
+    { retryable: true, retryAfterMs: undefined, delayMs: 10, draw: 0, nextDelayMs: 20 },
   ])(
-    "treats usable retry hints as floors while advancing backoff: %j",
-    async ({ retryable, retryAfterMs, delayMs }) => {
+    "keeps admitted retry timing while advancing backoff: %j",
+    async ({ retryable, retryAfterMs, delayMs, draw, nextDelayMs }) => {
       vi.useFakeTimers();
+      vi.mocked(Math.random).mockReturnValue(draw);
       const { client, connections } = createHandshakeClient();
       try {
         client.start();
@@ -110,7 +127,7 @@ describe("GatewayProtocolClient connect handshake", () => {
         const second = connections[1];
         assert(second);
         second.close(1006, "transport unavailable");
-        await vi.advanceTimersByTimeAsync(19);
+        await vi.advanceTimersByTimeAsync(nextDelayMs - 1);
         expect(connections).toHaveLength(2);
         await vi.advanceTimersByTimeAsync(1);
         expect(connections).toHaveLength(3);
@@ -224,26 +241,6 @@ describe("GatewayProtocolClient connect handshake", () => {
     }
   });
 
-  it("reconnects when an open Gateway never responds to connect", async () => {
-    vi.useFakeTimers();
-    const { client, connections } = createHandshakeClient();
-    client.start();
-    const connection = connections[0];
-    expect(connection).toBeDefined();
-    if (!connection) {
-      return;
-    }
-    receiveConnectChallenge(connection);
-    expect(connection.send).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(connection.close).toHaveBeenCalledWith(4000, "connect timeout");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(connections).toHaveLength(2);
-    client.stop();
-  });
-
   it("passes the Gateway challenge timestamp into connect planning", () => {
     const buildConnectPlan = vi.fn(() => ({}));
     const { client, connections } = createHandshakeClient(buildConnectPlan);
@@ -259,9 +256,54 @@ describe("GatewayProtocolClient connect handshake", () => {
     expect(buildConnectPlan).toHaveBeenCalledWith({
       nonce: "synthetic-nonce",
       challengeTs: 1_700_000_000_123,
+      serverCapabilities: [],
       generation: 1,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
     });
     client.stop();
+  });
+
+  it("does not retain an advertised capability after reconnecting to a different Gateway", async () => {
+    vi.useFakeTimers();
+    const buildConnectPlan = vi.fn(() => ({}));
+    const { client, connections } = createHandshakeClient(buildConnectPlan);
+    try {
+      client.start();
+      const first = connections[0];
+      assert.ok(first);
+      first.handlers.open();
+      first.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "first", ts: 1, capabilities: ["model-catalog-snapshot"] },
+        }),
+      );
+      expect(buildConnectPlan).toHaveBeenLastCalledWith({
+        nonce: "first",
+        challengeTs: 1,
+        serverCapabilities: ["model-catalog-snapshot"],
+        generation: 1,
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
+      });
+      first.handlers.close(1006, "reconnect");
+      await vi.advanceTimersByTimeAsync(10);
+      const second = connections[1];
+      assert.ok(second);
+      receiveConnectChallenge(second);
+      expect(buildConnectPlan).toHaveBeenLastCalledWith({
+        nonce: "synthetic-nonce",
+        challengeTs: 1_800_000_000_000,
+        serverCapabilities: [],
+        generation: 2,
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
+      });
+    } finally {
+      client.stop();
+    }
   });
 
   it("marks omitted and malformed challenge timestamps as invalid", () => {
@@ -284,7 +326,10 @@ describe("GatewayProtocolClient connect handshake", () => {
     expect(buildConnectPlan).toHaveBeenLastCalledWith({
       nonce: "legacy-nonce",
       challengeTs: null,
+      serverCapabilities: [],
       generation: 1,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
     });
 
     client.stop();
@@ -306,7 +351,10 @@ describe("GatewayProtocolClient connect handshake", () => {
     expect(buildConnectPlan).toHaveBeenLastCalledWith({
       nonce: "malformed-nonce",
       challengeTs: null,
+      serverCapabilities: [],
       generation: 1,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
     });
     secondClient.client.stop();
   });

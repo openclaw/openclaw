@@ -1,8 +1,10 @@
-// Captures source config and write ownership for administrative plugin mutations.
+// Captures validated source config and write ownership for plugin lifecycle operations.
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertConfigWriteAllowedInCurrentMode,
+  readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  type ConfigFileSnapshot,
 } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -12,16 +14,34 @@ import {
 } from "./install-config-mutation.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 
-function assertValidConfigSnapshot(
-  prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
-): ConfigSnapshotForInstallPersist {
-  const { snapshot, writeOptions } = prepared;
+function readValidSourceConfig(snapshot: ConfigFileSnapshot) {
   if (!snapshot.valid) {
     throw new ManagedPluginLifecycleError(
       "Config invalid; run `openclaw doctor --fix` before managing plugins.",
     );
   }
-  const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
+  return snapshot.sourceConfig;
+}
+
+export async function readPluginRuntimeConfig() {
+  return readValidSourceConfig(await readConfigFileSnapshot({ observe: false, isolateEnv: true }));
+}
+
+export async function readPluginMutationSnapshot(
+  env: NodeJS.ProcessEnv,
+  beforePersistentApply?: () => void,
+): Promise<ConfigSnapshotForInstallPersist> {
+  try {
+    assertConfigWriteAllowedInCurrentMode({ env });
+  } catch (error) {
+    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
+  }
+  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+  const config = readValidSourceConfig(snapshot);
+  const mutationWriteOptions = selectInstallMutationWriteOptions(
+    writeOptions,
+    beforePersistentApply,
+  );
   const { pluginMutation } = resolveInstallConfigMutationPreflights({
     parsed: asRecord(snapshot.parsed),
     snapshotPath: snapshot.path,
@@ -31,19 +51,8 @@ function assertValidConfigSnapshot(
     throw new ManagedPluginLifecycleError(pluginMutation.reason);
   }
   return {
-    config: snapshot.sourceConfig,
+    config,
     baseHash: snapshot.hash,
     writeOptions: mutationWriteOptions,
   };
-}
-
-export async function readPluginMutationSnapshot(
-  env: NodeJS.ProcessEnv,
-): Promise<ConfigSnapshotForInstallPersist> {
-  try {
-    assertConfigWriteAllowedInCurrentMode({ env });
-  } catch (error) {
-    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
-  }
-  return assertValidConfigSnapshot(await readConfigFileSnapshotForWrite());
 }

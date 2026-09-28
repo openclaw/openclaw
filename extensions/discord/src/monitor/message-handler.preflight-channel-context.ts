@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight channel context behavior.
 import {
   normalizeDiscordDisplaySlug,
   normalizeDiscordSlug,

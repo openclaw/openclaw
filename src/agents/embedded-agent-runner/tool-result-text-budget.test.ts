@@ -56,6 +56,22 @@ describe("tool-result text budgets", () => {
     expect(sliceToolResultTextTailToBudget("😀", 1)).toBe("");
   });
 
+  it.each([1, 2])("cuts supplementary text at raw floor %s", (minimumRawWeight) => {
+    const text = "a𠀀好😀b";
+    const options = { minimumRawWeight };
+    expect(sliceToolResultTextToBudget(text, 18, options)).toBe("a𠀀");
+    expect(sliceToolResultTextTailToBudget(text, 18, options)).toBe("好😀b");
+  });
+
+  it.each([
+    ["aéa", 4, 1.5, "aé", "éa"],
+    ["ab你cd😀ef", 13, 1.1, "ab你cd😀", "你cd😀ef"],
+  ])("keeps ASCII-run rounding for %s", (text, budget, minimumRawWeight, head, tail) => {
+    const options = { minimumRawWeight };
+    expect(sliceToolResultTextToBudget(text, budget, options)).toBe(head);
+    expect(sliceToolResultTextTailToBudget(text, budget, options)).toBe(tail);
+  });
+
   it("honors the larger of CJK cost and a caller safety floor", () => {
     const options = { minimumRawWeight: 2 };
     expect(sliceToolResultTextToBudget("ab你好", 9, options)).toBe("ab你");

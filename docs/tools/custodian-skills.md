@@ -8,7 +8,7 @@ read_when:
   - Planning operational skill coverage
 ---
 
-Custodian skills are release-versioned operational playbooks shipped with OpenClaw. They live under `custodian-skills/` in the package and load at the bundled-skill precedence tier, but only for the agent resolved by `agents.defaults.systemAgent.agentId`.
+Custodian skills are release-versioned operational playbooks shipped with OpenClaw. They live under `custodian-skills/` in the package. They load at the bundled-skill precedence tier, but only for the agent resolved by `agents.defaults.systemAgent.agentId`.
 
 When that setting is absent, OpenClaw falls back to a retained legacy default owner, the sole configured agent, or legacy `main` when no explicit agent roster exists. If several agents are configured without a system agent or retained legacy owner, no agent receives the library. For every other agent, Custodian skills are absent from discovery, snapshots, slash-command catalogs, sandbox sync, and the model-facing skills prompt.
 
@@ -19,14 +19,14 @@ Normal skill controls still apply. `skills.entries.<name>.enabled: false` disabl
 Every shipped Custodian skill uses the same five sections in this order:
 
 1. **Gather** reads redacted current config and probes live state.
-2. **Mutate** uses validated non-interactive writes — `openclaw config set` / `openclaw config patch` from a trusted shell, or the in-session Custodian tool actions where policy allows — never a direct file edit.
-3. **Repair** diagnoses with `openclaw doctor --lint`; only an explicitly approved repair uses `openclaw doctor --fix --non-interactive`. The read-only `diagnose-gateway` skill recommends that separate step but never runs it.
+2. **Mutate** uses validated non-interactive writes, never a direct file edit. Those writes are `openclaw config set` / `openclaw config patch` from a trusted shell, or the in-session Custodian tool actions where policy allows.
+3. **Repair** diagnoses with `openclaw doctor --lint`. Only an explicitly approved repair uses `openclaw doctor --fix --non-interactive`. The read-only `diagnose-gateway` skill recommends that separate step but never runs it.
 4. **Prove** exercises one live end-to-end outcome.
 5. **Report** records what changed, what was observed, and what remains.
 
-All five-section playbooks keep secret values out of prompts, logs, and files. Credentials use SecretRefs or credential stores. A workflow never claims success without its Prove outcome; it reports the exact blocker when live proof is unavailable.
+All five-section playbooks keep secret values out of prompts, logs, and files. Credentials use SecretRefs or credential stores. A workflow never claims success without its Prove outcome. It reports the exact blocker when live proof is unavailable.
 
-Lint exit code `1` means findings, not a failed diagnostic command: read the report and continue the remaining checks. Ordinary `doctor`, including `--non-interactive`, can copy legacy config and migrate state without `--fix`; it is not a read-only substitute. Read-only diagnostics exclude config/service repairs and state migrations, not incidental logs or cache bookkeeping. See [Doctor](/cli/doctor#lint-mode).
+Lint exit code `1` means findings, not a failed diagnostic command: read the report and continue the remaining checks. Ordinary `doctor`, including `--non-interactive`, can copy legacy config and migrate state without `--fix`. It is not a read-only substitute. Read-only diagnostics exclude config/service repairs and state migrations, not incidental logs or cache bookkeeping. See [Doctor](/cli/doctor#lint-mode).
 
 ## First wave
 
@@ -65,7 +65,7 @@ Put local additions in the configured Custodian agent's workspace, not in the re
 <custodian-workspace>/skills/<skill-name>/SKILL.md
 ```
 
-Workspace skills already have higher precedence than the bundled tier and are scoped to that agent's workspace. Follow the same Gather → Mutate → Repair → Prove → Report contract, keep the description short, and start a new session after changing the skill. See [Creating skills](/tools/creating-skills) for the full format.
+Workspace skills already have higher precedence than the bundled tier and are scoped to that agent's workspace. Follow the same Gather → Mutate → Repair → Prove → Report contract. Keep the description short. Start a new session after changing the skill. See [Creating skills](/tools/creating-skills) for the full format.
 
 ## Related
 

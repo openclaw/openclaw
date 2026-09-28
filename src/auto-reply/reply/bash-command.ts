@@ -25,6 +25,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
@@ -38,12 +39,10 @@ type BashRequest =
   | { action: "stop"; sessionId?: string };
 
 type ActiveBashJob =
-  | { state: "starting"; startedAt: number; command: string }
+  | { state: "starting" }
   | {
       state: "running";
       sessionId: string;
-      startedAt: number;
-      command: string;
     };
 
 let activeJob: ActiveBashJob | null = null;
@@ -110,19 +109,6 @@ function parseBashRequest(raw: string): BashRequest | null {
   return { action: "run", command: rest };
 }
 
-function resolveRawCommandBody(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}) {
-  const source = params.ctx.commandText ?? "";
-  const stripped = stripStructuralPrefixes(source);
-  return params.isGroup
-    ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
-    : stripped;
-}
-
 function getScopedSession(sessionId: string) {
   const running = getSession(sessionId);
   if (running && running.scopeKey === CHAT_BASH_SCOPE_KEY) {
@@ -142,13 +128,9 @@ function ensureActiveJobState() {
   if (activeJob.state === "starting") {
     return activeJob;
   }
-  const { running, finished } = getScopedSession(activeJob.sessionId);
+  const { running } = getScopedSession(activeJob.sessionId);
   if (running) {
     return activeJob;
-  }
-  if (finished) {
-    activeJob = null;
-    return null;
   }
   activeJob = null;
   return null;
@@ -173,17 +155,13 @@ export async function handleBashChatCommand(params: {
   agentId?: string;
   sessionKey: string;
   isGroup: boolean;
-  elevated: {
-    enabled: boolean;
-    allowed: boolean;
-    failures: Array<{ gate: string; key: string }>;
-  };
+  elevated: ReturnType<typeof resolveElevatedPermissions>;
 }): Promise<ReplyPayload> {
   if (!isCommandFlagEnabled(params.cfg, "bash")) {
     return buildDisabledCommandReply({
       label: "bash",
       configKey: "bash",
-      docsUrl: "https://docs.openclaw.ai/tools/slash-commands#config",
+      docsUrl: "https://docs.openclaw.ai/tools/slash-commands#configuration",
     });
   }
 
@@ -215,12 +193,10 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const rawBody = resolveRawCommandBody({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId,
-    isGroup: params.isGroup,
-  }).trim();
+  const stripped = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const rawBody = (
+    params.isGroup ? stripMentions(stripped, params.ctx, params.cfg, agentId) : stripped
+  ).trim();
   const request = parseBashRequest(rawBody);
   if (!request) {
     return { text: "⚠️ Unrecognized bash request." };
@@ -323,8 +299,6 @@ export async function handleBashChatCommand(params: {
 
   activeJob = {
     state: "starting",
-    startedAt: Date.now(),
-    command: commandText,
   };
 
   try {
@@ -364,8 +338,6 @@ export async function handleBashChatCommand(params: {
       activeJob = {
         state: "running",
         sessionId,
-        startedAt: result.details.startedAt,
-        command: commandText,
       };
       const snippet = formatSessionSnippet(sessionId);
       logVerbose(`Started bash session ${snippet}: ${commandText}`);

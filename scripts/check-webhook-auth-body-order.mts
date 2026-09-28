@@ -2,10 +2,14 @@
 
 // Ensures webhook handlers authenticate before reading request bodies.
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { bundledPluginCallsite, bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
+import {
+  collectCallExpressionLines,
+  runAsScript,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mts";
 
 const sourceRoots = ["extensions"];
 const enforcedFiles = new Set([
@@ -33,20 +37,15 @@ function getCalleeName(expression: ts.Expression): string | null {
 /**
  * Finds request body reads that occur before webhook auth validation.
  */
-function findBlockedWebhookBodyReadLines(content: string, fileName = "source.ts"): number[] {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const lines: number[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) {
-      const calleeName = getCalleeName(node.expression);
-      if (calleeName && blockedCallees.has(calleeName)) {
-        lines.push(toLine(sourceFile, node.expression));
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return lines;
+function findBlockedWebhookBodyReadLines(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+): number[] {
+  return collectCallExpressionLines(sourceFile, (node) => {
+    const calleeName = getCalleeName(node.expression);
+    return calleeName && blockedCallees.has(calleeName) ? node.expression : null;
+  });
 }
 
 /**

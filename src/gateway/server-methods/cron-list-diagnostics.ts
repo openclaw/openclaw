@@ -9,7 +9,6 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type Phase = "setup" | "listing" | "projection" | "previews" | "response" | "handlerExit";
 type RequestMode = { compact: boolean; previewsRequested: boolean; scopeApplied: boolean };
-export type CronListDiagnostics = NonNullable<ReturnType<typeof startCronListDiagnostics>>;
 
 export function startCronListDiagnostics(
   log: Pick<GatewayRequestContext["logGateway"], "warn">,

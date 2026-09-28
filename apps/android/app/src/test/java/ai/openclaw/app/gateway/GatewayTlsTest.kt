@@ -19,6 +19,20 @@ import kotlin.concurrent.thread
 
 class GatewayTlsTest {
   @Test
+  fun unreachableEndpointDoesNotAskForFingerprintButRetainsAnExistingPin() {
+    val result = GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+    assertEquals(
+      GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE),
+      decideGatewayTlsTrust(storedFingerprint = null, systemTrustCandidate = true, probeResult = result),
+    )
+    val pin = "ab".repeat(32)
+    assertEquals(
+      GatewayTlsTrustDecision.PinnedTrust(pin),
+      decideGatewayTlsTrust(storedFingerprint = pin, systemTrustCandidate = true, probeResult = result),
+    )
+  }
+
+  @Test
   fun splitGatewayTlsFallbackProbeTimeouts_skipsFallbackAfterBudgetExpires() {
     assertNull(
       splitGatewayTlsFallbackProbeTimeouts(

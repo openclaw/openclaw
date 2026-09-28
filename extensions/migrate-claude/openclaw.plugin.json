@@ -1,5 +1,6 @@
 {
   "id": "migrate-claude",
+  "categories": ["integrations"],
   "activation": {
     "onStartup": false
   },

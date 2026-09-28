@@ -40,14 +40,20 @@ const resolvePluginSetupProviderCore = vi.hoisted(() =>
   vi.fn<ResolvePluginSetupProvider>(() => undefined),
 );
 
-vi.mock("../commands/auth-choice.js", () => ({
+vi.mock("../commands/auth-choice.apply.js", () => ({
   applyAuthChoice,
   prepareAuthChoice: applyAuthChoice,
+}));
+
+vi.mock("../commands/auth-choice.model-check.js", () => ({
   warnIfModelConfigLooksOff,
+}));
+
+vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
 
-vi.mock("../commands/model-picker.js", () => ({
+vi.mock("../flows/model-picker.js", () => ({
   applyPrimaryModel,
   promptDefaultModel,
 }));
@@ -167,7 +173,6 @@ describe("runSetupModelAuthStep", () => {
         agentId: "ops",
         agentDir: "/tmp/ops-agent",
         pendingAuthProfiles: [],
-        validateCatalog: false,
       });
     },
   );
@@ -415,7 +420,6 @@ describe("runSetupModelAuthStep", () => {
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       agentId: "ops",
       agentDir: "/tmp/ops-agent",
-      validateCatalog: false,
     });
   });
 
@@ -450,7 +454,6 @@ describe("runSetupModelAuthStep", () => {
       agentId: "ops",
       agentDir: "/tmp/ops-agent",
       pendingAuthProfiles,
-      validateCatalog: false,
     });
     expect(persistAuthProfiles).not.toHaveBeenCalled();
   });

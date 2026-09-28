@@ -38,6 +38,14 @@ same entry point:
 openclaw models auth login --provider <id>
 ```
 
+In the Control UI, open **Settings → Models → Connect provider** to save a
+supported account without requesting a model reply. **Connect provider** in
+Model Setup opens the same picker and connection flow. Choose **Test & use** when
+you want to verify a model and select it. Plugins that only support full setup
+keep their separate setup action.
+
+OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal or Control UI reports when sign-in is complete.
+
 ## The token sink (why it exists)
 
 OAuth providers commonly mint a new refresh token on every login/refresh.
@@ -81,23 +89,32 @@ writes back to that person's account record rather than a shared or agent-local
 credential.
 
 Older installations may still contain `auth-profiles.json`, `auth-state.json`,
-per-agent `auth.json`, or shared `credentials/oauth.json`. Run
+or per-agent `auth.json`. Run
 `openclaw doctor --fix` once after upgrading. Doctor imports verified values,
 records a migration receipt, and renames the original file to a timestamped
 archive.
 
-Runtime never reads these retired files. What happens when one is still present
-depends on whether the SQLite store can already serve credentials for that
-agent:
+The older shared `credentials/oauth.json` importer has retired. Doctor leaves
+that file untouched and reports the [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+needed to import it before installing the latest release.
+
+Runtime never uses credentials from these retired files. What happens when one
+of the supported import files is still present depends on whether SQLite can already serve credentials for
+that agent:
 
 - The store holds profiles: the retired file is leftover bytes. Runtime logs a
   one-time warning naming the file and keeps working; Doctor archives it on the
   next `--fix`. Doctor never overwrites a usable stored credential with imported
   values, so the file cannot resurrect a stale token.
-- The store is empty: the credentials still live only in that file, so runtime
-  fails closed for that agent with `AUTH_PROFILE_MIGRATION_REQUIRED` rather than
-  falling through to environment auth. Gateway startup degrades this owner to
-  configured-unavailable instead of refusing to start.
+- The store is empty: runtime reads only the provider metadata in
+  `auth-profiles.json` to scope `AUTH_PROFILE_MIGRATION_REQUIRED`. Providers named
+  there cannot fall through to environment or config auth; unrelated providers
+  keep resolving normally. The error and Doctor finding list affected providers
+  and the recovery command, `openclaw doctor --fix`.
+- If provider scope cannot be determined (including malformed JSON or other
+  retired credential formats), the refusal remains agent-wide. Gateway startup
+  degrades the credential owner instead of refusing to start. Credential writes
+  and snapshot publication remain fenced until the migration is cleared.
 
 The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/config-secrets-env#auth-storage](/gateway/config-secrets-env#auth-storage)
 
@@ -266,6 +283,8 @@ Related docs:
 
 ## Related
 
+- [OpenAI authentication](/providers/openai/authentication) - login methods, identity, and capabilities
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
 - [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys
+- [Auth credential semantics](/auth-credential-semantics) - the canonical rules for auth profile ordering and runtime credential resolution

@@ -13,13 +13,10 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 private const val NOTIFICATION_CHANNEL_BASE_ID = "openclaw.system.notify"
 private const val NOTIFICATION_CONTENT_REQUEST_CODE = 3
 
-/** Parsed payload for system.notify invocations. */
 internal data class SystemNotifyRequest(
   val title: String,
   val body: String,
@@ -117,13 +114,11 @@ internal fun buildSystemNotification(
     .setSilent(isSilentSound(request.sound))
     .build()
 
-/** Handles system-level node.invoke commands implemented by Android services. */
 class SystemHandler internal constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
 
-  /** Posts an Android notification from the gateway system.notify command. */
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
@@ -157,21 +152,11 @@ class SystemHandler internal constructor(
     val params = parseJsonParamsObject(paramsJson) ?: return null
     // title/body are required by the gateway contract; optional fields only
     // influence Android channel/silence behavior.
-    val rawTitle =
-      (params["title"] as? JsonPrimitive)
-        ?.contentOrNull
-        ?: return null
-    val rawBody =
-      (params["body"] as? JsonPrimitive)
-        ?.contentOrNull
-        ?: return null
-    val sound = (params["sound"] as? JsonPrimitive)?.contentOrNull
-    val priority = (params["priority"] as? JsonPrimitive)?.contentOrNull
     return SystemNotifyRequest(
-      title = rawTitle.trim(),
-      body = rawBody.trim(),
-      sound = sound?.trim()?.ifEmpty { null },
-      priority = priority?.trim()?.ifEmpty { null },
+      title = parseJsonString(params, "title")?.trim() ?: return null,
+      body = parseJsonString(params, "body")?.trim() ?: return null,
+      sound = parseJsonString(params, "sound")?.trim()?.ifEmpty { null },
+      priority = parseJsonString(params, "priority")?.trim()?.ifEmpty { null },
     )
   }
 }

@@ -1,6 +1,14 @@
-// Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
+import { translateActive } from "../i18n/lib/translate.ts";
+
+export function isSensitiveLeafValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0 && !/^\$\{[^}]*\}$/.test(value.trim());
+  }
+  return value !== undefined && value !== null;
+}
 
 export type JsonSchema = {
   type?: string | string[];
@@ -32,6 +40,7 @@ export type JsonSchema = {
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
+  not?: JsonSchema | boolean;
   nullable?: boolean;
 };
 
@@ -71,16 +80,23 @@ export function pathKey(path: Array<string | number>): string {
 
 const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
 
-export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
-  const direct = hints[pathKey(path)];
+type ResolvedConfigUiHint = {
+  hint: ConfigUiHint;
+  hintPath: string;
+};
+
+function resolveHintForPath(
+  path: Array<string | number>,
+  hints: ConfigUiHints,
+): ResolvedConfigUiHint | undefined {
+  const directPath = pathKey(path);
+  const direct = hints[directPath];
   if (direct) {
-    return direct;
+    return { hint: direct, hintPath: directPath };
   }
   const segments = path.map(String);
   let wildcardHints = wildcardHintCache.get(hints);
   if (!wildcardHints) {
-    // Schema reloads replace the hints object, so identity safely owns this index.
-    // Reuse it across recursive form and search lookups instead of rescanning the catalog.
     wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
       hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
     );
@@ -91,10 +107,31 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
       hintSegments.length === segments.length &&
       hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
     ) {
-      return hint;
+      return { hint, hintPath: hintSegments.join(".") };
     }
   }
   return undefined;
+}
+
+export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
+  return resolveHintForPath(path, hints)?.hint;
+}
+
+export function localizedHintForPath(path: Array<string | number>, hints: ConfigUiHints) {
+  const resolved = resolveHintForPath(path, hints);
+  if (!resolved) {
+    return undefined;
+  }
+  const { hint, hintPath } = resolved;
+  return {
+    ...hint,
+    label: hint.label
+      ? (translateActive(configHintTranslationKey(hintPath, "label", hint.label)) ?? hint.label)
+      : hint.label,
+    help: hint.help
+      ? (translateActive(configHintTranslationKey(hintPath, "help", hint.help)) ?? hint.help)
+      : hint.help,
+  };
 }
 
 export function humanize(raw: string) {
@@ -103,10 +140,6 @@ export function humanize(raw: string) {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/\s+/g, " ")
     .replace(/^./, (m) => m.toUpperCase());
-}
-
-export function cloneConfigObject<T>(value: T): T {
-  return structuredClone(value);
 }
 
 export function serializeConfigForm(form: Record<string, unknown>): string {

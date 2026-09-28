@@ -1,7 +1,11 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
-import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
+import {
+  loadValidConfigSnapshotOrThrow,
+  resolveModelsTargetAgent,
+  updateConfig,
+} from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -34,15 +38,16 @@ describe("models/shared", () => {
     mocks.replaceConfigFile.mockClear();
   });
 
-  it("returns config when snapshot is valid", async () => {
-    const cfg = { providers: {} } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
+  it("returns the paired source and runtime config when the snapshot is valid", async () => {
+    const cfg: OpenClawConfig = { logging: { level: "debug" } };
+    const snapshot = {
       valid: true,
+      sourceConfig: {},
       runtimeConfig: cfg,
-      config: cfg,
-    });
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
 
-    await expect(loadValidConfigOrThrow()).resolves.toBe(cfg);
+    await expect(loadValidConfigSnapshotOrThrow()).resolves.toEqual(snapshot);
   });
 
   it("throws formatted issues when snapshot is invalid", async () => {
@@ -52,7 +57,7 @@ describe("models/shared", () => {
       issues: [{ path: "providers.openai.apiKey", message: "Required" }],
     });
 
-    await expect(loadValidConfigOrThrow()).rejects.toThrowError(
+    await expect(loadValidConfigSnapshotOrThrow()).rejects.toThrowError(
       "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
     );
   });

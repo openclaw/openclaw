@@ -2,9 +2,20 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderFastModePolicyContext } from "openclaw/plugin-sdk/provider-model-types";
+import { resolveXaiFastModelId } from "./fast-mode.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
-import { isXaiFrontierModelId, isXaiGrok46ModelId, normalizeXaiModelId } from "./model-id.js";
+import { isXaiFrontierModelId, isXaiXhighModelId, normalizeXaiModelId } from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
+
+export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
+  if (!ctx.api || ctx.runtimeId !== "openclaw") {
+    return undefined;
+  }
+  return (
+    resolveXaiFastModelId({ id: ctx.modelId, provider: ctx.provider, api: ctx.api }) !== undefined
+  );
+}
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
@@ -17,7 +28,7 @@ export function resolveThinkingProfile(
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }
   if (isXaiFrontierModelId(modelId)) {
-    const levels: ProviderThinkingProfile["levels"] = isXaiGrok46ModelId(modelId)
+    const levels: ProviderThinkingProfile["levels"] = isXaiXhighModelId(modelId)
       ? [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }]
       : [{ id: "low" }, { id: "medium" }, { id: "high" }];
     return {

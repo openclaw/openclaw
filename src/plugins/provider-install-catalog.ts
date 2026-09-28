@@ -17,6 +17,7 @@ import {
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginRegistrySnapshot, type PluginRegistryRecord } from "./plugin-registry.js";
+import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import {
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
@@ -50,6 +51,7 @@ type PreferredInstallSources = {
 type ProviderInstallCatalogChoiceFields = Pick<
   ProviderAuthChoiceMetadata,
   | "choiceHint"
+  | "modelTarget"
   | "assistantPriority"
   | "assistantVisibility"
   | "groupId"
@@ -202,6 +204,7 @@ function resolveProviderInstallCatalogChoiceFields(
 ): Partial<ProviderInstallCatalogChoiceFields> {
   return {
     ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+    ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
     ...(choice.assistantPriority !== undefined
       ? { assistantPriority: choice.assistantPriority }
       : {}),
@@ -262,6 +265,9 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
         ),
       ];
       for (const choice of provider.authChoices ?? []) {
+        if (!isProviderAuthChoicePlatformSupported(choice.platforms)) {
+          continue;
+        }
         const methodId = choice.method?.trim();
         const choiceId = choice.choiceId?.trim();
         const choiceLabel = choice.choiceLabel?.trim();
@@ -276,16 +282,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           choiceId,
           choiceLabel,
           ...resolveProviderInstallCatalogChoiceFields({
-            choiceHint: choice.choiceHint,
-            assistantPriority: choice.assistantPriority,
-            assistantVisibility: choice.assistantVisibility,
-            groupId: choice.groupId,
-            groupLabel: choice.groupLabel,
-            groupHint: choice.groupHint,
-            optionKey: choice.optionKey,
-            cliFlag: choice.cliFlag,
-            cliOption: choice.cliOption,
-            cliDescription: choice.cliDescription,
+            ...choice,
             onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
           }),
           ...(choice.deprecatedChoiceIds?.length
@@ -311,25 +308,23 @@ export function resolveProviderInstallCatalogEntries(
   const installParams = params ?? {};
   const { installedPluginIds, installsByPluginId } =
     resolvePreferredInstallsByPluginId(installParams);
-  const manifestEntries = resolveManifestProviderAuthChoices(params)
-    .flatMap((choice) => {
-      const install = installsByPluginId.get(choice.pluginId);
-      if (!install) {
-        return [];
-      }
-      return [
-        {
-          ...choice,
-          label: choice.groupLabel ?? choice.choiceLabel,
-          origin: install.origin,
-          install: install.install,
-          installSource: describePluginInstallSource(install.install, {
-            expectedPackageName: install.packageName,
-          }),
-        } satisfies ProviderInstallCatalogEntry,
-      ];
-    })
-    .toSorted((left, right) => left.choiceLabel.localeCompare(right.choiceLabel));
+  const manifestEntries = resolveManifestProviderAuthChoices(params).flatMap((choice) => {
+    const install = installsByPluginId.get(choice.pluginId);
+    if (!install) {
+      return [];
+    }
+    return [
+      {
+        ...choice,
+        label: choice.groupLabel ?? choice.choiceLabel,
+        origin: install.origin,
+        install: install.install,
+        installSource: describePluginInstallSource(install.install, {
+          expectedPackageName: install.packageName,
+        }),
+      } satisfies ProviderInstallCatalogEntry,
+    ];
+  });
   const seenChoiceIds = new Set(manifestEntries.map((entry) => entry.choiceId));
   const officialEntries = resolveOfficialExternalProviderInstallCatalogEntries({
     installedPluginIds,

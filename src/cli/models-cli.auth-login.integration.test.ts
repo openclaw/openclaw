@@ -19,7 +19,7 @@ const ORDER_BUSY_MESSAGE =
 const STALE_PROFILE_ID = "openai:stale-login";
 
 const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(async () => ({})),
+  callGateway: vi.fn(async () => ({ refreshed: true })),
   runAuth: vi.fn(async () => ({
     profiles: [
       {
@@ -36,7 +36,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: mocks.callGateway,
+}));
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
   resolvePluginSetupRegistry: () => ({ providers: [] }),
@@ -123,6 +126,13 @@ describe("models auth login owner integration", () => {
           FRESH_PROFILE_ID,
           STALE_PROFILE_ID,
         ]);
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "models.authRefresh",
+            params: { operation: "login", agentId: "main" },
+            requireLocalBackendSharedAuth: true,
+          }),
+        );
       },
     );
   });

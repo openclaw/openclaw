@@ -1,4 +1,3 @@
-// Matrix plugin module implements crypto bootstrap behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
@@ -54,7 +53,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
     const forceReset = options.forceResetCrossSigning === true;
-    const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset;
     if (forceReset && !(await this.deps.canUnlockSecretStorage())) {
       throw new Error(
         "Forced cross-signing reset requires the active Matrix recovery key; supply it before retrying",
@@ -64,7 +62,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
 
-    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
+    if (!forceReset) {
       await this.bootstrapSecretStorage(crypto, {
         strict,
         allowSecretStorageRecreateWithoutRecoveryKey:
@@ -157,16 +155,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         return false;
       }
     };
-    const refreshPublishedCrossSigningKeys = async (): Promise<void> => {
-      if (typeof crypto.userHasCrossSigningKeys !== "function") {
-        return;
-      }
-      try {
-        await crypto.userHasCrossSigningKeys(userId, true);
-      } catch {
-        // The normal bootstrap flow below handles missing or unavailable keys.
-      }
-    };
     const isCrossSigningReady = async (): Promise<boolean> => {
       if (typeof crypto.isCrossSigningReady !== "function") {
         return true;
@@ -233,7 +221,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     // First pass: preserve existing cross-signing identity and ensure public keys are uploaded.
     try {
-      await refreshPublishedCrossSigningKeys();
+      await hasPublishedCrossSigningKeys();
       await crypto.bootstrapCrossSigning({
         authUploadDeviceSigningKeys,
       });

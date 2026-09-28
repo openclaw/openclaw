@@ -92,7 +92,24 @@ describe("message tool sandbox attachments", () => {
       name: "standard mirrored sandbox bridge",
       createBridge: async (hostMirrorDir: string) => {
         await fs.writeFile(path.join(hostMirrorDir, "chart.txt"), "mirrored chart");
-        return createSandboxFsBridge({ sandbox: createSandboxContext(hostMirrorDir) });
+        return createSandboxFsBridge({
+          sandbox: {
+            ...createSandboxContext(hostMirrorDir),
+            backend: {
+              // This regular fixture file has no container-side aliases. Keep the
+              // real pinned host read; only model the backend's metadata command.
+              runShellCommand: async ({ script, args }) => {
+                expect(script).toContain('readlink -n -f -- "$cursor"');
+                expect(args).toEqual(["/sandbox/chart.txt", "0", "0"]);
+                return {
+                  stdout: Buffer.from("/sandbox/chart.txt\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              },
+            },
+          },
+        });
       },
       expectedBytes: "mirrored chart",
     },

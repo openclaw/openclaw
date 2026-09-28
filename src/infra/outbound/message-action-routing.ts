@@ -133,8 +133,7 @@ function resolveTargetBoundAccountId(params: {
   if (!params.agentId) {
     return undefined;
   }
-  const target =
-    normalizeOptionalString(params.args.to) ?? normalizeOptionalString(params.args.channelId) ?? "";
+  const target = readTrimmedStringAlias(params.args, ["to", "channelId"]);
   if (!target) {
     return resolveFirstBoundAccountId({
       cfg: params.cfg,
@@ -163,7 +162,6 @@ function resolveTargetBoundAccountId(params: {
 async function resolveActionTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
-  action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
   plugin?: ChannelPlugin;
@@ -190,18 +188,15 @@ async function resolveActionTarget(params: {
       accountId: params.accountId ?? undefined,
       plugin: params.plugin,
       preferredKind: "group",
-      validateResolvedTarget: (target) =>
-        target.kind === "user"
-          ? `Channel id "${channelIdRaw}" resolved to a user target.`
-          : undefined,
     });
-    params.args.channelId = sanitizeGroupTargetId(resolved.to);
+    if (resolved.kind === "user") {
+      throw invalidMessageActionTargetError(
+        `Channel id "${channelIdRaw}" resolved to a user target.`,
+      );
+    }
+    params.args.channelId = resolved.to.replace(/^(channel|group):/i, "");
   }
   return resolvedTarget;
-}
-
-function sanitizeGroupTargetId(target: string): string {
-  return target.replace(/^(channel|group):/i, "");
 }
 
 async function resolveResolvedTargetOrThrow(params: {
@@ -211,7 +206,6 @@ async function resolveResolvedTargetOrThrow(params: {
   accountId?: string;
   plugin?: ChannelPlugin;
   preferredKind?: "group" | "user" | "channel";
-  validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
 }): Promise<ResolvedMessagingTarget> {
   const resolved = await resolveChannelTarget({
     cfg: params.cfg,
@@ -223,10 +217,6 @@ async function resolveResolvedTargetOrThrow(params: {
   });
   if (!resolved.ok) {
     throw resolved.error;
-  }
-  const validationError = params.validateResolvedTarget?.(resolved.target);
-  if (validationError) {
-    throw invalidMessageActionTargetError(validationError);
   }
   return resolved.target;
 }
@@ -271,10 +261,7 @@ function isCurrentSourceTargetParam(
     return false;
   }
 
-  const explicitTarget =
-    normalizeOptionalString(params.target) ??
-    normalizeOptionalString(params.to) ??
-    normalizeOptionalString(params.channelId);
+  const explicitTarget = readTrimmedStringAlias(params, ["target", "to", "channelId"]);
   if (!explicitTarget) {
     return false;
   }
@@ -342,6 +329,8 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
+  assertReadAuthorityCurrent?: () => void;
+  assertTargetAuthorityCurrent?: () => void;
 };
 
 export async function prepareMessageRoute(params: {
@@ -364,7 +353,7 @@ export async function prepareMessageRoute(params: {
   const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
   const { channel, plugin: channelPlugin } = selection;
   actionParams.channel = channel;
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg,
     channel,
     accountId: readToolStringParam(actionParams, "accountId"),
@@ -382,7 +371,7 @@ export async function prepareMessageRoute(params: {
     action,
     args: actionParams,
     toolContext: input.toolContext,
-    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action],
+    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action] ?? null,
     // Trusted direct operators retain opaque resource-id workflows. Native conversation
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
@@ -434,24 +423,41 @@ export async function prepareMessageRoute(params: {
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         input.conversationReadOrigin,
       ),
+      messageActionAuthorization: input.messageActionAuthorization,
     });
+  let assertReadAuthorityCurrent: (() => void) | undefined;
+  let assertTargetAuthorityCurrent: (() => void) | undefined;
   if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
-    actionParams = prepareExternalMessageActionTargetForResolution({
+    const preparedRead = await prepareExternalMessageActionTargetForResolution({
       channel,
       action,
       cfg,
       params: actionParams,
       accountId: accountId ?? undefined,
+      agentId,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
       requesterAccountId:
         authorization !== undefined
           ? authorization.requesterAccountId
           : (input.requesterAccountId ?? undefined),
+      requesterSenderId:
+        authorization !== undefined
+          ? authorization.requesterSenderId
+          : (input.requesterSenderId ?? undefined),
+      senderIsOwner: input.senderIsOwner,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         input.conversationReadOrigin,
       ),
       toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+      messageActionAuthorization: authorization,
+      assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
     });
+    actionParams = preparedRead.params;
+    accountId = preparedRead.accountId ?? accountId;
+    assertReadAuthorityCurrent = preparedRead.assertReadAuthorityCurrent;
+    assertTargetAuthorityCurrent = preparedRead.assertTargetAuthorityCurrent;
   }
 
   return {
@@ -461,6 +467,8 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
+    assertReadAuthorityCurrent,
+    assertTargetAuthorityCurrent,
   };
 }
 
@@ -480,7 +488,6 @@ export async function resolveMessageTarget(params: {
     : await resolveActionTarget({
         cfg: params.cfg,
         channel: params.channel,
-        action: params.action,
         args: params.args,
         accountId: params.accountId,
         plugin: params.plugin,

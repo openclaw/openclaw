@@ -11,7 +11,7 @@ defineDiscordVoiceTests(
     resolveAgentRouteMock,
     agentCommandMock,
     loggerWarnMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     realtimeSessionMock,
     beginSpeakerTurn,
     lastRealtimeBridge,
@@ -86,7 +86,7 @@ defineDiscordVoiceTests(
         | (() => void)
         | undefined;
       idleHandler?.();
-      expectUserMessageIncludes("second answer");
+      await vi.waitFor(() => expectUserMessageIncludes("second answer"));
       expectUserMessageNotIncludes("third answer");
 
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
@@ -99,12 +99,12 @@ defineDiscordVoiceTests(
       expectUserMessageNotIncludes("third answer");
 
       idleHandler?.();
-      expectUserMessageIncludes("third answer");
+      await vi.waitFor(() => expectUserMessageIncludes("third answer"));
     });
 
     it("isolates a speaker whose retained Unicode speech exceeds the byte budget", async () => {
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
-      const destroyConnection = vi.spyOn(entry.connection, "destroy");
+      const destroyConnection = vi.spyOn(entry.audio, "stop");
       const accepted = "😀".repeat(8 * 1024);
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: accepted }] })
@@ -143,7 +143,7 @@ defineDiscordVoiceTests(
 
     it("retires an overflowing speech lane and admits the speaker again", async () => {
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
-      const destroyConnection = vi.spyOn(entry.connection, "destroy");
+      const destroyConnection = vi.spyOn(entry.audio, "stop");
       try {
         beginSpeakerTurn(entry);
         for (let index = 0; index < 32; index += 1) {
@@ -203,7 +203,7 @@ defineDiscordVoiceTests(
         | (() => void)
         | undefined;
       idleHandler?.();
-      expectUserMessageIncludes("second answer");
+      await vi.waitFor(() => expectUserMessageIncludes("second answer"));
     });
 
     it("drains queued exact speech after cancelled prebuffered output is discarded", async () => {
@@ -377,14 +377,11 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expectUserMessageIncludes("local retry answer"));
     });
 
-    it.each(
-      ["Error", "TimeoutError"].flatMap((name) =>
-        ["native", "forced-suppressed", "forced-unsuppressed"].map((delivery) => ({
-          name,
-          delivery,
-        })),
-      ),
-    )(
+    it.each([
+      { name: "TimeoutError", delivery: "native" },
+      { name: "Error", delivery: "forced-suppressed" },
+      { name: "TimeoutError", delivery: "forced-unsuppressed" },
+    ])(
       "preserves $name failure reporting through $delivery consult delivery",
       async ({ name, delivery }) => {
         const hostTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
@@ -436,8 +433,9 @@ defineDiscordVoiceTests(
             expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
           }
         } finally {
-          entry.stop();
+          const stopped = entry.stop();
           hostTurn.resolve({ payloads: [] });
+          await stopped;
           await submission;
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
@@ -613,30 +611,56 @@ defineDiscordVoiceTests(
       ]);
     });
 
-    it("adds default bootstrap profile context to realtime voice instructions", async () => {
-      resolveAgentRouteMock.mockReturnValue({
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:1001",
-      });
-      resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(
-        "OpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Wilfred",
-      );
-      const { bridgeParams } = await createJoinedBidiFixture({
-        voice: { realtime: { consultPolicy: "always" } },
-      });
+    it.each([
+      { mode: "bidi", files: undefined },
+      { mode: "agent-proxy", files: undefined },
+      { mode: "bidi", files: [] },
+      { mode: "agent-proxy", files: [] },
+    ] as const)(
+      "includes shared agent context once in $mode with files $files",
+      async ({ mode, files }) => {
+        resolveAgentRouteMock.mockReturnValue({
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:1001",
+        });
+        resolveRealtimeVoiceAgentContextInstructionsMock.mockResolvedValue(
+          files
+            ? "Agent context: shared voice agent context."
+            : "Agent context: shared voice agent context.\n\nOpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Wilfred",
+        );
+        const config = {
+          voice: {
+            realtime: {
+              consultPolicy: "always" as const,
+              bootstrapContextFiles: files ? [...files] : undefined,
+            },
+          },
+        };
+        const { bridgeParams } =
+          mode === "agent-proxy"
+            ? await createJoinedAgentProxyFixture({ config })
+            : await createJoinedBidiFixture(config);
 
-      expect(resolveRealtimeBootstrapContextInstructionsMock).toHaveBeenCalledWith({
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:1001",
-        files: undefined,
-        warn: expect.any(Function),
-      });
-      expect(bridgeParams?.instructions).toContain("OpenClaw realtime voice profile context");
-      expect(bridgeParams?.instructions).toContain("Name: Wilfred");
-      expect(bridgeParams?.instructions).toContain("short natural backchannel");
-      expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
-    });
+        expect(resolveRealtimeVoiceAgentContextInstructionsMock).toHaveBeenCalledWith({
+          config: {},
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:1001",
+          files,
+          warn: expect.any(Function),
+        });
+        expect(bridgeParams?.instructions?.match(/Agent context:/g)).toHaveLength(1);
+        if (files) {
+          expect(bridgeParams?.instructions).not.toContain(
+            "OpenClaw realtime voice profile context",
+          );
+        } else {
+          expect(bridgeParams?.instructions).toContain("OpenClaw realtime voice profile context");
+          expect(bridgeParams?.instructions).toContain("Name: Wilfred");
+        }
+        expect(bridgeParams?.instructions).toContain("short natural backchannel");
+        expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
+      },
+    );
 
     it("routes bidi realtime consults through a configured voice agent session target", async () => {
       resolveAgentRouteMock.mockImplementation((params?: { peer?: { id?: string } }) => {

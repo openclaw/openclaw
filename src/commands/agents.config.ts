@@ -4,6 +4,7 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import pMap from "p-map";
 import {
   listAgentEntries,
   resolveAgentConfig,
@@ -13,16 +14,22 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
-import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
+import { loadAgentIdentityFromWorkspaceAsync } from "../agents/identity-file.js";
 import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
 import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace-roster-transition.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import {
+  readAgentDatabaseAdmissionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 
 export type AgentSummary = {
   id: string;
+  status?: "degraded";
+  admissionRefusal?: AgentDatabaseAdmissionRefusal;
   name?: string;
   identityName?: string;
   identityEmoji?: string;
@@ -52,7 +59,7 @@ export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number
 }
 
 /** Build config-derived summaries for text/JSON agent listing. */
-export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
+export async function buildAgentSummaries(cfg: OpenClawConfig): Promise<AgentSummary[]> {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const configuredAgents = listAgentEntries(cfg);
   const orderedIds =
@@ -69,37 +76,50 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
 
   const ordered = uniqueStrings(orderedIds);
 
-  return ordered.map((id) => {
-    const workspace = resolveAgentWorkspaceDir(cfg, id);
-    const identity = loadAgentIdentityFromWorkspace(workspace);
-    const agentConfig = resolveAgentConfig(cfg, id);
-    const configName = normalizeOptionalString(agentConfig?.identity?.name);
-    const configEmoji = normalizeOptionalString(agentConfig?.identity?.emoji);
-    const configAvatarUrl = resolveAgentAvatarUrlFromSource(cfg, id, agentConfig?.identity?.avatar);
-    // Validate each avatar before choosing so a stale path cannot hide the workspace image.
-    const identityAvatarUrl =
-      configAvatarUrl ?? resolveAgentAvatarUrlFromSource(cfg, id, identity?.avatar);
-    const identitySource =
-      configName || configEmoji || configAvatarUrl ? "config" : identity ? "identity" : undefined;
-    const summary: AgentSummary = {
-      id,
-      name: normalizeOptionalString(agentConfig?.name),
-      identityName: configName ?? identity?.name,
-      identityEmoji: configEmoji ?? identity?.emoji,
-      identitySource,
-      workspace,
-      agentDir: resolveAgentDir(cfg, id),
-      model:
-        resolvePrimaryStringValue(agentConfig?.model) ??
-        resolvePrimaryStringValue(cfg.agents?.defaults?.model),
-      bindings: bindingCounts.get(id) ?? 0,
-      isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
-    };
-    if (identityAvatarUrl) {
-      summary.identityAvatarUrl = identityAvatarUrl;
-    }
-    return summary;
-  });
+  return pMap(
+    ordered,
+    async (id) => {
+      const workspace = resolveAgentWorkspaceDir(cfg, id);
+      const identity = await loadAgentIdentityFromWorkspaceAsync(workspace);
+      const agentConfig = resolveAgentConfig(cfg, id);
+      const configName = normalizeOptionalString(agentConfig?.identity?.name);
+      const configEmoji = normalizeOptionalString(agentConfig?.identity?.emoji);
+      const configAvatarUrl = await resolveAgentAvatarUrlFromSource(
+        cfg,
+        id,
+        agentConfig?.identity?.avatar,
+      );
+      // Validate each avatar before choosing so a stale path cannot hide the workspace image.
+      const identityAvatarUrl =
+        configAvatarUrl ?? (await resolveAgentAvatarUrlFromSource(cfg, id, identity?.avatar));
+      const identitySource =
+        configName || configEmoji || configAvatarUrl ? "config" : identity ? "identity" : undefined;
+      const summary: AgentSummary = {
+        id,
+        name: normalizeOptionalString(agentConfig?.name),
+        identityName: configName ?? identity?.name,
+        identityEmoji: configEmoji ?? identity?.emoji,
+        identitySource,
+        workspace,
+        agentDir: resolveAgentDir(cfg, id),
+        model:
+          resolvePrimaryStringValue(agentConfig?.model) ??
+          resolvePrimaryStringValue(cfg.agents?.defaults?.model),
+        bindings: bindingCounts.get(id) ?? 0,
+        isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
+      };
+      if (identityAvatarUrl) {
+        summary.identityAvatarUrl = identityAvatarUrl;
+      }
+      const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
+      if (admissionRefusal) {
+        summary.status = "degraded";
+        summary.admissionRefusal = admissionRefusal;
+      }
+      return summary;
+    },
+    { concurrency: 4 },
+  );
 }
 
 export function applyAgentConfig(
@@ -258,7 +278,11 @@ export function pruneAgentConfig(
     ? Object.fromEntries(
         Object.entries(cfg.broadcast).map(([peerId, value]) => [
           peerId,
-          Array.isArray(value) ? value.filter((entry) => !targetsDeletedAgent(entry)) : value,
+          Array.isArray(value)
+            ? value.filter((entry) => !targetsDeletedAgent(entry))
+            : value && typeof value === "object"
+              ? { ...value, agents: value.agents.filter((entry) => !targetsDeletedAgent(entry)) }
+              : value,
         ]),
       )
     : undefined;

@@ -8,11 +8,6 @@ export function isReservedNonPluginCommandRoot(primary: string | null | undefine
   return typeof primary === "string" && RESERVED_NON_PLUGIN_COMMAND_ROOTS.has(primary);
 }
 
-export function shouldRegisterPrimaryCommandOnly(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return invocation.primary !== null || !invocation.hasHelpOrVersion;
-}
-
 export function shouldSkipPluginCommandRegistration(params: {
   argv: string[];
   primary: string | null;
@@ -23,30 +18,13 @@ export function shouldSkipPluginCommandRegistration(params: {
   if (params.primary === "help") {
     return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
   }
-  if (invocation.hasHelpOrVersion) {
-    return (
-      !params.primary || params.hasBuiltinPrimary || isReservedNonPluginCommandRoot(params.primary)
-    );
-  }
-  if (params.hasBuiltinPrimary) {
-    return true;
-  }
-  if (!params.primary) {
-    return invocation.hasHelpOrVersion;
-  }
-  if (isReservedNonPluginCommandRoot(params.primary)) {
-    return true;
-  }
-  return false;
+  return (
+    params.hasBuiltinPrimary ||
+    isReservedNonPluginCommandRoot(params.primary) ||
+    (!params.primary && invocation.hasHelpOrVersion)
+  );
 }
 
 export function shouldEagerRegisterSubcommands(env: NodeJS.ProcessEnv = process.env): boolean {
   return isTruthyEnvValue(env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
-}
-
-export function shouldRegisterPrimarySubcommandOnly(
-  argv: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return !shouldEagerRegisterSubcommands(env) && shouldRegisterPrimaryCommandOnly(argv);
 }

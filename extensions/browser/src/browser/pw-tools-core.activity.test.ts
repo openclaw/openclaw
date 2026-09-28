@@ -1,6 +1,7 @@
 // Browser tests cover Playwright observation filtering behavior.
-import { describe, expect, it } from "vitest";
-import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -32,6 +33,51 @@ function installTextPage(contents: Record<string, string[]>) {
 }
 
 describe("getPageTextViaPlaywright", () => {
+  it.each(["cancel", "timeout"])("settles a stalled selector probe on %s", async (reason) => {
+    vi.useFakeTimers();
+    const probe = createDeferred<number>();
+    const entered = createDeferred<void>();
+    const innerText = vi.fn(async () => "late text");
+    setPwToolsCoreCurrentPage({
+      locator: () => ({
+        first: () => ({
+          count: () => {
+            entered.resolve();
+            return probe.promise;
+          },
+          innerText,
+        }),
+      }),
+    });
+    const controller = new AbortController();
+    let settled = false;
+    const pending = getPageTextViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      signal: controller.signal,
+    }).finally(() => {
+      settled = true;
+    });
+    const rejected = expect(pending).rejects.toThrow(
+      reason === "cancel" ? "cancel text" : /timed out/i,
+    );
+    try {
+      await entered.promise;
+      if (reason === "cancel") {
+        controller.abort(new Error("cancel text"));
+      } else {
+        await vi.advanceTimersByTimeAsync(DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+    } finally {
+      probe.resolve(1);
+      await pending.catch(() => {});
+      await rejected;
+      vi.useRealTimers();
+    }
+    expect(innerText).not.toHaveBeenCalled();
+  });
+
   it.each<{ selector?: string; contents: Record<string, string[]>; expected: string }>([
     {
       selector: ".excerpt",

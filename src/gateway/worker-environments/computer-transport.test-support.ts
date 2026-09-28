@@ -3,7 +3,11 @@ import { vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  claimAgentRunApprovalAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -14,7 +18,6 @@ import {
   NodeWorkerComputerCloseParamsSchema,
   parseNodeWorkerComputerInput,
 } from "../../worker/node-computer-protocol.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import { createContext, createNodeSession } from "../node-invoke-plugin-policy.test-helpers.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -80,6 +83,8 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     terminalAtMs: null,
   };
   const environment: WorkerEnvironmentRecord = {
+    preparation: null,
+    lastActivatedAtMs: null,
     environmentId: "environment-1",
     providerId: sharedHost ? "device" : "fixture-cloud",
     profileId: "desktop",
@@ -145,9 +150,10 @@ export function createHarness(sharedHost = false, withPolicy = true) {
   const { context } = createContext({
     nodeSession: node,
     getRuntimeConfig: () => state.config,
-    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator({
-      validateTurnClaim: (candidate) => isCurrentPlacementTurnClaim(state.placement, candidate),
-    }),
+    validateAgentRuntimeApprovalAuthority: ({ delegatedAuthority }) =>
+      validateAgentRunDelegatedAuthority(delegatedAuthority) &&
+      (delegatedAuthority.kind === "local" ||
+        isCurrentPlacementTurnClaim(state.placement, delegatedAuthority.turnClaim)),
   });
   const nativeExecutionIds: string[] = [];
   const publicInvoke = vi.fn<NodeRegistry["invoke"]>(async (invocation) => {
@@ -206,6 +212,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     return { ok: true, payload: { ok: true } };
   });
   const nodeTransport = {
+    getCurrentNode: vi.fn(async (nodeId: string) => (proof.nodeId === nodeId ? proof : undefined)),
     listCurrentNodes: vi.fn(async () => [proof]),
     hasCurrentRunner: (id) => id === proof.nodeId && state.privateCurrent,
     isCurrent: (candidate) => candidate === proof && state.privateCurrent,
@@ -261,12 +268,23 @@ export function createHarness(sharedHost = false, withPolicy = true) {
   };
   const run = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(run);
+  const workerLifetime = new AbortController();
+  const workerAuthority = claimAgentRunApprovalAuthority(authority, [workerLifetime.signal]);
+  const workerSource = {
+    authority: workerAuthority,
+    assertCurrent() {
+      if (!validateAgentRunDelegatedAuthority(workerAuthority)) {
+        throw new Error("Session desktop placement authority changed");
+      }
+    },
+  };
   return {
     claim,
     options,
     state,
     run,
     authority,
+    workerSource,
     privateInvoke,
     publicInvoke,
     nodeTransport,
@@ -275,6 +293,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     registry,
     nativeExecutionIds,
     releaseClaim() {
+      workerLifetime.abort();
       state.placement = { ...state.placement, turnClaim: null };
       for (const handler of closedHandlers) {
         handler(claim);
@@ -285,7 +304,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
       if (!prepared) {
         throw new Error("Expected a prepared session desktop");
       }
-      return { prepared, transport: prepared.bind(run) };
+      return { prepared, transport: prepared.bind(run, workerSource) };
     },
   };
 }

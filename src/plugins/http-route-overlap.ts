@@ -1,5 +1,5 @@
 /** Detects conflicting plugin HTTP routes before Gateway registration accepts them. */
-import { canonicalizePathVariant } from "../gateway/security-path.js";
+import { getPluginHttpRouteCanonicalPath, prefixMatchPath } from "./http-path.js";
 import type { OpenClawPluginHttpRouteMatch } from "./types.js";
 
 type PluginHttpRouteLike = {
@@ -11,18 +11,12 @@ type PluginHttpRouteRegistrationLike = PluginHttpRouteLike & {
   auth: string;
 };
 
-function prefixMatchPath(pathname: string, prefix: string): boolean {
-  return (
-    pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
-  );
-}
-
 function doPluginHttpRoutesOverlap(
   a: Pick<PluginHttpRouteLike, "path" | "match">,
   b: Pick<PluginHttpRouteLike, "path" | "match">,
 ): boolean {
-  const aPath = canonicalizePathVariant(a.path);
-  const bPath = canonicalizePathVariant(b.path);
+  const aPath = getPluginHttpRouteCanonicalPath(a);
+  const bPath = getPluginHttpRouteCanonicalPath(b);
 
   if (a.match === "exact" && b.match === "exact") {
     return aPath === bPath;
@@ -31,12 +25,7 @@ function doPluginHttpRoutesOverlap(
     return prefixMatchPath(aPath, bPath) || prefixMatchPath(bPath, aPath);
   }
 
-  const prefixRoute = a.match === "prefix" ? a : b;
-  const exactRoute = a.match === "exact" ? a : b;
-  return prefixMatchPath(
-    canonicalizePathVariant(exactRoute.path),
-    canonicalizePathVariant(prefixRoute.path),
-  );
+  return a.match === "prefix" ? prefixMatchPath(bPath, aPath) : prefixMatchPath(aPath, bPath);
 }
 
 /** Resolves the collision classes shared by static and lifecycle route registration. */
@@ -47,7 +36,7 @@ export function findPluginHttpRouteRegistrationConflicts<T extends PluginHttpRou
   authOverlap: T | undefined;
   canonicalMatches: T[];
 } {
-  const canonicalCandidatePath = canonicalizePathVariant(candidate.path);
+  const canonicalCandidatePath = getPluginHttpRouteCanonicalPath(candidate);
   let authOverlap: T | undefined;
   const canonicalMatches: T[] = [];
   for (const route of routes) {
@@ -60,7 +49,7 @@ export function findPluginHttpRouteRegistrationConflicts<T extends PluginHttpRou
     }
     if (
       route.match === candidate.match &&
-      canonicalizePathVariant(route.path) === canonicalCandidatePath
+      getPluginHttpRouteCanonicalPath(route) === canonicalCandidatePath
     ) {
       canonicalMatches.push(route);
     }

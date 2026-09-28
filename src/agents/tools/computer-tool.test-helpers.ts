@@ -8,11 +8,13 @@ const mocks = vi.hoisted(() => ({
   listNodesMock: vi.fn(),
   callGatewayToolMock: vi.fn(),
   sleepMock: vi.fn(),
+  gatewayComputerStatusMock: vi.fn(),
 }));
 
 export const listNodesMock = mocks.listNodesMock;
 export const callGatewayToolMock = mocks.callGatewayToolMock;
 export const sleepMock = mocks.sleepMock;
+export const gatewayComputerStatusMock = mocks.gatewayComputerStatusMock;
 export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 export const COMPUTER_ACT_COMMAND = "computer.act";
@@ -28,9 +30,15 @@ vi.mock("./gateway.js", async (importOriginal) => {
 });
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("./computer-tool-gateway.js", () => ({
+  loadGatewayComputerStatus: gatewayComputerStatusMock,
+  bindGatewayComputerCleanup: async () => undefined,
+}));
 
 export const { createComputerTool, invalidateComputerFrameIfMissing } =
   await import("./computer-tool.js");
+export const { loadPairedComputerUseAvailabilityForSurface } =
+  await import("../computer-use-node-capabilities.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");
 
 // With no config the reference width is capped at the default sanitization limit.
@@ -98,10 +106,13 @@ export function readFrameId(result: { details?: unknown }): string {
   return frameId;
 }
 
-export function readLastComputerActParams(): Record<string, unknown> {
-  const call = callGatewayToolMock.mock.calls.findLast(
-    (entry) => (entry[2] as { command?: string }).command === COMPUTER_ACT_COMMAND,
-  );
+export function readLastComputerActParams(
+  action?: ComputerUseV2ActionName,
+): Record<string, unknown> {
+  const call = callGatewayToolMock.mock.calls.findLast((entry) => {
+    const body = entry[2] as ComputerActBody;
+    return body.command === COMPUTER_ACT_COMMAND && (!action || body.params?.action === action);
+  });
   const body = call?.[2] as { params?: Record<string, unknown> } | undefined;
   if (!body?.params) {
     throw new Error("missing computer.act request");
@@ -117,6 +128,8 @@ export function createVisionComputerTool(options: ComputerToolOptions = {}) {
 export function resetComputerToolMocks() {
   listNodesMock.mockReset();
   callGatewayToolMock.mockReset();
+  gatewayComputerStatusMock.mockReset();
+  gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
   sleepMock.mockReset();
   sleepMock.mockImplementation((ms: number, signal?: AbortSignal) => {
     if (signal?.aborted) {

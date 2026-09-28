@@ -9,6 +9,7 @@ import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/pl
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -18,6 +19,8 @@ import {
   type GatewayMethodOperatorScope,
 } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
+
+registerDreamingEnglish();
 
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 

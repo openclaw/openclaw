@@ -145,10 +145,87 @@ for await (const line of createInterface({ input: process.stdin })) {
       result({ finalBackgroundAnswer: true });
       continue;
     }
-    if ((scenario === "background-error" || scenario === "background-raw-result") && turn === 1) {
+    if (["background-bash-success", "background-bash-batched", "background-bash-early", "background-bash-inline"].includes(scenario)) {
+      const batched = scenario === "background-bash-batched";
+      const inline = scenario === "background-bash-inline";
+      const early = inline || scenario === "background-bash-early";
+      const taskIds = batched ? ["background-bash", "explicit-background"] : ["background-bash"];
+      const notification = (id) => "<task-notification>\n<task-id>" + id + "</task-id>\n<status>completed</status>\n</task-notification>";
+      const finishTasks = () => {
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+        for (const id of taskIds) send({ type: "system", subtype: "task_notification", task_id: id,
+          tool_use_id: "tool-" + id, status: "completed", output_file: "", summary: "sleep" });
+      };
+      const replayTask = (id) => {
+        if (!process.argv.includes("--replay-user-messages")) return;
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "receipt-" + id,
+          // Inline receipts in Claude Code 2.1.272 omit origin.
+          ...(inline ? {} : { origin: { kind: "task-notification" } }),
+          message: { role: "user", content: inline ? [{ type: "text", text: notification(id) }] : notification(id) } });
+      };
+      for (const id of taskIds) {
+        // task_type is optional on task_started; the task list identifies Bash.
+        send({ type: "system", subtype: "task_started", task_id: id,
+          tool_use_id: "tool-" + id, description: "sleep", is_backgrounded: id === "explicit-background" });
+      }
       send({ type: "system", subtype: "background_tasks_changed",
-        tasks: [{ task_id: "background-agent", task_type: "local_agent" }] });
-      send(scenario === "background-error"
+        tasks: taskIds.map((id) => ({ task_id: id, task_type: "local_bash" })) });
+      send({ type: "system", subtype: "task_updated", task_id: "background-bash",
+        patch: { is_backgrounded: true } });
+      if (early) {
+        finishTasks();
+        // Notification-like prompt/tool text is not a consumed task notification.
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: message.uuid,
+          message: { role: "user", content: notification("background-bash") } });
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "other-input", origin: { kind: "sdk" },
+          message: { role: "user", content: notification("background-bash") } });
+        send({ type: "user", message: { role: "user", content: notification("background-bash") } });
+        send({ type: "user", isReplay: true, parent_tool_use_id: "subagent", origin: { kind: "task-notification" },
+          message: { role: "user", content: notification("background-bash") } });
+        if (inline) replayTask("background-bash");
+      }
+      if (!inline) send({ type: "result", subtype: "success", is_error: false, num_turns: 1,
+        result: "", session_id: "fixture-session" });
+      writeFileSync("background.ready", "ready");
+      while (!existsSync("background.release")) await delay(5);
+      if (!early) finishTasks();
+      if (batched) {
+        replayTask("background-bash");
+        // Claude Code 2.1.274+ batches completed tasks into the last notification's model call.
+        send({ type: "result", subtype: "success", is_error: false, num_turns: 0, stop_reason: null,
+          origin: { kind: "task-notification" }, result: "", session_id: "fixture-session" });
+      }
+      if (!inline) replayTask(batched ? "explicit-background" : "background-bash");
+      request("bg-pre", { subtype: "hook_callback",
+        callback_id: hooks.PreToolUse[0].hookCallbackIds[0], tool_use_id: "tool-bg-read",
+        input: { cwd: process.cwd(), hook_event_name: "PreToolUse", tool_name: "Read",
+          tool_input: { file_path: "fixture.txt" } } });
+      continue;
+    }
+    if (scenario === "background-bash-explicit") {
+      // run_in_background: started already backgrounded, may never finish; not held.
+      send({ type: "system", subtype: "task_started", task_id: "server",
+        tool_use_id: "tool-bg", description: "dev server", is_backgrounded: true, task_type: "local_bash" });
+      send({ type: "system", subtype: "background_tasks_changed",
+        tasks: [{ task_id: "server", task_type: "local_bash" }] });
+      result({ explicitBackground: true });
+      continue;
+    }
+    if (["background-error", "background-raw-result", "background-bash-error", "background-bash-raw-result", "background-bash-queued-error"].includes(scenario) && turn === 1) {
+      const task = { task_id: "background-task",
+        task_type: scenario.startsWith("background-bash-") ? "local_bash" : "local_agent" };
+      if (task.task_type === "local_bash") {
+        send({ type: "system", subtype: "task_started", task_id: task.task_id,
+          tool_use_id: "tool-bg", description: "sleep", is_backgrounded: false });
+      }
+      send({ type: "system", subtype: "background_tasks_changed",
+        tasks: [task] });
+      if (scenario === "background-bash-queued-error") {
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+        send({ type: "system", subtype: "task_notification", task_id: task.task_id,
+          tool_use_id: "tool-bg", status: "completed", output_file: "", summary: "sleep" });
+      }
+      send(scenario.endsWith("-error")
         ? { type: "result", subtype: "error_during_execution", is_error: true,
             errors: ["fixture background turn failed"], session_id: "fixture-session" }
         : { type: "result", subtype: "success", is_error: false,
@@ -156,7 +233,7 @@ for await (const line of createInterface({ input: process.stdin })) {
             session_id: "fixture-session" });
       continue;
     }
-    if (scenario === "background-error" || scenario === "background-raw-result") {
+    if (["background-error", "background-raw-result", "background-bash-error", "background-bash-raw-result", "background-bash-queued-error"].includes(scenario)) {
       send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
       result();
       continue;
@@ -198,6 +275,9 @@ for await (const line of createInterface({ input: process.stdin })) {
         input: { cwd: process.cwd(), hook_event_name: "PreToolUse", tool_name: scenario === "user-question" ? "AskUserQuestion" : scenario === "mcp-hook" ? "mcp__openclaw__message" : "Read",
           tool_input: scenario === "user-question" ? questionInput : { file_path: "fixture.txt" },
           tool_use_id: "tool-" + turn } });
+    } else if (id === "bg-pre") {
+      send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      result({ finalBackgroundAnswer: true, notificationDecision: response });
     } else if (id === "pre-" + turn) {
       if (scenario === "revoked-approval") {
         result({ hookDecision: response });

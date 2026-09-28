@@ -4,9 +4,12 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getLatestUpdateFetchFailure,
+  getUpdateRun,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../infra/update-run-record.js";
+import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { formatUpdateOneLiner, getUpdateCheckResult } from "./status.update.js";
 
@@ -74,6 +77,59 @@ describe("status update ledger evidence", () => {
     expect(update.git).not.toHaveProperty("stale");
     expect(formatUpdateOneLiner(update)).toContain("up to date");
   });
+
+  it.each([
+    ["git-fetch", "git fetch", "network unavailable", "network error"],
+    ["git-fetch-tags", "git fetch tags", "would clobber existing tag", "tag conflict"],
+    ["git-fetch-target-tag", "git fetch target tag", "permission denied", "authentication failed"],
+    [
+      "git-target-inspection-fetch",
+      "git target inspection fetch",
+      "could not resolve host",
+      "network error",
+    ],
+    ["git-import-admitted-target", "git import admitted target", "invalid pack", "fetch-failed"],
+  ])(
+    "preserves released fetch readers and clears stale status for %s receipts",
+    async (name, persistedKey, stderrTail, detail) => {
+      for (const exitCode of [1, 0]) {
+        now += 1_000;
+        const run = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+        const startedAtMs = now;
+        const start: UpdateRunStep = { step: name, status: "in_progress", startedAtMs };
+        recordUpdateRunStep(run.runId, start);
+        now += 100;
+        const result = { name, exitCode, ...(exitCode ? { stderrTail } : {}) };
+        for (const receipt of updateRunStepsFromResultStep(result)) {
+          const completed = { ...receipt, endedAtMs: now };
+          recordUpdateRunStep(run.runId, completed);
+          expect(completed.step).toBe(name);
+        }
+        expect(start.step).toBe(name);
+        const persisted = getUpdateRun(run.runId);
+        expect(persisted?.steps.map((step) => step.step)).toEqual(["requested", persistedKey]);
+        expect(persisted?.steps[1]).toMatchObject({
+          status: exitCode ? "failed" : "completed",
+          exitCode,
+          startedAtMs,
+          endedAtMs: now,
+        });
+        finishUpdateRun(run.runId, { status: exitCode ? "failed" : "succeeded" });
+        if (exitCode) {
+          expect(getLatestUpdateFetchFailure()).toEqual({
+            reason: "fetch-failed",
+            failedAtMs: now,
+            runId: run.runId,
+            detail,
+          });
+          expect((await readStatus()).git?.stale?.detail).toBe(detail);
+        } else {
+          expect(getLatestUpdateFetchFailure()).toBeUndefined();
+          expect((await readStatus()).git).not.toHaveProperty("stale");
+        }
+      }
+    },
+  );
 
   it.each([
     "fetch-failed",
@@ -144,6 +200,104 @@ describe("status update ledger evidence", () => {
     });
     expect((await readStatus()).git?.stale?.detail).toBe("tag conflict");
   });
+
+  it.each(["step", "reason"] as const)(
+    "uses fetch outcome time across overlapping runs with a %s failure",
+    async (failureKind) => {
+      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      recordUpdateRunStep(newer.runId, {
+        step: "git fetch",
+        status: "completed",
+        endedAtMs: now,
+      });
+      now += 1000;
+      const failedAtMs = now;
+      if (failureKind === "step") {
+        recordUpdateRunStep(older.runId, {
+          step: "git fetch",
+          status: "failed",
+          endedAtMs: now,
+          detail: "network unavailable",
+        });
+      } else {
+        finishUpdateRun(older.runId, { status: "failed", reason: "fetch-failed" });
+      }
+      // Finishing an unrelated build does not make its earlier fetch more recent.
+      now += 1000;
+      recordUpdateRunStep(newer.runId, { step: "build", status: "completed", endedAtMs: now });
+      finishUpdateRun(newer.runId, { status: "succeeded" });
+      expect((await readStatus()).git?.stale).toMatchObject({ runId: older.runId, failedAtMs });
+      expect(formatUpdateOneLiner(await readStatus())).not.toContain("up to date");
+    },
+  );
+
+  it.each(["succeeded", "failed", "rolled-back", "skipped"] as const)(
+    "clears failure when an older-created run fetches later and ends %s",
+    async (status) => {
+      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      recordUpdateRunStep(newer.runId, {
+        step: "git fetch",
+        status: "failed",
+        endedAtMs: now,
+      });
+      now += 1000;
+      recordUpdateRunStep(older.runId, {
+        step: "git target inspection fetch",
+        status: "completed",
+        endedAtMs: now,
+      });
+      finishUpdateRun(older.runId, { status });
+      // Later run finalization must not re-date the earlier failed fetch.
+      now += 1000;
+      finishUpdateRun(newer.runId, { status: "failed", reason: "fetch-failed" });
+      const update = await readStatus();
+      expect(update.git).not.toHaveProperty("stale");
+      expect(formatUpdateOneLiner(update)).toContain("up to date");
+    },
+  );
+
+  it.each([true, false])(
+    "requires a strictly later completion to clear equal-time failure (failure created first: %s)",
+    async (failureFirst) => {
+      const first = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      const second = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      const failed = failureFirst ? first : second;
+      const completed = failureFirst ? second : first;
+      now += 1000;
+      recordUpdateRunStep(failed.runId, { step: "git fetch", status: "failed", endedAtMs: now });
+      recordUpdateRunStep(completed.runId, {
+        step: "git fetch",
+        status: "completed",
+        endedAtMs: now,
+      });
+      expect((await readStatus()).git?.stale?.runId).toBe(failed.runId);
+    },
+  );
+
+  it.each(["running", "succeeded"] as const)(
+    "does not re-date an untimestamped fetch from later %s run activity",
+    async (status) => {
+      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      recordUpdateRunStep(older.runId, { step: "git fetch", status: "completed" });
+      now += 1000;
+      const failed = recordRun({ status: "failed", reason: "fetch-failed" });
+      now += 1000;
+      if (status === "running") {
+        recordUpdateRunStep(older.runId, { step: "build", status: "completed", endedAtMs: now });
+      } else {
+        finishUpdateRun(older.runId, { status });
+      }
+      expect((await readStatus()).git?.stale?.runId).toBe(failed.runId);
+    },
+  );
 
   it("leaves fresh checks to Git without clearing the recorded failure", async () => {
     recordRun({ status: "failed", reason: "fetch-failed" });

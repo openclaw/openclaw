@@ -1,4 +1,6 @@
 import {
+  createMeetingBrowserAudioCaptureSource,
+  type MeetingBrowserAudioCaptureRequest,
   createMeetingLeaveSource,
   createMeetingTranscriptSource,
 } from "openclaw/plugin-sdk/meeting-page-script-runtime";
@@ -6,6 +8,22 @@ import { ZOOM_MEETING_SELECTORS } from "./zoom-meetings-selectors.js";
 import { zoomMeetingStatusCallSource } from "./zoom-meetings-status-call-source.js";
 import { zoomMeetingStatusPreludeSource } from "./zoom-meetings-status-prejoin-source.js";
 import { normalizeZoomMeetingUrlForReuse } from "./zoom-meetings-urls.js";
+
+export function zoomMeetingAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
+  return createMeetingBrowserAudioCaptureSource({
+    ...params,
+    audioOutputsGlobal: "__openclawZoomAudioOutputs",
+    ownershipSource: `
+      ${pageIdentityFunctionSource()}
+      const expectedIdentity = ${JSON.stringify(normalizeZoomMeetingUrlForReuse(params.meetingUrl))};
+      const state = window.__openclawZoomMeeting;
+      return Boolean(expectedIdentity && state?.sessionId === sessionId &&
+        state.identity === expectedIdentity && !state.leavePending &&
+        (meetingIdentity(location.href) === expectedIdentity ||
+          (state.inCallUrl === location.href && state.inCallControl?.isConnected)));
+    `,
+  });
+}
 
 function pageIdentityFunctionSource(): string {
   return `const meetingIdentity = (rawUrl) => {

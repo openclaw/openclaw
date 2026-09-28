@@ -15,22 +15,27 @@ const legacyAbsenceCache = new Set<string>();
  * Name the directory whenever this process is scoped to a non-default one. Say it in
  * prose rather than as a `VAR=value cmd` one-liner, which no Windows shell accepts.
  */
-function doctorFixInstruction(filePath: string): string {
+function doctorFixInstruction(filePath: string, env: NodeJS.ProcessEnv): string {
   const command = "Run `openclaw doctor --fix`";
-  return process.env.OPENCLAW_STATE_DIR?.trim()
+  return env.OPENCLAW_STATE_DIR?.trim()
     ? `${command} with OPENCLAW_STATE_DIR set to ${path.dirname(filePath)}`
     : command;
 }
 
 export class ExecApprovalsMigrationRequiredError extends Error {
-  constructor(filePath: string, operation?: "doctor", problem = "Legacy exec approvals exist") {
+  constructor(
+    filePath: string,
+    operation?: "doctor",
+    problem = "Legacy exec approvals exist",
+    env: NodeJS.ProcessEnv = process.env,
+  ) {
     super(
       operation === "doctor"
         ? formatDoctorStateRepairFailure(
             `${problem} at ${filePath}`,
             "Stop the Gateway and node hosts, then reconcile this file with a verified copy of the intended exec policy; preserve existing SQLite policy.",
           )
-        : `${problem} at ${filePath}. ${doctorFixInstruction(filePath)} before using exec approvals.`,
+        : `${problem} at ${filePath}. ${doctorFixInstruction(filePath, env)} before using exec approvals.`,
     );
     this.name = "ExecApprovalsMigrationRequiredError";
   }
@@ -38,9 +43,13 @@ export class ExecApprovalsMigrationRequiredError extends Error {
 
 /** Refuse runtime access until Doctor owns the one-time legacy import. */
 export function assertNoPendingLegacyExecApprovals(
-  options: { pathMayExist?: (filePath: string) => boolean; operation?: "doctor" } = {},
+  options: {
+    pathMayExist?: (filePath: string) => boolean;
+    operation?: "doctor";
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): void {
-  const sourcePath = resolveExecApprovalsPath();
+  const sourcePath = resolveExecApprovalsPath(options.env);
   if (legacyAbsenceCache.has(sourcePath)) {
     return;
   }
@@ -55,6 +64,8 @@ export function assertNoPendingLegacyExecApprovals(
         ? `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`
         : sourcePath,
       options.operation,
+      undefined,
+      options.env,
     );
   }
   legacyAbsenceCache.add(sourcePath);

@@ -1,13 +1,17 @@
 // Covers heartbeat model override routing.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
+  heartbeatTestConfig,
   seedSessionStore,
   type HeartbeatReplySpy,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
@@ -62,6 +66,7 @@ async function withHeartbeatFixture(
 }
 
 afterEach(() => {
+  resetSystemEventsForTest();
   vi.restoreAllMocks();
 });
 
@@ -194,19 +199,189 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   }
 
-  it("passes heartbeatModelOverride from defaults heartbeat config", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ model: "ollama/llama3.2:1b" });
-    expectReplyOptions(replyOpts, {
-      isHeartbeat: true,
-      heartbeatModelOverride: "ollama/llama3.2:1b",
-    });
-  });
-
   it("passes heartbeat timeoutSeconds as a reply-run timeout override", async () => {
     const replyOpts = await runDefaultsHeartbeat({ timeoutSeconds: 45 });
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
       timeoutOverrideSeconds: 45,
+    });
+  });
+
+  it.each<{
+    name: string;
+    source?: "exec-event" | "hook" | "cron" | "background-task" | "background-task-blocked";
+    eventText?: string;
+    contextKey?: string;
+    isolatedEvent?: boolean;
+    heartbeat?: Partial<HeartbeatConfig>;
+    defaultTimeoutSeconds?: number;
+    scheduledTasks?: boolean;
+    expectedTimeoutMs: number;
+  }>([
+    { name: "ordinary agent default", expectedTimeoutMs: 48 * 60 * 60_000 },
+    {
+      name: "ordinary agent default despite an explicit heartbeat limit",
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "ordinary agent default for a hook-carried completion",
+      source: "hook",
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "ordinary agent default with recurring heartbeat disabled",
+      heartbeat: { every: "0m" },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "configured agent limit",
+      defaultTimeoutSeconds: 900,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 900_000,
+    },
+    {
+      name: "unlimited agent limit",
+      defaultTimeoutSeconds: 0,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+    },
+    {
+      name: "heartbeat limit when scheduled tasks take precedence",
+      scheduledTasks: true,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 45_000,
+    },
+    {
+      name: "ordinary agent budget for background task review",
+      source: "background-task",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "configured agent budget for a blocked task continuation",
+      source: "background-task-blocked",
+      contextKey: "task:review:blocked-followup",
+      eventText: "Delegated task is blocked. Continue the remaining work.",
+      defaultTimeoutSeconds: 900,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 900_000,
+    },
+    {
+      name: "unlimited agent budget for a coalesced task review",
+      source: "hook",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      defaultTimeoutSeconds: 0,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+    },
+    {
+      name: "agent budget when a scheduled turn admits a task review",
+      source: "background-task",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      scheduledTasks: true,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "heartbeat budget for an unconsumed base-session task",
+      source: "background-task",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      heartbeat: { timeoutSeconds: 45, isolatedSession: true },
+      expectedTimeoutMs: 45_000,
+    },
+    {
+      name: "ordinary agent budget for a task on the isolated execution queue",
+      source: "background-task",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      isolatedEvent: true,
+      heartbeat: { timeoutSeconds: 45, isolatedSession: true },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "ordinary agent budget for a cron-carried task review",
+      source: "cron",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 48 * 60 * 60_000,
+    },
+    {
+      name: "heartbeat budget when a cron-carried review is deferred behind scheduled tasks",
+      source: "cron",
+      contextKey: "task:review",
+      eventText: "Delegated task completed. Review and verify the result.",
+      scheduledTasks: true,
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 45_000,
+    },
+    {
+      name: "heartbeat budget for an unrelated notification",
+      source: "background-task",
+      contextKey: "notification:status",
+      eventText: "Service status changed.",
+      heartbeat: { timeoutSeconds: 45 },
+      expectedTimeoutMs: 45_000,
+    },
+  ])("uses the $name with a pending event", async (testCase) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            timeoutSeconds: testCase.defaultTimeoutSeconds,
+            heartbeat: {
+              every: "30m",
+              target: "whatsapp",
+              ...testCase.heartbeat,
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = `${resolveMainSessionKey(cfg)}${testCase.isolatedEvent ? ":heartbeat" : ""}`;
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+      enqueueSystemEvent(
+        testCase.eventText ?? "Exec finished (gateway id=build, code 0)\nBuild passed",
+        { sessionKey, contextKey: testCase.contextKey },
+      );
+      replySpy.mockResolvedValue({ text: "Build passed; continuing verification." });
+      const source = testCase.source ?? "exec-event";
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        source,
+        intent: source === "exec-event" ? "event" : "immediate",
+        reason: source === "hook" ? "hook:wake" : source,
+        tasks: testCase.scheduledTasks
+          ? [{ jobId: "monitor", name: "status", prompt: "Check service status" }]
+          : undefined,
+        deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const [ctx, opts, passedConfig] = firstReplyCall(replySpy);
+      expect(ctx?.InternalTurnSource).toBe(
+        testCase.scheduledTasks
+          ? "heartbeat"
+          : source === "cron"
+            ? "cron"
+            : testCase.eventText
+              ? "heartbeat"
+              : "exec",
+      );
+      expect(
+        resolveAgentTimeoutMs({ cfg: passedConfig, overrideSeconds: opts?.timeoutOverrideSeconds }),
+      ).toBe(testCase.expectedTimeoutMs);
     });
   });
 
@@ -259,50 +434,18 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
-  it("uses isolated session key when isolatedSession is enabled", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "whatsapp",
-              isolatedSession: true,
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
-      const sessionKey = resolveMainSessionKey(cfg);
-      const result = await runHeartbeatWithSeed({
-        seedSession,
-        cfg,
-        sessionKey,
-        replySpy,
-      });
+  it("retires the bundle MCP runtime only for isolated heartbeat runs", async () => {
+    // Isolated runs mint a fresh session ID per heartbeat, so nothing reuses the runtime.
+    const isolatedOpts = await runDefaultsHeartbeat({ isolatedSession: true });
+    expectReplyOptions(isolatedOpts, { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true });
 
-      // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
-      expect(result.ctx?.SessionKey).toBe(`${sessionKey}:heartbeat`);
-    });
+    const sharedOpts = await runDefaultsHeartbeat({});
+    expectReplyOptions(sharedOpts, { isHeartbeat: true, cleanupBundleMcpOnRunEnd: undefined });
   });
 
   it("uses main session key when isolatedSession is not set", async () => {
     await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "whatsapp",
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
       const sessionKey = resolveMainSessionKey(cfg);
       const result = await runHeartbeatWithSeed({
         seedSession,

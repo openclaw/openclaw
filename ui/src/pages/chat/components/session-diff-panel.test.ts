@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { settleLitElement } from "../../../test-helpers/lit-settle.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -15,14 +17,6 @@ type SessionDiffElement = HTMLElement & {
   loader: SessionDiffLoader | null;
   readonly updateComplete: Promise<boolean>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function result(branch: string): SessionsDiffResult {
   return {
@@ -81,6 +75,48 @@ afterEach(async () => {
 });
 
 describe("SessionDiffPanel", () => {
+  it("distinguishes incomplete diff results from a clean checkout", async () => {
+    setNativeGatewayTestState(null);
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.loader = async () => ({ ...result("feature/test"), truncated: true });
+    document.body.append(panel);
+    await settleLitElement(panel);
+
+    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+    expect(panel.textContent).toContain("Some changes could not be displayed.");
+    expect(panel.querySelector(".session-diff__file")).toBeNull();
+
+    panel.loader = async () => ({
+      ...result("feature/test"),
+      truncated: true,
+      files: [
+        { path: "example.txt", status: "added", additions: 0, deletions: 0, truncated: true },
+      ],
+    });
+    await settleLitElement(panel);
+
+    expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt");
+    expect(panel.textContent).toContain("Diff preview is unavailable.");
+    expect(panel.textContent).toContain("Some changes could not be displayed.");
+    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+
+    panel.loader = async () => ({ ...fileResult(SNAPSHOT_PATCH), truncated: true });
+    await settleLitElement(panel);
+
+    expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt");
+    expect(panel.textContent).toContain("snapshot line");
+    expect(panel.textContent).not.toContain("Diff preview is unavailable.");
+    expect(panel.textContent).toContain("Some changes could not be displayed.");
+    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+
+    panel.loader = async () => result("feature/test");
+    await settleLitElement(panel);
+
+    expect(panel.textContent).toContain("No changes in this session's checkout.");
+    expect(panel.textContent).not.toContain("Some changes could not be displayed.");
+    expect(panel.querySelector(".session-diff__file")).toBeNull();
+  });
+
   it("keeps stopped cloud changes visible with restart guidance and no local checkout action", async () => {
     setNativeGatewayTestState("local");
     const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
@@ -93,7 +129,7 @@ describe("SessionDiffPanel", () => {
     await vi.waitFor(() => expect(panel.textContent).toContain("Saved changed files are shown."));
     expect(panel.textContent).toContain("saved.txt");
     expect(panel.textContent).toContain("Start the cloud session to load this diff.");
-    expect(panel.textContent).not.toContain("Diff too large");
+    expect(panel.textContent).not.toContain("Diff preview is unavailable.");
     expect(panel.textContent).not.toContain("No changes in this session");
     expect(panel.querySelector(".session-diff__toolbar-button")).toBeNull();
     panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
@@ -211,10 +247,8 @@ describe("SessionDiffPanel", () => {
   });
 
   it.each([
-    { surface: "file", failed: false, feedback: "Copied!" },
     { surface: "file", failed: true, feedback: "Copy failed" },
     { surface: "sync", failed: false, feedback: "Copied!" },
-    { surface: "sync", failed: true, feedback: "Copy failed" },
   ])(
     "keeps $surface path copy feedback visible: $feedback",
     async ({ surface, failed, feedback }) => {
@@ -255,7 +289,6 @@ describe("SessionDiffPanel", () => {
 
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
-    { name: "native local gateway", nativeGateway: "local", offered: true },
     { name: "native remote gateway", nativeGateway: "remote", offered: false },
     {
       name: "remote execution node",

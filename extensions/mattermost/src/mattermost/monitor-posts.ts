@@ -1,17 +1,15 @@
-// Mattermost plugin module normalizes accepted posts into inbound turns.
 import {
   formatInboundEnvelope,
+  formatInboundFromLabel,
   implicitMentionKindWhen,
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   resolveChannelGroups,
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
-import {
-  resolveChannelContextVisibilityMode,
-  shouldIncludeSupplementalContext,
-} from "openclaw/plugin-sdk/context-visibility-runtime";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
@@ -19,16 +17,17 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { MattermostPostSchema } from "./client.js";
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
   resolveMattermostMonitorInboundAccess,
+  shouldRetainMattermostSenderHistory,
 } from "./monitor-auth.js";
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
-  formatInboundFromLabel,
   matchesMattermostBotMention,
   normalizeMention,
   shouldDropEmptyMattermostBody,
@@ -40,12 +39,13 @@ import {
   formatMattermostInboundMediaText,
   formatMattermostPendingMediaText,
 } from "./monitor-resources.js";
+import { createMattermostThreadBackfill } from "./monitor-thread-backfill.js";
 import { dispatchMattermostInboundTurn } from "./monitor-turn.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import {
-  createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
   logInboundDrop,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -54,20 +54,21 @@ import { hasMattermostThreadParticipationWithPersistence } from "./thread-partic
 
 export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   const { account, botUserId, botUsername, cfg, core, groupPolicy, pairing, resources } = monitor;
+  const groups = resolveChannelGroups(cfg, "mattermost", account.accountId);
   const groupsConfigPath = resolveChannelGroupsConfigPath({
     cfg,
     channel: "mattermost",
     accountId: account.accountId,
-    groups: resolveChannelGroups(cfg, "mattermost", account.accountId),
+    groups,
   });
   const { resolveMattermostMedia, resolveUserInfo } = resources;
   const channelHistories = new Map<string, HistoryEntry[]>();
-  const historyLimit = Math.max(
-    0,
-    account.config.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    account.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
+    DEFAULT_GROUP_HISTORY_LIMIT,
   );
+
+  const recoverThread = createMattermostThreadBackfill({ monitor, channelHistories, historyLimit });
 
   return async (
     post: MattermostIngressPost,
@@ -127,7 +128,11 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       agentId: route.agentId,
       sessionKey,
     });
-    const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
+    const historyKey = resolveMattermostPendingHistoryKey({
+      kind,
+      sessionKey,
+      threadRootId: effectiveReplyToId,
+    });
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
     const pendingBody = formatMattermostPendingMediaText({ body: rawText, media: nativeMedia });
@@ -224,14 +229,11 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         // Trigger allowlists do not hide history unless context visibility opts in.
         // Denied senders must still return before commands, sessions, or replies.
         if (
-          shouldIncludeSupplementalContext({
-            mode: resolveChannelContextVisibilityMode({
-              cfg,
-              channel: "mattermost",
-              accountId: account.accountId,
-            }),
-            kind: "history",
-            senderAllowed: false,
+          shouldRetainMattermostSenderHistory({
+            cfg,
+            accountId: account.accountId,
+            kind,
+            ingress: accessDecision.ingress,
           })
         ) {
           recordPendingHistory();
@@ -288,14 +290,46 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         groupId: channelId,
         requireMentionOverride: account.requireMention,
       });
+    const requireMentionInBotThreads =
+      groups?.[channelId]?.requireMentionInBotThreads ??
+      groups?.["*"]?.requireMentionInBotThreads ??
+      account.config.requireMentionInBotThreads;
+    const nativeThreadRootId = normalizeOptionalString(post.root_id);
+    let isBotOwnedThread = false;
+    if (kind !== "direct" && nativeThreadRootId && requireMentionInBotThreads !== undefined) {
+      try {
+        const root = MattermostPostSchema.safeParse(
+          await monitor.client.request<unknown>(`/posts/${encodeURIComponent(nativeThreadRootId)}`),
+        );
+        isBotOwnedThread =
+          root.success &&
+          root.data.id === nativeThreadRootId &&
+          root.data.channel_id === channelId &&
+          root.data.user_id === botUserId &&
+          !root.data.delete_at &&
+          !normalizeOptionalString(root.data.root_id);
+      } catch (err) {
+        monitor.logVerboseMessage(
+          `mattermost: failed resolving thread owner channel=${channelId} root=${nativeThreadRootId}: ${String(err)}`,
+        );
+      }
+    }
+    const botThreadPolicy = resolveBotThreadMentionPolicy({
+      isBotOwnedThread,
+      requireMentionInBotThreads,
+      requireMention: shouldRequireMention || oncharEnabled,
+      implicitMentionKinds: implicitMentionKindWhen("bot_thread_participant", threadAlreadyEngaged),
+    });
+    const botThreadMentionRequired = isBotOwnedThread && requireMentionInBotThreads === true;
     const mentionDecision = resolveMattermostInboundMentionDecision({
       cfg,
       accountId: account.accountId,
       kind,
-      requireMention: shouldRequireMention || oncharEnabled,
-      canDetectMention: canDetectMention || oncharEnabled,
+      requireMention: botThreadPolicy.requireMention,
+      // Explicit bot-thread requirements stay closed when no mention detector is available.
+      canDetectMention: canDetectMention || oncharEnabled || botThreadMentionRequired,
       wasMentioned: wasMentioned || oncharTriggered,
-      implicitMentionKinds: implicitMentionKindWhen("bot_thread_participant", threadAlreadyEngaged),
+      implicitMentionKinds: botThreadPolicy.implicitMentionKinds,
       allowTextCommands,
       hasControlCommand: isControlCommand,
       commandAuthorized,
@@ -322,7 +356,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         reason: "no mention",
         target: channelId,
         onceKey: JSON.stringify([account.accountId, channelId]),
-        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(channelId)}].${botThreadMentionRequired ? "requireMentionInBotThreads" : "requireMention"}=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
       recordPendingHistory();
       return;
@@ -373,9 +407,45 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       previousTimestamp,
       envelope: envelopeOptions,
     });
+    const backfill =
+      historyKey && effectiveReplyToId
+        ? await recoverThread({
+            historyKey,
+            threadRootId: effectiveReplyToId,
+            currentPostId: post.id,
+            currentPostTimestamp: post.create_at ?? 0,
+            agentId: route.agentId,
+            channelId,
+            kind,
+          })
+        : undefined;
+    if (backfill && !backfill.current) {
+      monitor.logVerboseMessage("mattermost: drop stale thread turn after session rotation");
+      return;
+    }
+    // Preserve concurrent live posts in the shared window, but do not render the
+    // trigger or a later post into this older turn's supplemental context.
+    const turnHistories = new Map<string, HistoryEntry[]>(
+      historyKey
+        ? [
+            [
+              historyKey,
+              (backfill?.history ?? channelHistories.get(historyKey) ?? [])
+                .filter(
+                  (entry) =>
+                    !allMessageIds.includes(entry.messageId ?? "") &&
+                    (entry.timestamp === undefined ||
+                      post.create_at == null ||
+                      entry.timestamp <= post.create_at),
+                )
+                .slice(-historyLimit),
+            ],
+          ]
+        : [],
+    );
     let combinedBody = body;
     if (historyKey) {
-      const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
+      const channelHistory = createChannelHistoryWindow({ historyMap: turnHistories });
       combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: historyLimit,
@@ -397,7 +467,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
 
     const inboundHistory =
       historyKey && historyLimit > 0
-        ? createChannelHistoryWindow({ historyMap: channelHistories }).buildInboundHistory({
+        ? createChannelHistoryWindow({ historyMap: turnHistories }).buildInboundHistory({
             historyKey,
             limit: historyLimit,
           })

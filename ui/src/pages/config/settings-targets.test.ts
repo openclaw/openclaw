@@ -28,6 +28,8 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["webSearch", "/settings/search", "", ""],
+      ["sessionStorage", "/settings/ai-agents", "?section=session", "#settings-session-storage"],
       [
         "meetingCapture",
         "/settings/communications",
@@ -44,6 +46,7 @@ describe("settings search target manifest", () => {
       ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
+      ["personalInstructions", "/settings/profile", "", "#settings-profile-personal-instructions"],
       ["githubConnections", "/settings/profile", "", "#settings-profile-github-connections"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
       [
@@ -65,6 +68,12 @@ describe("settings search target manifest", () => {
         "#settings-appearance-accent",
       ],
       [
+        "appearanceTypography",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-appearance-typography",
+      ],
+      [
         "appearanceTextSize",
         "/settings/appearance",
         "?section=__appearance__",
@@ -75,6 +84,12 @@ describe("settings search target manifest", () => {
         "/settings/appearance",
         "?section=__appearance__",
         "#settings-appearance-sidebar",
+      ],
+      [
+        "sessionSources",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-session-sources",
       ],
       [
         "appearanceChat",
@@ -125,41 +140,34 @@ describe("settings search target manifest", () => {
     expect(SETTINGS_SEARCH_TARGETS.modelBehavior.labelKey).toBe("quickSettings.model.title");
   });
 
-  it("marks only the identity-dependent target unavailable before connection", () => {
+  it("marks identity-dependent targets unavailable before connection", () => {
     expect(targets.filter((target) => target.requiresIdentity)).toEqual([
       SETTINGS_SEARCH_TARGETS.personal,
+      SETTINGS_SEARCH_TARGETS.personalInstructions,
     ]);
   });
 });
 
 describe("settings config section ownership", () => {
-  const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts", "transcripts"]],
-    ["appearance", ["__appearance__", "ui"]],
-    ["notifications", ["__notifications__"]],
-    ["security", ["security", "approvals"]],
-    ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
-    ["mcp", ["mcp"]],
-    ["memory", ["memory"]],
-    ["talk", ["talk"]],
-    ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
-    ["updates", ["update"]],
-    ["ai-agents", ["agents", "skills", "tools", "session"]],
+  const pages: readonly ConfigPageId[] = [
+    "communications",
+    "appearance",
+    "notifications",
+    "security",
+    "automation",
+    "mcp",
+    "memory",
+    "talk",
+    "infrastructure",
+    "updates",
+    "ai-agents",
   ];
 
-  it.each(pages)("routes every %s section back to its rendering page", (pageId, sections) => {
-    expect(configSectionKeysForPage(pageId)).toEqual(sections);
-
-    for (const section of sections) {
-      expect(configPageForSection(section)).toBe(pageId);
-    }
-  });
-
   it("assigns each curated section to exactly one page", () => {
-    const sections = pages.flatMap(([, pageSections]) => pageSections);
+    const sections = pages.flatMap((page) => configSectionKeysForPage(page) ?? []);
 
     expect(new Set(sections).size).toBe(sections.length);
-    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual(sections.toSorted());
+    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());
   });
 
   it("keeps uncurated sections on Advanced", () => {
@@ -167,6 +175,11 @@ describe("settings config section ownership", () => {
     expect(configPageForSection("secrets")).toBe("advanced");
     expect(configPageForSection("broadcast")).toBe("advanced");
     expect(configPageForSection("models")).toBe("advanced");
+  });
+
+  it("routes plugin policy to the dedicated plugin settings page", () => {
+    expect(configPageForSection("plugins")).toBe("plugin-settings");
+    expect(SCOPED_CONFIG_SECTION_KEYS.has("plugins")).toBe(true);
   });
 
   it("keeps Advanced free of a curated include list", () => {

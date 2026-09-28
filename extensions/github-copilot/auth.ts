@@ -34,10 +34,7 @@ export async function resolveFirstGithubToken(params: {
   const profileIds = listProfilesForProvider(authStore, PROVIDER_ID);
   const hasProfile = profileIds.length > 0;
   const requestedProfileId = params.profileId?.trim();
-  const githubToken =
-    [params.env.COPILOT_GITHUB_TOKEN, params.env.GH_TOKEN, params.env.GITHUB_TOKEN]
-      .map((value) => normalizeOptionalSecretInput(value))
-      .find((value) => value !== undefined) ?? "";
+  const githubToken = normalizeOptionalSecretInput(params.env.COPILOT_GITHUB_TOKEN) ?? "";
   const providerConfig = params.config?.models?.providers?.[PROVIDER_ID];
   const configuredRefCanOwnAuth =
     providerConfig?.auth === undefined ||

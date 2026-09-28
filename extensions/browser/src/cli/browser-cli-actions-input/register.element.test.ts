@@ -1,5 +1,6 @@
 // Browser tests cover register.element plugin behavior.
 import { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
@@ -7,7 +8,6 @@ import {
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
-import * as cliCoreApiModule from "../core-api.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
@@ -21,12 +21,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserElementCommands } = await import("./register.element.js");
 
@@ -152,7 +150,9 @@ describe("browser element commands", () => {
     await program.parseAsync(argv, { from: "user" });
 
     expect(getLastActionBody()).toMatchObject(expectedBody);
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({
+      timeoutMs: 126_250,
+    });
   });
 
   it("rejects a blank required ref before dispatch", async () => {
@@ -245,6 +245,6 @@ describe("browser element commands", () => {
     const timeoutRequest = timeoutCall?.[1] as { body?: { timeoutMs?: number } } | undefined;
     const timeoutOptions = timeoutCall?.[2] as { timeoutMs?: number } | undefined;
     expect(timeoutRequest?.body?.timeoutMs).toBe(20_000);
-    expect(timeoutOptions?.timeoutMs).toBe(25_250);
+    expect(timeoutOptions?.timeoutMs).toBe(126_250);
   });
 });

@@ -101,7 +101,7 @@ Maintenance changes 5,265 to 6,016 of 6,016. See [Maintainer and Internal Change
 - test(whatsapp): await automatic redelivery retries [#130101](https://github.com/openclaw/openclaw/pull/130101)
 - refactor(transcription): remove duplicate connection state [#130104](https://github.com/openclaw/openclaw/pull/130104)
 - fix(ci): prevent update scenarios from poisoning later CLI checks [#130121](https://github.com/openclaw/openclaw/pull/130121)
-- chore(skills): sync autoreview to TruffleHog-based canonical [#130122](https://github.com/openclaw/openclaw/pull/130122)
+- chore(skills): sync autoreview credential scanning from canonical source [#130122](https://github.com/openclaw/openclaw/pull/130122)
 - refactor(talk-voice): use canonical base URL normalization [#130126](https://github.com/openclaw/openclaw/pull/130126)
 - refactor(matrix): remove obsolete private runtime forwarding layers [#130129](https://github.com/openclaw/openclaw/pull/130129)
 - refactor(lmstudio): unify configured auth resolution [#130138](https://github.com/openclaw/openclaw/pull/130138)

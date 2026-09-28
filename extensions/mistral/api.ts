@@ -1,4 +1,6 @@
-// Mistral API module exposes the plugin public contract.
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMistralReasoningEffortMap } from "./provider-policy-api.js";
+
 export { buildMistralProvider } from "./provider-catalog.js";
 export {
   buildMistralModelDefinition,
@@ -7,35 +9,18 @@ export {
   MISTRAL_DEFAULT_MODEL_REF,
 } from "./model-definitions.js";
 export { applyMistralConfig, applyMistralProviderConfig } from "./onboard.js";
-
-const MISTRAL_MAX_TOKENS_FIELD = "max_tokens";
+export {
+  MISTRAL_SMALL_LATEST_ID,
+  MISTRAL_SMALL_4_ID,
+  MISTRAL_MEDIUM_3_5_ID,
+} from "./provider-policy-api.js";
 
 export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   supportsStore: false,
   supportsPromptCacheKey: true,
   supportsLongCacheRetention: false,
-  maxTokensField: MISTRAL_MAX_TOKENS_FIELD,
-} as const satisfies {
-  supportsStore: boolean;
-  supportsPromptCacheKey: boolean;
-  supportsLongCacheRetention: boolean;
-  maxTokensField: "max_tokens";
-};
-
-const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
-  off: "none",
-  minimal: "none",
-  low: "high",
-  medium: "high",
-  high: "high",
-  xhigh: "high",
-  adaptive: "high",
-  max: "high",
-};
-
-export const MISTRAL_SMALL_LATEST_ID = "mistral-small-latest";
-export const MISTRAL_SMALL_4_ID = "mistral-small-2603";
-export const MISTRAL_MEDIUM_3_5_ID = "mistral-medium-3-5";
+  maxTokensField: "max_tokens",
+} as const;
 
 export function resolveMistralCompatPatch(model: { id?: string }): {
   supportsStore: boolean;
@@ -45,46 +30,22 @@ export function resolveMistralCompatPatch(model: { id?: string }): {
   maxTokensField: "max_tokens";
   reasoningEffortMap?: Record<string, string>;
 } {
-  const reasoningEnabled =
-    model.id === MISTRAL_SMALL_LATEST_ID ||
-    model.id === MISTRAL_SMALL_4_ID ||
-    model.id === MISTRAL_MEDIUM_3_5_ID;
+  const reasoningEffortMap = resolveMistralReasoningEffortMap(model.id);
   return {
     ...MISTRAL_MODEL_TRANSPORT_PATCH,
-    supportsReasoningEffort: reasoningEnabled,
-    reasoningEffortMap: reasoningEnabled ? MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP : undefined,
+    supportsReasoningEffort: reasoningEffortMap !== undefined,
+    reasoningEffortMap,
   };
 }
 
-function compatMatchesResolved(
-  compat: Record<string, unknown> | undefined,
-  modelId: string | undefined,
-): boolean {
-  const expected = resolveMistralCompatPatch({ id: modelId });
-  return (
-    compat?.supportsStore === expected.supportsStore &&
-    compat?.supportsPromptCacheKey === expected.supportsPromptCacheKey &&
-    compat?.supportsLongCacheRetention === expected.supportsLongCacheRetention &&
-    compat?.supportsReasoningEffort === expected.supportsReasoningEffort &&
-    compat?.maxTokensField === expected.maxTokensField &&
-    compat?.reasoningEffortMap === expected.reasoningEffortMap
-  );
-}
-
 export function applyMistralModelCompat<T extends { compat?: unknown; id?: string }>(model: T): T {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>)
-      : undefined;
-  if (compatMatchesResolved(compat, model.id)) {
+  const compat = asOptionalObjectRecord(model.compat);
+  const patch = resolveMistralCompatPatch(model);
+  if (Object.entries(patch).every(([key, value]) => compat?.[key] === value)) {
     return model;
   }
-  const patch = resolveMistralCompatPatch(model);
   return {
     ...model,
-    compat: {
-      ...compat,
-      ...patch,
-    } as T extends { compat?: infer TCompat } ? TCompat : never,
-  } as T;
+    compat: { ...compat, ...patch },
+  };
 }

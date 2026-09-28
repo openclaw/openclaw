@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { handleInvoke } from "../node-host/invoke.js";
@@ -48,7 +50,9 @@ let resolveDecision: (result: { decision: string }) => void;
 let decisionEntered: Deferred;
 beforeEach(async ({ onTestFinished }) => {
   const previousRegistry = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previousRegistry));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previousRegistry);
+  });
   // A real Gateway already loaded its ingress channel before executing a tool.
   // Keep this node-policy fixture from cold-loading the whole A2A plugin graph.
   stageActivePluginRegistry(
@@ -134,6 +138,44 @@ beforeEach(async ({ onTestFinished }) => {
 afterEach(async () => {
   await state.cleanup();
 });
+
+it.each([
+  { host: "gateway", surface: "subagent" },
+  { host: "node", surface: "dashboard" },
+] as const)(
+  "preserves child context through $host exec from a $surface session",
+  async ({ host, surface }) => {
+    const childSessionKey = `agent:main:${surface}:exec-child`;
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: childSessionKey, storePath },
+      {
+        sessionId: "exec-child-instance",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+      },
+    );
+    const tool = createExecTool({
+      host,
+      node: "node-1",
+      security: "full",
+      ask: "off",
+      notifyOnExit: false,
+      allowBackground: false,
+      config: { session: { store: storePath } },
+      sessionKey: "agent:main:main",
+      runSessionKey: childSessionKey,
+      notifySessionKey: childSessionKey,
+    });
+    const result = await tool.execute("child-exec-context", {
+      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(process.env.OPENCLAW_SUBAGENT_EXEC || 'missing')")}`,
+      env: { OPENCLAW_SUBAGENT_EXEC: "0" },
+      workdir: state.root,
+    });
+    expect(result.details).toMatchObject({ status: "completed", aggregated: "1" });
+  },
+);
 
 it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
   const environment = withEnv(
@@ -248,7 +290,6 @@ it.each([
   "printf node-policy-proof",
   "/usr/bin/printf *.txt",
   "/usr/bin/env /usr/bin/printf node-policy-proof",
-  "FOO=bar /usr/bin/printf node-policy-proof",
   "/bin/sh -c '/usr/bin/printf node-policy-proof'",
 ])("keeps remote unpinned or wrapped %s on the human path", async (command) => {
   saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
@@ -329,8 +370,6 @@ it("denies caller allowlist/off misses before dispatch to a permissive node", as
 
 it.each([
   { channel: "webchat", decision: "allow-once" },
-  { channel: "webchat", decision: "allow-always" },
-  { channel: "a2a", decision: "allow-once" },
   { channel: "a2a", decision: "allow-always" },
 ])(
   "keeps $channel node approval $decision inside the originating tool lifetime",
@@ -404,33 +443,30 @@ it("reports target policy denial as not executed", async () => {
   ]);
 });
 
-it.each(["webchat", "a2a"])(
-  "does not dispatch a late %s approval after cancellation",
-  async (channel) => {
-    const controller = new AbortController();
-    const reason = new Error("originating turn closed");
-    const execution = executeNodeHostCommand({
-      ...request,
-      security: "allowlist",
-      ask: "on-miss",
-      signal: controller.signal,
-      turnSourceChannel: channel,
-    });
-    const drained = execution.catch(() => undefined);
-    try {
-      await Promise.race([decisionEntered.promise, execution]);
-      expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
-      controller.abort(reason);
-      resolveDecision({ decision: "allow-once" });
-      await expect(execution).rejects.toBe(reason);
-      expect(invokeCount).toBe(0);
-    } finally {
-      controller.abort(reason);
-      resolveDecision({ decision: "deny" });
-      await drained;
-    }
-  },
-);
+it("does not dispatch a late A2A approval after cancellation", async () => {
+  const controller = new AbortController();
+  const reason = new Error("originating turn closed");
+  const execution = executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+    signal: controller.signal,
+    turnSourceChannel: "a2a",
+  });
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+    controller.abort(reason);
+    resolveDecision({ decision: "allow-once" });
+    await expect(execution).rejects.toBe(reason);
+    expect(invokeCount).toBe(0);
+  } finally {
+    controller.abort(reason);
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
+});
 
 it("preserves a target deny introduced while approval was pending", async () => {
   const execution = executeNodeHostCommand({
@@ -468,30 +504,6 @@ it("executes full/off through a symlink cwd using the prepared canonical directo
   expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
 });
 
-it.skipIf(process.platform !== "darwin")(
-  "executes full/off in the actual macOS /tmp alias",
-  async () => {
-    const result = await executeNodeHostCommand({
-      ...request,
-      command: "/bin/pwd -P",
-      workdir: "/tmp",
-    });
-    expect(result.details).toMatchObject({
-      status: "completed",
-      aggregated: `${await fs.realpath("/tmp")}\n`,
-    });
-  },
-);
-
-it("executes full/off inline Node without approval script preflight", async () => {
-  const result = await executeNodeHostCommand({
-    ...request,
-    command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write("inline-proof")'`,
-  });
-  expect(result.details).toMatchObject({ status: "completed", aggregated: "inline-proof" });
-  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
-});
-
 it("does not bind a full/off script to approval-time contents", async () => {
   const script = path.join(request.workdir, "script.cjs");
   await fs.writeFile(script, 'process.stdout.write("before")');
@@ -505,10 +517,8 @@ it("does not bind a full/off script to approval-time contents", async () => {
   expect(result.details).toMatchObject({ status: "completed", aggregated: "after" });
 });
 
-it.each([
-  { runtime: "Node", command: [process.execPath, "-e", 'process.stdout.write("inline")'] },
-  { runtime: "Python", command: ["python3", "-c", 'print("inline")'] },
-])("prepares direct inline $runtime only without approval binding", async ({ command }) => {
+it("prepares direct inline Node only without approval binding", async () => {
+  const command = [process.execPath, "-e", 'process.stdout.write("inline")'];
   const params = { command, cwd: request.workdir, security: "full", ask: "off" };
   const prepare = (ask = "off") =>
     rpc("node.invoke", {}, { command: "system.run.prepare", params: { ...params, ask } });

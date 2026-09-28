@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -8,6 +9,7 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatWorktreeGcResult } from "../../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -15,6 +17,7 @@ import {
   WorktreeSnapshotError,
 } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -24,6 +27,10 @@ type WorktreeService = Pick<
   ManagedWorktreeService,
   "create" | "gc" | "list" | "listRepositoryBranches" | "remove" | "restore"
 >;
+
+function publicWorktreeRecord({ gcProtection: _gcProtection, ...record }: ManagedWorktreeRecord) {
+  return record;
+}
 
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters"));
@@ -65,7 +72,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      respond(true, { worktrees: await service.list() }, undefined);
+      respond(true, { worktrees: (await service.list()).map(publicWorktreeRecord) }, undefined);
     },
     "worktrees.create": async (opts) => {
       const { params, respond } = opts;
@@ -80,14 +87,16 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
       respond(
         true,
-        await service.create({
-          repoRoot,
-          name: params.name,
-          baseRef: params.baseRef,
-          ownerKind: "manual",
-          // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
-          runSetupScript: scopes.includes(ADMIN_SCOPE),
-        }),
+        publicWorktreeRecord(
+          await service.create({
+            repoRoot,
+            name: params.name,
+            baseRef: params.baseRef,
+            ownerKind: "manual",
+            // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
+            runSetupScript: scopes.includes(ADMIN_SCOPE),
+          }),
+        ),
         undefined,
       );
     },
@@ -98,7 +107,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       try {
         const result = await service.remove({
-          id: params.id,
+          id: normalizeOptionalString(params.id) ?? params.id,
           reason: "manual-delete",
           allowSnapshotLoss: params.force,
         });
@@ -126,7 +135,8 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      respond(true, await service.restore({ id: params.id }), undefined);
+      const id = normalizeOptionalString(params.id) ?? params.id;
+      respond(true, publicWorktreeRecord(await service.restore({ id })), undefined);
     },
     "worktrees.branches": async (opts) => {
       const { params, respond } = opts;
@@ -152,14 +162,25 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       const cfg = context.getRuntimeConfig();
       const limits = resolveWorktreeCleanupLimits();
-      respond(
-        true,
-        await service.gc({
-          limits,
-          ...createManagedWorktreeOwnerPolicy(cfg),
-        }),
-        undefined,
-      );
+      const result = await service.gc({
+        limits,
+        retryDeferred: true,
+        ...createManagedWorktreeOwnerPolicy(cfg),
+      });
+      if (result.outcome !== "completed") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, formatWorktreeGcResult(result), {
+            details: result,
+            // A retry could repeat any deletion that already committed.
+            retryable: false,
+          }),
+        );
+        return;
+      }
+      const { removed, orphansDeleted, snapshotsPruned } = result;
+      respond(true, { removed, orphansDeleted, snapshotsPruned }, undefined);
     },
   };
 }

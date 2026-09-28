@@ -2,7 +2,6 @@
 // Wraps config IO with mutable test runtime state for integration tests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import type {
@@ -54,7 +53,7 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
       : {};
   const defaults = {
     model: { primary: "anthropic/claude-opus-4-6" },
-    workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
+    workspace: path.join(testConfigRoot.value, "workspace"),
     ...fileDefaults,
     ...testState.agentConfig,
   };

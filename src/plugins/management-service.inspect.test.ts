@@ -20,13 +20,13 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { inspectManagedPlugin } = await import("./management-service.js");
 
 describe("managed plugin inspection", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });

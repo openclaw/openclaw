@@ -18,16 +18,20 @@ import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagno
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import { FailoverError } from "./failover-error.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
+import { resolveEmbeddedRunTerminalTimeout } from "./embedded-agent-runner/run/terminal-timeout.js";
+import { FailoverError, recordModelFallbackStop } from "./failover-error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { type ModelFallbackStepHandler, runFallbackAttempt } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import {
+  createSessionPlacementSettlementClosedAbortError,
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "./run-termination.js";
 import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 vi.mock("../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: () => undefined,
@@ -156,10 +160,102 @@ const stopCases: Array<{
   },
   { reason: "agent_run_direct_abort", make: () => ({ error: createAgentRunDirectAbortError() }) },
   { reason: "agent_run_restart_abort", make: () => ({ error: createAgentRunRestartAbortError() }) },
+  {
+    reason: "session_placement_settlement_closed",
+    make: () => ({ error: createSessionPlacementSettlementClosedAbortError() }),
+  },
   { reason: "terminal_abort_wrapper", make: async () => ({ error: await terminalAbortWrapper() }) },
 ];
 
 describe("model fallback chain-stop diagnostics", () => {
+  it("preserves an idle-breaker result without reporting fallback success or trying another model", async () => {
+    const terminalResult = {
+      meta: {
+        durationMs: 1,
+        modelFallbackStopReason: "idle_timeout_circuit_breaker",
+        error: { kind: "retry_limit", message: "fixture breaker" },
+      },
+    };
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("fixture failure", { reason: "format" }))
+      .mockResolvedValueOnce(terminalResult);
+    const result = await runWithModelFallback({
+      ...fallbackOptions,
+      fallbacksOverride: ["fixture-next/fixture-model", "fixture-last/fixture-model"],
+      run,
+      classifyResult: () => ({ stopReason: "idle_timeout_circuit_breaker" }),
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result).toBe(terminalResult);
+    await capture.flush();
+    const records = fallbackRecords();
+    expect(records).toHaveLength(2);
+    expect(records[0]?.attributes?.decision).toBe("candidate_failed");
+    expect(records[1]?.attributes).toMatchObject({
+      event: "model_fallback_chain_stopped",
+      reason: "idle_timeout_circuit_breaker",
+      candidateProvider: "fixture-next",
+      candidateModel: "fixture-model",
+    });
+  });
+
+  it.each([false, true])(
+    "attributes returned timeouts only to an active candidate chain (duplicate=%s)",
+    async (duplicate) => {
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
+      });
+      const run = vi.fn(async () =>
+        resolveEmbeddedRunTerminalTimeout({
+          terminalPrepared: {
+            timedOutDuringPrompt: true,
+            hasSuccessfulFinalAssistantAfterPromptTimeout: false,
+            hasPartialAssistantTextAfterPromptTimeout: false,
+            payloads: [],
+            payloadsWithToolMedia: [],
+            agentMeta: {
+              sessionId: "chain-stop-session",
+              provider: "runtime-provider",
+              model: "runtime-model",
+            },
+            attemptToolSummary: undefined,
+            failureSignal: undefined,
+          },
+          attempt,
+          terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant: undefined }),
+          resolveReplayInvalid: () => false,
+          setTerminalLifecycleMeta: vi.fn(),
+          startedAtMs: Date.now(),
+        }),
+      );
+      const result = await runWithModelFallback({
+        ...fallbackOptions,
+        fallbacksOverride: duplicate
+          ? ["fixture-primary/fixture-model"]
+          : fallbackOptions.fallbacksOverride,
+        run,
+        classifyResult: () => ({ stopReason: "agent_run_terminal_timeout" }),
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(result.result?.meta.agentMeta).toMatchObject({
+        provider: "runtime-provider",
+        model: "runtime-model",
+      });
+      await capture.flush();
+      const records = fallbackRecords();
+      expect(records).toHaveLength(duplicate ? 0 : 1);
+      if (!duplicate) {
+        expect(records[0]?.attributes).toMatchObject({
+          event: "model_fallback_chain_stopped",
+          reason: "agent_run_terminal_timeout",
+          candidateProvider: "fixture-primary",
+          candidateModel: "fixture-model",
+        });
+      }
+    },
+  );
+
   it.each(stopCases)(
     "records $reason once without replacing or retrying the failure",
     async (row) => {
@@ -467,3 +563,44 @@ describe("model fallback chain-stop diagnostics", () => {
     },
   );
 });
+
+it.each(["cli_max_turns", "cli_turn_stopped", "cleanup"])(
+  "does not label %s as a closed settlement",
+  async (code) => {
+    const error = new FailoverError("terminal stop", { reason: "unknown", code });
+    if (code === "cleanup") {
+      recordModelFallbackStop(error);
+    }
+    const run = vi.fn().mockRejectedValue(error);
+    await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    await capture.flush();
+    expect(
+      fallbackRecords().some(
+        (record) => record.attributes?.reason === "session_placement_settlement_closed",
+      ),
+    ).toBe(false);
+  },
+);
+
+it.each(["cause", "aggregate", "error"])(
+  "retains closed settlement diagnostics through %s",
+  async (kind) => {
+    const closed = createSessionPlacementSettlementClosedAbortError();
+    const error =
+      kind === "cause"
+        ? new Error("wrapper", { cause: closed })
+        : kind === "aggregate"
+          ? new AggregateError([closed], "wrapper")
+          : { error: closed };
+    const run = vi.fn().mockRejectedValue(error);
+    await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    await capture.flush();
+    expect(
+      fallbackRecords().some(
+        (record) => record.attributes?.reason === "session_placement_settlement_closed",
+      ),
+    ).toBe(true);
+  },
+);

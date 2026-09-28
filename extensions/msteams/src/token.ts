@@ -1,15 +1,13 @@
-// Msteams plugin module implements token behavior.
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MSTeamsConfig } from "../runtime-api.js";
-import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
-import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
-import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "./secret-input.js";
+} from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsConfig } from "../runtime-api.js";
+import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
+import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
 // ── Credential types ───────────────────────────────────────────────────────
 
@@ -158,20 +156,12 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
-  return loadMSTeamsDelegatedTokens();
-}
-
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  saveMSTeamsDelegatedTokens(tokens);
-}
-
 export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
 }): Promise<string | undefined> {
-  const tokens = loadDelegatedTokens();
+  const tokens = await loadMSTeamsDelegatedTokens();
   if (!tokens) {
     return undefined;
   }
@@ -190,7 +180,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    saveDelegatedTokens(refreshed);
+    await saveMSTeamsDelegatedTokens(refreshed);
     return refreshed.accessToken;
   } catch {
     return undefined;

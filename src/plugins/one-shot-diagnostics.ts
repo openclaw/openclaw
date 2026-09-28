@@ -99,7 +99,10 @@ export async function startOneShotDiagnosticsExporters(params: {
     if (!shutdown) {
       const stopping = work.track(async () => {
         try {
-          await servicesHandle?.stop();
+          const result = await servicesHandle?.stop();
+          for (const failure of result?.errors ?? []) {
+            reportShutdownFailure(failure);
+          }
         } catch (error) {
           reportShutdownFailure(error);
         }
@@ -116,7 +119,7 @@ export async function startOneShotDiagnosticsExporters(params: {
     // The scope-piggyback loader rules (e.g. dreaming sidecars) can widen a
     // scoped load, so re-filter to the flush-safe exporter allowlist.
     const services = acquired.registry.services.filter((entry) =>
-      ONE_SHOT_DIAGNOSTICS_SERVICE_IDS.has(entry.service.id),
+      ONE_SHOT_DIAGNOSTICS_SERVICE_IDS.has(entry.id),
     );
     if (services.length === 0) {
       // Enabled but not installed is ordinary; explain why this run exports nothing.

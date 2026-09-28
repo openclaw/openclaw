@@ -11,6 +11,7 @@ import {
   replaceConfigFile,
   resetConfigRuntimeState,
 } from "../config/config.js";
+import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -156,7 +157,7 @@ describe("onboarding authored config persistence", () => {
     });
   });
 
-  it("renames a legacy install and converges its main session before returning", async () => {
+  it("reports legacy session repairs without migrating during first-agent onboarding", async () => {
     await withTempHome(async (rawHome) => {
       const home = await fs.realpath(rawHome);
       const stateDir = path.join(home, ".openclaw");
@@ -166,7 +167,6 @@ describe("onboarding authored config persistence", () => {
       await replaceConfigFile({ nextConfig: {}, afterWrite: { mode: "auto" } });
 
       const legacyKey = "agent:main:main";
-      const canonicalKey = "agent:robby:main";
       const legacyDatabasePath = path.join(
         stateDir,
         "agents",
@@ -174,7 +174,7 @@ describe("onboarding authored config persistence", () => {
         "agent",
         "openclaw-agent.sqlite",
       );
-      const entry = { sessionId: "legacy-main-session", updatedAt: 100 };
+      const entry = { sessionId: "legacy-main-session", updatedAt: Date.now() };
       runOpenClawAgentWriteTransaction(
         (database) => {
           writeSessionEntry(database, legacyKey, entry, {
@@ -215,8 +215,11 @@ describe("onboarding authored config persistence", () => {
         );
 
       expect(result.agentId).toBe("robby");
-      expect(readEntry(ownerDatabasePath, "robby", canonicalKey)).toMatchObject(entry);
-      expect(readEntry(legacyDatabasePath, "main", legacyKey)).toBeUndefined();
+      expect.soft(await fs.stat(ownerDatabasePath).catch(() => null)).toBeNull();
+      expect.soft(readEntry(legacyDatabasePath, "main", legacyKey)).toMatchObject(entry);
+      expect(result.sessionMigrationWarnings).toEqual([
+        expect.stringContaining("openclaw doctor --fix"),
+      ]);
       expect(
         withExistingOpenClawStateDatabaseReadOnly(
           ({ db }) =>
@@ -226,12 +229,12 @@ describe("onboarding authored config persistence", () => {
               )
               .get() as { status: string },
         ),
-      ).toEqual({ status: "completed" });
+      ).toBeUndefined();
     });
   });
 
   it.each(["locked", "closed after publication"] as const)(
-    "defers migration when %s and converges on the next startup",
+    "preserves history when %s until an explicit Doctor repair",
     async (boundary) => {
       await withTempHome(async (rawHome) => {
         const home = await fs.realpath(rawHome);
@@ -317,27 +320,24 @@ describe("onboarding authored config persistence", () => {
           admission.close();
         }
 
-        if (boundary === "locked") {
-          expect(failure).toBeUndefined();
-          expect(result?.sessionMigrationWarnings).toEqual([
-            expect.stringMatching(/incomplete.*openclaw doctor --fix/),
-          ]);
-        } else {
-          expect.soft(failure).toEqual(new Error("admitted run authority is no longer active"));
-          expect.soft(readAgentDeletionJournal("robby")).toBeUndefined();
-          expect.soft(readAgentProvenance("robby")).toMatchObject({ createdVia: "operator" });
-          expect
-            .soft(readExactSessionEntryRowForCanonicalRepair(sourceDatabase, legacyKey)?.entry)
-            .toMatchObject(entry);
-          expect.soft(readTranscriptEventRows(sourceDatabase, entry.sessionId)).toEqual(beforeRows);
-          expect
-            .soft(
-              await fs
-                .stat(path.join(stateDir, "agents", "robby", "agent", "openclaw-agent.sqlite"))
-                .catch(() => null),
-            )
-            .toBeNull();
+        expect(failure).toBeUndefined();
+        expect(result?.agentId).toBe("robby");
+        expect(result?.sessionMigrationWarnings).toEqual([
+          expect.stringContaining("openclaw doctor --fix"),
+        ]);
+        if (boundary === "closed after publication") {
+          expect(readAgentDeletionJournal("robby")).toBeUndefined();
+          expect(readAgentProvenance("robby")).toMatchObject({ createdVia: "operator" });
         }
+        expect(
+          readExactSessionEntryRowForCanonicalRepair(sourceDatabase, legacyKey)?.entry,
+        ).toMatchObject(entry);
+        expect(readTranscriptEventRows(sourceDatabase, entry.sessionId)).toEqual(beforeRows);
+        expect(
+          await fs
+            .stat(path.join(stateDir, "agents", "robby", "agent", "openclaw-agent.sqlite"))
+            .catch(() => null),
+        ).toBeNull();
         const readLedgerStatus = () =>
           withExistingOpenClawStateDatabaseReadOnly(
             ({ db }) =>
@@ -372,11 +372,17 @@ describe("onboarding authored config persistence", () => {
             { agentId, path: databasePath },
           );
 
+        expect(readEntry(legacyDatabasePath, "main", legacyKey)).toMatchObject(entry);
+        expect(await fs.stat(ownerDatabasePath).catch(() => null)).toBeNull();
+        expect(readLedgerStatus()).toBeUndefined();
+        expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+        await migrateLegacyMainSessionKeys({
+          cfg: published.config,
+          env: process.env,
+          mode: "doctor-fix",
+        });
         expect(readEntry(ownerDatabasePath, "robby", canonicalKey)).toMatchObject(entry);
         expect(readEntry(legacyDatabasePath, "main", legacyKey)).toBeUndefined();
-        expect(log.info).toHaveBeenCalledWith(
-          expect.stringContaining("migrated retired main-agent session keys"),
-        );
         expect(readLedgerStatus()).toEqual({ status: "completed" });
       });
     },

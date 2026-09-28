@@ -1,4 +1,3 @@
-// Discord plugin module implements route resolution behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -47,13 +46,14 @@ export function buildDiscordConversationRouteContext(params: {
 
 export function resolveDiscordConversationRoute(params: {
   cfg: OpenClawConfig;
+  defaultAgentId?: string;
   accountId?: string | null;
   guildId?: string | null;
   memberRoleIds?: string[];
   peer: RoutePeer;
   parentConversationId?: string | null;
 }): ResolvedAgentRoute {
-  return resolveAgentRoute({
+  const input = {
     cfg: params.cfg,
     channel: "discord",
     accountId: params.accountId,
@@ -61,9 +61,23 @@ export function resolveDiscordConversationRoute(params: {
     memberRoleIds: params.memberRoleIds,
     peer: params.peer,
     parentPeer: params.parentConversationId
-      ? { kind: "channel", id: params.parentConversationId }
+      ? { kind: "channel" as const, id: params.parentConversationId }
       : undefined,
-  });
+  };
+  try {
+    return resolveAgentRoute(input);
+  } catch (error) {
+    if (
+      !params.defaultAgentId ||
+      !(error instanceof Error) ||
+      !("code" in error) ||
+      error.code !== "AGENT_SELECTION_REQUIRED"
+    ) {
+      throw error;
+    }
+    // Preserve ordinary routes for stale-binding comparison when selection succeeds.
+    return resolveAgentRoute({ ...input, defaultAgentId: params.defaultAgentId });
+  }
 }
 
 export function resolveDiscordBoundConversationRoute(params: {

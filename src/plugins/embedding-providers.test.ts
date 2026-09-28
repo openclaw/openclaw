@@ -26,7 +26,9 @@ function createAdapter(id: string): EmbeddingProviderAdapter {
 
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previous));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previous);
+  });
   stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
 });
 
@@ -62,16 +64,6 @@ describe("embedding provider registry", () => {
     },
   );
 
-  it("stores adapters in the active registry", () => {
-    const adapter = createAdapter("local-protocol");
-    registerEmbeddingProvider(adapter, { ownerPluginId: "local-protocol" });
-
-    expect(getRegisteredEmbeddingProvider("local-protocol")).toEqual({
-      adapter,
-      ownerPluginId: "local-protocol",
-    });
-  });
-
   it("uses builder ownership without displacing another plugin's adapter", () => {
     const building = createEmptyPluginRegistry();
     const original = createAdapter("shared");
@@ -100,7 +92,8 @@ describe("collectRegisteredEmbeddingProviderIds", () => {
   // startup "configured but unregistered" warning uses, so the /status drift line and
   // the boot warning agree on what counts as "registered".
   it("unions registry embedding providers with the global registry", () => {
-    registerEmbeddingProvider(createAdapter("global-embed"), { ownerPluginId: "p" });
+    const adapter = createAdapter("global-embed");
+    registerEmbeddingProvider(adapter, { ownerPluginId: "p" });
     const registry = {
       embeddingProviders: [{ provider: { id: "gen-embed" } }],
     } as never;
@@ -109,6 +102,7 @@ describe("collectRegisteredEmbeddingProviderIds", () => {
 
     expect(ids.has("gen-embed")).toBe(true);
     expect(ids.has("global-embed")).toBe(true);
+    expect(getRegisteredEmbeddingProvider("global-embed")).toEqual({ adapter, ownerPluginId: "p" });
     // Every globally registered provider (core + plugin-registered) is always included.
     for (const entry of listRegisteredEmbeddingProviders()) {
       expect(ids.has(entry.adapter.id)).toBe(true);

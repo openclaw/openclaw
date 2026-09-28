@@ -22,6 +22,12 @@ const SLACK_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "slack-message-dispatch-de
 
 export type SlackMessageDispatchReplayClaim = ChannelReplayClaimHandle;
 
+export class SlackMessageDispatchRetryError extends Error {
+  constructor(cause: unknown) {
+    super("Slack dispatch owner released while its twin was waiting", { cause });
+  }
+}
+
 type SlackMessageDispatchClaimResult =
   | { kind: "claimed"; handle: SlackMessageDispatchReplayClaim }
   | { kind: "duplicate" };
@@ -68,10 +74,24 @@ export type SlackMessageDispatchReplayGuard = ReturnType<
 export async function claimSlackMessageDispatchReplay(params: {
   guard: SlackMessageDispatchReplayGuard;
   key: string;
+  onWaiting?: () => void;
 }): Promise<SlackMessageDispatchClaimResult> {
   const claim = await runClaimableDedupeClaimLoop(
-    () => params.guard.claim({ keys: [params.key] }),
-    (_error, rejectionCount) => rejectionCount <= 1,
+    async () => {
+      const next = await params.guard.claim({ keys: [params.key] });
+      if (next.kind === "inflight") {
+        params.onWaiting?.();
+      }
+      return next;
+    },
+    (error, rejectionCount) => {
+      if (params.onWaiting) {
+        // Admission was released for the wait. Re-enter through the retry owner
+        // to regain ordering and the adoption watchdog before claiming again.
+        throw new SlackMessageDispatchRetryError(error);
+      }
+      return rejectionCount <= 1;
+    },
   );
   return claim.kind === "claimed"
     ? { kind: "claimed", handle: claim.handle }

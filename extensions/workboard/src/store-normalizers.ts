@@ -42,7 +42,6 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -96,8 +95,20 @@ export function normalizeBoardMetadata(
     1000,
     "board description",
   );
-  const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  const clearAppearance = input.clearAppearance === undefined ? [] : input.clearAppearance;
+  if (
+    !Array.isArray(clearAppearance) ||
+    clearAppearance.some((field) => field !== "icon" && field !== "color")
+  ) {
+    throw new Error("clearAppearance must be an array containing only icon or color.");
+  }
+  // Legacy empty/null inputs preserve appearance. Explicit clears take precedence.
+  const icon = clearAppearance.includes("icon")
+    ? undefined
+    : normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
+  const color = clearAppearance.includes("color")
+    ? undefined
+    : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
   let automationJobId = fallback?.automationJobId;
   if (Object.hasOwn(input, "automationJobId")) {
     automationJobId = normalizeOptionalString(input.automationJobId);
@@ -357,10 +368,6 @@ export function normalizeStringList(value: unknown, fieldName: string, maxLength
   return values;
 }
 
-export function normalizePosition(value: unknown, fallback: number): number {
-  return resolveNonNegativeIntegerOption(value, fallback);
-}
-
 function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
   if (value == null || value === "") {
     return undefined;
@@ -602,13 +609,7 @@ function normalizeEvent(value: unknown): WorkboardEvent | null {
 }
 
 export function normalizeEvents(value: unknown): WorkboardEvent[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map(normalizeEvent)
-    .filter((event): event is WorkboardEvent => event !== null)
-    .slice(-MAX_CARD_EVENTS);
+  return normalizeList(value, normalizeEvent, MAX_CARD_EVENTS) ?? [];
 }
 
 function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
@@ -1313,28 +1314,14 @@ function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
-function dropFirstProofExcept(
-  items: readonly WorkboardProof[] | undefined,
-  preserveProofId: string | undefined,
-): WorkboardProof[] | undefined {
+function dropFirstMatching<T>(
+  items: readonly T[] | undefined,
+  predicate: (item: T) => boolean,
+): T[] | undefined {
   if (!items?.length) {
     return undefined;
   }
-  const index = preserveProofId ? items.findIndex((proof) => proof.id !== preserveProofId) : 0;
-  if (index < 0) {
-    return items.slice();
-  }
-  const next = items.filter((_, itemIndex) => itemIndex !== index);
-  return next.length ? next : undefined;
-}
-
-function dropFirstNonDependencyLink(
-  items: readonly WorkboardLink[] | undefined,
-): WorkboardLink[] | undefined {
-  if (!items?.length) {
-    return undefined;
-  }
-  const index = items.findIndex((link) => !isDependencyLink(link));
+  const index = items.findIndex(predicate);
   if (index < 0) {
     return items.slice();
   }
@@ -1378,7 +1365,10 @@ export function trimMetadataToBudget(
     ) {
       next = removeUndefinedMetadataFields({
         ...next,
-        proof: dropFirstProofExcept(next.proof, options.preserveProofId),
+        proof: dropFirstMatching(
+          next.proof,
+          (proof) => !options.preserveProofId || proof.id !== options.preserveProofId,
+        ),
       });
     } else if (next.artifacts?.length) {
       next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
@@ -1390,7 +1380,7 @@ export function trimMetadataToBudget(
     } else if (next.workerLogs?.length) {
       next = removeUndefinedMetadataFields({ ...next, workerLogs: dropFirst(next.workerLogs) });
     } else if (next.links?.length) {
-      const links = dropFirstNonDependencyLink(next.links);
+      const links = dropFirstMatching(next.links, (link) => !isDependencyLink(link));
       if (links?.length === next.links.length) {
         next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
       } else {

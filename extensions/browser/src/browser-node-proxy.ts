@@ -1,9 +1,4 @@
 import crypto from "node:crypto";
-import {
-  addTimerTimeoutGraceMs,
-  MAX_TIMER_TIMEOUT_MS,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -21,6 +16,7 @@ import {
   type BrowserProxyEnvelope,
   type BrowserProxyRoute,
 } from "./browser-proxy-envelope.js";
+import { resolveBrowserProxyTimeouts } from "./browser-proxy-timeouts.js";
 import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
@@ -37,8 +33,6 @@ import {
 } from "./browser/session-tab-route.js";
 
 const logger = createSubsystemLogger("browser");
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
-const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
 
 class BrowserNodeSafeFallbackError extends Error {
   constructor(message: string, cause?: unknown) {
@@ -90,18 +84,9 @@ async function callBrowserProxy(params: {
   profile?: string;
   signal?: AbortSignal;
 }): Promise<BrowserProxyEnvelope> {
-  // Reserve both watchdog windows before clamping so timer saturation cannot
-  // make an outer watchdog expire alongside the browser action.
-  const proxyTimeoutMs = Math.min(
-    resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS),
-    MAX_TIMER_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
+  const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
+    params.timeoutMs,
   );
-  const nodeInvokeTimeoutMs =
-    addTimerTimeoutGraceMs(proxyTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
-    proxyTimeoutMs;
-  const gatewayTimeoutMs =
-    addTimerTimeoutGraceMs(nodeInvokeTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
-    nodeInvokeTimeoutMs;
   if (
     isBrowserProxyUploadRequest(params) &&
     !params.declaredCommands.includes(BROWSER_PROXY_UPLOAD_COMMAND)

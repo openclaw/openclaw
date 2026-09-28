@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements channel behavior.
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
@@ -76,7 +75,7 @@ const collectNextcloudTalkSecurityWarnings =
 const collectNextcloudTalkOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectNextcloudTalkSecurityWarnings,
   checkId: "channels.nextcloud-talk.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Nextcloud Talk security warning",
 });
 
@@ -122,7 +121,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
         inferTargetChatType: ({ to }) =>
           normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
-        resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveNextcloudTalkOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",
@@ -205,22 +204,26 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
       attachedResults: {
         channel: "nextcloud-talk",
-        sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+        sendText: async (ctx) =>
           await nextcloudTalkMessageAdapter.send.text({
-            cfg,
-            to,
-            text,
-            accountId,
-            replyToId,
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: ctx.text,
+            accountId: ctx.accountId,
+            replyToId: ctx.replyToId,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
           }),
-        sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+        sendMedia: async (ctx) =>
           await nextcloudTalkMessageAdapter.send.media({
-            cfg,
-            to,
-            text,
-            mediaUrl: mediaUrl ?? "",
-            accountId,
-            replyToId,
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: ctx.text,
+            mediaUrl: ctx.mediaUrl ?? "",
+            accountId: ctx.accountId,
+            replyToId: ctx.replyToId,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
           }),
       },
     },

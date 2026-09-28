@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import type { AnyChunk, TaskUpdateChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import {
@@ -38,6 +38,35 @@ function buildSessionSources(url: string): NonNullable<TaskUpdateChunk["sources"
 
 function field(text: string) {
   return { type: "mrkdwn" as const, text: truncateSlackText(text, SLACK_PROGRESS_FIELD_MAX) };
+}
+
+type SlackProgressText = { text: string; format?: "plain" };
+
+function progressTextSection(value: SlackProgressText, style?: "italic"): Block | KnownBlock {
+  if (value.format === "plain") {
+    return {
+      type: "section",
+      text: {
+        type: "plain_text",
+        text: truncateSlackText(value.text, SLACK_PROGRESS_FIELD_MAX),
+        emoji: false,
+      },
+    };
+  }
+  const rendered = renderProgressCardText(value.text, style);
+  const marker = style === "italic" ? "_" : "";
+  return { type: "section", text: field(`${marker}${rendered}${marker}`) };
+}
+
+export function buildSlackProgressTextBlocks(
+  blocks: NonNullable<ChannelProgressDraftCompositorSnapshot["preparedBlocks"]>,
+): (Block | KnownBlock)[] {
+  return blocks.map((block) =>
+    progressTextSection({
+      text: block.text,
+      format: block.format === "plain" ? "plain" : undefined,
+    }),
+  );
 }
 
 function resolveMaxLineChars(value: number | undefined, fallback: number): number {
@@ -159,7 +188,7 @@ function stableTaskIdPart(value: string, slugValue = value): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  const suffix = createHash("sha256").update(value).digest("hex").slice(0, 8);
+  const suffix = hash("sha256", value, "hex").slice(0, 8);
   return `${(slug || "task").slice(0, 48)}_${suffix}`;
 }
 
@@ -213,32 +242,20 @@ function buildNativeTasks(params: {
   return tasks;
 }
 
-function buildProgressAttentionTasks(
-  lines: readonly ChannelProgressDraftLine[],
+function formatProgressAttentionTitle(
+  line: ChannelProgressDraftLine,
   finalStatus: "complete" | "error" | undefined,
-): SlackPlanTask[] {
-  const contentIdOccurrences = new Map<string, number>();
-  // Attention follows the compositor window; Block Kit limits apply after projection.
-  return lines.flatMap((line) => {
-    const approval = line.kind === "approval";
-    if (
-      approval
-        ? line.status !== "requested" || finalStatus !== undefined
-        : lineTaskStatus(line) !== "error"
-    ) {
-      return [];
-    }
-    const title = approval
-      ? `Approval required: ${line.detail || line.label}`
-      : [...new Set([line.label, line.detail, line.status].filter(Boolean))].join(" — ");
-    const recovered = !approval && finalStatus === "complete";
-    const task: SlackPlanTask = {
-      id: `${SLACK_ATTENTION_TASK_PREFIX}${resolveLineTaskIdentity(line, contentIdOccurrences)}`,
-      title: compactTitle(recovered ? `Recovered: ${title}` : title),
-      status: approval ? "pending" : (finalStatus ?? "error"),
-    };
-    return [task];
-  });
+): string | undefined {
+  if (line.kind === "approval") {
+    return line.status === "requested" && finalStatus === undefined
+      ? compactTitle(`Approval required: ${line.detail || line.label}`)
+      : undefined;
+  }
+  if (lineTaskStatus(line) !== "error") {
+    return undefined;
+  }
+  const title = [...new Set([line.label, line.detail, line.status].filter(Boolean))].join(" — ");
+  return compactTitle(finalStatus === "complete" ? `Recovered: ${title}` : title);
 }
 
 function formatTaskDiffOutput(diffStat: SlackProgressDiffStat | undefined): string | undefined {
@@ -266,18 +283,30 @@ export function buildSlackProgressStreamChunks(params: {
     plan: params.plan,
     maxLineChars: params.maxLineChars,
   });
-  // Detailed work rows keep their identity through plan changes and already
-  // carry failures. Quiet cards need separate failure attention rows.
-  const attention = buildProgressAttentionTasks(
-    params.summaryRow ? params.lines : approvals,
-    params.finalInProgressStatus,
-  );
+  const contentIdOccurrences = new Map<string, number>();
+  const attention: SlackPlanTask[] = [];
+  for (const line of approvals) {
+    const title = formatProgressAttentionTitle(line, params.finalInProgressStatus);
+    if (title !== undefined) {
+      attention.push({
+        id: `${SLACK_ATTENTION_TASK_PREFIX}${resolveLineTaskIdentity(line, contentIdOccurrences)}`,
+        title,
+        status: "pending",
+      });
+    }
+  }
   const headline = params.title?.trim() || params.label?.trim();
+  const summaryTitle =
+    params.finalInProgressStatus === "error"
+      ? "Failed"
+      : params.finalInProgressStatus === "complete" || !params.summaryRow
+        ? "Completed"
+        : "Working";
   const newest = tasks.at(-1);
   const title = compactChunkText(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
-      (params.summaryRow ? "Working" : attention.at(-1)?.title) ||
+      (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
   );
   const diffOutput = formatTaskDiffOutput(params.diffStat);
@@ -286,7 +315,7 @@ export function buildSlackProgressStreamChunks(params: {
     // summary row for the whole turn; detailed cards add it only as a receipt.
     tasks.push({
       id: "openclaw_summary",
-      title: params.summaryRow ? compactTitle(title) : "Completed",
+      title: params.summaryRow ? compactTitle(title) : summaryTitle,
       status: params.finalInProgressStatus ?? (params.summaryRow ? "in_progress" : "complete"),
     });
   }
@@ -357,10 +386,11 @@ function buildActivityText(lines: readonly ChannelProgressDraftLine[], maxLineCh
 
 export function buildSlackProgressCardBlocks(params: {
   state: SlackProgressCardState;
-  title: string;
+  title?: string;
+  titleFormat?: "plain";
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
-  narration?: string;
+  narration?: string | readonly SlackProgressText[];
   maxLineChars?: number;
   toolCalls?: number;
   elapsedSeconds?: number;
@@ -375,7 +405,14 @@ export function buildSlackProgressCardBlocks(params: {
     maxLines: SLACK_MAX_BLOCKS,
     maxLineChars,
   });
-  const narration = params.narration?.replace(/\s+/g, " ").trim();
+  const narration = (
+    typeof params.narration === "string" ? [{ text: params.narration }] : (params.narration ?? [])
+  )
+    .map(({ text, format }: SlackProgressText) => ({
+      text: text.replace(/\s+/g, " ").trim(),
+      format,
+    }))
+    .filter((part) => part.text);
   const diffStat = formatChannelProgressDraftDiffStat(params.diffStat);
   const workingFooter = [
     ...(params.toolCalls && params.toolCalls > 0 ? [`🛠️ ${params.toolCalls} tools`] : []),
@@ -388,12 +425,11 @@ export function buildSlackProgressCardBlocks(params: {
   const icon = params.state === "working" ? "🔄" : params.state === "success" ? "✅" : "❌";
   const finalStatus =
     params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
-  const attention = buildProgressAttentionTasks(params.lines, finalStatus).map((task) =>
-    escapeSlackMrkdwn(task.title),
-  );
+  const attention = params.lines.flatMap((line) => {
+    const title = formatProgressAttentionTitle(line, finalStatus);
+    return title === undefined ? [] : [escapeSlackMrkdwn(title)];
+  });
   const sections = [
-    `${icon} *${renderProgressCardText(params.title.trim() || "Working", "bold")}*`,
-    narration ? `_${renderProgressCardText(narration, "italic")}_` : "",
     planLines.map((line) => renderProgressCardText(line)).join("\n"),
     buildActivityText(
       params.lines.filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error"),
@@ -402,9 +438,16 @@ export function buildSlackProgressCardBlocks(params: {
     // Attention has its own bounded section so activity truncation cannot hide it.
     joinRecentProgressRows(attention),
   ];
-  const blocks: (Block | KnownBlock)[] = sections
-    .filter(Boolean)
-    .map((text) => ({ type: "section", text: field(text) }));
+  const title =
+    params.title?.trim() ||
+    (params.state === "working" ? "Working" : params.state === "success" ? "Done" : "Failed");
+  const blocks: (Block | KnownBlock)[] = [
+    params.titleFormat === "plain"
+      ? progressTextSection({ text: `${icon} ${title}`, format: "plain" })
+      : { type: "section", text: field(`${icon} *${renderProgressCardText(title, "bold")}*`) },
+    ...narration.map((part) => progressTextSection(part, "italic")),
+    ...sections.filter(Boolean).map((text) => ({ type: "section" as const, text: field(text) })),
+  ];
   if (footer) {
     blocks.push({ type: "context", elements: [field(footer)] });
   }
@@ -542,11 +585,9 @@ export function reconcileSlackNativeTaskChunks(params: {
     if (nextTasks.has(id)) {
       continue;
     }
-    // Missing attention has cleared; failed tool history instead outlives the
-    // rolling window until successful closeout. Never resend append-only fields.
-    const recovered =
-      row.status === "error" &&
-      (id.startsWith(SLACK_ATTENTION_TASK_PREFIX) || params.finalStatus === "complete");
+    // Failed tool history outlives the rolling window until successful closeout.
+    // Never resend append-only fields.
+    const recovered = row.status === "error" && params.finalStatus === "complete";
     if (row.status === "complete" || (row.status === "error" && !recovered)) {
       nextTasks.set(id, row);
       continue;

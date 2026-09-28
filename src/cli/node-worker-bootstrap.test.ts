@@ -20,7 +20,7 @@ import {
   getNodeHostPluginRegistry,
 } from "../node-host/plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "../node-host/runtime.js";
-import { runStartupMigrations } from "../node-host/startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "../node-host/startup-state-readiness.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -121,8 +121,7 @@ function fixture() {
   return { root, stateDir, configPath, config };
 }
 
-async function bootstrap() {
-  const commandPath = ["node", "worker"];
+async function bootstrap(commandPath = ["node", "worker"]) {
   const error = vi.fn();
   await ensureCliExecutionBootstrap({
     commandPath,
@@ -160,6 +159,27 @@ function readGatewayState() {
 }
 
 describe("private node worker bootstrap", () => {
+  it.each(["install", "status", "pair", "setup"])(
+    "preserves independently owned Gateway state during browser extension %s bootstrap",
+    async (subcommand) => {
+      const { stateDir, configPath, config } = fixture();
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      seedMacNodeWorkerProofState(databasePath);
+      const databaseBefore = fs.readFileSync(databasePath);
+      const configBefore = fs.readFileSync(configPath);
+      const artifactsBefore = fs.readdirSync(path.dirname(databasePath)).toSorted();
+
+      await bootstrap(["browser", "extension", subcommand]);
+
+      expect(getRuntimeConfig().channels?.["fixture-channel"]).toEqual(
+        config.channels["fixture-channel"],
+      );
+      expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(artifactsBefore);
+    },
+  );
+
   it.each(["unknown", "metadata", "lease", "future", "corrupt"])(
     "does not adopt %s state as native bootstrap",
     async (shape) => {
@@ -188,11 +208,11 @@ describe("private node worker bootstrap", () => {
         fs.writeFileSync(databasePath, "not a SQLite database");
       }
       const before = fs.readFileSync(databasePath);
-      const startup = runStartupMigrations({ log: { info: vi.fn(), warn: vi.fn() } });
+      const startup = () => initializeNativeOpenClawStateDatabase();
       if (shape === "future" || shape === "corrupt") {
-        await expect(startup).rejects.toThrow();
+        expect(startup).toThrow();
       } else {
-        await expect(startup).resolves.toBeUndefined();
+        expect(startup()).toBeUndefined();
       }
       expect(fs.readFileSync(databasePath)).toEqual(before);
     },
@@ -203,7 +223,7 @@ describe("private node worker bootstrap", () => {
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     const rows = seedMacNodeWorkerProofState(databasePath);
     await bootstrap();
-    await runStartupMigrations({ log: { info: vi.fn(), warn: vi.fn() } });
+    ensureNodeHostStateReady();
     const store = createPluginStateSyncKeyedStore("fixture-node", {
       namespace: "bootstrap-proof",
       maxEntries: 10,
@@ -264,7 +284,7 @@ describe("private node worker bootstrap", () => {
       } finally {
         allocateSnapshot.mockRestore();
       }
-      await runStartupMigrations({ log: { info: vi.fn(), warn: vi.fn() } });
+      ensureNodeHostStateReady();
       const prepared = await prepareNodeHostRuntime();
       expect(getRuntimeConfig()).toBe(pinned);
       expect(prepared.manifest.commands).toEqual(

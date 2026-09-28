@@ -111,8 +111,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const fallbackModel = execution.resolved.model;
   const fallbackExhausted = execution.fallback.exhausted;
   const fallbackAttempts = execution.fallback.attempts;
-  const directlySentBlockKeys = execution.directlySentBlockKeys;
-  const directlySentBlockPayloads = execution.directlySentBlockPayloads;
+  const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
+  const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
   const { autoCompactionCount, didLogHeartbeatStrip } = execution;
 
@@ -344,8 +344,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     configuredFallbackModel,
     contextTokensUsed,
     didLogHeartbeatStrip,
-    directlySentBlockKeys,
-    directlySentBlockPayloads,
+    hasDirectlySentBlockReply,
+    directBlockDeliveries,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
@@ -428,7 +428,8 @@ export async function accountFollowupTurn(params: {
       nextSessionFile: queueKey,
       nextProvider: accounting.sessionModel.provider,
       nextModel: accounting.sessionModel.model,
-      nextModelOverrideSource: entry?.modelOverrideSource,
+      nextModelOverrideSource:
+        entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
       nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
     });

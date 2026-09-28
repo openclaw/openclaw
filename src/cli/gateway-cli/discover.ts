@@ -5,16 +5,11 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { buildGatewayDiscoveryTarget } from "../../infra/gateway-discovery-targets.js";
-import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 export type GatewayDiscoverOpts = {
   timeout?: string;
   json?: boolean;
 };
-
-export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
-  return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
-}
 
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   // Use display and endpoint fields; Bonjour can surface the same gateway on multiple interfaces.
@@ -74,7 +69,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
     lines.push(`  ${colorize(rich, theme.muted, "tls")}: ${fingerprint}`);
   }
   if (target.endpoint && target.sshPort) {
-    const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${target.endpoint.host} -p ${target.sshPort}`;
+    const ssh = `ssh -N -L 18789:127.0.0.1:${target.endpoint.port} <user>@${target.endpoint.host} -p ${target.sshPort}`;
     lines.push(`  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`);
   }
   return lines;

@@ -1,9 +1,12 @@
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 
 export type PluginRuntimeLoadContextState = {
+  activationInputFingerprint: string;
+  activationResultFingerprint: string;
   controlPlaneFingerprint: string;
   registrationConfigKey: string;
   loaderCacheIdentity?: Readonly<{ requestKey: string; resolvedKey: string }>;
+  preferBuiltPluginArtifacts?: boolean;
   declaredProviderOwners: DeclaredProviderOwnerIndex;
 };
 

@@ -2,6 +2,8 @@ import type { GatewayClient } from "../server-methods/client-types.js";
 
 export type DesktopObserveRequester = {
   connId?: string;
+  /** Display identity from authenticated Gateway metadata, never wire-supplied client labels. */
+  operatorName?: string;
   signal?: AbortSignal;
   isCurrent: () => boolean;
 };
@@ -17,6 +19,10 @@ export function resolveDesktopObserveRequester(options: {
   // Invalidation precedes the transport close event and its abort signal.
   return {
     connId: client.connId,
+    operatorName:
+      client.authenticatedUserProfile?.displayName?.trim() ||
+      client.authenticatedUserId?.trim() ||
+      undefined,
     signal: client.connectionSignal,
     isCurrent: () =>
       client.invalidated !== true &&

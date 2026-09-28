@@ -89,10 +89,12 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 Security notes:
 
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
-- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
-- SSH auto-targeting should likewise use the resolved service host, not TXT-only hints.
+- Clients that offer discovery-based routing should use the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- Where supported, SSH auto-targeting should likewise use the resolved service host, not TXT-only hints.
 - TLS pinning must never let an advertised `gatewayTlsSha256` override a previously stored pin.
 - iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
+
+The macOS app treats the resolved endpoint as a hint too. Selecting **Nearby Gateways** opens the connection editor; it does not authenticate to the advertised destination, change a saved route, or import SSH details or a certificate pin. Supply a trusted address, SSH target, or owner-provided setup code, then save the connection. See [Configure in the app](/platforms/mac/remote#configure-in-the-app).
 
 ## Debugging on macOS
 
@@ -116,9 +118,9 @@ The gateway writes a rolling log file (printed on startup as `gateway log file: 
 - `bonjour: suppressing ciao netmask assertion ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 
-OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log.
+OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log, as are transient `ENODEV` MDNS socket warnings that occur when a network interface (for example a short-lived Docker bridge) is removed between the responder's interface polls.
 
-When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution and do not indicate duplicate OCM supervision.
+When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution.
 
 Bonjour uses the system hostname for the advertised `.local` host when it's a valid DNS label. If the system hostname contains spaces, underscores, or another invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set `OPENCLAW_MDNS_HOSTNAME=<name>` before starting the gateway when you need an explicit host label.
 
@@ -241,3 +243,4 @@ macOS hosts auto-start the bundled LAN discovery plugin by default. When the Bon
 
 - Discovery policy and transport selection: [Discovery](/gateway/discovery)
 - Node pairing + approvals: [Gateway pairing](/gateway/pairing)
+- Wide-area DNS-SD setup helper: [`openclaw dns`](/cli/dns)

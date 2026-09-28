@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
@@ -32,7 +34,6 @@ import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import type { CronJobRow } from "../cron/store/schema.js";
 import { isSystemMonitorDeclaration } from "../cron/system-owned-declaration.js";
-import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import {
   compileSqliteQueryBindings,
   executeSqliteQuerySync,
@@ -220,29 +221,20 @@ export async function workspaceContainsUntrackedEntries(
       parent = next;
     }
   }
-  const walk = async (absoluteDir: string, relativeDir = ""): Promise<boolean> => {
-    const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const relativeEntry = path.join(relativeDir, entry.name);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        if (!trackedDirectories.has(path.normalize(relativeEntry))) {
-          return true;
-        }
-        if (await walk(path.join(absoluteDir, entry.name), relativeEntry)) {
-          return true;
-        }
-        continue;
-      }
-      if (!tracked.has(path.normalize(relativeEntry))) {
+  try {
+    await fs.stat(workspaceRoot);
+    const workspace = await fsSafeRoot(workspaceRoot);
+    for await (const entry of workspace.walk("", { symlinkPolicy: "include" })) {
+      const expected = entry.kind === "directory" ? trackedDirectories : tracked;
+      if (!expected.has(path.normalize(entry.relativePath))) {
         return true;
       }
     }
     return false;
-  };
-  try {
-    return await walk(workspaceRoot);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    const filesystemError = error as NodeJS.ErrnoException;
+    // A missing child leaves the remaining workspace entries unexamined.
+    return filesystemError.code !== "ENOENT" || filesystemError.path !== workspaceRoot;
   }
 }
 
@@ -294,7 +286,7 @@ export async function cleanupClawAgentFilesystem(params: {
           params.runtime.log(warning);
         }
         params.assertCurrent();
-        deleteWorkspaceState(statePlan);
+        await deleteWorkspaceState(statePlan, { assertCurrent: params.assertCurrent });
       } catch (error) {
         errors.push(coerceErrorMessage(error));
       }
@@ -397,7 +389,7 @@ export async function inspectClawBootstrap(
   options: OpenClawStateDatabaseOptions,
 ): Promise<ClawBootstrapStatus> {
   const nativeState = await resolveWorkspaceBootstrapStatus(install.workspace, options);
-  const setupState = readWorkspaceStateSnapshot(install.workspace, options).setup;
+  const setupState = (await readWorkspaceStateSnapshot(install.workspace, options)).setup;
   const base = {
     workspace: install.workspace,
     path: DEFAULT_BOOTSTRAP_FILENAME,

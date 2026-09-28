@@ -1,4 +1,3 @@
-// Mattermost plugin module implements draft stream behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -144,9 +143,6 @@ export function createMattermostDraftStream(params: {
   };
   const sealedAssistantTexts: Array<{ text: string; requiresBlockBoundary: boolean }> = [];
   const publishedAssistantParts = new Map<string, MattermostDraftPublishedPart>();
-  const trackPublishedAssistantPart = (part: MattermostDraftPublishedPart) => {
-    publishedAssistantParts.set(part.messageId, part);
-  };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
@@ -202,14 +198,6 @@ export function createMattermostDraftStream(params: {
     }
   };
 
-  const clearMessageId = () => {
-    currentGeneration.postId = undefined;
-  };
-  const isValidMessageId = (value: unknown): value is string =>
-    typeof value === "string" && value.length > 0;
-  const deleteMessage = async (postId: string) => {
-    await deleteMattermostPost(params.client, postId);
-  };
   const {
     loop,
     update: updateLifecycle,
@@ -222,9 +210,12 @@ export function createMattermostDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
-    clearMessageId,
-    isValidMessageId,
-    deleteMessage,
+    clearMessageId: () => {
+      currentGeneration.postId = undefined;
+    },
+    isValidMessageId: (value: unknown): value is string =>
+      typeof value === "string" && value.length > 0,
+    deleteMessage: (postId) => deleteMattermostPost(params.client, postId),
     warn: params.warn,
     warnPrefix: "mattermost stream preview cleanup failed",
   });
@@ -243,6 +234,15 @@ export function createMattermostDraftStream(params: {
     const sealed = currentGeneration;
     const assistantText = sealed.latestAssistantText?.trim();
     let publishedAssistantOffset = 0;
+    const recordPublishedAssistantPart = (messageId: string, content: string, offset: number) => {
+      if (!assistantText) {
+        return;
+      }
+      publishedAssistantParts.set(messageId, { messageId, content });
+      publishedAssistantOffset =
+        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
+        offset;
+    };
     const boundary = (async () => {
       try {
         await sealed.ready;
@@ -267,16 +267,7 @@ export function createMattermostDraftStream(params: {
           if (assistantText && (sealed.lastProviderText || sealed.lastSentText)) {
             const publishedContent = sealed.lastProviderText ?? sealed.lastSentText;
             // The existing preview remains visible if its lossless boundary edit fails.
-            trackPublishedAssistantPart({
-              messageId: sealed.postId,
-              content: publishedContent,
-            });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: 0,
-                chunk: publishedContent,
-              }) ?? 0;
+            recordPublishedAssistantPart(sealed.postId, publishedContent, 0);
           }
           let providerFirstChunk = sealed.lastProviderText ?? firstChunk;
           if (firstChunk !== sealed.lastSentText) {
@@ -285,37 +276,14 @@ export function createMattermostDraftStream(params: {
             });
             providerFirstChunk = updated.message ?? firstChunk;
           }
-          if (assistantText) {
-            trackPublishedAssistantPart({
-              messageId: sealed.postId,
-              content: providerFirstChunk,
-            });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: 0,
-                chunk: providerFirstChunk,
-              }) ?? 0;
-          }
+          recordPublishedAssistantPart(sealed.postId, providerFirstChunk, 0);
         } else {
           const firstPost = await createMattermostPost(params.client, {
             channelId: params.channelId,
             message: firstChunk,
             rootId: params.rootId,
           });
-          if (assistantText) {
-            const publishedContent = firstPost.message ?? firstChunk;
-            trackPublishedAssistantPart({
-              messageId: firstPost.id,
-              content: publishedContent,
-            });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: 0,
-                chunk: publishedContent,
-              }) ?? 0;
-          }
+          recordPublishedAssistantPart(firstPost.id, firstPost.message ?? firstChunk, 0);
         }
         for (const chunk of chunks.slice(1)) {
           const post = await createMattermostPost(params.client, {
@@ -323,16 +291,7 @@ export function createMattermostDraftStream(params: {
             message: chunk,
             rootId: params.rootId,
           });
-          if (assistantText) {
-            const publishedContent = post.message ?? chunk;
-            trackPublishedAssistantPart({ messageId: post.id, content: publishedContent });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: publishedAssistantOffset,
-                chunk: publishedContent,
-              }) ?? publishedAssistantOffset;
-          }
+          recordPublishedAssistantPart(post.id, post.message ?? chunk, publishedAssistantOffset);
         }
         if (assistantText) {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
@@ -372,18 +331,13 @@ export function createMattermostDraftStream(params: {
     return boundary;
   };
 
-  const flush = async () => {
+  const settleOperation = (operation: () => Promise<void>) => async () => {
     assertNoAcceptedDeliveryFailure();
-    await loop.flush();
+    await operation();
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  const discardPending = async () => {
-    assertNoAcceptedDeliveryFailure();
-    await stopForClear();
-    await currentGeneration.ready;
-    assertNoAcceptedDeliveryFailure();
-  };
+  const discardPending = settleOperation(stopForClear);
   const clear = async () => {
     assertNoAcceptedDeliveryFailure();
     await clearWithStop(discardPending);
@@ -391,29 +345,26 @@ export function createMattermostDraftStream(params: {
   };
   const deleteCurrentMessage = async () => {
     assertNoAcceptedDeliveryFailure();
-    await clearWithStop(async () => {
-      // Retraction drains this preview but keeps the turn open for its replacement.
-      loop.resetPending();
-      await loop.waitForInFlight();
-      await currentGeneration.ready;
-      assertNoAcceptedDeliveryFailure();
-      currentGeneration.lastSentText = "";
-      currentGeneration.latestSourceText = "";
-      currentGeneration.latestAssistantText = undefined;
-      loop.resetThrottleWindow();
-    });
-    assertNoAcceptedDeliveryFailure();
-  };
-  const seal = async () => {
-    assertNoAcceptedDeliveryFailure();
-    await sealLifecycle();
-    await currentGeneration.ready;
-    assertNoAcceptedDeliveryFailure();
-  };
-  const stop = async () => {
-    assertNoAcceptedDeliveryFailure();
-    await stopLifecycle();
-    await currentGeneration.ready;
+    const retiring = currentGeneration;
+    loop.resetPending();
+    const inFlight = loop.waitForInFlight();
+    const retirement = clearWithStop(
+      async () => {
+        await retiring.ready;
+        await inFlight;
+        assertNoAcceptedDeliveryFailure();
+      },
+      {
+        readMessageId: () => retiring.postId,
+        clearMessageId: () => {
+          retiring.postId = undefined;
+        },
+      },
+    );
+    // Claim retirement before yielding; replacement sends wait without reusing the deleted post.
+    currentGeneration = { lastSentText: "", latestSourceText: "", ready: retirement };
+    loop.resetThrottleWindow();
+    await retirement;
     assertNoAcceptedDeliveryFailure();
   };
   const update = (text: string) => {
@@ -466,13 +417,13 @@ export function createMattermostDraftStream(params: {
   return {
     update,
     updateAssistantText,
-    flush,
+    flush: settleOperation(loop.flush),
     postId: () => currentGeneration.postId,
     clear,
     deleteCurrentMessage,
     discardPending,
-    seal,
-    stop,
+    seal: settleOperation(sealLifecycle),
+    stop: settleOperation(stopLifecycle),
     forceNewMessage,
     settleBoundaries,
     resolveFinalText,

@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
-  readActualWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 async function manifestFor(root: string) {
-  return (await readActualWorkspaceManifest({ root, baseCommit: null })).manifest;
+  return (await captureWorkspaceManifest({ root, baseCommit: null })).manifest;
 }
 
 describe("worker workspace reconciliation publication", () => {
@@ -102,8 +102,11 @@ describe("worker workspace reconciliation publication", () => {
           base,
           current,
           journal,
-          publishAcceptedManifest: async () => {
-            throw publicationFailure;
+          acceptance: {
+            kind: "reconcile",
+            publish: async () => {
+              throw publicationFailure;
+            },
           },
         }),
       ).rejects.toBe(publicationFailure);
@@ -151,8 +154,11 @@ describe("worker workspace reconciliation publication", () => {
           },
           abort,
         },
-        publishAcceptedManifest: async () => {
-          throw new Error("publication rejected");
+        acceptance: {
+          kind: "reconcile",
+          publish: async () => {
+            throw new Error("publication rejected");
+          },
         },
       }),
     ).rejects.toThrow("publication rejected");
@@ -171,8 +177,8 @@ describe("worker workspace reconciliation publication", () => {
     const payload = tempDirs.make("openclaw-workspace-result-cleanup-payload-");
     await fs.writeFile(path.join(local, "result.txt"), "base\n");
     await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
-    const base = await readActualWorkspaceManifest({ root: local, baseCommit: null });
-    const current = await readActualWorkspaceManifest({ root: payload, baseCommit: null });
+    const base = await captureWorkspaceManifest({ root: local, baseCommit: null });
+    const current = await captureWorkspaceManifest({ root: payload, baseCommit: null });
     const publicationError = new Error("accepted publication rejected");
     const cleanupError = new Error("scratch removal failed");
     const ref = workerWorkspaceResultRef("claim-staging-cleanup");

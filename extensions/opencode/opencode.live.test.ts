@@ -116,10 +116,10 @@ describeLive("opencode plugin live", () => {
   it("completes a discovered live tool-call round trip", async () => {
     const { model, reasoningOptions } = await resolveOpencodeToolLiveModel();
     const tool = liveEchoTool();
-    const firstOptions = {
+    const options = {
       apiKey: OPENCODE_API_KEY,
       ...reasoningOptions,
-      maxTokens: 128,
+      maxTokens: 4096,
     } as const;
 
     const first = await completeSimple(
@@ -134,7 +134,7 @@ describeLive("opencode plugin live", () => {
         ],
         tools: [tool],
       },
-      firstOptions,
+      options,
     );
 
     if (first.stopReason === "error") {
@@ -169,11 +169,7 @@ describeLive("opencode plugin live", () => {
         ],
         tools: [tool],
       },
-      {
-        apiKey: OPENCODE_API_KEY,
-        ...reasoningOptions,
-        maxTokens: 64,
-      },
+      options,
     );
 
     if (second.stopReason === "error") {

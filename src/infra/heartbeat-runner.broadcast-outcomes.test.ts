@@ -123,17 +123,52 @@ describe("heartbeat broadcast outcomes", () => {
     expect(await run({ source: "cron", intent: "task" })).toEqual(result);
   });
 
-  it("preserves the busy retry fast path even when another agent ran", async () => {
-    const { run, runOnce } = startRunner();
-    const busy = {
-      status: "skipped",
-      reason: heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-    } as const;
-    runOnce.mockResolvedValueOnce(busy);
+  it.each([
+    { failedAgentId: "main", siblingStatus: "ran" },
+    { failedAgentId: "ops", siblingStatus: "ran" },
+    { failedAgentId: "ops", siblingStatus: "skipped" },
+  ] as const)(
+    "settles as failed when $failedAgentId fails and its sibling $siblingStatus",
+    async ({ failedAgentId, siblingStatus }) => {
+      const { runOnce } = startRunner();
+      const failure = { status: "failed", reason: "agent-tool-failure" } as const;
+      runOnce.mockImplementation(async ({ agentId }) =>
+        agentId === failedAgentId
+          ? failure
+          : siblingStatus === "ran"
+            ? { status: "ran", durationMs: 1 }
+            : { status: "skipped", reason: "quiet-hours" },
+      );
+      const completion = heartbeatWake.requestHeartbeatAndWait({
+        source: "manual",
+        intent: "manual",
+        coalesceMs: 0,
+      });
 
-    expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
-    expect(runOnce).toHaveBeenCalledTimes(2);
-  });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(completion).resolves.toEqual(failure);
+      expect(runOnce).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    { status: "ran", durationMs: 1 },
+    { status: "failed", reason: "agent-tool-failure" },
+  ] as const)(
+    "preserves the busy retry fast path beside a sibling $status result",
+    async (result) => {
+      const { run, runOnce } = startRunner();
+      const busy = {
+        status: "skipped",
+        reason: heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      } as const;
+      runOnce.mockResolvedValueOnce(busy).mockResolvedValue(result);
+
+      expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
+      expect(runOnce).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("retries a channel-not-ready alert without consuming its scheduled cadence", async () => {
     const { run, runOnce } = startRunner();

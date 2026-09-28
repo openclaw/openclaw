@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../plugin-sdk/plugin-test-runtime.js";
-import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { StreamFn } from "../runtime/index.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
 
 describe("xAI OAuth runtime materialization", () => {
   it("retains the selected concrete model through auth resolution and transport", async () => {
-    const plugin = await loadBundledPluginPublicSurface<{
+    const plugin = await loadBundledPluginFacade<{
       default: Parameters<typeof registerSingleProviderPlugin>[0];
     }>({ pluginId: "xai", artifactBasename: "index.js" });
     const provider = await registerSingleProviderPlugin(plugin.default);

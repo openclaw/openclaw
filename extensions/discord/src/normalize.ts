@@ -1,11 +1,26 @@
 // Discord helper module supports normalize behavior.
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 export function normalizeDiscordMessagingTarget(raw: string): string | undefined {
   // Default bare IDs to channels so routing is stable across tool actions.
   const target = parseDiscordTarget(raw, { defaultKind: "channel" });
   return target?.normalized;
+}
+
+export function matchesDiscordToolContextTarget(params: {
+  target: string;
+  toolContext: Pick<ChannelThreadingToolContext, "currentChannelId" | "currentMessagingTarget">;
+}): boolean {
+  const target = normalizeDiscordMessagingTarget(params.target);
+  if (!target) {
+    return false;
+  }
+  return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
+    (currentTarget) =>
+      currentTarget !== undefined && normalizeDiscordMessagingTarget(currentTarget) === target,
+  );
 }
 
 /**

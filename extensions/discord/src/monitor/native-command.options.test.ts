@@ -1,13 +1,20 @@
 // Discord tests cover native command.options plugin behavior.
-import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
+import {
+  ApplicationCommandOptionType,
+  ApplicationCommandType,
+  ChannelType,
+  InteractionContextType,
+} from "discord-api-types/v10";
 import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useBundledProviderPolicyArtifactsForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordLivePolicy, DiscordLivePolicyReader } from "./live-policy.js";
 
@@ -247,6 +254,46 @@ describe("createDiscordNativeCommand option wiring", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([
+    ["number", true, ApplicationCommandOptionType.Number],
+    ["number", undefined, ApplicationCommandOptionType.Number],
+    ["boolean", true, ApplicationCommandOptionType.Boolean],
+    ["boolean", undefined, ApplicationCommandOptionType.Boolean],
+  ] as const)(
+    "serializes %s options with required=%s before resolving choices",
+    (type, required, expectedType) => {
+      const choices = vi.fn(() => ["unused"]);
+      const description = "x".repeat(99) + "😀 trailing";
+      const command = createDiscordNativeCommand({
+        command: {
+          name: "scalar",
+          description: "Scalar option",
+          acceptsArgs: true,
+          args: [{ name: "value", description, type, required, choices, preferAutocomplete: true }],
+        },
+        cfg: {},
+        discordConfig: {},
+        accountId: "default",
+        sessionPrefix: "discord:slash",
+        ephemeralDefault: true,
+        threadBindings: createNoopThreadBindingManager("default"),
+      });
+
+      expect(command.serializeOptions()).toEqual([
+        {
+          name: "value",
+          description: "x".repeat(99),
+          type: expectedType,
+          required: required ?? false,
+        },
+      ]);
+      expect(choices).not.toHaveBeenCalled();
+      expect(loggerDebugMock).toHaveBeenCalledExactlyOnceWith(
+        `discord: truncating native command description (command:scalar arg:value) from ${description.length} to 100: ${JSON.stringify(description)}`,
+      );
+    },
+  );
 
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
     const command = createNativeCommand("acp");
@@ -847,3 +894,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     });
   });
 });
+
+installDiscordIngressTestRuntime();
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);

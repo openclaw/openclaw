@@ -1,9 +1,30 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
-import { markPrewarmedChatSnapshotReady } from "../pages/chat/session-snapshot-prewarm.ts";
-import { clearBootRecords, persistBootRecord, resolveBootRecordAuth } from "./boot-record.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import {
+  markPrewarmedChatSnapshotReady,
+  prewarmChatSnapshot,
+} from "../pages/chat/session-snapshot-prewarm.ts";
+import {
+  clearBootRecords,
+  persistBootRecord,
+  resolveBootRecordAuth,
+  type BootRecord,
+} from "./boot-record.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+
+export function prewarmBootChat(record: BootRecord, sessionKey: string): void {
+  if (parseAgentSessionKey(sessionKey)) {
+    prewarmChatSnapshot(
+      resolveChatSnapshotKey(
+        { agentsList: record.agents, hello: null, assistantAgentId: null },
+        { sessionKey },
+      ),
+    );
+  }
+}
 
 export function clearWarmBootState(): void {
   // The boot record gates the next warm boot, so it must be gone before any

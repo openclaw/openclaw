@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
-import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
+import type {
+  MigrationApplyResult,
+  MigrationPlan,
+  MigrationProviderPlugin,
+} from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
@@ -67,10 +71,10 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProviders: () => [provider],
-  resolvePluginMigrationProvider: ({ providerId }: { providerId: string }) =>
-    providerId === provider.id ? provider : undefined,
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run([provider]),
 }));
 
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";

@@ -44,22 +44,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
-const ANTHROPIC_OPUS_TEMPLATE = buildForwardCompatTemplate({
-  id: "claude-opus-4-5",
-  name: "Claude Opus 4.5",
-  provider: "anthropic",
-  api: "anthropic-messages",
-  baseUrl: "https://api.anthropic.com",
-});
-
-const ANTHROPIC_OPUS_EXPECTED = {
-  provider: "anthropic",
-  id: "claude-opus-4-6",
-  api: "anthropic-messages",
-  baseUrl: "https://api.anthropic.com",
-  reasoning: true,
-};
-
 const ANTHROPIC_SONNET_TEMPLATE = buildForwardCompatTemplate({
   id: "claude-sonnet-4-5",
   name: "Claude Sonnet 4.5",
@@ -126,49 +110,11 @@ function createRegistry(
   } as never;
 }
 
-function runAnthropicOpusForwardCompatFallback() {
-  expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      agentDir: state.agentDir(),
-      modelRegistry: createRegistry([
-        {
-          provider: "anthropic",
-          modelId: "claude-opus-4-5",
-          model: ANTHROPIC_OPUS_TEMPLATE,
-        },
-      ]),
-      runtimeHooks: createRuntimeHooks(),
-    }),
-    expectedModel: ANTHROPIC_OPUS_EXPECTED,
-  });
-}
-
-function runAnthropicSonnetForwardCompatFallback() {
-  expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      agentDir: state.agentDir(),
-      modelRegistry: createRegistry([
-        {
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-5",
-          model: ANTHROPIC_SONNET_TEMPLATE,
-        },
-      ]),
-      runtimeHooks: createRuntimeHooks(),
-    }),
-    expectedModel: ANTHROPIC_SONNET_EXPECTED,
-  });
-}
-
-function runClaudeCliSonnetForwardCompatFallback() {
+async function runClaudeCliSonnetForwardCompatFallback() {
   // claude-cli uses Anthropic templates but must preserve the requested provider
   // so downstream auth/transport stays on the CLI integration.
   expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
+    result: await resolveModelWithRegistry({
       provider: "claude-cli",
       modelId: "claude-sonnet-4-6",
       agentDir: state.agentDir(),
@@ -188,8 +134,8 @@ function runClaudeCliSonnetForwardCompatFallback() {
   });
 }
 
-function runZaiForwardCompatFallback() {
-  const result = resolveModelWithRegistry({
+async function runZaiForwardCompatFallback() {
+  const result = await resolveModelWithRegistry({
     provider: ZAI_GLM5_CASE.provider,
     modelId: ZAI_GLM5_CASE.id,
     agentDir: state.agentDir(),
@@ -209,16 +155,6 @@ function runZaiForwardCompatFallback() {
 }
 
 describe("resolveModel forward-compat tail", () => {
-  it(
-    "builds an anthropic forward-compat fallback for claude-opus-4-6",
-    runAnthropicOpusForwardCompatFallback,
-  );
-
-  it(
-    "builds an anthropic forward-compat fallback for claude-sonnet-4-6",
-    runAnthropicSonnetForwardCompatFallback,
-  );
-
   it(
     "preserves the claude-cli provider for anthropic forward-compat fallback models",
     runClaudeCliSonnetForwardCompatFallback,

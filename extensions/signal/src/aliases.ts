@@ -22,15 +22,7 @@ type ResolvedSignalTarget =
     };
 
 function normalizeAliasKey(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const withoutSignal = /^signal:/i.test(trimmed)
-    ? trimmed.slice("signal:".length).trim()
-    : trimmed;
-  const normalized = normalizeLowercaseStringOrEmpty(withoutSignal);
-  return normalized || undefined;
+  return normalizeLowercaseStringOrEmpty(raw.trim().replace(/^signal:/i, "")) || undefined;
 }
 
 function resolveAliasMap(params: {
@@ -111,18 +103,6 @@ function resolveSignalAliasTargetFromMap(params: {
   }
 }
 
-function resolveSignalAliasTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  input: string;
-}): ResolvedSignalAliasTarget | null {
-  const aliases = resolveAliasMap(params);
-  return resolveSignalAliasTargetFromMap({
-    aliases,
-    input: params.input,
-  });
-}
-
 export function resolveSignalTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -135,7 +115,10 @@ export function resolveSignalTarget(params: {
       source: "raw",
     };
   }
-  const aliasTarget = resolveSignalAliasTarget(params);
+  const aliasTarget = resolveSignalAliasTargetFromMap({
+    aliases: resolveAliasMap(params),
+    input: params.input,
+  });
   if (aliasTarget) {
     return { ...aliasTarget, source: "alias" };
   }

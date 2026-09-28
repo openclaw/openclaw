@@ -1,6 +1,6 @@
-// Slack helper module supports format behavior.
 import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   chunkTextForOutbound,
   FormatCapabilityProfile,
@@ -15,9 +15,6 @@ import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
 
 function isAllowedSlackAngleToken(token: string): boolean {
-  if (!token.startsWith("<") || !token.endsWith(">")) {
-    return false;
-  }
   const inner = token.slice(1, -1);
   return (
     inner.startsWith("@") ||
@@ -35,25 +32,17 @@ function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
   if (mentions === "escape") {
     return escapeSlackMrkdwn(text);
   }
-  if (!text) {
-    return "";
-  }
   if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
 
-  SLACK_ANGLE_TOKEN_RE.lastIndex = 0;
   const out: string[] = [];
   let lastIndex = 0;
 
-  for (
-    let match = SLACK_ANGLE_TOKEN_RE.exec(text);
-    match;
-    match = SLACK_ANGLE_TOKEN_RE.exec(text)
-  ) {
-    const matchIndex = match.index ?? 0;
+  for (const match of text.matchAll(SLACK_ANGLE_TOKEN_RE)) {
+    const matchIndex = match.index;
     out.push(escapeSlackMrkdwn(text.slice(lastIndex, matchIndex)));
-    const token = match[0] ?? "";
+    const token = match[0];
     out.push(isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwn(token));
     lastIndex = matchIndex + token.length;
   }
@@ -63,9 +52,6 @@ function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
 }
 
 function escapeSlackMrkdwnText(text: string, mentions?: "escape"): string {
-  if (!text) {
-    return "";
-  }
   if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
@@ -210,7 +196,10 @@ function tokenizeSlackMrkdwn(text: string): string[] {
       index += 3;
       continue;
     }
-    const entity = ["&amp;", "&lt;", "&gt;"].find((candidate) => text.startsWith(candidate, index));
+    const entity =
+      text[index] === "&"
+        ? ["&amp;", "&lt;", "&gt;"].find((candidate) => text.startsWith(candidate, index))
+        : undefined;
     if (entity) {
       tokens.push(entity);
       index += entity.length;
@@ -419,11 +408,8 @@ function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOpti
   };
 }
 
-export function normalizeSlackOutboundText(
-  markdown: string,
-  options: SlackMarkdownOptions = {},
-): string {
-  const ir = makeSlackEmphasisStylesSafe(
+function prepareSlackMarkdownIR(markdown: string, options: SlackMarkdownOptions): MarkdownIR {
+  return makeSlackEmphasisStylesSafe(
     markdownToIR(markdown ?? "", {
       assistantTranscriptRoleHeaders: true,
       linkify: false,
@@ -433,6 +419,13 @@ export function normalizeSlackOutboundText(
       tableMode: options.tableMode,
     }),
   );
+}
+
+export function normalizeSlackOutboundText(
+  markdown: string,
+  options: SlackMarkdownOptions = {},
+): string {
+  const ir = prepareSlackMarkdownIR(markdown, options);
   return protectSlackAssistantTranscriptRoleHeaders(
     renderMarkdownWithMarkers(ir, buildSlackRenderOptions(options), SLACK_FORMAT_PROFILE),
   );
@@ -518,24 +511,25 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = makeSlackEmphasisStylesSafe(
-    markdownToIR(markdown ?? "", {
-      assistantTranscriptRoleHeaders: true,
-      linkify: false,
-      autolink: false,
-      headingStyle: "rich",
-      blockquotePrefix: "> ",
-      tableMode: options.tableMode,
-    }),
-  );
+  const ir = prepareSlackMarkdownIR(markdown, options);
   const renderOptions = buildSlackRenderOptions();
+  const normalizedLimit =
+    limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
   return renderMarkdownIRChunksWithinLimit({
     ir,
-    limit,
-    renderChunk: (chunk) =>
-      protectSlackAssistantTranscriptRoleHeaders(
-        renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE),
-      ),
+    limit: normalizedLimit,
+    renderChunk: (chunk) => {
+      const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
+      // Protection only adds a prefix, so an oversized probe cannot become a fit.
+      return rendered.length > normalizedLimit
+        ? rendered
+        : protectSlackAssistantTranscriptRoleHeaders(rendered);
+    },
     measureRendered: (rendered) => rendered.length,
-  }).map(({ rendered }) => rendered);
+  }).map(({ rendered }) =>
+    // Unsplittable safety fallbacks still need protection before leaving Slack.
+    rendered.length > normalizedLimit
+      ? protectSlackAssistantTranscriptRoleHeaders(rendered)
+      : rendered,
+  );
 }

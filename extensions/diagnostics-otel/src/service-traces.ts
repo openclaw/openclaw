@@ -6,11 +6,12 @@ import {
   type SpanKind,
   type Tracer,
 } from "@opentelemetry/api";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import {
@@ -63,18 +64,15 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
         : typeof durationMs === "number" && durationMs >= 0
           ? endTimeMs - durationMs
           : undefined;
-    const parentContext =
-      "parentContext" in options ? (options.parentContext ?? undefined) : undefined;
-    const span = tracer.startSpan(
+    return tracer.startSpan(
       name,
       {
         attributes: redactOtelAttributes(attributes),
         ...(options.kind !== undefined ? { kind: options.kind } : {}),
         ...(startTime !== undefined ? { startTime } : {}),
       },
-      parentContext,
+      options.parentContext ?? undefined,
     );
-    return span;
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
     metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
@@ -356,6 +354,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       runId?: string;
       sessionKey?: string;
       sessionId?: string;
+      agentId?: string;
       provider?: string;
       model?: string;
       channel?: string;
@@ -373,6 +372,9 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.trigger) {
       spanAttrs["openclaw.trigger"] = evt.trigger;
+    }
+    if (evt.agentId) {
+      spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
     }
   };
 

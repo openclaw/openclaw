@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
@@ -7,16 +8,6 @@ export type RequestFn = (...args: Parameters<GatewayBrowserClient["request"]>) =
 
 const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
-
-export function deferred<T = unknown>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 export function approval(id: string, createdAtMs: number) {
   return {
@@ -255,7 +246,7 @@ export function registerOverlayPairingAccessTests() {
     });
 
     it("discards an in-flight setup credential after admin access becomes pairing-only", async () => {
-      const setup = deferred();
+      const setup = deferred<unknown>();
       const request = vi.fn<RequestFn>((method) => {
         if (method === "device.pair.setupCode") {
           return setup.promise;

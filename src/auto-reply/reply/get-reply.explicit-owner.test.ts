@@ -10,7 +10,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import * as pluginRuntime from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
   createOpenClawTestState,
@@ -83,7 +83,6 @@ it.each(["main", "work"])(
     const cfg = await createExplicitOwnerConfig();
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "injector", status: "loaded" }));
-    vi.spyOn(pluginRuntime, "getActivePluginRegistry").mockReturnValue(registry);
     for (const owner of ["main", "work"]) {
       await replaceSessionEntry(
         { agentId: owner, sessionKey: "global" },
@@ -105,12 +104,14 @@ it.each(["main", "work"])(
       );
     }
     const prepare = () =>
-      resolvePromptBuildHookResult({
-        config: cfg,
-        prompt: "hello",
-        messages: [],
-        hookCtx: { agentId, sessionKey: "global" },
-      });
+      withPluginRuntimeRegistryScope(registry, () =>
+        resolvePromptBuildHookResult({
+          config: cfg,
+          prompt: "hello",
+          messages: [],
+          hookCtx: { agentId, sessionKey: "global" },
+        }),
+      );
     expect((await prepare()).prependContext).toBe(`${agentId} context`);
     expect(
       loadSessionEntryReadOnly({ agentId, sessionKey: "global" })?.pluginNextTurnInjections,

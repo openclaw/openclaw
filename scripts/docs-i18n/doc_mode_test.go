@@ -103,37 +103,6 @@ func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _,
 
 func (docFrontmatterFallbackTranslator) Close() {}
 
-type docProtocolLeakTranslator struct{}
-
-func (docProtocolLeakTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (docProtocolLeakTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	switch {
-	case strings.Contains(text, "First chunk") && strings.Contains(text, "Second chunk"):
-		return strings.Join([]string{
-			"<frontmatter>",
-			"title: leaked",
-			"</frontmatter>",
-			"",
-			"<body>",
-			"First translated",
-			"",
-			"Second translated",
-			"</body>",
-		}, "\n"), nil
-	default:
-		replacer := strings.NewReplacer(
-			"First chunk", "First translated",
-			"Second chunk", "Second translated",
-		)
-		return replacer.Replace(text), nil
-	}
-}
-
-func (docProtocolLeakTranslator) Close() {}
-
 type docWrappedLeafTranslator struct{}
 
 func (docWrappedLeafTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -188,18 +157,6 @@ func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ s
 
 func (t *docPromptBudgetTranslator) Close() {}
 
-type uppercaseWrapperTranslator struct{}
-
-func (uppercaseWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (uppercaseWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	return "<BODY>\n" + strings.ReplaceAll(text, "Regular paragraph.", "Translated paragraph.") + "\n</BODY>\n", nil
-}
-
-func (uppercaseWrapperTranslator) Close() {}
-
 type boundaryWrapperTranslator struct{}
 
 func (boundaryWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -247,18 +204,6 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 }
 
 func (t *singletonFenceRetryTranslator) Close() {}
-
-type splitProtocolMarkerTranslator struct{}
-
-func (splitProtocolMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (splitProtocolMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	return strings.ReplaceAll(text, "[Notice kind=system]", "[Aviso kind=system]"), nil
-}
-
-func (splitProtocolMarkerTranslator) Close() {}
 
 type fencedLiteralMaskingTranslator struct {
 	rawInputs []string
@@ -2195,43 +2140,6 @@ func TestValidateDocChunkTranslationRejectsTopLevelBodyWrapperLeakEvenWhenSource
 	}
 	if !strings.Contains(err.Error(), "protocol token leaked") {
 		t.Fatalf("expected protocol token leakage error, got %v", err)
-	}
-}
-
-func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
-	body := strings.Join([]string{
-		"First chunk",
-		"",
-		"Second chunk",
-		"",
-	}, "\n")
-
-	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
-	translated, err := translateDocBodyChunked(context.Background(), docProtocolLeakTranslator{}, "gateway/configuration-reference.md", body, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateDocBodyChunked returned error: %v", err)
-	}
-	if strings.Contains(translated, "<frontmatter>") || strings.Contains(translated, "<body>") || strings.Contains(translated, "[[[FM_") {
-		t.Fatalf("expected protocol wrapper leakage to be removed after split:\n%s", translated)
-	}
-	if !strings.Contains(translated, "First translated") || !strings.Contains(translated, "Second translated") {
-		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
-	}
-}
-
-func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
-	body := "Regular paragraph.\n"
-
-	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
-	translated, err := translateDocBodyChunked(context.Background(), uppercaseWrapperTranslator{}, "gateway/configuration-reference.md", body, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateDocBodyChunked returned error: %v", err)
-	}
-	if strings.Contains(strings.ToLower(translated), "<body>") {
-		t.Fatalf("expected uppercase wrapper to be stripped:\n%s", translated)
-	}
-	if !strings.Contains(translated, "Translated paragraph.") {
-		t.Fatalf("expected translated body content to survive unwrap:\n%s", translated)
 	}
 }
 

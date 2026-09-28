@@ -4,6 +4,7 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -63,6 +64,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
@@ -96,6 +98,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({
       authStorage: { setRuntimeApiKey: vi.fn() } as never,
@@ -127,6 +130,9 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     ensureContextEnginesInitialized: vi.fn(),
   }));
   vi.doMock("../../context-engine/registry.js", () => ({
+    hasSameContextEngineInstance: vi.fn(
+      (left: ContextEngine, right: ContextEngine) => left === right,
+    ),
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -166,7 +172,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
-        release: vi.fn(),
+        [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };
     return {
@@ -213,9 +219,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     };
   };
   vi.doMock("../harness/selection.js", () => ({
-    agentHarnessBuildsOpenClawTools: vi.fn(
-      (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
-    ),
     selectAgentHarness: vi.fn(createMockAgentHarness),
     selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),

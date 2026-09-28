@@ -71,7 +71,14 @@ suite.define(() => {
       }).messages;
 
       expect(mergedMessages).toHaveLength(2);
-      expect(mergedMessages[0]).toBe(localUserMessage);
+      expect(mergedMessages[0]).toEqual({
+        ...localUserMessage,
+        __openclaw: {
+          cliSessionId,
+          externalId: "control-ui-claude-user-copy",
+          importedFrom: "claude-cli",
+        },
+      });
       expect(requireRecord(requireRecord(mergedMessages[1])["__openclaw"])).toMatchObject({
         cliSessionId,
         externalId: "control-ui-claude-imported-assistant",

@@ -21,8 +21,9 @@ OpenClaw is a single container with some config files. The interesting customiza
 ## Quick start
 
 ```bash
-# Replace with your provider: ANTHROPIC, GEMINI, OPENAI, or OPENROUTER
-export <PROVIDER>_API_KEY="..."
+# Export the key for the provider you configured. Use ANTHROPIC_API_KEY,
+# GEMINI_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.
+export ANTHROPIC_API_KEY="..."
 ./scripts/k8s/deploy.sh
 
 kubectl port-forward svc/openclaw 18789:18789 -n openclaw
@@ -55,8 +56,9 @@ Then deploy as usual with `./scripts/k8s/deploy.sh`.
 **Option A: API key in environment (one step)**
 
 ```bash
-# Replace with your provider: ANTHROPIC, GEMINI, OPENAI, or OPENROUTER
-export <PROVIDER>_API_KEY="..."
+# Export the key for the provider you configured. Use ANTHROPIC_API_KEY,
+# GEMINI_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.
+export ANTHROPIC_API_KEY="..."
 ./scripts/k8s/deploy.sh
 ```
 
@@ -92,7 +94,7 @@ Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 
 The Deployment probes `/readyz` for startup and traffic readiness with a five-minute startup budget, and `/healthz` for liveness. Every probe asserts the JSON probe contract rather than the status code alone, because the Control UI answers unknown paths with a catch-all `200`; a status-only check would pass forever against an image whose probe route does not exist yet.
 
-`/startupz` is the better traffic-admission probe because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness probes to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
+`/startupz` is the better traffic-admission probe because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from `2026.8.1` or newer, the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness probes to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
 
 ## Customization
 

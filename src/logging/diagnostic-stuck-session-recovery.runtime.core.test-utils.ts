@@ -10,14 +10,13 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import {
   mocks,
+  observeRecoveryContextLog,
   resetMocks,
   warnLogMessages,
 } from "./diagnostic-stuck-session-recovery.runtime.test-harness.js";
 
 describe("stuck session recovery", () => {
-  beforeEach(() => {
-    resetMocks();
-  });
+  beforeEach(resetMocks);
 
   it("does not abort an active embedded run by default", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
@@ -97,6 +96,28 @@ describe("stuck session recovery", () => {
     expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "rechecks an admitted retry wait before a queued recovery abort (expired=%s)",
+    async (expired) => {
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("waiting-session");
+      mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+        activeWorkKind: "embedded_run",
+        lastProgressAgeMs: 720_000,
+        activeRetryWaitDeadlineAtMs: Date.now() + (expired ? -1000 : 60_000),
+      });
+      mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+      mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+      await recoverStuckDiagnosticSession({
+        sessionId: "waiting-session",
+        sessionKey: "agent:main:waiting",
+        ageMs: 720_000,
+        allowActiveAbort: true,
+      });
+      expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(expired ? 1 : 0);
+      expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledTimes(expired ? 1 : 0);
+    },
+  );
 
   it("returns an abort outcome for a stale tool call on an active embedded run", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-tool");
@@ -194,19 +215,21 @@ describe("stuck session recovery", () => {
       mocks.abortEmbeddedAgentRun.mockReturnValue(true);
       mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
+      const logged = observeRecoveryContextLog("run-456");
       await recoverStuckDiagnosticSession({
         sessionId: "run-456",
         sessionKey,
         ageMs: 629_000,
         allowActiveAbort: true,
       });
+      await logged;
     } finally {
       await openClawState.cleanup();
     }
 
     expect(warnLogMessages()).toEqual([
-      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 stopped="Twitter Mention Moderation Agent" cronJobId=job-123 cronRunId=run-456 lastAssistant="There are 40 cached mentions."',
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 activeSessionId=run-456 activeWorkKind=embedded_run lane=session:agent:clawblocker:cron:job-123:run:run-456 aborted=true drained=true forceCleared=false released=0",
+      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 cronJobId=job-123 cronRunId=run-456 stopped="Twitter Mention Moderation Agent" lastAssistant="There are 40 cached mentions."',
     ]);
   });
 

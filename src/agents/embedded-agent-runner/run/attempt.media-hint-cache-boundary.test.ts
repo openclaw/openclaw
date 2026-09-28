@@ -26,18 +26,7 @@ vi.mock("../../../plugins/host-hook-state.js", () => ({
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveImageGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveVideoGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveMusicGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
+  vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -90,12 +79,10 @@ async function createTurnFixture(systemPromptOverride?: string) {
     ],
   });
   return async (progress?: string) => {
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockReturnValue(
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
       progress
-        ? `- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
-        : undefined,
+        ? `## Media Generation Tasks\n- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
+        : "## Media Generation Tasks\n- tool=image_generate; none",
     );
     let systemPromptText = BASE;
     const setActiveSessionSystemPrompt = (next: string) => {
@@ -128,7 +115,6 @@ async function createTurnFixture(systemPromptOverride?: string) {
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
       sessionAgentId: "main",
-      setActiveSessionSystemPrompt,
       systemPromptText,
       toolResultPromptProjectionState: {
         replacements: new Map(),

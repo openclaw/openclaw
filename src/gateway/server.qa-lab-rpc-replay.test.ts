@@ -5,9 +5,9 @@ import { setImmediate } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectOk,
-  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -122,30 +122,41 @@ beforeAll(async () => {
   vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
   const root = dirs.make("qa-rpc-replay-");
   recordPath = path.join(root, "proxy-events.jsonl");
-  const backendPort = await getGatewayTestPort();
-  child = await owner.start({
-    repoRoot: process.cwd(),
-    providerMode: "mock-openai",
-    controlUiEnabled: false,
-    transportBaseUrl: "http://127.0.0.1:1",
-    command: {
-      executablePath: process.execPath,
-      argsPrefix: [
-        path.resolve("test/fixtures/qa-gateway-rpc-proxy.mjs"),
-        String(backendPort),
-        process.cwd(),
-        recordPath,
-      ],
-      tempParentDir: root,
-      usePackagedPlugins: true,
-    },
-    onListening: async (context) => {
-      token = context.token;
-      testState.gatewayAuth = { mode: "token", token };
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
-      backend = await startTestGatewayServer(backendPort, { auth: { mode: "token", token } });
-    },
-  });
+  const backendPortClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  const backendPort = backendPortClaim.port;
+  let claimHandedOff = false;
+  try {
+    child = await owner.start({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      controlUiEnabled: false,
+      transportBaseUrl: "http://127.0.0.1:1",
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [
+          path.resolve("test/fixtures/qa-gateway-rpc-proxy.mjs"),
+          String(backendPort),
+          process.cwd(),
+          recordPath,
+        ],
+        tempParentDir: root,
+        usePackagedPlugins: true,
+      },
+      onListening: async (context) => {
+        token = context.token;
+        testState.gatewayAuth = { mode: "token", token };
+        vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
+        claimHandedOff = true;
+        backend = await startTestGatewayServer(backendPortClaim, {
+          auth: { mode: "token", token },
+        });
+      },
+    });
+  } finally {
+    if (!claimHandedOff) {
+      await backendPortClaim.release();
+    }
+  }
   childPid = child.pid;
   observer = new WebSocket(`ws://127.0.0.1:${backendPort}`);
   trackConnectChallengeNonce(observer);

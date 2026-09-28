@@ -1,10 +1,11 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
@@ -21,6 +22,7 @@ import {
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -29,51 +31,121 @@ import {
 import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import {
+  renderAttachmentCardHeader,
+  renderAttachmentPreviewSkeleton,
+  renderCompactAttachmentCard,
+} from "./chat-attachment-card.ts";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
+  safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
+import { isPdfAttachment } from "./chat-pdf-preview.ts";
+import type {
+  AttachmentSidebarRuntime,
+  SidebarContent,
+  ChatDetailPanelContent,
+} from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
 
-type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
+registerFilePreviewEnglish();
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
   onRequestUpdate: () => void,
   runtime: AttachmentSidebarRuntime,
+  embedSandboxMode: EmbedSandboxMode,
+  download?: { pending: boolean; error: string | null; onDownload: () => void },
 ) {
-  const liveSource = content.resolveSource?.(onRequestUpdate, runtime);
-  const source = content.resolveSource ? liveSource : content;
-  const sourceHref = source?.src ?? "";
-  const src =
-    content.attachmentKind === "audio" ||
-    content.attachmentKind === "video" ||
-    content.mimeType?.toLowerCase().startsWith("audio/") ||
-    content.mimeType?.toLowerCase().startsWith("video/")
-      ? safeMediaAttachmentHref(sourceHref)
-      : safeAttachmentHref(sourceHref);
-  const authToken = content.resolveSource
-    ? (liveSource?.authToken ?? null)
-    : (content.authToken ?? null);
-  const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (!src) {
-    return html`<div class="sidebar-attachment-preview__unavailable">
-      ${t("chat.attachments.previewUnavailable")}
-    </div>`;
+  if (content.download && download) {
+    return html`${renderCompactAttachmentCard({
+      kind: "document",
+      label: content.title,
+      mimeType: content.mimeType ?? undefined,
+      sizeBytes: content.sizeBytes,
+      onDownload: download.onDownload,
+      downloadPending: download.pending,
+    })}${download.error ? html`<div role="alert">${download.error}</div>` : nothing}`;
   }
-  if (content.attachmentKind === "video" || mimeType.startsWith("video/")) {
+  const resolution = content.resolveSource?.(onRequestUpdate, runtime);
+  const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
+  const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const kind =
+    content.attachmentKind === "video" || mimeType.startsWith("video/")
+      ? "video"
+      : content.attachmentKind === "audio" || mimeType.startsWith("audio/")
+        ? "audio"
+        : content.attachmentKind === "image" || mimeType.startsWith("image/")
+          ? "image"
+          : "document";
+  const src = (
+    content.plainText
+      ? safePlainTextAttachmentHref
+      : kind === "audio" || kind === "video"
+        ? safeMediaAttachmentHref
+        : safeAttachmentHref
+  )(source?.src ?? "");
+  const authToken = source?.authToken ?? null;
+  const pending = resolution?.status === "pending";
+  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
+  const blockedExternalSvg =
+    (mimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
+          isSvgImageMediaPath(src ?? "", undefined) ||
+          isSvgImageMediaPath(content.title, undefined)))) &&
+    isCrossOriginHttpSource(src ?? "");
+  const imagePreview = (src || pending) && !blockedExternalSvg && kind === "image";
+  if (
+    (src || pending) &&
+    kind === "document" &&
+    isPdfAttachment(mimeType, content.title) &&
+    !isCrossOriginHttpSource(src ?? "")
+  ) {
+    return html`<openclaw-chat-pdf-preview
+      .src=${src ?? ""}
+      .sourceIdentity=${[
+        runtime.connectionEpoch ?? "",
+        runtime.agentId ?? "",
+        runtime.sessionKey ?? "",
+        content.sourceIdentity ?? src ?? "",
+      ].join("\u0000")}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .downloadHref=${src ?? ""}
+    ></openclaw-chat-pdf-preview>`;
+  }
+  if (
+    (src || pending) &&
+    isTextAttachment(mimeType, content.title) &&
+    !isCrossOriginHttpSource(src ?? "")
+  ) {
+    return html`<openclaw-chat-text-attachment
+      .compact=${true}
+      .plainText=${content.plainText ?? false}
+      .actions=${content.renderActions?.() ?? nothing}
+      .embedSandboxMode=${embedSandboxMode}
+      .src=${src ?? ""}
+      .sourceIdentity=${[runtime.connectionEpoch ?? "", runtime.agentId ?? "", runtime.sessionKey ?? "", content.sourceIdentity ?? src ?? ""].join("\u0000")}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+    ></openclaw-chat-text-attachment>`;
+  }
+  if (kind === "video" && (src || pending)) {
     return html`<openclaw-chat-video-player
-      .src=${src}
-      .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}
+      .src=${src ?? ""}
+      .preview=${true}
+      .sourceIdentity=${content.sourceIdentity ?? content.src ?? src ?? ""}
       .label=${content.title}
       .mimeType=${content.mimeType ?? ""}
       .playback=${source?.playback ?? content.playback ?? "native"}
@@ -83,7 +155,67 @@ function renderSidebarAttachment(
       .mediaHeight=${source?.height ?? content.height}
     ></openclaw-chat-video-player>`;
   }
-  if (content.attachmentKind === "audio" || mimeType.startsWith("audio/")) {
+  if (!src || imagePreview) {
+    const width = source?.width ?? content.width;
+    const height = source?.height ?? content.height;
+    return html`
+      <div
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--${kind} sidebar-attachment-preview__state-card"
+        aria-busy=${pending ? "true" : nothing}
+      >
+        ${renderAttachmentCardHeader({
+          kind,
+          label: content.title,
+          mimeType: content.mimeType ?? undefined,
+          sizeBytes: source?.sizeBytes ?? content.sizeBytes,
+          downloadHref: src ?? undefined,
+          downloadPending: pending,
+          visualMode: "preview-with-favicon",
+        })}
+        <div
+          class="sidebar-attachment-preview__state"
+          style=${styleMap({ "--preview-ratio": width && height ? `${width} / ${height}` : undefined })}
+        >
+          ${pending || imagePreview ? renderAttachmentPreviewSkeleton() : nothing}
+          ${
+            imagePreview && src
+              ? keyed(
+                  src,
+                  html`<img
+                    class="sidebar-attachment-preview__image"
+                    src=${src}
+                    alt=${content.title}
+                    .onload=${function (this: HTMLImageElement) {
+                      this.dataset.preview = "ready";
+                    }}
+                    .onerror=${function (this: HTMLImageElement) {
+                      this.dataset.preview = "error";
+                    }}
+                  />`,
+                )
+              : nothing
+          }
+          ${
+            pending
+              ? nothing
+              : html`<div class="sidebar-attachment-preview__unavailable">
+                  ${t("chat.attachments.previewUnavailable")}
+                  ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
+                  ${
+                    (resolution?.status === "error" || resolution?.status === "unavailable") &&
+                    resolution.onRetry
+                      ? html`<button class="btn btn--sm" type="button" @click=${resolution.onRetry}>
+                          ${t("common.retry")}
+                        </button>`
+                      : nothing
+                  }
+                </div>`
+          }
+        </div>
+      </div>
+    `;
+  }
+  if (kind === "audio") {
     return html`<openclaw-chat-audio-player
       .src=${src}
       .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}
@@ -95,29 +227,6 @@ function renderSidebarAttachment(
       .serverDurationMs=${source?.durationMs ?? content.durationMs}
       .voiceNote=${content.voiceNote === true}
     ></openclaw-chat-audio-player>`;
-  }
-  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
-  const blockedExternalSvg =
-    (mimeType === "image/svg+xml" ||
-      (inferTypeFromExtension &&
-        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
-          isSvgImageMediaPath(src, undefined) ||
-          isSvgImageMediaPath(content.title, undefined)))) &&
-    isCrossOriginHttpSource(src);
-  if (
-    !blockedExternalSvg &&
-    (content.attachmentKind === "image" || mimeType.startsWith("image/"))
-  ) {
-    return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
-  }
-  if (isTextAttachment(mimeType, content.title) && !isCrossOriginHttpSource(src)) {
-    return html`<openclaw-chat-text-attachment
-      .src=${src}
-      .sourceIdentity=${content.sourceIdentity ?? src}
-      .label=${content.title}
-      .mimeType=${content.mimeType ?? ""}
-      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
-    ></openclaw-chat-text-attachment>`;
   }
   return renderCompactAttachmentCard({
     kind: content.attachmentKind ?? "document",
@@ -134,19 +243,14 @@ export function buildRawContent(
   if (!content) {
     return null;
   }
-  if (content.kind === "markdown") {
+  if (content.kind === "markdown" || content.kind === "file") {
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: formatFencedCodeBlock(rawText),
-      rawText,
-    };
-  }
-  if (content.kind === "file") {
-    const rawText = content.rawText ?? content.content;
-    return {
-      kind: "markdown",
-      content: formatFencedCodeBlock(rawText, content.language),
+      content: formatFencedCodeBlock(
+        rawText,
+        content.kind === "file" ? content.language : undefined,
+      ),
       rawText,
     };
   }
@@ -160,21 +264,9 @@ export function buildRawContent(
   return null;
 }
 
-// Editing is only offered for uniform line endings: the editor serializes with
-// one configured separator, so a mixed-endings file would have its untouched
-// lines silently rewritten on save.
-
-function resolveSidebarCanvasSandbox(
-  content: ChatDetailPanelContent,
-  embedSandboxMode: EmbedSandboxMode,
-): string {
-  return content.kind === "canvas"
-    ? resolveEmbedSandbox(embedSandboxMode, content.sandbox)
-    : "allow-scripts";
-}
-
 type MarkdownSidebarProps = {
   content: ChatDetailPanelContent | null;
+  showingRawText: boolean;
   error: Error | null;
   onRetry: () => void;
   fileView?: FileViewControls;
@@ -185,9 +277,11 @@ type MarkdownSidebarProps = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   githubRepo?: MarkdownRenderOptions["githubRepo"];
+  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
+  attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -198,13 +292,14 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           codeBlockInteraction: "interactive",
           fileLinks: true,
           githubRepo: props.githubRepo ?? null,
+          githubRepositories: props.githubRepositories,
           interactiveImages: props.onOpenImage !== undefined,
           sessionLinks: true,
         })
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
-      ? resolveSidebarCanvasSandbox(content, props.embedSandboxMode ?? "scripts")
+      ? resolveEmbedSandbox(props.embedSandboxMode ?? "scripts", content.sandbox)
       : "";
   const canvasSrc =
     content?.kind === "canvas"
@@ -226,7 +321,11 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
             : content?.kind === "session-diff"
               ? t("chat.sessionDiff.title")
               : content?.kind === "markdown"
-                ? t("chat.detailPanel.markdownPreview")
+                ? t(
+                    props.showingRawText
+                      ? "chat.detailPanel.viewSource"
+                      : "chat.detailPanel.markdownPreview",
+                  )
                 : t("chat.detailPanel.toolDetails");
   return html`
     <div class="sidebar-panel">
@@ -284,60 +383,38 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       .openFile=${content.openFile ?? null}
                       .revealFile=${props.fileView?.onReveal ?? null}
                     ></openclaw-session-diff>`
-                  : content.kind === "canvas"
-                    ? html`
-                        <div class="chat-tool-card__preview" data-kind="canvas">
-                          <div class="chat-tool-card__preview-panel" data-side="front">
-                            ${keyed(
-                              `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
-                              html`
-                                <iframe
-                                  class="chat-tool-card__preview-frame"
-                                  title=${
-                                    content.title?.trim() || t("chat.detailPanel.renderPreview")
-                                  }
-                                  sandbox=${canvasSandbox}
-                                  src=${canvasSrc ?? nothing}
-                                  style=${
-                                    content.preferredHeight
-                                      ? `height:${content.preferredHeight}px`
-                                      : ""
-                                  }
-                                ></iframe>
-                              `,
-                            )}
-                          </div>
-                          ${
-                            content.rawText?.trim()
-                              ? html`
-                                  <div style="margin-top: 12px;">
-                                    <button @click=${props.onViewRawText} class="btn" type="button">
-                                      ${t("chat.detailPanel.viewRawText")}
-                                    </button>
-                                  </div>
-                                `
-                              : nothing
-                          }
-                        </div>
-                      `
-                    : content.kind === "image"
-                      ? html`
-                          <div class="chat-tool-card__preview" data-kind="image">
+                  : content.kind === "canvas" || content.kind === "image"
+                    ? keyed(
+                        content.kind,
+                        html`
+                          <div class="chat-tool-card__preview" data-kind=${content.kind}>
                             <div class="chat-tool-card__preview-panel" data-side="front">
-                              <button
-                                type="button"
-                                class="chat-tool-card__preview-image-button"
-                                aria-label=${t("chat.imageLightbox.open", { title })}
-                                @click=${() =>
-                                  openResolvedImage(props.onOpenImage, content.src, title)}
-                              >
-                                <img
-                                  class="chat-tool-card__preview-image"
-                                  src=${content.src}
-                                  alt=${title}
-                                  style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                                />
-                              </button>
+                              ${
+                                content.kind === "canvas"
+                                  ? keyed(
+                                      `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                                      html`<iframe
+                                        class="chat-tool-card__preview-frame"
+                                        title=${title}
+                                        sandbox=${canvasSandbox}
+                                        src=${canvasSrc ?? nothing}
+                                        style=${content.preferredHeight ? `height:${content.preferredHeight}px` : ""}
+                                      ></iframe>`,
+                                    )
+                                  : html`<button
+                                      type="button"
+                                      class="chat-tool-card__preview-image-button"
+                                      aria-label=${t("chat.imageLightbox.open", { title })}
+                                      @click=${() => openResolvedImage(props.onOpenImage, content.src, title)}
+                                    >
+                                      <img
+                                        class="chat-tool-card__preview-image"
+                                        src=${content.src}
+                                        alt=${title}
+                                        style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                                      />
+                                    </button>`
+                              }
                             </div>
                             ${
                               content.rawText?.trim()
@@ -355,53 +432,70 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                                 : nothing
                             }
                           </div>
-                        `
-                      : content.kind === "attachment"
-                        ? html`<div class="sidebar-attachment-preview">
-                            ${renderSidebarAttachment(
-                              content,
-                              props.onAttachmentUpdate,
-                              props.attachmentRuntime,
-                            )}
-                          </div>`
-                        : html`
-                            <section class="sidebar-markdown-shell">
-                              <div class="sidebar-markdown-shell__toolbar">
-                                <div class="sidebar-markdown-shell__intro">
-                                  <div class="sidebar-markdown-shell__eyebrow">
-                                    ${icons.scrollText}
-                                    <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                                  </div>
-                                  <div class="sidebar-markdown-shell__hint">
-                                    ${t("chat.detailPanel.renderedMarkdownHint")}
-                                  </div>
+                        `,
+                      )
+                    : content.kind === "attachment"
+                      ? html`<div class="sidebar-attachment-preview">
+                          ${renderSidebarAttachment(
+                            content,
+                            props.onAttachmentUpdate,
+                            props.attachmentRuntime,
+                            props.embedSandboxMode ?? "scripts",
+                            props.attachmentDownload,
+                          )}
+                        </div>`
+                      : html`
+                          <section class="sidebar-markdown-shell">
+                            <div class="sidebar-markdown-shell__toolbar">
+                              <div class="sidebar-markdown-shell__intro">
+                                <div class="sidebar-markdown-shell__eyebrow">
+                                  ${icons.scrollText}
+                                  <span
+                                    >${t(props.showingRawText ? "chat.detailPanel.viewSource" : "chat.detailPanel.renderedMarkdown")}</span
+                                  >
                                 </div>
-                                <button
-                                  @click=${props.onViewRawText}
-                                  class="btn btn--sm"
-                                  type="button"
-                                >
-                                  ${t("chat.detailPanel.viewRawText")}
-                                </button>
+                                ${
+                                  props.showingRawText
+                                    ? nothing
+                                    : html`
+                                        <div class="sidebar-markdown-shell__hint">
+                                          ${t("chat.detailPanel.renderedMarkdownHint")}
+                                        </div>
+                                      `
+                                }
                               </div>
                               ${
-                                markdownHtml
-                                  ? html`
-                                      <article
-                                        class="sidebar-markdown-reader sidebar-markdown"
-                                        dir=${detectTextDirection(content.content)}
-                                      >
-                                        ${unsafeHTML(markdownHtml)}
-                                      </article>
-                                    `
+                                props.showingRawText
+                                  ? nothing
                                   : html`
-                                      <div class="sidebar-markdown-empty">
-                                        ${t("chat.detailPanel.noPreviewableMarkdown")}
-                                      </div>
+                                      <button
+                                        @click=${props.onViewRawText}
+                                        class="btn btn--sm"
+                                        type="button"
+                                      >
+                                        ${t("chat.detailPanel.viewRawText")}
+                                      </button>
                                     `
                               }
-                            </section>
-                          `
+                            </div>
+                            ${
+                              markdownHtml
+                                ? html`
+                                    <article
+                                      class="sidebar-markdown-reader sidebar-markdown"
+                                      dir=${detectTextDirection(content.content)}
+                                    >
+                                      ${unsafeHTML(markdownHtml)}
+                                    </article>
+                                  `
+                                : html`
+                                    <div class="sidebar-markdown-empty">
+                                      ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                    </div>
+                                  `
+                            }
+                          </section>
+                        `
               : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `
         }
       </div>
@@ -417,6 +511,7 @@ export function renderSidebarPanel(
 ) {
   // Markdown previews and file editors need a bounded host wrapper so their
   // inner content can shrink and scroll. Content-sized kinds keep auto height.
+  // Text attachments own Markdown initialization when their async body arrives.
   const fillHost =
     props.content?.kind === "file" ||
     props.content?.kind === "markdown" ||
@@ -425,7 +520,7 @@ export function renderSidebarPanel(
   return html`
     <div
       class=${fillHost ? "sidebar-panel-host--fill" : ""}
-      ${markdownBlocks()}
+      ${props.content?.kind === "attachment" ? nothing : markdownBlocks()}
       @click=${props.onClick}
       @keydown=${props.onKeydown}
     >

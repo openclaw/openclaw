@@ -1,20 +1,8 @@
+import type { SkillsSearchResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
-export type ClawHubSearchResult = {
-  score: number;
-  slug: string;
+export type ClawHubSearchResult = Omit<SkillsSearchResult["results"][number], "installRef"> & {
   installRef?: string;
-  /**
-   * Set only for sources ClawHub serves install-only. Absence means the ordinary
-   * review-then-install flow, so gateways that predate this field behave as before.
-   */
-  installOnly?: true;
-  trustState?: "not-scanned-by-clawhub";
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
 };
 
 /**
@@ -31,12 +19,9 @@ export async function searchClawHub(
   query: string,
   signal?: AbortSignal,
 ): Promise<ClawHubSearchResult[]> {
-  if (!query.trim()) {
-    return [];
-  }
   const response = await client.request<{ results: ClawHubSearchResult[] }>(
     "skills.search",
-    { query, limit: 20 },
+    { query: query.trim() || undefined, limit: 20 },
     { signal },
   );
   return response?.results ?? [];

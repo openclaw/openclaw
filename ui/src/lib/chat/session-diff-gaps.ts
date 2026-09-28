@@ -1,29 +1,19 @@
 import type { DiffLine, DiffLineGap } from "./tool-call-diff.ts";
 
+export { splitDiffLines as splitSessionDiffFileText } from "./tool-call-diff.ts";
+
 export type SessionDiffGapDirection = "down" | "up" | "all";
 
 const GAP_CHUNK_SIZE = 20;
 const EXPAND_WHOLE_GAP_MAX = 25;
 
-export function splitSessionDiffFileText(text: string): string[] {
-  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  if (lines.at(-1) === "") {
-    lines.pop();
-  }
-  return lines;
-}
-
 function fileMatchesPatch(lines: readonly DiffLine[], fileLines: readonly string[]): boolean {
-  for (const line of lines) {
-    if (
-      (line.kind === "add" || line.kind === "ctx") &&
-      line.lineNo !== undefined &&
-      fileLines[line.lineNo - 1] !== line.text
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return lines.every(
+    (line) =>
+      (line.kind !== "add" && line.kind !== "ctx") ||
+      line.lineNo === undefined ||
+      fileLines[line.lineNo - 1] === line.text,
+  );
 }
 
 function contextRows(fileLines: readonly string[], start: number, count: number): DiffLine[] {

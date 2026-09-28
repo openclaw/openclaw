@@ -3,7 +3,11 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
 import type { SubmittedUpdateReport } from "./update-failure-report.ts";
-import type { ApplicationStatusBanner, RecordedUpdateAttempt } from "./update-overlay-helpers.ts";
+import type {
+  ApplicationStatusBanner,
+  RecordedUpdateAttempt,
+  createUpdateStatusRefresher,
+} from "./update-overlay-helpers.ts";
 
 export type UpdateFailureReportNotice = {
   attemptId: string;
@@ -19,7 +23,9 @@ export type ApplicationUpdateOverlaySnapshot = {
   updateCampaignStatusHydrated: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
+  updateStatusCheckBanner: (ApplicationStatusBanner & { mode: "manual" | "completion" }) | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
+  diagnosableUpdateFailureId: string | null;
   reportableUpdateFailureId: string | null;
   updateFailureReportBusy: boolean;
   updateFailureReportNotice: UpdateFailureReportNotice | null;
@@ -41,10 +47,11 @@ export type ApplicationOverlaySnapshot = ApplicationUpdateOverlaySnapshot & {
 export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
-  refreshUpdateStatus: () => Promise<void>;
+  refreshUpdateStatus: ReturnType<typeof createUpdateStatusRefresher>;
   acknowledgeUpdateRun: () => void;
   runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
   holdUpdate: () => Promise<boolean>;
+  diagnoseUpdateFailure: (attemptId: string) => void;
   reportUpdateFailure: (attemptId: string) => Promise<void>;
   decideApproval: (
     decision: ExecApprovalDecision,

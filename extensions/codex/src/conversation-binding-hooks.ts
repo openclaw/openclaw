@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
+  PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -34,6 +35,24 @@ const getNodeConversationState = defineCodexBuildState(
   "openclaw.codex.conversationBinding",
   () => ({ queue: new KeyedAsyncQueue() }),
 );
+
+function isCurrentPublicBinding(
+  binding: PluginConversationBinding,
+  service: ReturnType<
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime").getSessionBindingService
+  >,
+): boolean {
+  return (
+    service.resolveByConversation({
+      channel: binding.channel,
+      accountId: binding.accountId,
+      conversationId: binding.conversationId,
+      ...(binding.parentConversationId
+        ? { parentConversationId: binding.parentConversationId }
+        : {}),
+    })?.bindingId === binding.bindingId
+  );
+}
 
 export async function handleCodexConversationInboundClaim(
   event: PluginHookInboundClaimEvent,
@@ -78,9 +97,20 @@ export async function handleCodexConversationInboundClaim(
               },
             };
           }
+          const { getSessionBindingService } =
+            await import("openclaw/plugin-sdk/conversation-binding-runtime");
+          if (!isCurrentPublicBinding(publicBinding, getSessionBindingService())) {
+            return {
+              reply: {
+                text: "This Codex conversation was detached or changed before its message could run.",
+              },
+            };
+          }
           const resumed = await resume({
             nodeId: data.nodeId,
             sessionId: data.sessionId,
+            agentId: data.agentId,
+            sessionKey,
             prompt,
             cwd: data.cwd,
             timeoutMs: options.timeoutMs,
@@ -119,17 +149,9 @@ export async function handleCodexConversationInboundClaim(
       const { getSessionBindingService } =
         await import("openclaw/plugin-sdk/conversation-binding-runtime");
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
-      const currentPublicBinding = getSessionBindingService().resolveByConversation({
-        channel: publicBinding.channel,
-        accountId: publicBinding.accountId,
-        conversationId: publicBinding.conversationId,
-        ...(publicBinding.parentConversationId
-          ? { parentConversationId: publicBinding.parentConversationId }
-          : {}),
-      });
       const current = options.bindingStore.read(identity);
       if (
-        currentPublicBinding?.bindingId !== publicBinding.bindingId ||
+        !isCurrentPublicBinding(publicBinding, getSessionBindingService()) ||
         (expected &&
           (!current ||
             current.threadId !== expected.threadId ||

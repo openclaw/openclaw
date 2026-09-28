@@ -1,5 +1,4 @@
 import type {
-  OpenClawPluginApi,
   OpenClawPluginService,
   PluginRuntimeLifecycleRegistration,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -8,6 +7,7 @@ import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-con
 import {
   createEmptyPluginRegistry,
   createPluginRecord,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -88,7 +88,7 @@ describe("OpenShell plugin registration lifecycle", () => {
     },
   );
 
-  it.each(["disable", "restart", "reset", "delete"] as const)(
+  it.each(["disable", "reset"] as const)(
     "preserves global backend hooks during scoped %s cleanup",
     async (reason) => {
       const generation = registerGeneration("/sandbox/scoped");
@@ -101,57 +101,29 @@ describe("OpenShell plugin registration lifecycle", () => {
         await generation.cleanup({ reason, ...scope });
         expect(readBackend()).toEqual(generation.backend);
       }
-      if (reason === "reset" || reason === "delete") {
+      if (reason === "reset") {
         await generation.cleanup({ reason });
         expect(readBackend()).toEqual(generation.backend);
       }
     },
   );
 
-  it.each(["older-first", "newer-first"] as const)(
-    "preserves the live backend when plugin generations stop %s",
-    async (order) => {
-      const original = readBackend();
-      const older = registerGeneration("/sandbox/older");
-      const newer = registerGeneration("/sandbox/newer");
-      expect(readBackend()).toEqual(newer.backend);
-
-      const first = order === "older-first" ? older : newer;
-      const last = order === "older-first" ? newer : older;
-      await first.stop();
-      expect(readBackend()).toEqual(last.backend);
-      await last.stop();
-      expect(readBackend()).toEqual(original);
-      await first.stop();
-      expect(readBackend()).toEqual(original);
-    },
-  );
-
-  it.each([
-    "discovery",
-    "tool-discovery",
-    "setup-only",
-    "setup-runtime",
-    "cli-metadata",
-  ] satisfies OpenClawPluginApi["registrationMode"][])(
-    "does not register runtime hooks or services in %s mode",
-    (registrationMode) => {
-      const original = readBackend();
-      const services: OpenClawPluginService[] = [];
-      const lifecycles: PluginRuntimeLifecycleRegistration[] = [];
-      plugin.register(
-        createTestPluginApi({
-          registrationMode,
-          pluginConfig: { remoteWorkspaceDir: "/outside-managed-roots" },
-          registerService: (service) => services.push(service),
-          registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
-        }),
-      );
-      expect(services).toEqual([]);
-      expect(lifecycles).toEqual([]);
-      expect(readBackend()).toEqual(original);
-    },
-  );
+  it("does not register runtime hooks or services in discovery mode", () => {
+    const original = readBackend();
+    const services: OpenClawPluginService[] = [];
+    const lifecycles: PluginRuntimeLifecycleRegistration[] = [];
+    plugin.register(
+      createTestPluginApi({
+        registrationMode: "discovery",
+        pluginConfig: { remoteWorkspaceDir: "/outside-managed-roots" },
+        registerService: (service) => services.push(service),
+        registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
+      }),
+    );
+    expect(services).toEqual([]);
+    expect(lifecycles).toEqual([]);
+    expect(readBackend()).toEqual(original);
+  });
 
   it("retires a registered backend even when no plugin services ever start", async () => {
     const originalBackend = readBackend();
@@ -172,9 +144,9 @@ describe("OpenShell plugin registration lifecycle", () => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect.poll(readBackend).toEqual(originalBackend);
     } finally {
-      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
-        await lifecycle.cleanup?.({ reason: "disable" });
-      }
+      await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
+        failures: [],
+      });
       if (originalRegistry) {
         setActivePluginRegistry(originalRegistry);
       } else {

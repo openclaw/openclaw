@@ -12,7 +12,6 @@ import {
   loadSessionEntry,
   onSessionIdentityMutation,
   patchSessionEntryCore,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-inventory.js";
@@ -22,6 +21,7 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import {
   projectPublicSessionEntry,
@@ -38,6 +38,68 @@ afterEach(() => {
 });
 
 describe("SQLite session row persistence", () => {
+  it("replaces optional row projections independently across database handles and generations", () => {
+    const fixtures = ["first", "second"].map((name) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make(`session-projection-${name}-`)),
+      };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:projection" };
+      return { name, scope, database: openOpenClawAgentDatabase(scope) };
+    });
+    for (let round = 0; round < 4; round++) {
+      for (const { name, scope, database } of fixtures) {
+        const sessionId = `generation-${Math.floor(round / 2)}`;
+        const updatedAt = 10 + round;
+        const populated = round % 2 === 0;
+        replaceSessionEntrySync(scope, {
+          sessionId,
+          updatedAt,
+          ...(populated
+            ? {
+                label: `${name}-${round}`,
+                displayName: `display-${name}-${round}`,
+                lastReadAt: updatedAt + 1,
+                modelProvider: `provider-${name}-${round}`,
+                model: `model-${name}-${round}`,
+                startedAt: updatedAt + 2,
+              }
+            : {}),
+        });
+        expect(
+          database.db
+            .prepare(
+              "SELECT current_session_id, updated_at, label, last_read_at FROM session_nodes WHERE session_key = ?",
+            )
+            .get(scope.sessionKey),
+        ).toEqual({
+          current_session_id: sessionId,
+          updated_at: updatedAt,
+          label: populated ? `${name}-${round}` : null,
+          last_read_at: populated ? updatedAt + 1 : null,
+        });
+        expect(
+          database.db
+            .prepare(
+              "SELECT session_key, updated_at, model_provider, model, display_name, started_at FROM session_windows WHERE session_id = ?",
+            )
+            .get(sessionId),
+        ).toEqual({
+          session_key: scope.sessionKey,
+          updated_at: updatedAt,
+          model_provider: populated ? `provider-${name}-${round}` : null,
+          model: populated ? `model-${name}-${round}` : null,
+          display_name: populated ? `display-${name}-${round}` : null,
+          started_at: populated ? updatedAt + 2 : null,
+        });
+        expect(loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt });
+        if (!populated) {
+          expect(loadSessionEntry(scope)).not.toHaveProperty("label");
+        }
+      }
+    }
+  });
+
   it.each(["entry", "target"] as const)(
     "bounds saved-prompt decoding while publishing %s identity changes",
     async (kind) => {
@@ -86,7 +148,9 @@ describe("SQLite session row persistence", () => {
         const decodes = parse.mock.calls.filter(([text]) =>
           text.includes("identity-decode-payload:"),
         ).length;
-        expect(decodes).toBeLessThanOrEqual(iterations * 3);
+        // One decode per patch: preparation owns the only hydration of the row; the commit
+        // revalidates the persisted row without decoding and the writer reuses that row.
+        expect(decodes).toBeLessThanOrEqual(iterations);
       } finally {
         parse.mockRestore();
         unsubscribe();
@@ -227,7 +291,7 @@ describe("SQLite session row persistence", () => {
                 isRecord(entry) &&
                 (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
             ).length,
-          ).toBeLessThanOrEqual(4);
+          ).toBeLessThanOrEqual(3);
           const retainedSkills = facts[0]?.skillsSnapshot?.skills;
           expect(retainedSkills).toEqual(skillsSnapshot.skills);
           retainedSkills?.push({ name: "observer-only" });
@@ -242,6 +306,39 @@ describe("SQLite session row persistence", () => {
         clone.mockRestore();
         unsubscribe();
       }
+    },
+  );
+
+  it.each(["during", "after"] as const)(
+    "isolates the existing-entry context when first read %s the update",
+    async (readTiming) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-context-copy-")),
+      };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:context-copy" };
+      const skillsSnapshot = { prompt: "Saved prompt", skills: [] };
+      replaceSessionEntrySync(scope, { sessionId: "existing", updatedAt: 1, skillsSnapshot });
+      let readContext: () => InternalSessionEntry | undefined = () => undefined;
+      const result = await patchSessionEntryCore(
+        scope,
+        (entry, context) => {
+          readContext = () => context.existingEntry;
+          entry.skillsSnapshot!.prompt = "Callback mutation";
+          if (readTiming === "during") {
+            expect(readContext()?.skillsSnapshot).toEqual(skillsSnapshot);
+          }
+          return null;
+        },
+        { skipMaintenance: true },
+      );
+      result!.skillsSnapshot!.prompt = "Result mutation";
+      const contextEntry = readContext()!;
+      expect(contextEntry.skillsSnapshot).toEqual(skillsSnapshot);
+      contextEntry.skillsSnapshot!.prompt = "Context mutation";
+      expect(readContext()).toBe(contextEntry);
+      expect(result?.skillsSnapshot?.prompt).toBe("Result mutation");
+      expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
     },
   );
 
@@ -363,6 +460,30 @@ describe("SQLite session row persistence", () => {
     expect(persisted?.createdActor).toBeUndefined();
     expect(persisted).not.toHaveProperty("sandbox");
     expect(persisted).not.toHaveProperty("label");
+  });
+
+  it("preserves legacy history references in storage without exposing checkpoint metadata", async () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-legacy-history-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:legacy-history" };
+    const entry = {
+      sessionId: "current",
+      updatedAt: 42,
+      compactionCheckpoints: [
+        {
+          sessionId: "current",
+          preCompaction: { sessionId: "old" },
+          postCompaction: { sessionId: "current" },
+        },
+      ],
+    };
+    await upsertSessionEntryCore(scope, entry);
+    await patchSessionEntryCore(scope, () => ({ label: "Updated" }));
+    const stored = loadSessionEntry(scope);
+    expect(stored).toHaveProperty("compactionCheckpoints", entry.compactionCheckpoints);
+    expect(projectPublicSessionEntry(entry)).not.toHaveProperty("compactionCheckpoints");
+    expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty("compactionCheckpoints");
+    expect(entry.compactionCheckpoints).toHaveLength(1);
   });
 
   it("persists private workspace intent but excludes runtime-only resolved skills from SQLite JSON", async () => {

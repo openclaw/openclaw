@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
@@ -45,10 +44,12 @@ import {
   cleanupFailedCreateContainer,
   cleanupFailedCreateNetwork,
   detectHostSelinux,
+  inspectionHasFleetOwner,
   inspectionState,
   prepareCellConfig,
   prepareCellDirectories,
   probeCellHealth,
+  probeLoopbackPort,
   readHostIdentity,
   requireInspectedAttemptId,
   requireInspectedGatewayToken,
@@ -58,7 +59,10 @@ import {
   restorePreviousCell,
   withFleetCellOperation,
   verifyReplacementHealthy,
+  type FleetHealthResult,
 } from "./service-support.runtime.js";
+
+export type { FleetHealthResult } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
@@ -67,21 +71,6 @@ const OFFICIAL_IMAGE_GID = 1_000;
 // restore without rolling back slow-booting cells prematurely.
 const CELL_VERIFY_TIMEOUT_MS = 60_000;
 const CELL_VERIFY_POLL_MS = 1_000;
-
-async function probeLoopbackPort(port: number): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    const server = createServer();
-    server.once("error", (error: NodeJS.ErrnoException) => {
-      // The probe exists only to catch the one legible failure early (address in
-      // use). Anything else - e.g. EACCES on a privileged port an unprivileged CLI
-      // cannot bind but a rootful daemon can - defers to the authoritative runtime bind.
-      resolve(error.code !== "EADDRINUSE");
-    });
-    server.listen(port, "127.0.0.1", () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -119,11 +108,6 @@ type FleetListEntry = {
   created: string;
 };
 
-export type FleetHealthResult =
-  | { status: "ok"; url: string; httpStatus: number }
-  | { status: "failed"; url: string; error: string; httpStatus?: number }
-  | { status: "skipped"; url: string; reason: string };
-
 type FleetStatusResult = {
   tenant: string;
   containerName: string;
@@ -145,6 +129,7 @@ export type FleetLifecycleAction = "start" | "stop" | "restart";
 export type FleetLogsOptions = {
   tenant: string;
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
 };
@@ -219,9 +204,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         tenantId,
         operationName: "create",
         operation: async (checkpoint) => {
-          checkpoint();
+          await checkpoint();
           const stateDir = resolveStateDir(env);
-          const usedPorts = new Set(listFleetCells(env).map((cell) => cell.hostPort));
+          const usedPorts = new Set((await listFleetCells(env)).map((cell) => cell.hostPort));
           const reservation = {
             tenantId,
             createdAtMs: now(),
@@ -230,7 +215,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             containerName: cellContainerName(tenantId),
             dataDir: cellDataDir(stateDir, tenantId),
           };
-          let record: ReturnType<typeof reserveFleetCell> | undefined;
+          let record: Awaited<ReturnType<typeof reserveFleetCell>> | undefined;
           if (createOptions.port !== undefined) {
             const candidatePort = allocateHostPort(usedPorts, createOptions.port);
             if (!(await probePort(candidatePort))) {
@@ -239,13 +224,14 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               );
             }
             // The probe is best-effort UX; the runtime bind remains authoritative across this TOCTOU gap.
-            record = reserveFleetCell(env, { ...reservation, requestedPort: candidatePort });
+            await checkpoint();
+            record = await reserveFleetCell(env, { ...reservation, requestedPort: candidatePort });
           } else {
             const unavailablePorts = new Set(usedPorts);
             // The exclusion set only grows, so this terminates: allocateHostPort throws
             // its range-exhaustion error once every port through 65535 is excluded.
             while (!record) {
-              for (const cell of listFleetCells(env)) {
+              for (const cell of await listFleetCells(env)) {
                 unavailablePorts.add(cell.hostPort);
               }
               const candidate = allocateHostPort(unavailablePorts);
@@ -253,14 +239,15 @@ export function createFleetService(options: FleetServiceOptions = {}) {
                 unavailablePorts.add(candidate);
                 continue;
               }
+              await checkpoint();
               try {
                 // The probe is best-effort UX; the runtime bind remains authoritative across this TOCTOU gap.
-                record = reserveFleetCell(env, { ...reservation, requestedPort: candidate });
+                record = await reserveFleetCell(env, { ...reservation, requestedPort: candidate });
               } catch (error) {
-                if (getFleetCell(env, tenantId)) {
+                if (await getFleetCell(env, tenantId)) {
                   throw error;
                 }
-                const candidateWasReserved = listFleetCells(env).some(
+                const candidateWasReserved = (await listFleetCells(env)).some(
                   (cell) => cell.hostPort === candidate,
                 );
                 if (!candidateWasReserved) {
@@ -307,12 +294,12 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               selinuxRelabel: await selinuxEnabled(),
             };
             validateCellContainerProfile(profile);
-            checkpoint();
+            await checkpoint();
             await prepareCellDirectories(record, authSecretDir, imageOwner);
-            assertCurrentReservation(env, record);
+            await assertCurrentReservation(env, record);
             const started = createOptions.start !== false;
             networkAttempted = true;
-            checkpoint();
+            await checkpoint();
             await containers.createNetwork(
               runtime,
               profile.networkName,
@@ -323,18 +310,18 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               },
               { internal: network === "internal" },
             );
-            assertCurrentReservation(env, record);
+            await assertCurrentReservation(env, record);
             containerAttempted = true;
-            checkpoint();
+            await checkpoint();
             await containers.run(profile, false);
-            assertCurrentReservation(env, record);
-            checkpoint();
+            await assertCurrentReservation(env, record);
+            await checkpoint();
             await prepareCellConfig(record, imageOwner);
-            assertCurrentReservation(env, record);
+            await assertCurrentReservation(env, record);
             if (started) {
-              checkpoint();
+              await checkpoint();
               await containers.start(runtime, record.containerName);
-              assertCurrentReservation(env, record);
+              await assertCurrentReservation(env, record);
             }
             const url = `http://127.0.0.1:${record.hostPort}`;
             result = {
@@ -373,8 +360,8 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             }
             if (releaseReservation) {
               try {
-                checkpoint();
-                deleteFleetCell(env, tenantId);
+                await checkpoint();
+                await deleteFleetCell(env, tenantId);
               } catch {
                 // Preserve the provisioning error; a stale reservation remains recoverable via fleet list/rm.
               }
@@ -420,7 +407,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
 
     async list(): Promise<FleetListEntry[]> {
-      const records = listFleetCells(env);
+      const records = await listFleetCells(env);
       const localityChecks = new Map<FleetContainerRuntimeName, Promise<void>>();
       const inspections = await Promise.all(
         records.map(async (record) => {
@@ -458,7 +445,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
 
     async status(tenant: string): Promise<FleetStatusResult> {
-      const record = requireCell(env, tenant);
+      const record = await requireCell(env, tenant);
       let inspection: FleetContainerInspectResult;
       try {
         await containers.assertLocal(record.runtime);
@@ -474,9 +461,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       let container: FleetStatusResult["container"];
       let health: FleetHealthResult;
       if (inspection.kind === "ok") {
-        const managed =
-          inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-          inspection.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir);
+        const managed = inspectionHasFleetOwner(record, inspection);
         container = {
           state: managed ? inspection.state : "unknown",
           running: inspection.running,
@@ -513,26 +498,28 @@ export function createFleetService(options: FleetServiceOptions = {}) {
 
     async lifecycle(tenant: string, action: FleetLifecycleAction): Promise<FleetActionResult> {
       const tenantId = validateTenantId(tenant);
-      await containers.assertLocal(requireCell(env, tenantId).runtime);
+      await containers.assertLocal((await requireCell(env, tenantId)).runtime);
       return await withFleetCellOperation({
         env,
         tenantId,
         operationName: action,
         operation: async (checkpoint) => {
-          const record = requireCell(env, tenantId);
+          const record = await requireCell(env, tenantId);
           await containers.assertLocal(record.runtime);
-          assertManagedInspection(
+          const inspection = assertManagedInspection(
             record,
             await containers.inspect(record.runtime, record.containerName),
           );
-          checkpoint();
-          await containers[action](record.runtime, record.containerName);
+          await checkpoint();
+          // Pin the inspected generation: the ownership guard above proved this
+          // container, and a name can point at a different one by the time we act.
+          await containers[action](record.runtime, inspection.containerId);
           return { tenant: record.tenantId, action };
         },
       });
     },
     async logs(logOptions: FleetLogsOptions): Promise<void> {
-      const record = requireCell(env, validateTenantId(logOptions.tenant));
+      const record = await requireCell(env, validateTenantId(logOptions.tenant));
       await containers.assertLocal(record.runtime);
       // Ownership must be proven before streaming; never stream a foreign name-squatting container.
       const inspection = assertManagedInspection(
@@ -543,6 +530,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       // Pin the inspected generation so a concurrent restore cannot redirect the stream.
       await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
+        timestamps: logOptions.timestamps,
         tail: logOptions.tail,
         since: logOptions.since,
         redactValues: gatewayCredential ? [gatewayCredential] : [],
@@ -553,13 +541,13 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       const tenantId = validateTenantId(tenant);
       const explicitImage =
         requestedImage === undefined ? undefined : validateFleetImage(requestedImage);
-      await containers.assertLocal(requireCell(env, tenantId).runtime);
+      await containers.assertLocal((await requireCell(env, tenantId)).runtime);
       return await withFleetCellOperation({
         env,
         tenantId,
         operationName: "upgrade",
         operation: async (checkpoint) => {
-          const record = requireCell(env, tenantId);
+          const record = await requireCell(env, tenantId);
           await containers.assertLocal(record.runtime);
           const inspection = assertManagedInspection(
             record,
@@ -598,21 +586,21 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           validateCellContainerProfile(oldProfile);
           validateCellContainerProfile(nextProfile);
 
-          checkpoint();
+          await checkpoint();
           await containers.pull(record.runtime, image);
-          checkpoint();
+          await checkpoint();
           assertManagedNetwork(
             record,
             await containers.inspectNetwork(record.runtime, cellNetworkName(record.tenantId)),
           );
           try {
             if (inspection.running) {
-              checkpoint();
-              await containers.stop(record.runtime, record.containerName);
+              await checkpoint();
+              await containers.stop(record.runtime, inspection.containerId);
             }
-            checkpoint();
-            await containers.remove(record.runtime, record.containerName, false);
-            checkpoint();
+            await checkpoint();
+            await containers.remove(record.runtime, inspection.containerId, false);
+            await checkpoint();
             await containers.run(nextProfile, true);
             // `run -d` succeeds once the container launches, and a broken image can stay
             // "running" briefly before crashing. Commit only after the replacement answers
@@ -630,8 +618,8 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               pollMs: CELL_VERIFY_POLL_MS,
               context: "upgrade",
             });
-            checkpoint();
-            updateImage(env, record.tenantId, image);
+            await checkpoint();
+            await updateImage(env, record.tenantId, image);
           } catch (error) {
             try {
               await restorePreviousCell({
@@ -666,8 +654,8 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         tenantId,
         operationName: "backup",
         operation: async (checkpoint) => {
-          checkpoint();
-          const record = requireCell(env, tenantId);
+          await checkpoint();
+          const record = await requireCell(env, tenantId);
           return await backupFleetCell({
             record,
             stateDir: resolveStateDir(env),
@@ -688,7 +676,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         tenantId,
         operationName: "restore",
         operation: async (checkpoint) => {
-          const record = requireCell(env, tenantId);
+          const record = await requireCell(env, tenantId);
           return await restoreFleetCell({
             record,
             stateDir: resolveStateDir(env),
@@ -722,13 +710,13 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         throw new Error("--purge-data requires --force.");
       }
       const tenantId = validateTenantId(params.tenant);
-      await containers.assertLocal(requireCell(env, tenantId).runtime);
+      await containers.assertLocal((await requireCell(env, tenantId)).runtime);
       return await withFleetCellOperation({
         env,
         tenantId,
         operationName: "rm",
         operation: async (checkpoint) => {
-          const record = requireCell(env, tenantId);
+          const record = await requireCell(env, tenantId);
           await containers.assertLocal(record.runtime);
           const stateDir = resolveStateDir(env);
           const authSecretDir = cellAuthSecretDir(stateDir, record.tenantId);
@@ -768,27 +756,29 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             assertManagedNetwork(record, networkInspection);
           }
           if (inspection.kind === "ok") {
-            assertManagedInspection(record, inspection);
+            const managed = assertManagedInspection(record, inspection);
             if (inspection.running && !params.force) {
               throw new Error(
                 `Fleet cell ${record.tenantId} is running; use --force to remove it.`,
               );
             }
-            checkpoint();
-            await containers.remove(record.runtime, record.containerName, params.force === true);
+            await checkpoint();
+            // Pin the inspected generation: `--force --purge-data` must never
+            // destroy a container that did not pass the ownership guard.
+            await containers.remove(record.runtime, managed.containerId, params.force === true);
           }
           if (networkInspection.kind === "ok") {
-            checkpoint();
+            await checkpoint();
             await containers.removeNetwork(record.runtime, networkName);
           }
           if (purgeTargets.length > 0) {
-            checkpoint();
+            await checkpoint();
             await Promise.all(
               purgeTargets.map((target) => fs.rm(target, { recursive: true, force: true })),
             );
           }
-          checkpoint();
-          deleteFleetCell(env, record.tenantId);
+          await checkpoint();
+          await deleteFleetCell(env, record.tenantId);
           return {
             tenant: record.tenantId,
             action: "rm",

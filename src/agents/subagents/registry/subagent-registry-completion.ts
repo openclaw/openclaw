@@ -5,18 +5,13 @@
  */
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { SUBAGENT_KILL_TASK_ERROR, type SubagentTerminalState } from "./subagent-control.types.js";
 import {
-  SUBAGENT_KILL_TASK_ERROR,
-  type DetachedTaskTerminalState,
-} from "../../../tasks/detached-task-runtime-contract.js";
-import { resolveRequiredCompletionTerminalResult } from "../../../tasks/task-completion-contract.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
-import {
-  SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
   SUBAGENT_ENDED_OUTCOME_TIMEOUT,
+  SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_TARGET_KIND_SUBAGENT,
   type SubagentLifecycleEndedOutcome,
   type SubagentLifecycleEndedReason,
@@ -25,58 +20,55 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-/** Returns the complete task projection only after completion capture has settled. */
-export function resolveFinalizedSubagentTaskState(
+/** Classify execution independently of reply capture, including cancelled yielded runs. */
+function resolveSubagentTaskTerminalStatus(
   entry: SubagentRunRecord,
-): DetachedTaskTerminalState | undefined {
-  const endedAt = entry.execution.endedAt;
+): SubagentTerminalState["status"] | undefined {
   const outcome = entry.execution.outcome;
-  const completion = entry.completion;
   if (
-    typeof endedAt !== "number" ||
+    typeof entry.execution.endedAt !== "number" ||
     !outcome ||
-    entry.pauseReason === "sessions_yield" ||
-    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
+    entry.pauseReason === "sessions_yield"
   ) {
     return undefined;
   }
-  const progressSummary = resolveSubagentCompletionResultText(entry);
   if (
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
     entry.suppressAnnounceReason !== "steer-restart"
   ) {
-    return {
-      status: "cancelled",
-      endedAt,
-      lastEventAt: endedAt,
-      error: SUBAGENT_KILL_TASK_ERROR,
-      progressSummary,
-      terminalSummary: null,
-    };
+    return "cancelled";
   }
-  if (outcome.status === "ok") {
-    const terminal =
-      entry.expectsCompletionMessage !== true
-        ? {}
-        : entry.delivery?.disposition === "intentional_non_delivery"
-          ? { terminalOutcome: "succeeded" as const, terminalSummary: null }
-          : resolveRequiredCompletionTerminalResult(progressSummary);
-    return {
-      status: "succeeded",
-      endedAt,
-      lastEventAt: endedAt,
-      progressSummary,
-      terminalSummary: terminal.terminalSummary ?? null,
-      terminalOutcome: terminal.terminalOutcome,
-    };
+  return outcome.status === "ok"
+    ? "succeeded"
+    : outcome.status === "timeout"
+      ? "timed_out"
+      : "failed";
+}
+
+/** Returns terminal execution facts only after completion capture has settled. */
+export function resolveFinalizedSubagentTaskState(
+  entry: SubagentRunRecord,
+): SubagentTerminalState | undefined {
+  const endedAt = entry.execution.endedAt;
+  const outcome = entry.execution.outcome;
+  const completion = entry.completion;
+  const status = resolveSubagentTaskTerminalStatus(entry);
+  if (
+    typeof endedAt !== "number" ||
+    status === undefined ||
+    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
+  ) {
+    return undefined;
   }
   return {
-    status: outcome.status === "timeout" ? "timed_out" : "failed",
+    status,
     endedAt,
-    lastEventAt: endedAt,
-    error: outcome.status === "error" ? outcome.error : undefined,
-    progressSummary,
-    terminalSummary: null,
+    error:
+      status === "cancelled"
+        ? SUBAGENT_KILL_TASK_ERROR
+        : outcome?.status === "error"
+          ? outcome.error
+          : undefined,
   };
 }
 

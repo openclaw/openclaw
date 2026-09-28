@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { heartbeatLog } from "./heartbeat-runner-config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { heartbeatLog } from "./heartbeat-log.js";
+import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner ambient owner resolution", () => {

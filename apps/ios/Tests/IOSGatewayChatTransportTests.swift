@@ -124,7 +124,7 @@ struct IOSGatewayChatTransportTests {
 
     private func withSessionTransport(
         unreadAckAdvertisement: Bool? = true,
-        _ run: (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
+        _ run: @MainActor (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
@@ -138,6 +138,10 @@ struct IOSGatewayChatTransportTests {
                 let request = try await recorder.record(data)
                 let payload = switch request.method {
                 case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
+                case "agent.identity.get":
+                    try String(decoding: JSONEncoder().encode(AgentIdentityResult(
+                        agentid: #require(request.params["agentId"]?.value as? String),
+                        name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
                 case "sessions.create": #"{"key":"forked"}"#
                 default: #"{"entry":{}}"#
                 }
@@ -147,7 +151,13 @@ struct IOSGatewayChatTransportTests {
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 let hello = GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect",
-                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.create"],
+                    methods: [
+                        "agents.list",
+                        "agent.identity.get",
+                        "sessions.patch",
+                        "sessions.delete",
+                        "sessions.create",
+                    ],
                     capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [])
                 guard unreadAckAdvertisement == nil else { return .data(hello) }
                 var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
@@ -182,21 +192,25 @@ struct IOSGatewayChatTransportTests {
     @Test func `new session roster preserves selectable choices on its captured connection`() async throws {
         try await self.withSessionTransport { transport, recorder in
             let lease = try #require(await transport.acquireNewSessionRouteLease())
-            let roster = try await lease.listAgents()
+            var roster: OpenClawChatAgentsListResponse?
+            try await lease.loadAgents { roster = $0 }
             #expect(roster == OpenClawChatAgentsListResponse(
                 defaultId: "system",
                 agents: [
-                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
-                    OpenClawChatAgentChoice(id: "legacy"),
-                    OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
-                ]))
+                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", emoji: "A", workspaceGit: true),
+                    OpenClawChatAgentChoice(id: "legacy", name: "Assistant", emoji: "A"),
+                    OpenClawChatAgentChoice(id: "alpha", name: "Assistant", emoji: "A", workspaceGit: false),
+                ],
+                sessionRoutingContract: "per-sender|main|system"))
             await transport.gateway.disconnect()
             await #expect(throws: Error.self) {
-                _ = try await lease.listAgents()
+                try await lease.loadAgents { _ in Issue.record("Retired roster published") }
             }
             let requests = await recorder.all()
-            #expect(requests.map(\.method) == ["agents.list"])
+            #expect(requests.map(\.method) == ["agents.list"] + Array(repeating: "agent.identity.get", count: 3))
             #expect(requests.first?.params.isEmpty == true)
+            #expect(requests.dropFirst().compactMap { $0.params["agentId"]?.value as? String }.sorted() ==
+                ["alpha", "legacy", "zeta"])
         }
     }
 
@@ -846,13 +860,15 @@ struct LocalFixtureChatTransportTests {
         (LocalChatFixture.appleReviewDemo, ["main"]),
         (LocalChatFixture.appScreenshots, ["main", "research", "automation"]),
     ])
-    func `new session options expose fixture agents and create the selected session`(
+    @MainActor func `new session options expose fixture agents and create the selected session`(
         fixture: LocalChatFixture,
         expectedAgentIDs: [String]) async throws
     {
         let transport = LocalFixtureChatTransport(fixture: fixture)
         let route = try #require(await transport.acquireNewSessionRouteLease())
-        let catalog = try #require(try await route.listAgents())
+        var response: OpenClawChatAgentsListResponse?
+        try await route.loadAgents { response = $0 }
+        let catalog = try #require(response)
 
         #expect(catalog.defaultId == fixture.defaultAgentID)
         #expect(catalog.agents.map(\.id) == expectedAgentIDs)

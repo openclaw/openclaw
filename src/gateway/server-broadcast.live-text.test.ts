@@ -1,16 +1,24 @@
-import { getEventListeners } from "node:events";
+import { EventEmitter, getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type TextPayload = { sessionKey: string; text: string; delta?: string };
-type Frame = { type: "event"; event: string; seq: number; payload: TextPayload };
-type PeerSocket = {
+type Frame = {
+  type: "event";
+  event: string;
+  seq: number;
+  payload: TextPayload;
+  recipientProfileId?: string;
+};
+type PeerSocket = EventEmitter & {
   readyState: number;
   bufferedAmount: number;
   close: () => void;
@@ -21,7 +29,7 @@ type PeerSocket = {
 function createPeer(connId: string, completeImmediately = false) {
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: Frame[] = [];
-  const socket: PeerSocket = {
+  const socket: PeerSocket = Object.assign(new EventEmitter(), {
     readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
@@ -34,7 +42,7 @@ function createPeer(connId: string, completeImmediately = false) {
         callbacks.push(callback);
       }
     }),
-  };
+  });
   const client: GatewayWsClient = {
     connId,
     socket: socket as unknown as GatewayWsClient["socket"],
@@ -66,8 +74,230 @@ const text = (value: string, delta?: string): TextPayload => ({
   text: value,
   ...(delta === undefined ? {} : { delta }),
 });
+const textProjection = {
+  key: "text",
+  delta: (payload: unknown) => {
+    const value = payload as TextPayload;
+    return { sessionKey: value.sessionKey, delta: value.delta };
+  },
+  snapshotBytes: (payload: unknown, deltaPayloadBytes: number) =>
+    deltaPayloadBytes + Buffer.byteLength(',"text":""') + (payload as TextPayload).text.length * 6,
+};
 
 describe("connection live-text delivery", () => {
+  it("sends one baseline per recipient and concatenates blocked appends without repeating it", () => {
+    const slow = createPeer("slow");
+    const fast = createPeer("fast", true);
+    const late = createPeer("late", true);
+    const clients = new GatewayClientRegistry([slow.client, fast.client]);
+    const onBroadcast = vi.fn();
+    const { broadcast } = createGatewayBroadcaster({ clients, onBroadcast });
+    const owner = new AbortController();
+    const opts = {
+      liveText: {
+        group: owner.signal,
+        coalesce: { key: "text", merge: mergeText },
+        projection: textProjection,
+      },
+    };
+    broadcast("chat", text("A", "A"), opts);
+    broadcast("chat", text("AB", "B"), opts);
+    clients.add(late.client);
+    broadcast("chat", text("ABC", "C"), opts);
+    broadcast("chat", text("ABCD", "D"), opts);
+    slow.complete();
+    expect(slow.frames.map(({ payload }) => payload)).toEqual([
+      text("A", "A"),
+      { sessionKey: "agent:main:stream", delta: "BCD" },
+    ]);
+    expect(fast.frames.map(({ payload }) => payload)).toEqual([
+      text("A", "A"),
+      { sessionKey: "agent:main:stream", delta: "B" },
+      { sessionKey: "agent:main:stream", delta: "C" },
+      { sessionKey: "agent:main:stream", delta: "D" },
+    ]);
+    expect(late.frames.map(({ payload }) => payload)).toEqual([
+      text("ABC", "C"),
+      { sessionKey: "agent:main:stream", delta: "D" },
+    ]);
+    expect(slow.frames.map(({ seq }) => seq)).toEqual([1, 2]);
+    expect(onBroadcast.mock.calls.map(([, payload]) => payload)).toEqual([
+      text("A", "A"),
+      text("AB", "B"),
+      text("ABC", "C"),
+      text("ABCD", "D"),
+    ]);
+    owner.abort();
+    expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
+  });
+
+  it.each([
+    "filtered",
+    "dropped",
+    "resubscribed",
+    "queued resubscription",
+    "replaced socket",
+  ] as const)("repairs the baseline after %s output", (interruption) => {
+    const peer = createPeer("subscriber", interruption !== "queued resubscription");
+    peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    const subscribers = createSessionMessageSubscriberRegistry();
+    subscribers.subscribe(peer.client.connId, "agent:main:stream");
+    let visible = true;
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+      sessionMessageSubscribers: subscribers,
+      canReceiveSessionEvent: () => visible,
+    });
+    const owner = new AbortController();
+    const opts = {
+      dropIfSlow: true,
+      liveText: {
+        group: owner.signal,
+        coalesce: { key: "text", merge: mergeText },
+        projection: textProjection,
+      },
+    };
+    broadcast("chat", text("A", "A"), opts);
+    if (interruption === "filtered") {
+      visible = false;
+      broadcast("chat", text("AB", "B"), opts);
+      visible = true;
+    } else if (interruption === "dropped") {
+      peer.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      broadcast("chat", text("AB", "B"), opts);
+      peer.socket.bufferedAmount = 0;
+    } else if (interruption === "queued resubscription") {
+      broadcast("chat", text("AB", "B"), opts);
+    }
+    if (interruption === "resubscribed" || interruption === "queued resubscription") {
+      subscribers.unsubscribe(peer.client.connId, "agent:main:stream");
+      subscribers.subscribe(peer.client.connId, "agent:main:stream");
+    }
+    const replacement = createPeer("replacement", true);
+    if (interruption === "replaced socket") {
+      peer.client.socket = replacement.client.socket;
+    }
+    broadcast("chat", text("ABC", "C"), opts);
+    peer.complete();
+    const frames = interruption === "replaced socket" ? replacement.frames : peer.frames;
+    expect(frames.at(-1)?.payload).toEqual(
+      text("ABC", interruption === "queued resubscription" ? "BC" : "C"),
+    );
+    if (interruption === "dropped") {
+      expect(frames.map(({ seq }) => seq)).toEqual([1, 3]);
+    }
+    owner.abort();
+  });
+
+  it("flushes appends before rewrite and tool barriers, snapshots canvas changes, and retires abort progress", () => {
+    const peer = createPeer("barriers");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+    });
+    const owner = new AbortController();
+    const liveText = {
+      group: owner.signal,
+      coalesce: { key: "text", merge: mergeText },
+      projection: textProjection,
+    };
+    broadcast("chat", text("A", "A"), { liveText });
+    broadcast("chat", text("AB", "B"), { liveText });
+    broadcast("agent", text("tool"), { liveText: { group: owner.signal } });
+    broadcast("chat", text("replacement", "replacement"), {
+      liveText: { group: owner.signal, projection: { ...textProjection, snapshot: true } },
+    });
+    broadcast("chat", text("replacement!", "!"), { liveText });
+    const canvasVersion = {};
+    broadcast("chat", text("replacement!!", "!"), {
+      liveText: { ...liveText, projection: { ...textProjection, version: canvasVersion } },
+    });
+    broadcast("chat", text("final"), { liveText: { group: owner.signal } });
+    expect(peer.frames.map(({ payload }) => payload)).toEqual([
+      text("A", "A"),
+      { sessionKey: "agent:main:stream", delta: "B" },
+      text("tool"),
+      text("replacement", "replacement"),
+      text("replacement!!", "!!"),
+      text("final"),
+    ]);
+    broadcast("chat", text("stale", "stale"), { liveText });
+    owner.abort();
+    broadcast("chat", text("aborted"), { liveText: { group: owner.signal } });
+    for (let i = 0; i < 7; i += 1) {
+      peer.complete();
+    }
+    expect(peer.frames.at(-1)?.payload).toEqual(text("aborted"));
+    expect(peer.frames).toHaveLength(7);
+    expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
+  });
+
+  it("serializes only selected wire projections and shares them across recipients", () => {
+    const first = createPeer("one", true);
+    const peers = [first, createPeer("two", true)];
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+    });
+    const snapshotJSON = vi.fn(() => ({ content: [{ type: "text", text: "answer" }] }));
+    const delta = vi.fn((payload: unknown) => ({
+      deltaText: (payload as { deltaText: string }).deltaText,
+    }));
+    const owner = new AbortController();
+    const opts: GatewayBroadcastOpts = {
+      liveText: { group: owner.signal, projection: { key: "chat", delta } },
+    };
+    broadcast("chat", { message: { toJSON: snapshotJSON }, deltaText: "answer" }, opts);
+    broadcast("chat", { message: { toJSON: snapshotJSON }, deltaText: " suffix" }, opts);
+    expect(snapshotJSON).toHaveBeenCalledTimes(1);
+    expect(delta).toHaveBeenCalledTimes(1);
+    expect(first.frames[1]?.payload).toEqual({ deltaText: " suffix" });
+    owner.abort();
+  });
+
+  it("reserves a blocked snapshot without encoding it until subscription recovery needs it", () => {
+    const peer = createPeer("blocked");
+    const subscribers = createSessionMessageSubscriberRegistry();
+    subscribers.subscribe(peer.client.connId, "agent:main:stream");
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+      sessionMessageSubscribers: subscribers,
+    });
+    const owner = new AbortController();
+    const snapshotJSON = vi.fn((value: string) => ({ content: value }));
+    const payload = (value: string, delta: string) => ({
+      ...text(value, delta),
+      message: { toJSON: () => snapshotJSON(value) },
+    });
+    const opts = {
+      liveText: {
+        group: owner.signal,
+        coalesce: { key: "text", merge: mergeText },
+        projection: {
+          ...textProjection,
+          snapshotBytes: (value: unknown, deltaPayloadBytes: number) =>
+            deltaPayloadBytes + 100 + (value as TextPayload).text.length * 12,
+        },
+      },
+    };
+    broadcast("chat", payload("A", "A"), opts);
+    broadcast("chat", payload('AB\\\n"🦞', 'B\\\n"🦞'), opts);
+    broadcast("chat", payload('AB\\\n"🦞C', "C"), opts);
+    const reserved = getBufferedAmount(peer.client.connId)!;
+    expect(snapshotJSON).toHaveBeenCalledTimes(1);
+    subscribers.unsubscribe(peer.client.connId, "agent:main:stream");
+    subscribers.subscribe(peer.client.connId, "agent:main:stream");
+    peer.complete();
+    expect(snapshotJSON).toHaveBeenCalledTimes(2);
+    expect(peer.frames.at(-1)?.payload).toMatchObject({
+      text: 'AB\\\n"🦞C',
+      message: { content: 'AB\\\n"🦞C' },
+    });
+    expect(Buffer.byteLength(JSON.stringify(peer.frames.at(-1))) + 10).toBeLessThanOrEqual(
+      reserved,
+    );
+    expect(getBufferedAmount(peer.client.connId)).toBe(0);
+    owner.abort();
+  });
+
   it("coalesces each blocked peer independently and flushes only the terminal's group", () => {
     const slow = createPeer("slow");
     const fast = createPeer("fast", true);
@@ -368,6 +598,61 @@ describe("connection live-text delivery", () => {
     expect(getBufferedAmount(peer.client.connId)).toBe(128);
   });
 
+  it("reserves a complete queued message and refreshes recipient projection when it drains", () => {
+    const peer = createPeer("projected-message");
+    const payload = {
+      sessionKey: "agent:main:stream",
+      message: { content: "A".repeat(4096) },
+    };
+    let sharingRole = "owner";
+    const delivered = vi.fn();
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+      prepareSessionEventProjection: (event, value) => {
+        if (event !== "session.message") {
+          return undefined;
+        }
+        const source = value as typeof payload;
+        return () => ({ payload: { ...source, session: { sharingRole } }, delivered });
+      },
+    });
+    const stateVersion = { presence: 7 };
+    const opts = {
+      stateVersion,
+      liveText: {
+        group: new AbortController().signal,
+        coalesce: { key: "message", merge: replaceText },
+      },
+    };
+    broadcast("tick", {});
+    broadcast("session.message", payload, opts);
+    const originalBytes = getBufferedAmount(peer.client.connId)!;
+    expect(originalBytes).toBeGreaterThan(Buffer.byteLength(JSON.stringify(payload)));
+    const replacement = { ...payload, message: { content: "B".repeat(2048) } };
+    broadcast("session.message", replacement, opts);
+    expect(getBufferedAmount(peer.client.connId)).toBeLessThan(originalBytes);
+    expect(getBufferedAmount(peer.client.connId)).toBeGreaterThan(
+      Buffer.byteLength(JSON.stringify(replacement)),
+    );
+    expect(peer.frames).toHaveLength(1);
+    expect(delivered).not.toHaveBeenCalled();
+
+    sharingRole = "viewer";
+    peer.client.preparedRecipientProfileId = "current-profile";
+    peer.complete();
+
+    expect(peer.frames.at(-1)).toEqual({
+      type: "event",
+      event: "session.message",
+      payload: { ...replacement, session: { sharingRole: "viewer" } },
+      seq: 2,
+      stateVersion,
+      recipientProfileId: "current-profile",
+    });
+    expect(getBufferedAmount(peer.client.connId)).toBe(0);
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
   it.each([0, 1])(
     "reserves complete pending frames at the byte limit (overflow=%s)",
     (overflow) => {
@@ -382,6 +667,8 @@ describe("connection live-text delivery", () => {
         (total, payload) =>
           total +
           10 +
+          Buffer.byteLength(',"recipientProfileId":""') +
+          USER_PROFILE_ID_MAX_LENGTH * 6 +
           Buffer.byteLength(
             JSON.stringify({
               type: "event",
@@ -423,12 +710,55 @@ describe("connection live-text delivery", () => {
     },
   );
 
+  it("stamps current recipients only after draining and budgets queued identity growth", () => {
+    const peer = createBufferedPeer("profile-growth", 0);
+    const other = createPeer("other-profile", true);
+    peer.client.preparedRecipientProfileId = "a";
+    other.client.preparedRecipientProfileId = "other";
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client, other.client]),
+    });
+    const group = new AbortController().signal;
+    broadcast("tick", {});
+    broadcast("chat", text("queued"), {
+      liveText: { group, coalesce: { key: "text", merge: replaceText } },
+    });
+    const reserved = getBufferedAmount(peer.client.connId)! - peer.socket.bufferedAmount;
+    peer.client.preparedRecipientProfileId = "\u0001".repeat(USER_PROFILE_ID_MAX_LENGTH);
+    peer.socket.bufferedAmount = 0;
+    const originalSend = peer.socket.send;
+    peer.socket.send = (wire, callback) => {
+      originalSend(wire, callback);
+      if ((JSON.parse(wire) as Frame).payload?.text === "queued") {
+        // The barrier must stamp after the pending send's synchronous publication.
+        peer.client.preparedRecipientProfileId = "after-drain";
+      }
+    };
+    broadcast("chat", text("barrier"), { liveText: { group } });
+    expect(peer.frames.map(({ seq, recipientProfileId }) => ({ seq, recipientProfileId }))).toEqual(
+      [
+        { seq: 1, recipientProfileId: "a" },
+        { seq: 2, recipientProfileId: "\u0001".repeat(USER_PROFILE_ID_MAX_LENGTH) },
+        { seq: 3, recipientProfileId: "after-drain" },
+      ],
+    );
+    expect(Buffer.byteLength(JSON.stringify(peer.frames[1])) + 10).toBeLessThanOrEqual(reserved);
+    expect(other.frames.every((frame) => frame.recipientProfileId === "other")).toBe(true);
+    peer.client.preparedRecipientProfileId = undefined;
+    broadcast("chat", text("unavailable"));
+    expect(peer.frames.at(-1)).not.toHaveProperty("recipientProfileId");
+  });
+
   it.each([false, true])(
     "applies slow-consumer policy to sibling pending bytes after an ordinary write (droppable=%s)",
     (dropIfSlow) => {
+      vi.useFakeTimers();
       const peer = createBufferedPeer("sibling-pressure", MAX_BUFFERED_BYTES - 8192);
+      const delivered = vi.fn();
       const { broadcast } = createGatewayBroadcaster({
         clients: new GatewayClientRegistry([peer.client]),
+        prepareSessionEventProjection: (event, payload) =>
+          event === "session.message" ? () => ({ payload, delivered }) : undefined,
       });
       broadcast("tick", {});
       broadcast("chat", text("A".repeat(4096)), {
@@ -441,9 +771,10 @@ describe("connection live-text delivery", () => {
       expect(peer.frames).toHaveLength(2);
       expect(peer.socket.bufferedAmount).toBeLessThan(MAX_BUFFERED_BYTES);
 
-      broadcast("tick", { marker: "over shared budget" }, { dropIfSlow });
+      broadcast("session.message", { marker: "over shared budget" }, { dropIfSlow });
 
       expect(peer.frames).toHaveLength(2);
+      expect(delivered).not.toHaveBeenCalled();
       if (dropIfSlow) {
         expect(peer.socket.close).not.toHaveBeenCalled();
         expect(peer.socket.terminate).not.toHaveBeenCalled();
@@ -453,14 +784,18 @@ describe("connection live-text delivery", () => {
         expect(peer.frames.at(-1)).toMatchObject({ seq: 4, payload: text("A".repeat(4096)) });
       } else {
         expect(peer.socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+        expect(peer.socket.terminate).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
         expect(peer.socket.terminate).toHaveBeenCalledOnce();
       }
+      vi.useRealTimers();
     },
   );
 
   it.each([false, true])(
     "preserves slow-consumer closure with nonzero transport backlog (coalesce=%s)",
     (coalesce) => {
+      vi.useFakeTimers();
       const peer = createBufferedPeer("backlogged", MAX_BUFFERED_BYTES - 4096);
       const { broadcast } = createGatewayBroadcaster({
         clients: new GatewayClientRegistry([peer.client]),
@@ -484,7 +819,10 @@ describe("connection live-text delivery", () => {
       ]);
       expect(peer.socket.bufferedAmount).toBeGreaterThan(MAX_BUFFERED_BYTES);
       expect(peer.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
+      expect(peer.socket.terminate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
       expect(peer.socket.terminate).toHaveBeenCalledOnce();
+      vi.useRealTimers();
     },
   );
 

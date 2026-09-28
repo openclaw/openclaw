@@ -8,64 +8,119 @@ import { driver, execution, macOsEndpoint, result } from "./commands.test-helper
 import { ClickButton, ScrollDirection } from "./driver-client.js";
 
 describe("cua-computer desktop frames", () => {
-  it.each(
-    (
-      [
-        {
-          name: "small macOS display",
-          platform: "darwin",
-          native: [1024, 768],
-          scale: 1,
-          cap: 1200,
-          delivered: [1024, 768],
+  it.each([
+    { action: "key", method: "pressKey", params: { keys: "up" } },
+    { action: "type", method: "typeText", params: { text: "hello" } },
+    { action: "left_click", method: "click", params: { x: 10, y: 20 } },
+    { action: "mouse_move", method: "moveCursor", params: { x: 10, y: 20 } },
+    {
+      action: "scroll",
+      method: "scroll",
+      params: { x: 10, y: 20, scrollDirection: "down" },
+    },
+    {
+      action: "left_click_drag",
+      method: "drag",
+      params: { fromX: 1, fromY: 2, x: 10, y: 20 },
+    },
+  ] as const)(
+    "preserves native effect evidence for desktop $action",
+    async ({ action, method, params }) => {
+      const input = driver();
+      input[method].mockResolvedValue({
+        ...result({}),
+        action: {
+          effect: 3,
+          route: 2,
+          delivery: { mode: 1 },
+          escalation: { target: 3, reason: 3 },
         },
-        {
-          name: "downscaled Windows display",
-          platform: "win32",
-          native: [1920, 1080],
-          scale: 1,
-          cap: 1280,
-          delivered: [1280, 720],
-        },
-        {
-          name: "portrait Linux display",
-          platform: "linux",
-          native: [1080, 1920],
-          scale: 1,
-          cap: 1280,
-          delivered: [720, 1280],
-        },
-        {
-          name: "macOS Retina display",
-          platform: "darwin",
-          native: [200, 100],
-          scale: 2,
-          cap: 100,
-          delivered: [100, 50],
-        },
-        {
-          name: "rounded portrait display",
-          platform: "win32",
-          native: [1201, 1244],
-          scale: 1,
-          cap: 1200,
-          delivered: [1159, 1200],
-        },
-        {
-          name: "one-pixel reference cap",
-          platform: "linux",
-          native: [64, 160],
-          scale: 1,
-          cap: 1,
-          delivered: [1, 1],
-        },
-      ] as const
-    ).flatMap((test) =>
-      (["capture cap", "returned width"] as const).map((reference) =>
-        Object.assign({ reference }, test),
-      ),
-    ),
-  )(
+      });
+      const computer = await execution(input.session);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}'));
+        const frame =
+          action === "key" || action === "type"
+            ? {}
+            : { displayFrameId: screen.displayFrameId, refWidth: screen.width };
+        const response = JSON.parse(
+          await computer.act(
+            JSON.stringify({ action, ...params, ...frame, deliveryMode: "background" }),
+          ),
+        );
+        expect(response).toMatchObject({
+          ok: true,
+          effect: "suspected_noop",
+          escalation: { recommended: "desktop", reasonCode: "suspected_noop" },
+          details: {
+            route: "global_input",
+            deliveryMode: "foreground",
+            scope: "desktop",
+            deliveryModeApplicable: false,
+          },
+        });
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "small macOS display",
+      platform: "darwin",
+      native: [1024, 768],
+      scale: 1,
+      cap: 1200,
+      delivered: [1024, 768],
+      reference: "capture cap",
+    },
+    {
+      name: "downscaled Windows display",
+      platform: "win32",
+      native: [1920, 1080],
+      scale: 1,
+      cap: 1280,
+      delivered: [1280, 720],
+      reference: "returned width",
+    },
+    {
+      name: "portrait Linux display",
+      platform: "linux",
+      native: [1080, 1920],
+      scale: 1,
+      cap: 1280,
+      delivered: [720, 1280],
+      reference: "capture cap",
+    },
+    {
+      name: "macOS Retina display",
+      platform: "darwin",
+      native: [200, 100],
+      scale: 2,
+      cap: 100,
+      delivered: [100, 50],
+      reference: "returned width",
+    },
+    {
+      name: "rounded portrait display",
+      platform: "win32",
+      native: [1201, 1244],
+      scale: 1,
+      cap: 1200,
+      delivered: [1159, 1200],
+      reference: "returned width",
+    },
+    {
+      name: "one-pixel reference cap",
+      platform: "linux",
+      native: [64, 160],
+      scale: 1,
+      cap: 1,
+      delivered: [1, 1],
+      reference: "capture cap",
+    },
+  ] as const)(
     "maps the returned bitmap on a $name using its $reference",
     async ({ platform, native, scale, cap, delivered, reference }) => {
       const geometry = {
@@ -173,7 +228,6 @@ describe("cua-computer desktop frames", () => {
   );
 
   it.each([
-    { action: "left_click", button: ClickButton.Left, count: 1 },
     { action: "right_click", button: ClickButton.Right, count: 1 },
     { action: "middle_click", button: ClickButton.Middle, count: 1 },
     { action: "double_click", button: ClickButton.Left, count: 2 },

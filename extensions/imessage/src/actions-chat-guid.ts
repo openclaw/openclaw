@@ -5,7 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString as stringFromUnknown } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { IMessageActionTransportOptions } from "./actions-rpc.js";
+import type { IMessageActionTransportOptions } from "./actions-transport.js";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { createIMessageRpcClient } from "./client.js";
 import type { IMessageTarget } from "./targets.js";

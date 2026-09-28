@@ -10,7 +10,7 @@ import type {
   SummaryDocument,
 } from "./types.js";
 
-type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
+export type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
 type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
 

@@ -1,24 +1,21 @@
-/**
- * Projects stream state into the stable embedded-attempt result contract.
- */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "../../failover/message-patterns.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  TERMINATED_TRANSPORT_MESSAGE_RE,
+} from "../../failover/message-patterns.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedAttemptPromptState } from "./attempt-prompt-phase.js";
-import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import {
@@ -36,12 +33,16 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 export function createAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  let heartbeatToolResponse: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   let modelAttempt: AgentRuntimeModelAttempt | undefined;
   return {
     apply(
       attempt: Pick<
         EmbeddedRunAttemptResult,
-        "latestMcpAppChannelView" | "latestMcpConnectAction" | "modelAttempt"
+        | "latestMcpAppChannelView"
+        | "latestMcpConnectAction"
+        | "heartbeatToolResponse"
+        | "modelAttempt"
       >,
     ): void {
       modelAttempt = attempt.modelAttempt;
@@ -49,6 +50,8 @@ export function createAttemptCarryover() {
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
+      heartbeatToolResponse = attempt.heartbeatToolResponse ?? heartbeatToolResponse;
+      attempt.heartbeatToolResponse = heartbeatToolResponse;
     },
     get modelAttempt() {
       return modelAttempt;
@@ -57,6 +60,7 @@ export function createAttemptCarryover() {
 }
 
 export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
+  answerSegments?: EmbeddedAttemptSubscription["answerSegments"];
   successfulNestedToolNames?: string[];
 };
 
@@ -117,7 +121,11 @@ function isTransientSettledTurnFailure(failure: unknown): boolean {
     typeof failure.message === "string"
       ? failure.message.trim()
       : "";
-  return INCOMPLETE_ASSISTANT_STREAM_RE.test(message);
+  // A projected bare `terminated` can lack a retryable code. Keep settled tools
+  // eligible for the existing tool-free finalizer.
+  return (
+    INCOMPLETE_ASSISTANT_STREAM_RE.test(message) || TERMINATED_TRANSPORT_MESSAGE_RE.test(message)
+  );
 }
 
 function normalizeEmbeddedAttemptToolMetas(
@@ -176,7 +184,6 @@ function hasVisiblePendingToolMediaReply(
   );
 }
 
-/** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
 export function completeEmbeddedAttemptResult(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
@@ -211,6 +218,7 @@ export function completeEmbeddedAttemptResult(
     lastAssistant: settled.lastAssistant,
     currentAttemptAssistant: settled.currentAttemptAssistant,
     currentAttemptCompletedAssistant: settled.currentAttemptCompletedAssistant,
+    hasSuccessfulModelResponse: subscription.hasSuccessfulModelResponse(),
     successfulNestedToolNames: settled.successfulNestedToolNames,
     attemptUsage: settled.attemptUsage,
     promptCache: sessionRuntime.state.promptCache,
@@ -252,7 +260,7 @@ export function completeEmbeddedAttemptResult(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
-    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
+    terminal.promptErrorSource !== "hook:before_agent_run"
   ) {
     const contextWindow = {
       ...(attempt.contextWindowInfo?.tokens
@@ -284,21 +292,12 @@ export function completeEmbeddedAttemptResult(
           usage: state.attemptUsage,
         },
         {
-          runId: attempt.runId,
-          trace: freezeDiagnosticTraceContext(state.diagnosticTrace),
-          agentId: hookAgentId,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          workspaceDir: attempt.workspaceDir,
-          trigger: attempt.trigger,
+          ...buildEmbeddedAgentHookContext(
+            attempt,
+            hookAgentId,
+            freezeDiagnosticTraceContext(state.diagnosticTrace),
+          ),
           ...contextWindow,
-          ...buildAgentHookContextChannelFields(attempt),
-          ...buildAgentHookContextIdentityFields({
-            trigger: attempt.trigger,
-            senderId: attempt.senderId,
-            chatId: attempt.chatId,
-            channelContext: attempt.channelContext,
-          }),
         },
       )
       .catch((err: unknown) => {
@@ -353,6 +352,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
     assistantTexts,
+    answerSegments: subscription.answerSegments,
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
@@ -367,6 +367,7 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     sourceReplyDelivered: subscription.getSourceReplyDelivered(),
+    sourceReplyDeliveryState: subscription.getSourceReplyDeliveryState(),
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -402,8 +403,7 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads.length +
     (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
-    terminalReplyExpectation: attempt.terminalReplyExpectation,
+    terminalReplyExpectation: resolveReplyExpectation(attempt),
     payloadCount: 0,
     aborted: terminal.aborted,
     timedOut: terminal.timedOut,

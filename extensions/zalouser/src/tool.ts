@@ -109,7 +109,7 @@ function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolCon
 async function executeZalouserTool(
   _toolCallId: string,
   params: ToolParams,
-  _signal?: AbortSignal,
+  signal?: AbortSignal,
   _onUpdate?: unknown,
   context?: ZalouserToolContext,
 ): Promise<AgentToolResult<unknown>> {
@@ -121,6 +121,7 @@ async function executeZalouserTool(
           throw new Error("threadId and message required for send action");
         }
         const result = await sendMessageZalouser(target.threadId, params.message, {
+          signal,
           profile: params.profile,
           isGroup: target.isGroup,
         });
@@ -139,6 +140,7 @@ async function executeZalouserTool(
           throw new Error("url required for image action");
         }
         const result = await sendImageZalouser(target.threadId, params.url, {
+          signal,
           profile: params.profile,
           mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
           caption: params.message,
@@ -156,6 +158,7 @@ async function executeZalouserTool(
           throw new Error("threadId and url required for link action");
         }
         const result = await sendLinkZalouser(target.threadId, params.url, {
+          signal,
           profile: params.profile,
           caption: params.message,
           isGroup: target.isGroup,

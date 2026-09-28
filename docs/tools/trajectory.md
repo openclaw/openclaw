@@ -81,6 +81,8 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
+- `tool.call`, with the tool identity and sanitized arguments
+- `tool.result`, with the sanitized result and execution outcome
 - `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether the chain advanced, succeeded, or was exhausted
 - `model.completed`
 - `trace.artifacts`
@@ -164,11 +166,20 @@ redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts existing legacy runtime sidecar files up to 50 MiB
-- session files: 50 MiB
+- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts existing runtime sources — the SQLite runtime store or legacy runtime sidecar files — up to 50 MiB
+- session (transcript) sources: 50 MiB, whether read from the SQLite transcript store or a session file
 - runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+The source byte limits are checked before parsing events. SQLite sources use
+UTF-8 JSONL size, including separators between rows, regardless of the database
+encoding. SQLite runtime event counts are also checked before loading rows.
+Oversized sources fail with a size error before an export bundle is created.
+
+These are per-source limits, not a bound on total process memory. Parsing,
+projection, redaction, and output serialization can retain additional copies;
+large exports can still require more memory than their source size.
 
 Review bundles before sharing them outside your team. Redaction is best-effort
 and cannot know every application-specific secret.
@@ -187,12 +198,13 @@ If the command rejects the output path:
 - do not pass `/tmp/...` or `~/...`
 - keep the export inside `.openclaw/trajectory-exports/`
 
-If the export fails with a size error, the session or sidecar exceeded the
-export safety limits above. Start a new session or export a smaller
-reproduction.
+If the export fails with a size error, a transcript or runtime source — the
+SQLite store or a file — exceeded the export safety limits above. Start a new
+session or export a smaller reproduction.
 
 ## Related
 
 - [Diffs](/tools/diffs)
 - [Session management](/concepts/session)
 - [Exec tool](/tools/exec)
+- [Codex harness runtime](/plugins/codex-harness-runtime)

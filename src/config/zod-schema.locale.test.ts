@@ -15,18 +15,14 @@ describe("zod default locale", () => {
     vi.resetModules();
   });
 
-  it("restores real issue messages when the bundled locale registration was tree-shaken", async () => {
+  it("uses real issue messages when the default locale starts unset", async () => {
     vi.resetModules();
     const { z } = await import("zod");
     const previousLocaleError = z.config().localeError;
 
     try {
-      // Simulate a built dist: zod@4 is sideEffects:false, so its implicit
-      // locale registration can be dropped by bundling.
+      // Zod 4.5 registers its default during schema construction, including in bundles.
       z.config({ localeError: undefined });
-      const degraded = z.object({ expected: z.string() }).strict().safeParse({ unexpected: true });
-      expect(firstIssueMessage(degraded)).toBe("Invalid input");
-
       const { OpenClawSchema } = await import("./zod-schema.js");
       const restored = OpenClawSchema.safeParse({
         agents: { defaults: { session: { pruneAfter: "1d" } } },

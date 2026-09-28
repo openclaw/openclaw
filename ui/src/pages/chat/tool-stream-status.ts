@@ -174,25 +174,6 @@ function clearCompactionTimer(host: ToolStreamHost) {
   }
 }
 
-function scheduleCompactionClear(
-  host: ToolStreamHost,
-  delayMs: number,
-  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
-) {
-  host.compactionClearTimer = window.setTimeout(() => {
-    const current = host.compactionStatus;
-    if (expected?.phase && current?.phase !== expected.phase) {
-      return;
-    }
-    if (expected?.runId && current?.runId !== expected.runId) {
-      return;
-    }
-    host.compactionStatus = null;
-    host.compactionClearTimer = null;
-    host.requestUpdate?.();
-  }, delayMs);
-}
-
 function setCompactionStatus(
   host: ToolStreamHost,
   runId: string,
@@ -213,7 +194,15 @@ function setCompactionStatus(
     completedAt: completed ? Date.now() : null,
   };
   if (!completed) {
-    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, { phase, runId });
+    host.compactionClearTimer = window.setTimeout(() => {
+      const current = host.compactionStatus;
+      if (current?.phase !== phase || (runId && current?.runId !== runId)) {
+        return;
+      }
+      host.compactionStatus = null;
+      host.compactionClearTimer = null;
+      host.requestUpdate?.();
+    }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
 
@@ -233,7 +222,6 @@ export function handleSessionOperationEvent(
   const operationId = toTrimmedString(payload.operationId) ?? `session-compact:${sessionKey}`;
 
   if (payload.phase === "start") {
-    clearCompactionTimer(host);
     setCompactionStatus(host, operationId, "active");
     return;
   }
@@ -244,11 +232,11 @@ export function handleSessionOperationEvent(
   if (host.compactionStatus?.runId && host.compactionStatus.runId !== operationId) {
     return;
   }
-  clearCompactionTimer(host);
   if (payload.completed === true) {
     setCompactionStatus(host, operationId, "complete");
     return;
   }
+  clearCompactionTimer(host);
   host.compactionStatus = null;
 }
 
@@ -288,8 +276,7 @@ function handleLifecycleCompactionEvent(host: ToolStreamHost, payload: AgentEven
 
   // We scope lifecycle cleanup to the visible chat session first, then
   // use runId only to match the specific compaction retry we started tracking.
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-  if (!accepted.accepted) {
+  if (!acceptsToolStreamSession(host, payload)) {
     return;
   }
   if (host.compactionStatus?.phase !== "retrying") {
@@ -302,27 +289,15 @@ function handleLifecycleCompactionEvent(host: ToolStreamHost, payload: AgentEven
   setCompactionStatus(host, payload.runId, "complete");
 }
 
-export function resolveAcceptedSession(
+export function acceptsToolStreamSession(
   host: ToolStreamHost,
   payload: AgentEventPayload,
-  options?: {
-    allowSessionScopedWhenIdle?: boolean;
-  },
-): { accepted: boolean; sessionKey?: string } {
+): boolean {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
-    return { accepted: false };
+    return false;
   }
-  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
-    return { accepted: true, sessionKey };
-  }
-  if (host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
-  if (!host.chatRunId) {
-    return { accepted: false };
-  }
-  return { accepted: true, sessionKey };
+  return host.chatRunId ? payload.runId === host.chatRunId : Boolean(sessionKey);
 }
 
 function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventPayload) {
@@ -332,8 +307,7 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
     return;
   }
 
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-  if (!accepted.accepted) {
+  if (!acceptsToolStreamSession(host, payload)) {
     return;
   }
 

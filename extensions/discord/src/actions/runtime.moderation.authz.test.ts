@@ -3,14 +3,26 @@ import { PermissionFlagsBits } from "discord-api-types/v10";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import { discordModerationActionRuntime } from "./runtime-deps.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
-const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
-const banMemberDiscord = vi.fn(async () => ({ ok: true }));
-const kickMemberDiscord = vi.fn(async () => ({ ok: true }));
-const timeoutMemberDiscord = vi.fn(async () => ({ id: "user-1" }));
-const hasAnyGuildPermissionDiscord = vi.fn(async () => false);
+const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasAnyGuildPermissionDiscord } =
+  vi.hoisted(() => ({
+    banMemberDiscord: vi.fn(async () => ({ ok: true })),
+    kickMemberDiscord: vi.fn(async () => ({ ok: true })),
+    timeoutMemberDiscord: vi.fn(async () => ({ id: "user-1" })),
+    hasAnyGuildPermissionDiscord: vi.fn(async () => false),
+  }));
+
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    banMemberDiscord,
+    kickMemberDiscord,
+    timeoutMemberDiscord,
+    hasAnyGuildPermissionDiscord,
+  };
+});
 
 const enableAllActions = (_key: keyof DiscordActionConfig, _defaultValue = true) => true;
 const DISCORD_TEST_CFG = EMPTY_DISCORD_TEST_CONFIG;
@@ -22,12 +34,6 @@ function handleModerationAction(action: string, params: Record<string, unknown>)
 describe("discord moderation sender authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    Object.assign(discordModerationActionRuntime, originalDiscordModerationActionRuntime, {
-      banMemberDiscord,
-      kickMemberDiscord,
-      timeoutMemberDiscord,
-      hasAnyGuildPermissionDiscord,
-    });
   });
 
   it("rejects ban when sender lacks BAN_MEMBERS", async () => {

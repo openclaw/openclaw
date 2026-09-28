@@ -302,3 +302,23 @@ type BoardWidgetSizingInput = {
   presentation?: "card" | "full-bleed" | "frameless";
   sizeH: number;
 };
+
+export function boardWidgetGridItems(
+  widgets: readonly (BoardWidgetSizingInput & { name: string; sizeW: number; position: number })[],
+  contentHeights: ReadonlyMap<string, number>,
+  fitAutoContent = false,
+  pageWidgetName = "",
+): BoardGridItem[] {
+  const chromeRowPx = boardChromeRowPx();
+  return widgets.map((widget) => ({
+    name: widget.name,
+    w: widget.sizeW,
+    h: effectiveBoardWidgetRows(
+      widget,
+      contentHeights.get(widget.name),
+      widget.name === pageWidgetName ? 0 : chromeRowPx,
+      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+    ),
+    order: widget.position,
+  }));
+}

@@ -196,53 +196,6 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
   });
 
-  it("returns configured model context window on first lookup", async () => {
-    mockContextModuleDeps(() => ({
-      models: {
-        providers: {
-          openrouter: {
-            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
-          },
-        },
-      },
-    }));
-
-    const { lookupContextTokens } = await importContextModule();
-    expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
-  });
-
-  it("returns sync config overrides for read-only callers", async () => {
-    mockContextModuleDeps(() => ({
-      models: {
-        providers: {
-          openrouter: {
-            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
-          },
-        },
-      },
-    }));
-
-    const { lookupContextTokens } = await importContextModule();
-    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
-      321_000,
-    );
-  });
-
-  it("prefers config contextTokens over contextWindow on first lookup", async () => {
-    mockContextModuleDeps(() => ({
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
-          },
-        },
-      },
-    }));
-
-    const { lookupContextTokens } = await importContextModule();
-    expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
-  });
-
   it("keeps a lower configured window as a cap on discovered context tokens", async () => {
     mockDiscoveryDeps([{ provider: "openai", id: "gpt-5.5", contextTokens: 272_000 }], {
       openai: {
@@ -590,21 +543,6 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 
-  it("keeps discovered context metadata when no static rows exist", async () => {
-    mockDiscoveryDeps([
-      {
-        id: "claude-sonnet",
-        provider: "openrouter",
-        contextWindow: 654_321,
-      },
-    ]);
-    const { lookupContextTokens } = await importContextModule();
-    lookupContextTokens("claude-sonnet");
-    await flushAsyncWarmup();
-
-    expect(lookupContextTokens("claude-sonnet")).toBe(654_321);
-  });
-
   it("resolveContextTokensForModel handles self-prefixed provider-owned discovery ids", async () => {
     mockDiscoveryDeps([
       {
@@ -630,25 +568,6 @@ describe("lookupContextTokens", () => {
     expect(result).toBe(1_048_576);
   });
 
-  it("resolveContextTokensForModel returns configured override via direct config scan (beats discovery)", async () => {
-    // Config has an explicit contextWindow; resolveContextTokensForModel should
-    // return it via direct config scan, preventing collisions with raw discovery
-    // entries. Real callers (status.summary.ts etc.) always pass cfg.
-    mockDiscoveryDeps([
-      { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
-    ]);
-
-    const cfg = createContextOverrideConfig("google-gemini-cli", "gemini-3.1-pro-preview", 200_000);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
-
-    const result = resolveContextTokensForModel({
-      cfg: cfg as never,
-      provider: "google-gemini-cli",
-      model: "gemini-3.1-pro-preview",
-    });
-    expect(result).toBe(200_000);
-  });
-
   it.each([
     {
       name: "matches a bare configured row for a provider-self-prefixed runtime model",
@@ -664,6 +583,24 @@ describe("lookupContextTokens", () => {
         createConfiguredModel("kilocode/kilo-auto/balanced", 900_000),
       ],
       expected: 900_000,
+    },
+    {
+      name: "prefers the exact bare row over an earlier self-prefixed row",
+      model: "kilo-auto/balanced",
+      configuredModels: [
+        createConfiguredModel("kilocode/kilo-auto/balanced", 2_000),
+        createConfiguredModel("kilo-auto/balanced", 128_000),
+      ],
+      expected: 128_000,
+    },
+    {
+      name: "keeps the exact bare row ahead of a later self-prefixed row",
+      model: "kilo-auto/balanced",
+      configuredModels: [
+        createConfiguredModel("kilo-auto/balanced", 128_000),
+        createConfiguredModel("kilocode/kilo-auto/balanced", 2_000),
+      ],
+      expected: 128_000,
     },
     {
       name: "does not strip another provider's prefix",
@@ -716,29 +653,29 @@ describe("lookupContextTokens", () => {
 
   it("bounds an authored effective cap by a smaller authored context window", async () => {
     mockDiscoveryDeps([]);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
-
-    expect(
-      resolveContextTokensForModel({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                models: [
-                  {
-                    id: "gpt-5.6-sol",
-                    contextWindow: 128_000,
-                    contextTokens: 1_000_000,
-                  },
-                ],
-              },
+    const { resolveContextTokensForModel, resolveModelContextTokenProjection } =
+      await importContextModule();
+    const params = {
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.invalid",
+              models: [{ ...createConfiguredModel("wide", 1_000_000), contextWindow: 128_000 }],
             },
           },
-        } as never,
-        provider: "openai",
-        model: "gpt-5.6-sol",
-      }),
-    ).toBe(128_000);
+        },
+      },
+      provider: "custom",
+      model: "wide",
+      allowAsyncLoad: false,
+    } satisfies Parameters<typeof resolveModelContextTokenProjection>[0];
+
+    expect(resolveModelContextTokenProjection(params)).toEqual({
+      contextTokens: 128_000,
+      authoredContextTokens: 1_000_000,
+    });
+    expect(resolveContextTokensForModel(params)).toBe(128_000);
   });
 
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {

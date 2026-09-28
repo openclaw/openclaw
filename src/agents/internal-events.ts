@@ -39,6 +39,8 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  /** True only when the producer substituted placeholder text for an absent result. */
+  noVisibleResult?: boolean;
   modelRouteChange?: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
@@ -48,14 +50,14 @@ type AgentTaskCompletionInternalEvent = {
 
 type TaskCompletionPromptMode = "plain" | "protected" | "data";
 
-const MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS = 6_000;
-const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 // Status labels embed provider/lifecycle error text ("failed: <cause>",
 // "timed out: <cause>"), which is caller-supplied and unbounded. Keep the
 // single status line short so a large error cannot crowd out the child result
 // or the reply instruction in the parent's prompt.
 const MAX_TASK_COMPLETION_STATUS_LABEL_CHARS = 500;
 const TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER = "…[truncated]";
+
+const MEDIA_DIRECTIVE_CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
 
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
@@ -120,23 +122,16 @@ function sanitizeMultilineField(value: string): string {
 function sanitizeMediaDirectiveValue(value: string, raw = false): string | null {
   const sanitized = (raw ? value : escapeInternalRuntimeContextDelimiters(value))
     .replace(/\r?\n/g, " ")
-    .replace(/./gs, (char) => {
-      const code = char.charCodeAt(0);
-      return code < 32 || code === 127 ? " " : char;
-    })
+    .replace(MEDIA_DIRECTIVE_CONTROL_CHARS, " ")
     .trim();
   return sanitized || null;
 }
 
 function formatChildResultDataBlock(value: string): string {
-  // The event retains the authoritative full result; only model-visible
-  // projections share this escaped-output budget.
   return (
     wrapPromptDataBlock({
       label: "Child result",
       text: value,
-      maxEscapedChars: MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
-      truncationMarker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -156,7 +151,15 @@ function formatGeneratedMediaDirectiveLines(
   if (mediaUrls.length === 0) {
     return [];
   }
-  return [label, ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
+  return [
+    label,
+    ...mediaUrls.map((mediaUrl) => {
+      // Delimit literal quotes and suffixes that the unquoted parser treats as serialized output.
+      const reference =
+        mediaUrl.includes('"') || /[`'\\})\],]$/u.test(mediaUrl) ? `"${mediaUrl}"` : mediaUrl;
+      return `MEDIA:${reference}`;
+    }),
+  ];
 }
 
 function formatTaskCompletionEvent(
@@ -179,17 +182,7 @@ function formatTaskCompletionEvent(
     },
   );
   const result =
-    mode === "data"
-      ? truncateWithMarker(
-          event.result || "(no output)",
-          MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
-          {
-            marker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
-            reserve: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE.length,
-            trimEnd: true,
-          },
-        )
-      : formatChildResultDataBlock(event.result);
+    mode === "data" ? event.result || "(no output)" : formatChildResultDataBlock(event.result);
   const modelRouteChange = normalizeAgentRunRouteChange(event.modelRouteChange);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event, mode === "data");

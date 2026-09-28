@@ -8,10 +8,7 @@ import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js"
 import type { PluginCandidate } from "./discovery.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
-import {
-  loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecords,
-} from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
   isInstalledPluginEnabled,
@@ -23,6 +20,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 vi.unmock("../version.js");
 
@@ -756,7 +754,7 @@ describe("installed plugin index", () => {
   it("indexes persisted plugin index records from an explicit state directory", async () => {
     const fixture = createRichPluginFixture({ installOwner: "demo" });
     const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         demo: {
           source: "npm",
@@ -797,7 +795,7 @@ describe("installed plugin index", () => {
   it("discovers installed plugin packages from persisted install records", async () => {
     const fixture = createRichPluginFixture();
     const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         demo: {
           source: "git",

@@ -31,7 +31,7 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   managedServiceEnvKeys: string | undefined;
   serviceEnvironment: Record<string, string | undefined>;
   platform: NodeJS.Platform;
-  existingEnvironmentFileEnvironment: Record<string, string | undefined>;
+  existingSecretRefEnvironment: Record<string, string | undefined>;
   stateDirDotEnvEnvironment: Record<string, string | undefined>;
   configSecretRefEnvironment: Record<string, string | undefined>;
 }): void {
@@ -48,12 +48,12 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   if (managedKeys.size === 0) {
     return;
   }
-  // The caller limits these entries to file-backed SecretRefs active in the current config.
-  // Carry them through both file-backed supervisors or systemd can drop their env file.
+  // Preserve installed values for active SecretRefs, migrating legacy inline values
+  // into the supervisor's owner-only env file before the service is rewritten.
   if (launchAgent || params.platform === "linux") {
     addManagedServiceEnvEntries({
       plan: params.plan,
-      entries: params.existingEnvironmentFileEnvironment,
+      entries: params.existingSecretRefEnvironment,
       managedKeys,
       valueSource: "file",
     });

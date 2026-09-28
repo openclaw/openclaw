@@ -1,4 +1,52 @@
+import { runSynchronousWork, type SynchronousWork } from "./synchronous-work.js";
+
 const TOP_N_LIMIT = 200;
+const SORT_RUN_SIZE = 1024;
+
+function* sortEntriesWork<T extends object>(
+  entries: T[],
+  compare: (a: T, b: T) => number,
+  shouldYield?: () => boolean,
+  limit = entries.length,
+): SynchronousWork<T[]> {
+  if (!shouldYield || entries.length <= SORT_RUN_SIZE) {
+    return entries.toSorted(compare);
+  }
+  let sorted = entries.slice();
+  // Native sorting keeps each run cheap; merging provides checkpoints for wide windows.
+  for (let start = 0; start < sorted.length; start += SORT_RUN_SIZE) {
+    const run = sorted.slice(start, start + SORT_RUN_SIZE);
+    run.sort(compare);
+    for (let index = 0; index < run.length; index++) {
+      sorted[start + index] = run[index]!;
+    }
+    yield;
+  }
+  let merged = sorted.slice();
+  for (let width = SORT_RUN_SIZE; width < sorted.length; width *= 2) {
+    for (let start = 0; start < sorted.length; start += width * 2) {
+      const middle = Math.min(start + width, sorted.length);
+      const end = Math.min(start + width * 2, sorted.length);
+      // A discarded run suffix cannot contribute to the final result window.
+      const leftEnd = Math.min(middle, start + limit);
+      const rightEnd = Math.min(end, middle + limit);
+      const mergedEnd = start + Math.min(limit, leftEnd - start + rightEnd - middle);
+      let left = start;
+      let right = middle;
+      for (let index = start; index < mergedEnd; index++) {
+        if (shouldYield()) {
+          yield;
+        }
+        // Prefer the earlier run for equal entries, preserving the native sort's stability.
+        const takeRight =
+          left >= leftEnd || (right < rightEnd && compare(sorted[left]!, sorted[right]!) > 0);
+        merged[index] = takeRight ? sorted[right++]! : sorted[left++]!;
+      }
+    }
+    [sorted, merged] = [merged, sorted];
+  }
+  return sorted;
+}
 
 /** Stable bounded ordering; each caller owns its comparator and validated limit. */
 export function sortAndLimitBy<T extends object>(
@@ -6,18 +54,50 @@ export function sortAndLimitBy<T extends object>(
   limit: number | undefined,
   compare: (a: T, b: T) => number,
 ): T[] {
+  return runSynchronousWork(sortAndLimitByWork(entries, limit, compare));
+}
+
+/** Checkpoints preserve stable ordering for cooperative callers. */
+export function* sortAndLimitByWork<T extends object>(
+  entries: T[],
+  limit: number | undefined,
+  compare: (a: T, b: T) => number,
+  shouldYield?: () => boolean,
+): SynchronousWork<T[]> {
   if (limit !== undefined && limit <= TOP_N_LIMIT) {
     const selected: T[] = [];
-    for (const entry of entries) {
+    let preferFirst = false;
+    let index = 0;
+    while (index < entries.length) {
+      const entry = entries[index++]!;
+      if (shouldYield?.()) {
+        yield;
+      }
       const first = selected[0];
-      const beforeFirst = first && compare(entry, first) < 0;
+      const beforeFirst: boolean | undefined =
+        preferFirst && first ? compare(entry, first) < 0 : undefined;
       const worst = selected[limit - 1];
       if (!beforeFirst && worst && compare(entry, worst) >= 0) {
+        preferFirst = false;
         continue;
       }
-      const insertAt = beforeFirst
-        ? 0
-        : selected.findIndex((candidate, index) => index > 0 && compare(entry, candidate) < 0);
+      // Follow ascending/descending runs without comparing both endpoints for every row.
+      preferFirst = beforeFirst ?? Boolean(first && compare(entry, first) < 0);
+      let insertAt = 0;
+      if (!preferFirst) {
+        let low = 1;
+        let high = selected.length;
+        // Insert after equal entries to preserve the input order for ties.
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (compare(entry, selected[middle]!) < 0) {
+            high = middle;
+          } else {
+            low = middle + 1;
+          }
+        }
+        insertAt = low < selected.length ? low : -1;
+      }
       if (insertAt >= 0) {
         selected.splice(insertAt, 0, entry);
         if (selected.length > limit) {
@@ -29,6 +109,6 @@ export function sortAndLimitBy<T extends object>(
     }
     return selected;
   }
-  const sorted = entries.toSorted(compare);
+  const sorted = yield* sortEntriesWork(entries, compare, shouldYield, limit);
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }

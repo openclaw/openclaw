@@ -76,6 +76,7 @@ describe("ChatGPT Responses tool request controls", () => {
           type: "function",
           name: "lookup",
           description: "Look up a value.",
+          strict: false,
           parameters: {
             type: "object",
             properties: { query: { type: "string" } },
@@ -86,5 +87,38 @@ describe("ChatGPT Responses tool request controls", () => {
       tool_choice: "auto",
       parallel_tool_calls: true,
     });
+  });
+
+  it.each([
+    { label: "all-optional", required: [] },
+    { label: "mixed-required", required: ["action"] },
+  ])("preserves $label schemas in streamOpenAICodexResponses", async ({ required }) => {
+    const parameters = {
+      type: "object",
+      properties: { action: { type: "string" }, after: { type: "string" } },
+      required,
+      additionalProperties: false,
+    };
+    const expectedParameters = structuredClone(parameters);
+    const payload = await capturePayload({
+      ...context,
+      tools: [
+        {
+          name: "board",
+          description: "Read or edit a board.",
+          parameters,
+        },
+      ],
+    });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        name: "board",
+        description: "Read or edit a board.",
+        strict: false,
+        parameters: expectedParameters,
+      },
+    ]);
   });
 });

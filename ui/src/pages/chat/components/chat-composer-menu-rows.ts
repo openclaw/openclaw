@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 
@@ -21,7 +22,7 @@ export function renderCapabilityToggleRow(options: {
   label: string;
   checked: boolean;
   disabled: boolean;
-  title: string | null | undefined;
+  title?: string | null;
   icon?: TemplateResult;
   note?: TemplateResult | typeof nothing;
   checkbox?: boolean;
@@ -30,8 +31,8 @@ export function renderCapabilityToggleRow(options: {
     <wa-dropdown-item
       class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
       value=${options.value}
-      type=${options.checkbox ? "checkbox" : "normal"}
-      .checked=${options.checked}
+      type="checkbox"
+      .checked=${live(options.checked)}
       ?disabled=${options.disabled}
       title=${options.title ?? ""}
     >
@@ -48,9 +49,10 @@ export function renderCapabilityToggleRow(options: {
               class="agent-chat__capability-menu-switch"
               size="s"
               tabindex="-1"
+              inert
+              aria-hidden="true"
               .checked=${options.checked}
               ?disabled=${options.disabled}
-              aria-label=${options.label}
             ></wa-switch>`
       }
     </wa-dropdown-item>
