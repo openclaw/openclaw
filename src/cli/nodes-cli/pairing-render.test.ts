@@ -38,4 +38,46 @@ describe("cli/nodes-cli/pairing-render", () => {
     expect(table).toContain("Phone");
     expect(table).toContain("10.0.0.1");
   });
+
+  it("drops bidirectional controls from a spoofed device name before the operator sees it", () => {
+    const rlo = String.fromCodePoint(0x202e); // RIGHT-TO-LEFT OVERRIDE
+    const rli = String.fromCodePoint(0x2067); // RIGHT-TO-LEFT ISOLATE
+    const pdf = String.fromCodePoint(0x202c); // POP DIRECTIONAL FORMATTING
+    // A device names itself so the override renders it as "Owner's iPhone".
+    const spoofed = `Owner${rli}${rlo}enohPi s${pdf}box`;
+    const { pending } = parsePairingList({
+      pending: [
+        { requestId: "r1", nodeId: "n1", displayName: spoofed, remoteIp: "10.0.0.9", ts: 1 },
+      ],
+    });
+
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 80,
+      theme,
+    });
+
+    for (const control of [rli, rlo, pdf, String.fromCodePoint(0x200f)]) {
+      expect(table).not.toContain(control);
+    }
+    // The literal characters survive, so the reordering is gone but the name is not.
+    expect(table).toContain("OwnerenohPi sbox");
+  });
+
+  it("keeps right-to-left letters in a device name", () => {
+    const { pending } = parsePairingList({
+      pending: [
+        { requestId: "r1", nodeId: "n1", displayName: "שלום Phone", remoteIp: "10.0.0.1", ts: 1 },
+      ],
+    });
+
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 80,
+      theme,
+    });
+    expect(table).toContain("שלום Phone");
+  });
 });
