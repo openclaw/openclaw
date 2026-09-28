@@ -9,6 +9,7 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
 import {
   getCodexInferenceThread,
@@ -20,24 +21,106 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
+  createRuntimeDynamicTool,
   createStartedThreadHarness,
   extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
 
 setupRunAttemptTestHooks();
 
 describe("Codex native hook Gateway fallback", () => {
+  it("guards native spawn through default optional model admission", async () => {
+    const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
+    const params = createParams(
+      path.join(tempDir, "optional-participant-hooks.jsonl"),
+      path.join(tempDir, "optional-participant-hooks-workspace"),
+    );
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
+      profileId: "unrestricted-native-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    let ambiguous = false;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertNativeSubagentSpawnAllowed: () => {
+        if (ambiguous) {
+          throw new Error("Several people have steered this turn");
+        }
+      },
+    };
+    const started = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "account/read") {
+        return { account: { type: "apiKey" } };
+      }
+      if (method === "turn/start") {
+        started.resolve();
+      }
+      return undefined;
+    });
+    ownCodexInferenceClient(harness.client);
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await Promise.race([started.promise, run]);
+      expect(preflight).toHaveBeenCalledWith(
+        expect.objectContaining({ nativeModelAdmission: "optional" }),
+      );
+      const start = harness.requests.find(({ method }) => method === "thread/start");
+      const relayId = extractRelayIdFromThreadRequest(start?.params);
+      const generation = extractGenerationFromThreadRequest(start?.params);
+      const spawn = (toolUseId: string) =>
+        invokeNativeHookRelay({
+          provider: "codex",
+          relayId,
+          generation,
+          requireGeneration: true,
+          event: "pre_tool_use",
+          rawPayload: {
+            session_id: "thread-1",
+            turn_id: "turn-1",
+            tool_name: "Agent",
+            tool_use_id: toolUseId,
+            tool_input: { message: "Inspect the fixture" },
+          },
+        });
+      await expect(spawn("single-person")).resolves.toMatchObject({ stdout: "", exitCode: 0 });
+      ambiguous = true;
+      const response = await spawn("several-people");
+      expect(response.stdout).toContain(
+        "Use sessions_spawn with the requester's requester_profile.id as user",
+      );
+      expect(JSON.parse(response.stdout)).toMatchObject({
+        hookSpecificOutput: { permissionDecision: "deny" },
+      });
+      expect(start?.params).not.toHaveProperty(["config", "agents.enabled"], false);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    } finally {
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+      harness.close();
+    }
+  });
+
   it("preserves a no-policy operator's disabled hooks until a policy is introduced", async () => {
     const params = createParams(
       path.join(tempDir, "optional-model-hooks.jsonl"),
       path.join(tempDir, "optional-model-hooks-workspace"),
     );
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("sessions_spawn")]);
     const listeners = new Set<() => void>();
     let policy: NonNullable<
       Parameters<typeof bindProductionHarnessHostCapabilitiesForTest>[1]
@@ -56,6 +139,10 @@ describe("Codex native hook Gateway fallback", () => {
         };
       },
     });
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertNativeSubagentSpawnAllowed: () => {},
+    };
     const selected = { provider: params.provider, model: params.modelId };
     const permitted = params.hostCapabilities.bindModelExecution?.(selected);
     if (!permitted) {
@@ -94,8 +181,20 @@ describe("Codex native hook Gateway fallback", () => {
       expect(getCodexInferenceThreadQualification(harness.client, "thread-1")).toBeUndefined();
       const start = harness.requests.find(({ method }) => method === "thread/start");
       expect(start?.params).toMatchObject({
-        config: { "features.shell_tool": true, openai_base_url: route?.baseUrl },
+        config: {
+          "features.shell_tool": true,
+          openai_base_url: route?.baseUrl,
+          "agents.enabled": false,
+          "features.multi_agent": false,
+          "features.multi_agent_v2": false,
+        },
       });
+      expect(start?.params).toHaveProperty(
+        "dynamicTools",
+        expect.arrayContaining([
+          expect.objectContaining({ type: "function", name: "sessions_spawn" }),
+        ]),
+      );
       expect(start?.params).not.toHaveProperty(["config", "hooks.PreToolUse", 0]);
       const turn = harness.requests.find(({ method }) => method === "turn/start");
       expect(turn?.params).toHaveProperty(
