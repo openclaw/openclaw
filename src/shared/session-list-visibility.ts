@@ -19,9 +19,16 @@ export function isSystemCreatedSessionRow(row: {
   label?: string;
   displayName?: string;
   subject?: string;
+  classification?: string;
 }): boolean {
   if (isCronSessionDisplayKey(row.key)) {
     return false;
+  }
+  // Isolated heartbeat lanes are Gateway-owned background work surfaced with a
+  // recorded classification. Hide them from default views, while keeping
+  // operator-named lanes discoverable and reachable via the system toggle.
+  if (row.classification === "heartbeat") {
+    return !(row.label?.trim() || row.displayName?.trim() || row.subject?.trim());
   }
   if (row.createdActor?.type === "system") {
     return true;

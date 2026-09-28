@@ -91,7 +91,9 @@ async function openDraftDatabase(): Promise<IDBDatabase> {
   return database;
 }
 
-function ownerKey(scope: DurableComposerDraftScope): string {
+function ownerKey(
+  scope: Pick<DurableComposerDraftScope, "gatewayOwner" | "recoveryScope">,
+): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
 }
 
@@ -314,9 +316,7 @@ export async function prepareDurableComposerRecovery(
     const database = await openDraftDatabase();
     transaction = database.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
-    const values: unknown[] = await requestResult(
-      store.index(OWNER_INDEX).getAll(ownerKey({ ...owner, scopeKey: "" })),
-    );
+    const values: unknown[] = await requestResult(store.index(OWNER_INDEX).getAll(ownerKey(owner)));
     const records = values.map(parseStoredDraft).filter((record) => record !== null);
     const entries: DurableComposerRecoveryEntry[] = [];
     let activeCount = records.filter(
@@ -672,7 +672,7 @@ export async function retireDurableComposerDrafts(
         now,
       );
     }
-    await pruneOwnerRecords(store, ownerKey({ ...owner, scopeKey: "" }), now);
+    await pruneOwnerRecords(store, ownerKey(owner), now);
     await transactionComplete(transaction);
     return "completed";
   } catch {

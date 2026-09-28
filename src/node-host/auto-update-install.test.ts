@@ -144,12 +144,12 @@ describe("Bun private node runtime installation", () => {
           await fs.access(options.cwd);
         }
         const { BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: bin } = options.env;
-        if (argv.join(" ") === "bun pm bin -g") {
+        if (argv.join(" ") === [process.execPath, "pm", "bin", "-g"].join(" ")) {
           // Bun requires its global project manifest before any global command.
           await fs.access(path.join(project!, "package.json"));
           return { code: 0, stdout: `${bin}\n`, stderr: "" };
         }
-        if (argv[0] === "bun" && argv[1] === "add" && project && bin) {
+        if (argv[0] === process.execPath && argv[1] === "add" && project && bin) {
           const archiveSpec = argv.find((arg) => arg.startsWith("openclaw@file:"));
           expect(archiveSpec).toBeDefined();
           expect(await fs.readFile(archiveSpec!.slice("openclaw@file:".length))).toEqual(archive);
@@ -172,7 +172,7 @@ describe("Bun private node runtime installation", () => {
     expect(mocks.command.mock.calls.some(([argv]) => argv[0].startsWith("npm"))).toBe(false);
     const install = mocks.command.mock.calls.find(([argv]) => argv[1] === "add");
     expect(install?.[0]).toEqual([
-      "bun",
+      process.execPath,
       "add",
       "-g",
       "--trust",

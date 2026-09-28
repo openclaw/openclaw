@@ -963,7 +963,9 @@ function normalizeGlobalInstallCommand(
         command:
           managerOrCommand === "npm"
             ? (resolvePreferredNpmCommand(pkgRoot) ?? managerOrCommand)
-            : managerOrCommand,
+            : managerOrCommand === "bun" && process.versions.bun
+              ? process.execPath
+              : managerOrCommand,
       }
     : managerOrCommand;
 }
