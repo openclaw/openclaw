@@ -84,6 +84,7 @@ export type DetailProps = SharedProps &
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
+    onEditMcp?: () => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
@@ -461,24 +462,22 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         t("pluginsPage.auth.accounts"),
         (props.inspection?.mcpAuth ?? []).map((server) => ({
           name: server.serverName,
-          trailing: html`<span
-              class="plugin-connection-status ${server.state === "authorized" ? "" : "plugin-connection-status--warning"}"
-              role="status"
-              >${t(server.state === "authorized" ? "pluginsPage.auth.signedIn" : "pluginsPage.auth.needsSignIn")}</span
-            >
-            ${
+          trailing: html`${
               server.state === "authorized"
-                ? nothing
-                : html`<button
-                    type="button"
-                    class="btn btn--sm oc-action oc-action-secondary"
-                    aria-label=${t("pluginsPage.auth.connectAccount", { name: server.serverName })}
-                    ?disabled=${!props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
-                    @click=${() => props.onMcpLogin?.(server.serverName)}
-                  >
-                    ${t("pluginsPage.auth.connect")}
-                  </button>`
-            }`,
+                ? html`<span class="plugin-connection-status" role="status">
+                    ${icons.check} ${t("pluginsPage.auth.connected")}
+                  </span>`
+                : nothing
+            }
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(server.state === "authorized" ? "pluginsPage.auth.editAccount" : "pluginsPage.auth.connectAccount", { name: server.serverName })}
+              ?disabled=${server.state === "authorized" ? !props.onEditMcp : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
+              @click=${() => (server.state === "authorized" ? props.onEditMcp?.() : props.onMcpLogin?.(server.serverName))}
+            >
+              ${t(server.state === "authorized" ? "pluginsPage.auth.edit" : "pluginsPage.auth.connect")}
+            </button>`,
         })),
         icons.circleUser,
       )}
@@ -486,18 +485,20 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         t("pluginsPage.auth.credentials"),
         (props.inspection?.credentials ?? []).map((credential) => ({
           name: credential.envVars.join(" / ") || credential.label,
-          trailing: html`<span
-              class="plugin-connection-status ${credential.status === "invalid" || credential.status === "unresolved" ? "plugin-connection-status--warning" : ""}"
-              role="status"
-              >${t(credential.status === "missing" && credential.requiresCredential === false ? "pluginsPage.auth.optional" : `pluginsPage.auth.credentialStatus.${credential.status}`)}</span
-            >
+          trailing: html`${
+              credential.status === "configured"
+                ? html`<span class="plugin-connection-status" role="status">
+                    ${icons.check} ${t("pluginsPage.auth.configured")}
+                  </span>`
+                : nothing
+            }
             <button
               type="button"
               class="btn btn--sm oc-action oc-action-secondary"
-              aria-label=${t("pluginsPage.auth.configureCredential", { name: credential.label })}
+              aria-label=${t(credential.status === "configured" ? "pluginsPage.auth.editCredential" : "pluginsPage.auth.configureCredential", { name: credential.label })}
               @click=${() => props.onTabChange("configuration")}
             >
-              ${t("pluginsPage.auth.configure")}
+              ${t(credential.status === "configured" ? "pluginsPage.auth.edit" : "pluginsPage.auth.configure")}
             </button>`,
         })),
         icons.key,

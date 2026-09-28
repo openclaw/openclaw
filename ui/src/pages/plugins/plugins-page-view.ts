@@ -186,6 +186,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       mcpLoginBusy: model.mcpLoginBusy,
       canMcpLogin: model.canMcpLogin,
       onMcpLogin: actions.startMcpLogin,
+      onEditMcp: () => model.context.navigate("mcp"),
       catalog: detail?.catalog,
       inspectionError: detail?.error ?? null,
       catalogLoading: detail?.catalogLoading,

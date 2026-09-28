@@ -1569,12 +1569,17 @@ openclaw-plugins-page
 }
 
 .plugin-connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.plugin-connection-status--warning {
-  color: var(--warn);
+.plugin-connection-status svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ok);
 }
 
 @media (max-width: 560px) {

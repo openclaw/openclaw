@@ -142,7 +142,9 @@ describe("PluginsPage routing", () => {
       );
       await vi.waitFor(() => expect(page.querySelector("h1")).not.toBeNull());
       if (installed) {
-        await vi.waitFor(() => expect(page.textContent).toContain("Needs sign-in"));
+        await vi.waitFor(() =>
+          expect(page.querySelector('[aria-label="Connect account"]')).not.toBeNull(),
+        );
         expect(page.textContent).toContain("Credentials");
       } else {
         expect(page.textContent).not.toContain("Accounts");

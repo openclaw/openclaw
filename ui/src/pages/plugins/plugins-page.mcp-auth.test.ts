@@ -48,21 +48,27 @@ describe("plugin MCP sign-in", () => {
     "authorized",
     undefined,
   ] as const)(
-    "keeps Accounts visible after sign-in and offers Connect only when needed (%s)",
+    "shows Connect before sign-in and Connected with Edit afterward (%s)",
     async (state) => {
       const inspection = createInspectResult({
         mcpAuth: state ? [{ serverName: "workboard-mcp", state }] : undefined,
       });
-      const { page } = await setup(async () => inspection);
+      const { page, context } = await setup(async () => inspection);
       const section = [...page.querySelectorAll(".plugin-capabilities")].find((entry) =>
         entry.querySelector("h2")?.textContent?.startsWith("Accounts"),
       );
       if (state) {
         expect(section?.textContent).toContain("workboard-mcp");
-        expect(section?.textContent).toContain(
-          state === "authorized" ? "Signed in" : "Needs sign-in",
+        const status = section?.querySelector('[role="status"]');
+        const button = section?.querySelector<HTMLButtonElement>("button");
+        expect(status?.textContent?.trim() ?? null).toBe(
+          state === "authorized" ? "Connected" : null,
         );
-        expect(Boolean(section?.querySelector("button"))).toBe(state !== "authorized");
+        expect(button?.textContent?.trim()).toBe(state === "authorized" ? "Edit" : "Connect");
+        if (state === "authorized") {
+          button?.click();
+          expect(context.navigate).toHaveBeenCalledWith("mcp");
+        }
         expect(page.querySelector(".plugin-catalog-detail__panel")?.firstElementChild).toBe(
           section,
         );
@@ -73,14 +79,14 @@ describe("plugin MCP sign-in", () => {
   );
 
   it.each([
-    ["missing", undefined, "Not configured"],
-    ["missing", false, "Optional"],
-    ["configured", undefined, "Configured"],
-    ["invalid", undefined, "Needs attention"],
-    ["unresolved", undefined, "Needs attention"],
+    ["missing", undefined],
+    ["missing", false],
+    ["configured", undefined],
+    ["invalid", undefined],
+    ["unresolved", undefined],
   ] as const)(
     "shows credential state %s (required=%s) and opens existing Settings",
-    async (status, requiresCredential, label) => {
+    async (status, requiresCredential) => {
       const inspection = createInspectResult({
         credentials: [
           {
@@ -106,9 +112,11 @@ describe("plugin MCP sign-in", () => {
         "Capabilities1",
       ]);
       expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
-      expect(sections[0]?.querySelector('[role="status"]')?.textContent).toBe(label);
-      expect(Boolean(sections[0]?.querySelector(".plugin-connection-status--warning"))).toBe(
-        label === "Needs attention",
+      expect(sections[0]?.querySelector('[role="status"]')?.textContent?.trim() ?? null).toBe(
+        status === "configured" ? "Configured" : null,
+      );
+      expect(sections[0]?.querySelector("button")?.textContent?.trim()).toBe(
+        status === "configured" ? "Edit" : "Configure",
       );
       sections[0]?.querySelector<HTMLButtonElement>("button")?.click();
       expect(context.navigate).toHaveBeenCalledWith(
@@ -153,7 +161,7 @@ describe("plugin MCP sign-in", () => {
     await waitForFast(() =>
       expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).toBeNull(),
     );
-    expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Signed in");
+    expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
   });
 
   it.each(["navigation", "reconnect"])(
