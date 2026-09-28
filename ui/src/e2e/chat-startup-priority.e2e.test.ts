@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat startup request priority" });
 const sessionKey = "agent:research:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -395,10 +396,8 @@ suite.define(() => {
         ],
       });
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived", exact: true })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Archived");
+      await closeSidebarMenu(page);
       await gateway.waitForRequest("sessions.list", {
         match: { agentId: "research", archived: true },
       });

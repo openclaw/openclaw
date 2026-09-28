@@ -84,18 +84,16 @@ function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
   };
 }
 
-function normalizeCaller(
-  caller?: LlmCompleteCaller,
-  fallback?: LlmCompleteCaller,
-): LlmCompleteCaller {
-  const source = caller ?? fallback;
-  if (!source) {
+function normalizeCaller(caller?: LlmCompleteCaller): LlmCompleteCaller {
+  if (!caller) {
     return { kind: "unknown" };
   }
+  const id = normalizeOptionalString(caller.id);
+  const name = normalizeOptionalString(caller.name);
   return {
-    kind: source.kind,
-    ...(normalizeOptionalString(source.id) ? { id: source.id!.trim() } : {}),
-    ...(normalizeOptionalString(source.name) ? { name: source.name!.trim() } : {}),
+    kind: caller.kind,
+    ...(id ? { id } : {}),
+    ...(name ? { name } : {}),
   };
 }
 
@@ -324,8 +322,7 @@ function resolvePluginPolicyId(
   if (caller.kind !== "plugin") {
     return undefined;
   }
-  const pluginId = normalizeOptionalString(caller.id);
-  return pluginId;
+  return normalizeOptionalString(caller.id);
 }
 
 function resolvePluginLlmPolicy(
@@ -446,9 +443,6 @@ function assertAllowedModelOverride(params: {
   });
 }
 
-/**
- * Create the host-owned generic LLM completion runtime for trusted plugin callers.
- */
 export function createRuntimeLlm(
   options: CreateRuntimeLlmOptions = {},
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
@@ -585,6 +579,16 @@ export function createRuntimeLlm(
       }
 
       const callerResult = createDeferredCore<LlmCompleteResult>();
+      const reject = (error: unknown, assertAuthorized: () => void) => {
+        try {
+          if (!isLlmOperatorAuthorizationError(error)) {
+            assertAuthorized();
+          }
+          callerResult.reject(error);
+        } catch (authorizationError) {
+          callerResult.reject(authorizationError);
+        }
+      };
       const trackOwner = captureAsyncWorkTracker();
       // Admit drainage with the parent before acquisition; the caller only waits for its result.
       void trackOwner(async () => {
@@ -710,26 +714,12 @@ export function createRuntimeLlm(
             }),
           );
         } catch (error) {
-          try {
-            if (!isLlmOperatorAuthorizationError(error)) {
-              assertPreparedCurrent();
-            }
-            callerResult.reject(error);
-          } catch (authorizationError) {
-            callerResult.reject(authorizationError);
-          }
+          reject(error, assertPreparedCurrent);
         } finally {
           await work.drain();
         }
       }).catch((error: unknown) => {
-        try {
-          if (!isLlmOperatorAuthorizationError(error)) {
-            assertCurrent();
-          }
-          callerResult.reject(error);
-        } catch (authorizationError) {
-          callerResult.reject(authorizationError);
-        }
+        reject(error, assertCurrent);
       });
       return await callerResult.promise;
     }),

@@ -13,6 +13,7 @@ import {
   sessionsListResponse,
   waitForConfirmModal,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -136,10 +137,8 @@ suite.define(() => {
     };
     const filter = async (label: "Archived" | "All") => {
       await sidebar.getByRole("button", { name: "Filter & sort" }).click();
-      await sidebar
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: label, exact: true })
-        .click();
+      await chooseSidebarMenuOption(sidebar.page(), "Status", label);
+      await closeSidebarMenu(page);
     };
     const pageKeys = () =>
       page.evaluate(() => {

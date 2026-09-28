@@ -225,14 +225,6 @@ export function resolvePdfModelConfigForTool(params: {
     authStore: params.authStore,
   });
 
-  const fallbacks: string[] = [];
-  const addFallback = (ref: string) => {
-    const trimmed = ref.trim();
-    if (trimmed && !fallbacks.includes(trimmed)) {
-      fallbacks.push(trimmed);
-    }
-  };
-
   const activeProvider = params.activeModel?.provider.trim();
   const activeModel = params.activeModel?.model.trim();
   const activeFallback =
@@ -372,13 +364,10 @@ export function resolvePdfModelConfigForTool(params: {
   preferred ??= activeFallback;
 
   if (preferred?.trim()) {
-    for (const candidate of fallbackCandidates) {
-      if (candidate !== preferred) {
-        addFallback(candidate);
-      }
-    }
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
+    const fallbacks = [...new Set(fallbackCandidates.map((ref) => ref.trim()))].filter(
+      (ref) => ref && ref !== preferred,
+    );
+    return { primary: preferred, ...(fallbacks.length > 0 ? { fallbacks } : {}) };
   }
 
   return null;

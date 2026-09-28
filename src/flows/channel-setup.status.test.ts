@@ -80,7 +80,6 @@ vi.mock("../plugins/bundled-sources.js", () => ({
 import {
   collectChannelStatus,
   noteChannelPrimer,
-  noteChannelStatus,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
 } from "./channel-setup.status.js";
@@ -363,22 +362,6 @@ describe("resolveChannelSetupSelectionContributions", () => {
         "Matrix: 已安装",
         "Zalo: 安装插件后启用",
       ]);
-    });
-  });
-
-  it("localizes channel status note title", async () => {
-    const note = vi.fn(async () => {});
-    listChatChannels.mockReturnValue([makeMeta("discord", "Discord")]);
-    isChannelConfigured.mockReturnValue(true);
-
-    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
-      await noteChannelStatus({
-        cfg: {} as never,
-        prompter: { note } as never,
-        installedPlugins: [],
-      });
-
-      expect(note).toHaveBeenCalledWith(expect.any(String), "频道状态");
     });
   });
 

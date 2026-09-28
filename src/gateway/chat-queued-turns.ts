@@ -25,6 +25,8 @@ export type QueuedChatTurnEntry = {
   ownerConnId?: string;
   ownerDeviceId?: string;
   abortDiagnosticReason?: ChatAbortDiagnosticReason;
+  /** Hold this source's adoption while its explicit withdrawal is committed. */
+  holdPendingInputWithdrawal?: () => (() => void) | undefined;
 };
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
@@ -54,6 +56,7 @@ type RegisterQueuedChatTurnParams = {
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  holdPendingInputWithdrawal?: QueuedChatTurnEntry["holdPendingInputWithdrawal"];
   /** Record cancellation while the exact queued entry is still current. */
   onAborted?: (reason: ChatAbortDiagnosticReason) => void;
 };
@@ -117,6 +120,9 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     agentId: normalizeOptionalString(params.agentId)?.toLowerCase(),
     ownerConnId: normalizeOptionalString(params.ownerConnId),
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
+    ...(params.holdPendingInputWithdrawal
+      ? { holdPendingInputWithdrawal: params.holdPendingInputWithdrawal }
+      : {}),
   };
   params.chatQueuedTurns.set(runId, entry);
   entry.abortListener = () => {

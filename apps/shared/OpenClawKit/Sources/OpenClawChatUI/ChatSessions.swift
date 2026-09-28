@@ -563,6 +563,11 @@ public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equa
 }
 
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
+    /// Discovery needs only actor type, not the creator's identity or display metadata.
+    public struct CreatedActor: Codable, Sendable, Hashable {
+        public let type: String
+    }
+
     public var id: String {
         self.key
     }
@@ -595,6 +600,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var subject: String?
     public var room: String?
     public var space: String?
+    public var createdAt: Double?
+    public var createdActor: CreatedActor?
+    public var createdVia: String?
     public var updatedAt: Double?
     public var lastReadAt: Double?
     public var markedUnreadAt: Double?

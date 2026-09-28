@@ -426,9 +426,11 @@ never triggers automatic re-enablement of the rejected installation.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
-`openclaw doctor --fix` diagnose this state. `--fix` leaves an already-stopped
-Gateway stopped. If the update was interrupted or installation safety is
-uncertain, rerun `openclaw update` or use Doctor and triage before starting it.
+`openclaw doctor --fix` diagnose this state. After successful standalone repair,
+`--fix` starts and verifies an already-stopped managed Gateway whose service
+targets the current installation. Update-time Doctor leaves activation with the
+updater. If the update was interrupted or installation safety is uncertain,
+rerun `openclaw update` or use Doctor and triage before starting it manually.
 Once verified, run `openclaw gateway start` (or
 `openclaw --profile <profile> gateway start`) to re-enable and start that service.
 Keep the same state/config and custom-label overrides. Doctor prints the selected
@@ -544,8 +546,10 @@ Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
 saved reply and any admitted completion claim remain available for a later
 attempt. Delegated requests and unverified internal inputs cannot resume
-automatically without surviving authority. Child-completion follow-ups still use their
-existing recovery and delivery ownership checks.
+automatically without surviving authority. Missing or invalid provenance does not
+establish a human sender for an internal claim. Legacy channel and Control UI
+turns retain their existing recovery checks. Child-completion follow-ups still use
+their existing recovery and delivery ownership checks.
 
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.

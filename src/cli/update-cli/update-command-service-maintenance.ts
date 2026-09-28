@@ -307,7 +307,14 @@ async function stopManagedServiceBeforeMutableUpdate(
       const retryTimeout = process.platform === "win32" && attempt === 0;
       try {
         serviceState = await withCommandProcessScope(() =>
-          readGatewayServiceStateForUpdate(inspectedService, serviceEnv, params.timeoutMs),
+          readGatewayServiceStateForUpdate(
+            inspectedService,
+            serviceEnv,
+            params.timeoutMs,
+            params.phase === "inspect"
+              ? undefined
+              : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
+          ),
         );
       } catch (error) {
         if (
@@ -514,7 +521,10 @@ async function stopManagedServiceBeforeMutableUpdate(
     // Ownership inspection and native preparation await work. Recheck the exact
     // launcher before stopping so a replacement service cannot inherit authority.
     const readCurrentService = async (env: NodeJS.ProcessEnv) => {
-      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
+      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs, {
+        managerUid: inspected.serviceManagerUid,
+        assertCurrent,
+      });
       const verdict = await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root,

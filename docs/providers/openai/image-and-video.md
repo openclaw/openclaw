@@ -11,7 +11,10 @@ sidebarTitle: "Image generation"
 
 The bundled `openai` plugin registers image generation through the
 `image_generate` tool. It supports both OpenAI API-key and Codex OAuth image
-generation through the same `openai/gpt-image-2` model ref.
+generation through the same `openai/gpt-image-2` model ref. Sign in with
+ChatGPT (SIWC) cannot authorize this tool. Codex OAuth here means an OpenClaw
+model auth profile; signing in only to a native Codex user home does not supply
+`image_generate` with a credential.
 
 | Capability                | OpenAI API key                     | Codex OAuth                          |
 | ------------------------- | ---------------------------------- | ------------------------------------ |

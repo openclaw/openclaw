@@ -421,7 +421,7 @@ describe("read-only Skill Workshop migration inspection", () => {
         await fs.mkdir(path.dirname(skillFile), { recursive: true });
         await fs.writeFile(skillFile, content);
         if (version === 15) {
-          seedLegacyV15ProposalRows(state.env, [
+          await seedLegacyV15ProposalRows(state.env, [
             { record, workspaceDir: state.workspaceDir, claimReleasedTime: null },
           ]);
         } else {

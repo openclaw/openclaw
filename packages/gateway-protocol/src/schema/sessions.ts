@@ -21,7 +21,12 @@ export {
 export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
-export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
+export {
+  SessionsListParamsSchema,
+  SessionOwnerSessionCountSchema,
+  type SessionsListParams,
+  type SessionOwnerSessionCount,
+} from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   SessionParticipantIdentitySchema,

@@ -2222,6 +2222,7 @@ describe("frozen admission workflow barriers", () => {
     "acquires selected upgrade metadata before expanded %s admission",
     (lane) => {
       const path = "src/gateway/node-command-policy.ts";
+      const membershipOwner = "src/cli/update-cli/update-command-terminal-publication.ts";
       const scenarioCatalog = "scripts/lib/upgrade-survivor-scenarios.json";
       const inputs = {
         docker_lanes: lane,
@@ -2239,12 +2240,14 @@ describe("frozen admission workflow barriers", () => {
         {
           "package.json": '{"type":"module","version":"2026.9.2"}',
           [path]: readFileSync(path, "utf8"),
+          [membershipOwner]: readFileSync(membershipOwner, "utf8"),
           ...currentSurvivorScenarioFiles(),
         },
         { ADMISSION_BASELINES_RESOLVED: "true" },
       );
       const planned = fixture.selection();
       expect(planned.sourcePaths).toContain(path);
+      expect(planned.sourcePaths).toContain(membershipOwner);
       expect(planned.sourcePaths).toContain(scenarioCatalog);
       const origin = join(fixture.root, "origin.git");
       fixture.git("clone", "--bare", "--no-hardlinks", fixture.target, origin);
@@ -2254,6 +2257,10 @@ describe("frozen admission workflow barriers", () => {
       fixture.git("config", "remote.origin.partialclonefilter", "blob:none");
       const oid = fixture.git("rev-parse", `${fixture.sha}:${path}`);
       const scenarioCatalogOid = fixture.git("rev-parse", `${fixture.sha}:${scenarioCatalog}`);
+      const membershipOid = fixture.git("rev-parse", `${fixture.sha}:${membershipOwner}`);
+      unlinkSync(
+        join(fixture.target, ".git", "objects", membershipOid.slice(0, 2), membershipOid.slice(2)),
+      );
       unlinkSync(join(fixture.target, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
       unlinkSync(
         join(
@@ -2283,7 +2290,10 @@ describe("frozen admission workflow barriers", () => {
       });
       expect(acquired.status, acquired.stderr).toBe(0);
       expect(readFileSync(requested, "utf8").trim().split("\n")).toEqual(
-        expect.arrayContaining([oid, scenarioCatalogOid]),
+        expect.arrayContaining([oid, scenarioCatalogOid, membershipOid]),
+      );
+      expect(fixture.git("cat-file", "blob", membershipOid)).toBe(
+        readFileSync(membershipOwner, "utf8").trim(),
       );
       const admitted = fixture.admit();
       expect(admitted.status, admitted.stderr).toBe(0);

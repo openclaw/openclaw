@@ -46,7 +46,6 @@ import {
   parseSessionPendingInputMessage,
   projectSessionPendingInput,
   readSessionPendingInputByKey,
-  readSessionPendingInputReceipts,
   readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
   finishSessionPendingInputOwner,
@@ -694,32 +693,4 @@ export function readSessionSubmittedInput(
     // Unavailable or corrupt storage supplies no proof of the original submitted bytes.
     return undefined;
   }
-}
-
-/** Bounded display reconciliation; these durable correlations never authorize replay. */
-export function listSessionPendingInputReceipts(
-  scope: PendingInputScope,
-  options: { runIds: readonly string[] },
-): Array<
-  | { runId: string; state: "pending" }
-  | { runId: string; state: "consumed"; consumedByEventId: string }
-> {
-  if (options.runIds.length > 50) {
-    throw new Error("Pending input receipt lookup accepts at most 50 run IDs");
-  }
-  const runIds = [...new Set(options.runIds)];
-  if (!runIds.length) {
-    return [];
-  }
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    if (
-      !hasSessionPendingInputsSchema(database.db) ||
-      !hasPendingInputConsumptionColumn(database.db)
-    ) {
-      return [];
-    }
-    return readSessionPendingInputReceipts(database, resolved, runIds);
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : [];
 }

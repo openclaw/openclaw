@@ -262,13 +262,16 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
     ) {
       return undefined;
     }
-    const { resolveWebSearchToolRuntimeContext } = await webToolRuntimeContextLoader.load();
-    const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
-      {
-        config: params.cfg,
-        lateBindRuntimeConfig: true,
-      },
-    );
+    const { resolveWebToolRuntimeContext } = await webToolRuntimeContextLoader.load();
+    const {
+      config,
+      preferRuntimeProviders,
+      runtimeMetadata: runtimeWebSearch,
+    } = resolveWebToolRuntimeContext({
+      kind: "search",
+      config: params.cfg,
+      lateBindRuntimeConfig: true,
+    });
     const { hasUsableWebSearchProvider } = await webSearchRuntimeLoader.load();
     const hasWebSearchProvider = hasUsableWebSearchProvider({
       config,

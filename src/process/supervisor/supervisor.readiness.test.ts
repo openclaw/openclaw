@@ -45,6 +45,7 @@ it.each(["manual-cancel", "overall-timeout", "no-output-timeout"] as const)(
       supervisor.cancel("pending-private-input");
     } else {
       await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersToNextTimerAsync();
     }
     const run = await starting;
     await expect(run.wait()).resolves.toMatchObject({ reason, stdout: "early" });

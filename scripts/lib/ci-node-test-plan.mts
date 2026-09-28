@@ -4166,6 +4166,9 @@ export function createSelectedNodeTestShardBundles(
     selectedGroups.set(owner, [...(selectedGroups.get(owner) ?? []), target]);
   }
   const canonicalFamilies = new Map<NodeTestShardGroup, string | undefined>();
+  const selectedTimings = readCompactGroupTimings(
+    options.runnerBackend === "github" ? "github" : "blacksmith",
+  );
   const projected = full.flatMap((shard) => {
     let retainedSeconds = 0;
     const groups = shard.groups.flatMap((group) => {
@@ -4193,7 +4196,7 @@ export function createSelectedNodeTestShardBundles(
       // weights, retaining an indivisible-file floor and separate build admission.
       const weight = (paths: readonly string[]) =>
         paths.reduce((total, file) => total + stripeFileWeight(file), 0);
-      const selectedSeconds = inventory?.length
+      const fallbackSeconds = inventory?.length
         ? Math.min(
             seconds,
             Math.max(
@@ -4204,13 +4207,20 @@ export function createSelectedNodeTestShardBundles(
             ),
           )
         : seconds;
-      retainedSeconds += selectedSeconds;
+      const canonicalTimingKey = compactGroupTimingKey(group);
+      const timingParent =
+        parseCompactSplitTimingKey(canonicalTimingKey)?.parentShardName ?? canonicalTimingKey;
       const { timingKeys } = createCompactSplitTimingGeneration({
         configs: selectedConfigs,
         env: group.env,
-        parentShardName: `changed-${group.shard_name}`,
+        // Retain worker/parallel timing policy without borrowing the full owner's inventory.
+        parentShardName: timingParent.startsWith("changed-")
+          ? timingParent
+          : `changed-${timingParent}`,
         stripes: [includePatterns],
       });
+      const selectedSeconds = Math.max(fallbackSeconds, selectedTimings[timingKeys[0]!] ?? 0);
+      retainedSeconds += selectedSeconds;
       const projectedGroup = {
         ...group,
         configs: selectedConfigs,
@@ -4229,11 +4239,8 @@ export function createSelectedNodeTestShardBundles(
             shardName: `changed-${shard.shardName}`,
             groups,
             predictedSeconds: Math.ceil(
-              Math.min(
-                shard.predictedSeconds!,
-                retainedSeconds +
-                  compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
-              ),
+              retainedSeconds +
+                compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
             ),
           },
         ]

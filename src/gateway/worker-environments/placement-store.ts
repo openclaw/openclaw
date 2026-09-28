@@ -124,7 +124,11 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
-    ...createPlacementTurnClaimWorkerOps({ path, now: options.now }),
+    ...createPlacementTurnClaimWorkerOps({
+      path,
+      instanceId: runtime.instanceId,
+      now: options.now,
+    }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
     ...createPlacementWorkspaceJournalOps(runtime),

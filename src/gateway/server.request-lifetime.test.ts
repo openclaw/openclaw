@@ -6,6 +6,10 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -14,6 +18,7 @@ import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   markGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -93,7 +98,16 @@ describe("public Gateway close request lifetime", () => {
         await gateway.server.startupSettled;
         phase = "WebSocket connection";
         ws = await gateway.openWs();
-        await connectOk(ws, { scopes: ["operator.admin"] });
+        // An ephemeral CLI avoids admitting history prewarming alongside the waiter.
+        await connectOk(ws, {
+          scopes: ["operator.admin"],
+          client: {
+            id: GATEWAY_CLIENT_IDS.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            version: "1.0.0",
+            platform: "test",
+          },
+        });
         const response = onceMessage<Pick<ResponseFrame, "type" | "id" | "ok" | "error">>(
           ws,
           (frame) => frame.type === "res" && frame.id === "wait-for-shutdown",
@@ -114,7 +128,9 @@ describe("public Gateway close request lifetime", () => {
         requestSent = true;
         phase = "waiter admission";
         await Promise.race([entered.promise, prematureReply]);
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
+          1,
+        );
         // A failing owner is released through the real terminal registry, not an abandoned wait.
         releaseTimer = setTimeout(() => {
           emergencyRelease = true;

@@ -25,8 +25,8 @@ import {
   type AnnounceTarget,
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
-  isNonDeliverableSessionsReply,
 } from "./sessions-send-helpers.js";
+import { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 

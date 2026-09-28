@@ -212,6 +212,7 @@ export function sidebarPanelDefinitions(
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
+        .uploadConfig=${state?.uploadConfig}
         .attachmentLimits=${state?.hello?.policy?.attachments}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`

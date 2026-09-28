@@ -38,6 +38,15 @@ function gatewayPrewarmItems(
         }
       },
     })),
+    {
+      name: "session-history-worker",
+      load: async () => {
+        const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
+        if (!isCancelled()) {
+          await prewarmGatewaySessionHistory(getConfig(), { isCancelled });
+        }
+      },
+    },
     { name: "agent-events", load: () => import("./server-chat.js") },
     { name: "session-key", load: () => import("./server-session-key.js") },
     ...listAgentIds(getConfig()).map((agentId) => ({

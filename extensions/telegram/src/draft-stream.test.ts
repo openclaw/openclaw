@@ -8,7 +8,7 @@ import {
 } from "./draft-stream.api.test-helpers.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
-import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan, type TelegramInputRichMessage } from "./rich-message.js";
 
 function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
   return createDraftStream(api, { thread: { id: 99, scope: "forum" } });
@@ -1282,7 +1282,7 @@ describe("draft stream initial message debounce", () => {
         const progress = (text: string) => ({
           text,
           complete: true as const,
-          ...(richMessages ? { richMessage: buildTelegramRichMarkdown(text) } : {}),
+          ...(richMessages ? { richMessage: buildTelegramRichMarkdownPlan(text).richMessage } : {}),
         });
 
         stream.updatePreview(progress("0/1 complete"));

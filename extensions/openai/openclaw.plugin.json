@@ -314,7 +314,7 @@
       "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key"
     },
     {
       "provider": "openai",
@@ -332,7 +332,7 @@
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key",
       "onboardingFeatured": true
     },
     {
@@ -342,13 +342,13 @@
       "choiceId": "openai-token-sharing",
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
-      "choiceLabel": "Sign in with ChatGPT",
-      "choiceHint": "Use your Codex allowance with per-instance usage tracking and token limits",
+      "choiceLabel": "Sign in with ChatGPT (Beta)",
+      "choiceHint": "Authorize OpenClaw for eligible Responses models using your Codex allowance",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
-      "assistantPriority": -50,
+      "assistantPriority": 0,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key"
     },
     {
       "provider": "openai",
@@ -362,7 +362,7 @@
       "assistantPriority": 5,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key",
       "onboardingFeatured": true,
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",

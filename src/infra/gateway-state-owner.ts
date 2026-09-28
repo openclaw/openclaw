@@ -6,7 +6,10 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveGatewayLockDir } from "../config/paths.js";
+import {
+  resolveGatewayLockDir,
+  resolveGatewayLockDirForCanonicalStateDir,
+} from "../config/paths.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import {
@@ -145,6 +148,7 @@ export function withStateDatabaseColdAdmission<T>(
 export function resolveGatewayStateOwnerPath(databasePath: string): string {
   const canonical = resolveIdentityPathViaExistingAncestorSync(databasePath);
   const uid = process.getuid?.();
+  // The state directory is an ancestor of the freshly canonical database path.
   const directory =
     process.platform === "win32"
       ? path.join(
@@ -155,7 +159,9 @@ export function resolveGatewayStateOwnerPath(databasePath: string): string {
           "locks",
           uid === undefined ? "openclaw-state-owners" : `openclaw-state-owners-${uid}`,
         )
-      : resolveGatewayLockDir(resolveOpenClawStateDirForDatabasePath(canonical));
+      : resolveGatewayLockDirForCanonicalStateDir(
+          resolveOpenClawStateDirForDatabasePath(canonical),
+        );
   return path.join(
     resolveIdentityPathViaExistingAncestorSync(directory),
     `state.${sha256HexPrefixCore(canonical, 16)}.lock`,

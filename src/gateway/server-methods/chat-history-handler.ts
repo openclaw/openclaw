@@ -11,8 +11,8 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareOptionalSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
-import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
+import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -230,11 +230,14 @@ export async function handleChatHistoryRequest({
     // Receipts belong to the currently selected physical session, never archived history.
     const inputReceipts = inputRunIds
       ? !messageId && sessionId && sessionId === entry?.sessionId
-        ? listSessionPendingInputReceipts(
-            { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
-            { runIds: inputRunIds },
+        ? (
+            await readSessionPendingInputReceiptsInWorker(
+              { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
+              { runIds: inputRunIds },
+            )
           ).map((receipt) =>
             receipt.state === "pending" &&
+            !receipt.cancelled &&
             isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
               agentId: sessionAgentId,
               sessionKey: canonicalKey,

@@ -109,26 +109,37 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     id: string,
     input: WorkboardAttachmentInput,
     scope?: WorkboardMutationScope,
+    assertCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const now = Date.now();
       const { attachment, contentBase64 } = normalizeAttachmentInput(id, input, now);
-      await this.attachmentStore.register(attachment.id, {
-        version: 1,
-        attachment,
-        contentBase64,
-      });
+      // Blob storage and metadata publication are separate accepted writes. Each
+      // needs live upload authority; rejection cleanup must not require it.
+      await this.withMutationAuthority(
+        () =>
+          this.attachmentStore.register(attachment.id, {
+            version: 1,
+            attachment,
+            contentBase64,
+          }),
+        assertCurrent,
+      );
       try {
-        const updated = await this.updateCard(id, {
-          metadata: {
-            ...clearDiagnostics(existing.metadata, ["missing_proof"]),
-            attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
-              -MAX_CARD_ATTACHMENTS,
-            ),
-          },
-        });
+        const updated = await this.withMutationAuthority(
+          () =>
+            this.updateCard(id, {
+              metadata: {
+                ...clearDiagnostics(existing.metadata, ["missing_proof"]),
+                attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
+                  -MAX_CARD_ATTACHMENTS,
+                ),
+              },
+            }),
+          assertCurrent,
+        );
         if (!updated.metadata?.attachments?.some((entry) => entry.id === attachment.id)) {
           await this.attachmentStore.delete(attachment.id);
           throw new Error("attachment metadata was trimmed before it could be indexed.");

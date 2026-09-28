@@ -105,9 +105,11 @@ openclaw_resolve_frozen_gateway_network_layout() {
 
 openclaw_resolve_frozen_upgrade_survivor_capabilities() {
   local source_root="${1:?missing selected source root}" authorization_status=0 has_trust has_legacy has_tool_search_recipe
+  local has_membership_warning has_absent_membership
 
   export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current" \
-    OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="current"
+    OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="current" \
+    OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE="absent"
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
@@ -119,6 +121,22 @@ openclaw_resolve_frozen_upgrade_survivor_capabilities() {
   if [ "$has_tool_search_recipe" = 0 ]; then
     export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="absent"
   fi
+
+  # Preserve native containment for cuts predating absent-membership recovery.
+  # Inspect the committed result owner, never package versions or observed output.
+  has_membership_warning="$(openclaw_frozen_target_source_flag contains "$source_root" \
+    src/cli/update-cli/update-command-terminal-publication.ts \
+    'Service membership unverifiable on this host; using managed stop/update/start.')" || return 2
+  has_absent_membership="$(openclaw_frozen_target_source_flag contains "$source_root" \
+    src/cli/update-cli/update-command-terminal-publication.ts 'serviceMembershipSourceAbsent')" || return 2
+  case "$has_membership_warning:$has_absent_membership" in
+    1:1) ;;
+    0:0) export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE="native" ;;
+    *)
+      echo "unrecognized selected managed-service membership warning contract" >&2
+      return 2
+      ;;
+  esac
 
   # The older shipped installer fetched its official companion through ClawHub
   # and therefore owns a three-request audit instead of the current idle ledger.

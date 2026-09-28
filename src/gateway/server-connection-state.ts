@@ -265,7 +265,14 @@ export function createGatewayConnectionState(params: {
           },
           delivered: () => {
             references.forget(row.key);
-            ancestorDelivery?.delivered();
+            if (event === "sessions.changed" && source.reason === "activity-summary") {
+              // Rosters skip recaps, so a full recap row cannot certify a later reference.
+              for (const ancestor of ancestorDelivery?.ancestorSessions ?? []) {
+                references.forget(ancestor.key);
+              }
+            } else {
+              ancestorDelivery?.delivered();
+            }
           },
         };
       };

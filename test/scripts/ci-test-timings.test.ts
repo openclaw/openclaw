@@ -133,6 +133,47 @@ describe("native singleton invocation timings", () => {
     },
   );
 
+  it.each([false, true])(
+    "records only the parallel envelope wall (interleaved=%s)",
+    (interleaved) => {
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
+      let text = invocationLog()
+        .replace(encodeNodeTestGroups([descriptor]), encodeNodeTestGroups([{ ...descriptor, env }]))
+        .replace(
+          line(0, "begin"),
+          [line(0, "begin"), line(0, "[test] inner parallelism 2")].join("\n"),
+        );
+      if (interleaved) {
+        text = text
+          .replace(line(11, `[test] starting ${config}`) + "\n", "")
+          .replace(
+            line(2, "RUN v5.0.1 /checkout"),
+            [line(2, `[test] starting ${config}`), line(2, "RUN v5.0.1 /checkout")].join("\n"),
+          );
+      }
+      expect(refit(text)).toEqual({ [createExtensionTestTimingKey(config, files, env)!]: 34 });
+    },
+  );
+
+  it.each(["fallback", "missing", "contradictory"])(
+    "qualifies requested overlap using its %s receipt",
+    (kind) => {
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
+      const receipt =
+        kind === "missing"
+          ? []
+          : kind === "fallback"
+            ? [line(0, "[test] inner parallelism 1")]
+            : [line(0, "[test] inner parallelism 1"), line(0, "[test] inner parallelism 2")];
+      const text = invocationLog()
+        .replace(encodeNodeTestGroups([descriptor]), encodeNodeTestGroups([{ ...descriptor, env }]))
+        .replace(line(0, "begin"), [line(0, "begin"), ...receipt].join("\n"));
+      const observed = refit(text);
+      expect(observed[createExtensionTestTimingKey(config, files, env)!]).toBeUndefined();
+      expect(observed).toEqual(kind === "fallback" ? refit(invocationLog()) : {});
+    },
+  );
+
   it("keeps an outer singleton wall distinct from its invocation and shared overhead", () => {
     const only = [files[0]!];
     const text = [

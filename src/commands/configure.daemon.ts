@@ -36,7 +36,6 @@ export async function maybeInstallDaemon(params: {
     }
     loaded = false;
   }
-  let shouldCheckLinger = false;
   let shouldInstall = true;
   if (loaded) {
     const action = guardCancel(
@@ -65,7 +64,6 @@ export async function maybeInstallDaemon(params: {
           );
         },
       );
-      shouldCheckLinger = true;
       shouldInstall = false;
     }
     if (action === "skip") {
@@ -148,20 +146,17 @@ export async function maybeInstallDaemon(params: {
       note(gatewayInstallErrorHint(), "Gateway");
       return "failed";
     }
-    shouldCheckLinger = true;
   }
 
-  if (shouldCheckLinger) {
-    await ensureSystemdUserLingerInteractive({
-      runtime: params.runtime,
-      prompter: {
-        confirm: async (p) => guardCancel(await confirm(p), params.runtime, 1),
-        note,
-      },
-      reason:
-        "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-      requireConfirm: true,
-    });
-  }
+  await ensureSystemdUserLingerInteractive({
+    runtime: params.runtime,
+    prompter: {
+      confirm: async (p) => guardCancel(await confirm(p), params.runtime, 1),
+      note,
+    },
+    reason:
+      "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+    requireConfirm: true,
+  });
   return "succeeded";
 }

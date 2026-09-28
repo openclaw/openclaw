@@ -42,7 +42,7 @@ const findSystemGatewayServices = vi.hoisted(() =>
   vi.fn<() => Promise<ExtraGatewayService[]>>(async () => []),
 );
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
-const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const formatRuntimeStatus = vi.hoisted(() => vi.fn((): string | null => null));
 const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
@@ -158,10 +158,8 @@ vi.mock("./daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("./doctor-format.js", () => ({
-  buildGatewayRuntimeHints,
-  formatGatewayRuntimeSummary,
-}));
+vi.mock("../daemon/runtime-format.js", () => ({ formatRuntimeStatus }));
+vi.mock("./doctor-format.js", () => ({ buildGatewayRuntimeHints }));
 
 vi.mock("./gateway-install-token.js", () => ({
   resolveGatewayInstallToken: vi.fn(),
@@ -219,7 +217,7 @@ describe("maybeRepairGatewayDaemon", () => {
       status: "repaired",
     });
     buildGatewayRuntimeHints.mockReturnValue([]);
-    formatGatewayRuntimeSummary.mockReturnValue(null);
+    formatRuntimeStatus.mockReturnValue(null);
     renderSystemdUnavailableHints.mockReset().mockReturnValue([]);
   });
 
@@ -936,7 +934,7 @@ describe("maybeRepairGatewayDaemon", () => {
         serviceTarget: "system/ai.openclaw.gateway",
       },
     });
-    formatGatewayRuntimeSummary.mockReturnValue(
+    formatRuntimeStatus.mockReturnValue(
       "unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)",
     );
 

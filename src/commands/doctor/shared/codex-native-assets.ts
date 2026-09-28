@@ -61,7 +61,10 @@ async function safeReadDir(dir: string): Promise<Dirent[]> {
   return await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
 }
 
-async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
+async function discoverDirectoryAssets(
+  root: string,
+  kind: "skill" | "plugin",
+): Promise<CodexNativeAssetHit[]> {
   if (!(await isDirectory(root))) {
     return [];
   }
@@ -70,12 +73,16 @@ async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
     if (hits.length >= MAX_DISCOVERED_DIRS || depth > MAX_SCAN_DEPTH) {
       return;
     }
-    if (depth === 1 && path.basename(dir) === ".system") {
+    if (kind === "skill" && depth === 1 && path.basename(dir) === ".system") {
       // Built-in Codex system skills are not user assets that migration should promote.
       return;
     }
-    if (await exists(path.join(dir, "SKILL.md"))) {
-      hits.push({ kind: "skill", path: dir });
+    const marker =
+      kind === "skill"
+        ? path.join(dir, "SKILL.md")
+        : path.join(dir, ".codex-plugin", "plugin.json");
+    if (await exists(marker)) {
+      hits.push({ kind, path: dir });
       return;
     }
     for (const entry of await safeReadDir(dir)) {
@@ -86,33 +93,6 @@ async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
   }
   await visit(root, 0);
   return hits;
-}
-
-async function discoverPluginHits(root: string): Promise<CodexNativeAssetHit[]> {
-  if (!(await isDirectory(root))) {
-    return [];
-  }
-  const hits = new Map<string, CodexNativeAssetHit>();
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (hits.size >= MAX_DISCOVERED_DIRS || depth > MAX_SCAN_DEPTH) {
-      return;
-    }
-    if (await exists(path.join(dir, ".codex-plugin", "plugin.json"))) {
-      hits.set(dir, { kind: "plugin", path: dir });
-      return;
-    }
-    for (const entry of await safeReadDir(dir)) {
-      if (entry.isDirectory()) {
-        await visit(path.join(dir, entry.name), depth + 1);
-      }
-    }
-  }
-  await visit(root, 0);
-  return [...hits.values()];
-}
-
-function isCodexRuntimeConfigured(cfg: OpenClawConfig, _env: NodeJS.ProcessEnv): boolean {
-  return collectConfiguredAgentHarnessRuntimes(cfg).includes("codex");
 }
 
 function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {
@@ -131,8 +111,10 @@ function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {
   return hasRecord(plugins?.entries?.codex) && plugins.entries.codex.enabled !== false;
 }
 
-function shouldScanCodexNativeAssets(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return isCodexRuntimeConfigured(cfg, env) || isCodexPluginConfigured(cfg);
+function shouldScanCodexNativeAssets(cfg: OpenClawConfig): boolean {
+  return (
+    collectConfiguredAgentHarnessRuntimes(cfg).includes("codex") || isCodexPluginConfigured(cfg)
+  );
 }
 
 /** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */
@@ -141,7 +123,7 @@ async function scanCodexNativeAssets(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<CodexNativeAssetHit[]> {
   const env = params.env ?? process.env;
-  if (!shouldScanCodexNativeAssets(params.cfg, env)) {
+  if (!shouldScanCodexNativeAssets(params.cfg)) {
     return [];
   }
   const codexHome = resolveCodexHome(env);
@@ -149,13 +131,16 @@ async function scanCodexNativeAssets(params: {
   function record(hit: CodexNativeAssetHit): void {
     hits.set(`${hit.kind}:${hit.path}`, hit);
   }
-  for (const hit of await discoverSkillHits(path.join(codexHome, "skills"))) {
+  for (const hit of await discoverDirectoryAssets(path.join(codexHome, "skills"), "skill")) {
     record(hit);
   }
-  for (const hit of await discoverSkillHits(resolvePersonalAgentSkillsDir(env))) {
+  for (const hit of await discoverDirectoryAssets(resolvePersonalAgentSkillsDir(env), "skill")) {
     record(hit);
   }
-  for (const hit of await discoverPluginHits(path.join(codexHome, "plugins", "cache"))) {
+  for (const hit of await discoverDirectoryAssets(
+    path.join(codexHome, "plugins", "cache"),
+    "plugin",
+  )) {
     record(hit);
   }
   const configPath = path.join(codexHome, "config.toml");
