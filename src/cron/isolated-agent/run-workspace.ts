@@ -166,6 +166,8 @@ async function resolveCronSessionWorkspace(params: {
     if (
       !record ||
       record.id !== binding.id ||
+      record.ownerKind !== "session" ||
+      record.ownerId !== params.sessionKey ||
       record.removedAt !== undefined ||
       record.branch !== binding.branch ||
       path.resolve(record.repoRoot) !== path.resolve(binding.repoRoot)
