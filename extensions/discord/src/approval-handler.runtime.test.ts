@@ -244,6 +244,22 @@ describe("discordApprovalNativeRuntime", () => {
       accentColor: 0xed4245,
     },
     {
+      approvalKind: "plugin",
+      phase: "resolved",
+      decision: "deny",
+      terminalStatus: "expired",
+      label: "Expired",
+      accentColor: 0xed4245,
+    },
+    {
+      approvalKind: "plugin",
+      phase: "resolved",
+      decision: "deny",
+      terminalStatus: "cancelled",
+      label: "Cancelled",
+      accentColor: 0xed4245,
+    },
+    {
       approvalKind: "system-agent",
       phase: "resolved",
       decision: "deny",
@@ -289,6 +305,12 @@ describe("discordApprovalNativeRuntime", () => {
               operationSummary: command,
               applicationStatus: scenario.applicationStatus,
               terminalStatus: scenario.terminalStatus,
+            }
+          : {}),
+        ...(plugin && scenario.phase === "resolved"
+          ? {
+              terminalStatus: (scenario as { terminalStatus?: "expired" | "cancelled" })
+                .terminalStatus,
             }
           : {}),
       };

@@ -143,11 +143,10 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleExpired = async (approvalId: string): Promise<void> => {
-    const entry = pending.remove(approvalId);
-    if (!entry) {
-      return;
+    const settled = pending.settle(approvalId, finalizeExpiredEntry);
+    if (settled.status === "taken") {
+      await settled.terminal(settled.entry);
     }
-    await finalizeExpiredEntry(entry);
   };
 
   const handleRequested = async (

@@ -1,9 +1,9 @@
 // Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
 import { normalizeApprovalRequest, resolveApprovalRequestKind } from "./approval-types.js";
-import { buildPendingApprovalView } from "./approval-view-model.js";
+import { buildPendingApprovalView, buildResolvedApprovalView } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
 describe("buildPendingApprovalView", () => {
   it("passes command analysis through exec approval views", () => {
@@ -183,5 +183,51 @@ describe("buildPendingApprovalView", () => {
     { request: { command: "echo hi", title: "Ambiguous", description: "Ambiguous" } },
   ])("rejects a request payload without exactly one owner: %j", (request) => {
     expect(() => resolveApprovalRequestKind(request)).toThrow("exactly one owner");
+  });
+});
+
+describe("buildResolvedApprovalView for plugin terminal status", () => {
+  const pluginRequest: PluginApprovalRequest = {
+    id: "plugin-approval",
+    createdAtMs: 1,
+    expiresAtMs: 2,
+    request: {
+      title: "Use protected tool",
+      description: "The plugin needs operator consent.",
+    },
+  };
+
+  it.each(["expired", "cancelled"] as const)(
+    "copies %s into the resolved plugin view",
+    (terminalStatus) => {
+      const resolved: PluginApprovalResolved = {
+        id: "plugin-approval",
+        decision: "deny",
+        resolvedBy: "timeout",
+        ts: 3,
+        terminalStatus,
+      };
+
+      const view = buildResolvedApprovalView(pluginRequest, resolved);
+
+      expect(view.approvalKind).toBe("plugin");
+      if (view.approvalKind !== "plugin") {
+        throw new Error("expected plugin approval view");
+      }
+      expect(view.decision).toBe("deny");
+      expect(view.terminalStatus).toBe(terminalStatus);
+    },
+  );
+
+  it("omits terminal status for a user-decided plugin resolution", () => {
+    const view = buildResolvedApprovalView(pluginRequest, {
+      id: "plugin-approval",
+      decision: "deny",
+      resolvedBy: "operator",
+      ts: 3,
+    });
+
+    expect(view.approvalKind).toBe("plugin");
+    expect(view).not.toHaveProperty("terminalStatus");
   });
 });

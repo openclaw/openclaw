@@ -73,6 +73,8 @@ export type PluginApprovalResolved = {
   resolvedBy?: string | null;
   ts: number;
   request?: PluginApprovalRequestPayload;
+  /** Recorded terminal status for fail-closed outcomes; absence means a user decision. */
+  terminalStatus?: "expired" | "cancelled";
 };
 
 export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;

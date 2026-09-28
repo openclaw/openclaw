@@ -195,6 +195,7 @@ export function buildResolvedApprovalView(
       ...buildPluginViewBase(normalizedRequest, "resolved"),
       decision: resolved.decision,
       resolvedBy: resolved.resolvedBy,
+      ...(resolved.terminalStatus ? { terminalStatus: resolved.terminalStatus } : {}),
     };
   }
   return {

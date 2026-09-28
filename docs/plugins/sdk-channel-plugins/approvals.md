@@ -135,8 +135,11 @@ Other approval helpers:
   `openclaw/plugin-sdk/approval-runtime` for terminal presentation.
   Rich labels preserve application-status precedence; prose preserves denial
   precedence, because a denied system change can also report `not-applied`.
-  Both prioritize cancellation. Pass a decision formatter for transport-specific
-  label spelling, and prepare any bounded operation summary before building prose.
+  Both prioritize cancellation. A resolved plugin approval whose event carries
+  `terminalStatus: "expired"` or `"cancelled"` renders as Expired or Cancelled
+  instead of the fail-closed deny decision. Pass a decision formatter for
+  transport-specific label spelling, and prepare any bounded operation summary
+  before building prose.
   Use `formatApprovalDecisionLabel` for a recorded decision without implying
   application completion.
 - Approval account lookup helpers `resolveApprovalRequestAccountId` and

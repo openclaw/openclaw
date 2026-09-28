@@ -43,3 +43,44 @@ describe("publishAppliedApprovalResolution for OpenClaw changes", () => {
     },
   );
 });
+
+async function publishPluginTerminal(status: "denied" | "expired" | "cancelled") {
+  const handlePluginApprovalResolved = vi.fn(async () => {});
+  await publishAppliedApprovalResolution({
+    record: {
+      id: "plugin:1",
+      kind: "plugin",
+      status,
+      decision: status === "denied" ? "deny" : undefined,
+      resolvedAtMs: 1,
+    } as unknown as PublishParams["record"],
+    liveRecord: { request: {}, resolvedBy: null } as unknown as PublishParams["liveRecord"],
+    context: {
+      broadcast: vi.fn(),
+      broadcastToConnIds: vi.fn(),
+    } as unknown as PublishParams["context"],
+    forwarder: { handlePluginApprovalResolved } as unknown as ExecApprovalForwarder,
+  });
+  return handlePluginApprovalResolved;
+}
+
+describe("publishAppliedApprovalResolution for plugin approvals", () => {
+  it.each(["expired", "cancelled"] as const)(
+    "publishes %s as the plugin terminal status, not a plain deny",
+    async (status) => {
+      const forwarded = await publishPluginTerminal(status);
+      expect(forwarded).toHaveBeenCalledTimes(1);
+      expect(forwarded).toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "deny", terminalStatus: status }),
+      );
+    },
+  );
+
+  it("keeps an explicit plugin deny free of a terminal status", async () => {
+    const forwarded = await publishPluginTerminal("denied");
+    expect(forwarded).toHaveBeenCalledTimes(1);
+    expect(forwarded).toHaveBeenCalledWith(expect.objectContaining({ decision: "deny" }));
+    const event = forwarded.mock.calls[0]?.[0] as { terminalStatus?: string };
+    expect(event.terminalStatus).toBeUndefined();
+  });
+});

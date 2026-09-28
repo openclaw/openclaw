@@ -4,6 +4,7 @@ type SystemAgentResolvedView = Extract<ResolvedApprovalView, { approvalKind: "sy
 type ApprovalTerminalOutcome =
   | ResolvedApprovalView["decision"]
   | "cancelled"
+  | "expired"
   | "applied"
   | "not-applied";
 
@@ -12,6 +13,7 @@ const TERMINAL_LABELS = {
   "allow-always": "Allowed always",
   deny: "Denied",
   cancelled: "Cancelled",
+  expired: "Expired",
   applied: "Applied",
   "not-applied": "Completion unconfirmed",
 };
@@ -25,6 +27,14 @@ function interpretApprovalTerminalOutcome(
   view: ResolvedApprovalView,
   precedence: "application" | "denial",
 ): ApprovalTerminalOutcome {
+  if (view.approvalKind === "plugin") {
+    // Plugin approvals publish their recorded terminal status; show expiry or
+    // cancellation as such instead of the fail-closed deny decision.
+    if (view.terminalStatus === "expired" || view.terminalStatus === "cancelled") {
+      return view.terminalStatus;
+    }
+    return view.decision;
+  }
   if (view.approvalKind !== "system-agent") {
     return view.decision;
   }

@@ -334,6 +334,72 @@ describe("createExecApprovalChannelRuntime", () => {
     expect(finalizedResolved).not.toHaveBeenCalled();
   });
 
+  it("routes a plugin expiry event through expiry finalization", async () => {
+    const finalizedExpired = vi.fn(async () => undefined);
+    const finalizedResolved = vi.fn(async () => undefined);
+    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
+      eventKinds: ["plugin"],
+      deliverRequested: async () => [{ id: "plugin:expired" }],
+      finalizeResolved: finalizedResolved,
+      finalizeExpired: finalizedExpired,
+    });
+
+    await runtime.handleRequested({
+      id: "plugin:expired",
+      request: {
+        title: "Plugin approval",
+        description: "Let plugin proceed",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+    await runtime.handleResolved({
+      id: "plugin:expired",
+      decision: "deny",
+      resolvedBy: "timeout",
+      ts: 2000,
+      terminalStatus: "expired",
+    });
+
+    expect(finalizedExpired).toHaveBeenCalledOnce();
+    expect(finalizedResolved).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a plugin expiry that lands while delivery is still in flight", async () => {
+    const pendingDelivery = createDeferred<Array<{ id: string }>>();
+    const finalizedExpired = vi.fn(async () => undefined);
+    const finalizedResolved = vi.fn(async () => undefined);
+    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
+      eventKinds: ["plugin"],
+      deliverRequested: async () => pendingDelivery.promise,
+      finalizeResolved: finalizedResolved,
+      finalizeExpired: finalizedExpired,
+    });
+
+    const requestPromise = runtime.handleRequested({
+      id: "plugin:mid-flight",
+      request: {
+        title: "Plugin approval",
+        description: "Let plugin proceed",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+    await runtime.handleResolved({
+      id: "plugin:mid-flight",
+      decision: "deny",
+      resolvedBy: "timeout",
+      ts: 2000,
+      terminalStatus: "expired",
+    });
+
+    pendingDelivery.resolve([{ id: "plugin:mid-flight" }]);
+    await requestPromise;
+
+    expect(finalizedExpired).toHaveBeenCalledOnce();
+    expect(finalizedResolved).not.toHaveBeenCalled();
+  });
+
   it("routes gateway requests through the shared client", async () => {
     const runtime = createRuntime();
 
