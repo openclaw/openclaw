@@ -23,6 +23,7 @@ import {
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
+import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -330,16 +331,16 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
     if (state === "replaced") {
       setActiveEmbeddedRun(parentId, replacement, parentKey);
     }
-    const exactRead = sessions.loadExactSessionEntryReadOnly;
+    const exactRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
     const failedRead = vi.fn();
     const reader = vi
-      .spyOn(sessions, "loadExactSessionEntryReadOnly")
-      .mockImplementation((scope) => {
+      .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+      .mockImplementation((scope, assertCurrent, consume) => {
         if (state === "unreadable child" && scope.sessionKey === childKey("queued")) {
           failedRead();
-          throw new Error("preparatory child read failed");
+          return Promise.reject(new Error("preparatory child read failed"));
         }
-        return exactRead(scope);
+        return exactRead(scope, assertCurrent, consume);
       });
     try {
       const respond = await stopParent();
