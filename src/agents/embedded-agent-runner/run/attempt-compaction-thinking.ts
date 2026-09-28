@@ -19,6 +19,8 @@ export function createAttemptCompactionThinkingResolver(
         api: model.api,
         reasoning: model.reasoning,
         ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+        // Deployment aliases name their backing model here (params.canonicalModelId).
+        ...(model.params ? { params: model.params } : {}),
         ...(compat ? { compat } : {}),
       },
     ];

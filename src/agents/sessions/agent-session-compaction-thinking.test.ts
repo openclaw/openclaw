@@ -112,4 +112,25 @@ describe("AgentSession threshold compaction thinking", () => {
 
     expect(resolveCompactionThinkingLevel(claude, "low")).toBe("high");
   });
+
+  it("resolves summaries against a Claude deployment alias's backing model", () => {
+    const resolveCompactionThinkingLevel = createAttemptCompactionThinkingResolver(
+      {
+        config: { agents: { defaults: { compaction: { thinkingLevel: "adaptive" } } } },
+        sessionKey: undefined,
+        sandboxSessionKey: undefined,
+      },
+      "main",
+    );
+    const deployment = {
+      ...testModel,
+      provider: "claude-gateway",
+      id: "team-sonnet",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-sonnet-4-6" },
+    };
+
+    expect(resolveCompactionThinkingLevel(deployment, "low")).toBe("high");
+  });
 });
