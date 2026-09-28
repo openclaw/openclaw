@@ -112,9 +112,7 @@ async function prepareAcceptedPublication(
   deps: PlacementRecoveryDeps,
   claim: WorkerSessionTurnClaim,
 ): Promise<void> {
-  if (deps.prepareAcceptedWorkspacePublication) {
-    await deps.prepareAcceptedWorkspacePublication(claim).catch(() => undefined);
-  }
+  await deps.prepareAcceptedWorkspacePublication?.(claim).catch(() => undefined);
 }
 
 export async function recoverPendingWorkspaceResults(

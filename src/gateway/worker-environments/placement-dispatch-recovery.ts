@@ -101,7 +101,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             current: true,
           });
           await recoverPendingWorkspaceResults(deps, pendingFacts, placement.environmentId);
-          const recovered = placements.get(placement.sessionId);
+          const recovered = (
+            await placements.readProjection([placement.sessionId], { current: true })
+          ).placements.get(placement.sessionId);
           if (
             recovered?.state !== "active" ||
             !matchesWorkerPlacementTarget(recovered, placement) ||
