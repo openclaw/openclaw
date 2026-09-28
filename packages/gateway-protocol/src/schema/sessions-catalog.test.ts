@@ -136,6 +136,7 @@ describe("SessionsCatalogListParamsSchema", () => {
       Value.Check(SessionsCatalogListParamsSchema, {
         agentId: "main",
         progressId: "progress-1",
+        allowPartialResults: true,
       }),
     ).toBe(true);
   });
@@ -184,6 +185,12 @@ describe("SessionsCatalogHostEventSchema", () => {
     };
 
     expect(Value.Check(SessionsCatalogHostEventSchema, event)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [{ ...event.catalog.hosts[0], pending: true }] },
+      }),
+    ).toBe(true);
     expect(Value.Check(SessionsCatalogHostEventSchema, { ...event, unexpected: true })).toBe(false);
     expect(
       Value.Check(SessionsCatalogHostEventSchema, {

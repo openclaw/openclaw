@@ -4,9 +4,10 @@ import {
   type TalkCatalogResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
 import {
-  bytesToBase64,
   floatToPcm16,
   measureRealtimeTalkAudioFrame,
   RealtimeTalkMediaStreamMeter,
@@ -29,7 +30,6 @@ import {
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
 const BARGE_IN_CONSECUTIVE_SPEECH_FRAMES = 2;
-const MAX_PENDING_AUDIO_APPENDS = 4;
 const AUDIO_APPEND_TIMEOUT_MS = 8_000;
 const RELAY_CLOSE_TIMEOUT_MS = 8_000;
 const MAX_PENDING_ACTIVATION_EVENTS = 32;
@@ -56,7 +56,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
   private audioAppendAbortController: AbortController | null = null;
-  private readonly pendingAudioAppends = new Set<Promise<unknown>>();
+  private readonly audioInputBudget = new RealtimeTalkAudioInputBudget((detail) =>
+    this.ctx.callbacks.onInputNotice?.(detail),
+  );
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly toolAbortControllers = new Map<string, AbortController>();
   private readonly completedToolCalls = new Set<string>();
@@ -225,17 +227,17 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         this.cancelOutput("barge-in");
       }
       const abortController = this.audioAppendAbortController;
-      // Live microphone frames become stale once the Gateway falls behind, so fail at
-      // the ownership cap instead of silently dropping speech or growing a latency queue.
+      const frameMs = (samples.length / this.session.audio.inputSampleRateHz) * 1000;
       if (!abortController || abortController.signal.aborted || this.pendingOutputCancellations) {
         return;
       }
-      if (this.pendingAudioAppends.size >= MAX_PENDING_AUDIO_APPENDS) {
-        this.failAudioAppend("Realtime Talk audio input fell behind");
+      // Drop stale frames past the budget without ending the call, but make the loss
+      // visible so the user repeats it. The append timeout still fails a dead relay.
+      if (!this.audioInputBudget.reserve(frameMs)) {
         return;
       }
       const pcm = floatToPcm16(samples);
-      const request = this.ctx.client
+      void this.ctx.client
         .request(
           "talk.session.appendAudio",
           {
@@ -248,18 +250,16 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             timeoutMs: AUDIO_APPEND_TIMEOUT_MS,
           },
         )
-        .catch((error: unknown) => this.failAudioAppend(error));
-      this.pendingAudioAppends.add(request);
-      void request.finally(() => {
-        this.pendingAudioAppends.delete(request);
-      });
+        .catch((error: unknown) => this.failAudioAppend(error))
+        // Close resets the budget first, so late settlements cannot report recovery.
+        .finally(() => this.audioInputBudget.settle(frameMs));
     });
   }
 
   private abortPendingAudioAppends(): void {
     this.audioAppendAbortController?.abort();
     this.audioAppendAbortController = null;
-    this.pendingAudioAppends.clear();
+    this.audioInputBudget.reset();
   }
 
   private failAudioAppend(error: unknown): void {
@@ -372,6 +372,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
               role: event.role,
               text: event.text,
               final: event.final ?? false,
+              ...(event.textMode ? { textMode: event.textMode } : {}),
+              ...(event.transcriptId ? { transcriptId: event.transcriptId } : {}),
             });
           }
           return;
@@ -457,9 +459,19 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (!callId || !name) {
       return;
     }
-    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      const abortController = this.startToolExecution(callId);
-      try {
+    if (
+      name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
+      name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+    ) {
+      await this.submitToolResult(callId, {
+        error: `Tool "${name}" not available in browser Talk`,
+      });
+      return;
+    }
+    const abortController = new AbortController();
+    this.toolAbortControllers.set(callId, abortController);
+    try {
+      if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
         await submitRealtimeTalkAgentControl({
           ctx: this.ctx,
           callId,
@@ -468,19 +480,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           signal: abortController.signal,
           submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
         });
-      } finally {
-        this.finishToolExecution(callId, abortController);
+        return;
       }
-      return;
-    }
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      await this.submitToolResult(callId, {
-        error: `Tool "${name}" not available in browser Talk`,
-      });
-      return;
-    }
-    const abortController = this.startToolExecution(callId);
-    try {
       if (event.forced) {
         await this.submitToolResult(
           callId,
@@ -509,7 +510,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
-      this.finishToolExecution(callId, abortController);
+      if (this.toolAbortControllers.get(callId) === abortController) {
+        this.toolAbortControllers.delete(callId);
+      }
     }
   }
 
@@ -528,7 +531,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       shouldAllowProviderResponse &&
       (this.pendingOutputCancellations > 0 || this.outputPlaybackDelayMs() > 0)
     ) {
-      this.scheduleDelayedToolResult({ callId, result, ...(options ? { options } : {}) });
+      const pending = { callId, result, ...(options ? { options } : {}) };
+      this.delayedToolResults.add(pending);
+      this.rescheduleDelayedToolResult(pending);
       return;
     }
     await this.sendToolResultNow(callId, result, options);
@@ -563,11 +568,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       0,
       Math.ceil((this.outputQueue.queuedUntil - this.outputContext.currentTime) * 1000),
     );
-  }
-
-  private scheduleDelayedToolResult(pending: DelayedToolResult): void {
-    this.delayedToolResults.add(pending);
-    this.rescheduleDelayedToolResult(pending);
   }
 
   private rescheduleDelayedToolResult(pending: DelayedToolResult): void {
@@ -659,18 +659,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       if (pending.callId === callId) {
         this.discardDelayedToolResult(pending);
       }
-    }
-  }
-
-  private startToolExecution(callId: string): AbortController {
-    const abortController = new AbortController();
-    this.toolAbortControllers.set(callId, abortController);
-    return abortController;
-  }
-
-  private finishToolExecution(callId: string, abortController: AbortController): void {
-    if (this.toolAbortControllers.get(callId) === abortController) {
-      this.toolAbortControllers.delete(callId);
     }
   }
 

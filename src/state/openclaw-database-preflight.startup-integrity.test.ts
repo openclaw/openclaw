@@ -12,6 +12,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +31,8 @@ it.each(["DELETE", "WAL", "closed WAL"])(
     openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    // These raw writers model unclean external mutation, outside the lease owner.
+    clearOpenClawAgentIntegrityVerification(agentPath, env);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = mode === "closed WAL" ? undefined : new DatabaseSync(agentPath);
     writer?.exec(`PRAGMA journal_mode=${mode}; PRAGMA wal_autocheckpoint=0;`);

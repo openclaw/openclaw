@@ -11,10 +11,11 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
 const TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE = 900;
@@ -125,7 +126,7 @@ function readTranscriptMirrorFactsInSnapshot(
           "identity.message_idempotency_key",
           "identity.seq",
           "identity.parent_id",
-          "event.event_json",
+          transcriptEventJsonSql(database.db, "event").as("event_json"),
           "active.message_position",
           "rewrite.generation",
         ])

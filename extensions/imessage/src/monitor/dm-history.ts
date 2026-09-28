@@ -1,4 +1,3 @@
-// Imessage plugin module implements dm history behavior.
 import {
   formatInboundEnvelope,
   type resolveEnvelopeFormatOptions,

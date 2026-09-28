@@ -33,25 +33,12 @@ export function scopedToolAgentMatches(
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }
-  return entry.scope === "global" && !hasScopedToolEvidence(entries, entry.kind, policyAgentId);
+  return entry.scope === "global" && !hasScopedAgentEvidence(entries, entry.kind, policyAgentId);
 }
 
 function hasScopedAgentEvidence(
-  entries: readonly PolicyAgentWorkspaceEvidence[],
-  kind: PolicyAgentWorkspaceEvidence["kind"],
-  policyAgentId: string,
-): boolean {
-  return entries.some(
-    (candidate) =>
-      candidate.scope === "agent" &&
-      candidate.kind === kind &&
-      scopedAgentIdMatches(candidate.agentId, policyAgentId),
-  );
-}
-
-function hasScopedToolEvidence(
-  entries: readonly PolicyToolPostureEvidence[],
-  kind: PolicyToolPostureEvidence["kind"],
+  entries: readonly (PolicyAgentWorkspaceEvidence | PolicyToolPostureEvidence)[],
+  kind: PolicyAgentWorkspaceEvidence["kind"] | PolicyToolPostureEvidence["kind"],
   policyAgentId: string,
 ): boolean {
   return entries.some(
@@ -296,7 +283,6 @@ export function channelScopedPolicyTargets(policy: unknown): readonly ChannelSco
 }
 
 type ScopedPolicyField = {
-  readonly fieldPath: string;
   readonly propertyPath: string;
   readonly targetPath: string;
   readonly metadata: PolicyRuleMetadata;
@@ -341,7 +327,6 @@ function duplicateScopedFieldFinding(
   const seen = new Map<
     string,
     {
-      readonly scopeName: string;
       readonly propertyPath: string;
       readonly field: ScopedPolicyField;
     }
@@ -373,12 +358,11 @@ function duplicateScopedFieldFinding(
             `Use an equally or more restrictive scoped value, or remove the scoped override.`,
           );
         }
-        const key = `${selectorValue}\0${field.fieldPath}`;
+        const key = `${selectorValue}\0${field.propertyPath}`;
         const previous = seen.get(key);
         if (previous !== undefined) {
           if (isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)) {
             seen.set(key, {
-              scopeName,
               propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
               field,
             });
@@ -392,7 +376,6 @@ function duplicateScopedFieldFinding(
           );
         }
         seen.set(key, {
-          scopeName,
           propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
           field,
         });
@@ -412,7 +395,6 @@ function scopedPolicyFields(
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
-      fieldPath: rule.policyPath.join("."),
       propertyPath: rule.policyPath.join("."),
       targetPath: `${prefix}/${rule.policyPath.map(ocPathSegment).join("/")}`,
       metadata: rule,

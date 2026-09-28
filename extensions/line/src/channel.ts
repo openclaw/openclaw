@@ -1,4 +1,3 @@
-// Line plugin module implements channel behavior.
 import {
   buildDmGroupAccountAllowlistAdapter,
   createFlatAllowlistOverrideResolver,

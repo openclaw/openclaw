@@ -52,23 +52,16 @@ class PreparedRegistryResources {
     }
   }
 
-  retain(work = false): PreparedModelRuntimeResourceClaim {
+  retain(): PreparedModelRuntimeResourceClaim {
     this.assertOpen();
-    const releaseWork = work ? retainRuntimePluginWork([this.acquired.registry]) : () => {};
-    let claim: PreparedModelRuntimeResourceClaim;
-    try {
-      claim = this.acquired.resources.retain();
-    } catch (error) {
-      releaseWork();
-      throw error;
-    }
+    const claim = this.acquired.resources.retain();
     this.claims++;
     let release: Promise<void> | undefined;
     return {
       release: () => {
         if (!release) {
           const completion = createDeferredCore();
-          release = releaseRuntimePluginWork(() => completion.promise, releaseWork);
+          release = completion.promise;
           const pending = this.trackRelease(claim.release);
           this.claims--;
           // The final generation lease joins original-view and donor cleanup as well.
@@ -123,19 +116,49 @@ class PreparedRegistryResources {
   }
 }
 
-/** Construction holds every exact registry until publication has taken its own claim. */
+/** Batch scopes retain selected sources through later catalog work; idle publication owns custody only. */
 export class PreparedModelRuntimeBuildResources {
-  private readonly claims = new Map<PreparedRegistryResources, PreparedModelRuntimeResourceClaim>();
+  private readonly registries = new Set<PluginRegistry>();
+  private readonly releases = new AsyncDisposableStack();
 
-  private retain(resources: PreparedRegistryResources | undefined): void {
-    if (resources && !this.claims.has(resources)) {
-      this.claims.set(resources, resources.retain(true));
+  constructor(
+    private readonly retainPhysicalRegistry: (
+      registry: PluginRegistry,
+    ) => (() => void | Promise<void>) | undefined,
+  ) {}
+
+  private assertOpen(): void {
+    if (this.releases.disposed) {
+      throw new Error("Prepared registry construction resources have been released");
     }
+  }
+
+  retainRegistry(registry: PluginRegistry): void {
+    this.assertOpen();
+    if (this.registries.has(registry)) {
+      return;
+    }
+    const release = this.retainPhysicalRegistry(registry);
+    let releaseWork = () => {};
+    let completion: Promise<void> | undefined;
+    const releaseClaim = () => (completion ??= releaseRuntimePluginWork(release, releaseWork));
+    // External registry owners keep physical custody, but construction still owns finite work.
+    this.releases.defer(releaseClaim);
+    try {
+      releaseWork = retainRuntimePluginWork([registry]);
+    } catch (error) {
+      // Acquisition cleanup may wait for this claim; start it now and let the stack join it.
+      void releaseClaim().catch(() => {});
+      throw error;
+    }
+    this.registries.add(registry);
   }
 
   retainGeneration(generation: PreparedModelRuntimePluginGeneration | undefined): void {
     for (const registry of [generation?.pluginRegistry, generation?.inboundPluginRegistry]) {
-      this.retain(registry && state.registries.get(registry));
+      if (registry) {
+        this.retainRegistry(registry);
+      }
     }
   }
 
@@ -143,13 +166,14 @@ export class PreparedModelRuntimeBuildResources {
     params: Parameters<typeof acquireAgentRuntimePluginRegistry>[0],
     onPrimaryRegistry: (registry: PluginRegistry) => void,
   ): Promise<PluginRegistry> {
+    this.assertOpen();
     const assertLifetime = capturePreparedModelRuntimeLifetime();
     const acquired = await acquireAgentRuntimePluginRegistry(params);
     if ("resources" in acquired) {
       const resources = new PreparedRegistryResources(acquired);
       try {
         assertLifetime();
-        this.retain(resources);
+        this.retainRegistry(acquired.registry);
         // The build claim now owns finite work before producer custody crosses another await.
         acquired.releaseWork();
       } catch (error) {
@@ -157,7 +181,7 @@ export class PreparedModelRuntimeBuildResources {
         throw error;
       }
     } else {
-      this.retain(state.registries.get(acquired.registry));
+      this.retainRegistry(acquired.registry);
     }
     onPrimaryRegistry(
       state.registries.get(acquired.registry)?.primaryRegistry ?? acquired.primaryRegistry,
@@ -165,16 +189,9 @@ export class PreparedModelRuntimeBuildResources {
     return acquired.registry;
   }
 
-  async [Symbol.asyncDispose](): Promise<void> {
-    const claims = [...this.claims.values()];
-    this.claims.clear();
-    const results = await Promise.allSettled(claims.map((claim) => claim.release()));
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Prepared registry construction cleanup failed");
-    }
+  [Symbol.asyncDispose](): Promise<void> {
+    this.registries.clear();
+    return this.releases.disposeAsync();
   }
 }
 

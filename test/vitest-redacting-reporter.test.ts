@@ -1,12 +1,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { createPreparedVitestCliFixture } from "./scripts/run-vitest-bounded-fixture.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const synthetic = "not-a-real-secret-value-1234567890";
+const preparedCli = createPreparedVitestCliFixture(repoRoot, ["run-vitest.mts"]);
+beforeAll(() => preparedCli.prepare());
+afterAll(() => preparedCli.cleanup());
 
 describe("Vitest public reporter output", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -76,7 +80,7 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
       const child = spawnSync(
         resolveTestNodeExecPath(),
         [
-          path.join(repoRoot, "scripts/run-vitest.mjs"),
+          path.join(preparedCli.root, "scripts/run-vitest.mjs"),
           "run",
           "--config",
           config,
@@ -88,7 +92,13 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
           "--reporter=junit",
           "--reporter=./scripts/lib/vitest-resource-reporter.mts",
         ],
-        { cwd: repoRoot, env, encoding: "utf8", timeout: 45_000, maxBuffer: 4 * 1024 * 1024 },
+        {
+          cwd: repoRoot,
+          env: preparedCli.env(env),
+          encoding: "utf8",
+          timeout: 45_000,
+          maxBuffer: 4 * 1024 * 1024,
+        },
       );
       expect(child.error).toBeUndefined();
       expect(child.signal).toBeNull();

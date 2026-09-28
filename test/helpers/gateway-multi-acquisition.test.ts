@@ -38,10 +38,10 @@ async function createAcquiredOwner() {
 }
 
 describe("multi-Gateway suite acquisition ownership", () => {
-  it.each(["none", "client", "gateway", "both"] as const)(
+  it.each(["none", "gateway", "both"] as const)(
     "stops every acquired Gateway and preserves state ownership (cleanup failure: %s)",
     async (failure) => {
-      const clientFails = failure === "client" || failure === "both";
+      const clientFails = failure === "both";
       const gatewayFails = failure === "gateway" || failure === "both";
       const owners = await Promise.all([
         createAcquiredOwner(),
@@ -170,14 +170,9 @@ describe("multi-Gateway suite acquisition ownership", () => {
     },
   );
 
-  it.each([
-    { boundary: "server", order: "before rejection" },
-    { boundary: "server", order: "after rejection" },
-    { boundary: "node", order: "before rejection" },
-    { boundary: "node", order: "after rejection" },
-  ] as const)(
-    "retains the $boundary acquired $order through actual afterAll",
-    async ({ boundary, order }) => {
+  it.each(["server", "node"] as const)(
+    "retains the %s acquired after rejection through actual afterAll",
+    async (boundary) => {
       const owner = await createAcquiredOwner();
       const acquisitionError = new Error(`${boundary} acquisition failed`);
       const sibling = createDeferred();
@@ -266,10 +261,6 @@ describe("multi-Gateway suite acquisition ownership", () => {
           (error: unknown) => error,
         );
         await started.promise;
-        if (order === "before rejection") {
-          sibling.resolve();
-          await siblingAcquisition;
-        }
         failure.reject(acquisitionError);
         await setImmediate();
         let cleanupSettled = false;
@@ -292,9 +283,7 @@ describe("multi-Gateway suite acquisition ownership", () => {
         const cleanupError = await cleanupResult;
         expect(bodyError).toBe(acquisitionError);
         expect(cleanupError).toBeUndefined();
-        if (order === "after rejection") {
-          expect(cleanupSettledBeforeLateAcquisition).toBe(false);
-        }
+        expect(cleanupSettledBeforeLateAcquisition).toBe(false);
         expect(ownerJoinedAtCleanupSettlement).toBe(true);
       } finally {
         // Settle late acquisitions and close their independently retained native

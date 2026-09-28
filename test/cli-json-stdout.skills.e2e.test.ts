@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
@@ -126,18 +126,22 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         )}`;
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--import=${preload}`,
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_GATEWAY_PORT: "1",
-          ...("explicitGateway" in testCase
-            ? {
-                OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
-                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
-              }
-            : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_GATEWAY_PORT: "1",
+            ...("explicitGateway" in testCase
+              ? {
+                  OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                  OPENCLAW_GATEWAY_TOKEN: "fixture-token",
+                }
+              : {}),
+          },
+          { execArgv: [`--import=${preload}`] },
+        );
         const message =
           "remoteMissing" in testCase
             ? [
@@ -168,20 +172,32 @@ describe("cli json stdout contract", () => {
   ])("keeps skills search nested causes behind debug mode ($name)", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
+        // Match the selected runtime's SyntaxError for the same malformed response.
+        let syntaxError: unknown;
+        try {
+          JSON.parse("not-json");
+        } catch (error) {
+          syntaxError = error;
+        }
+        assert(syntaxError instanceof SyntaxError);
         const preload = `data:text/javascript,${encodeURIComponent(
           'globalThis.fetch = async () => new Response("not-json", { status: 200 });',
         )}`;
-        const result = runBuiltCli(tempHome, ["skills", "search", "fixture"], {
-          NODE_OPTIONS: `--import=${preload}`,
-          OPENCLAW_DEBUG: testCase.debug,
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          ["skills", "search", "fixture"],
+          {
+            OPENCLAW_DEBUG: testCase.debug,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          },
+          { execArgv: [`--import=${preload}`] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout).toBe("");
         expect(result.stderr).toContain("ClawHub /api/v1/search returned malformed JSON");
-        expect(result.stderr.includes("Unexpected token")).toBe(testCase.includesCause);
+        expect(result.stderr.includes(syntaxError.message)).toBe(testCase.includesCause);
       },
       { prefix: "openclaw-skills-human-failure-e2e-" },
     );

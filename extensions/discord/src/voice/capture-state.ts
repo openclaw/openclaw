@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 
 type VoiceCaptureEntry = {
   stream?: Readable;
+  stopInput?: () => void;
   startRecording?: () => void;
   finalizeTimer?: ReturnType<typeof setTimeout>;
 };
@@ -18,7 +19,11 @@ export function stopVoiceCaptureState(state: VoiceCaptureState): void {
   state.clear();
   for (const capture of captures) {
     clearVoiceCaptureFinalizeTimer(capture);
-    capture.stream?.destroy();
+    if (capture.stopInput) {
+      capture.stopInput();
+    } else {
+      capture.stream?.destroy();
+    }
   }
 }
 

@@ -20,33 +20,49 @@ describe("device capability chips", () => {
     expect(chip?.querySelector("svg circle")?.namespaceURI).toBe("http://www.w3.org/2000/svg");
   });
 
-  it("collapses session runtimes into one chip listing each supported runtime once", () => {
-    const runtimeCaps = [
-      "claude-sessions",
-      "codex-cli-sessions",
-      "codex-app-server-threads",
-      "opencode-sessions",
-      "pi-sessions",
-    ];
-    const container = renderChips(["browser", ...runtimeCaps, "pi-sessions"]);
+  it.each([
+    {
+      caps: [
+        "claude-sessions",
+        "codex-cli-sessions",
+        "codex-cli-session-source",
+        "codex-app-server-threads",
+        "opencode-sessions",
+        "pi-sessions",
+        "pi-sessions",
+      ],
+      label: "5 runtimes",
+      title:
+        "claude-sessions, codex-cli-sessions, codex-app-server-threads, opencode-sessions, pi-sessions",
+    },
+    {
+      caps: ["codex-cli-sessions", "codex-cli-session-source"],
+      label: "1 runtime",
+      title: "codex-cli-sessions",
+    },
+    {
+      caps: ["codex-cli-session-source"],
+      label: "1 runtime",
+      title: "codex-cli-sessions",
+    },
+  ])("collapses session runtimes into one chip: $caps", ({ caps, label, title }) => {
+    const container = renderChips(["browser", ...caps]);
     const chips = Array.from(container.querySelectorAll('[role="listitem"]'));
-    const runtimeChip = chips.find((chip) => chip.textContent?.trim() === "5 runtimes");
+    const runtimeChip = chips.find((chip) => chip.textContent?.trim() === label);
 
     expect(chips).toHaveLength(2);
-    expect(runtimeChip?.getAttribute("title")).toBe(runtimeCaps.join(", "));
+    expect(runtimeChip?.getAttribute("title")).toBe(title);
   });
 
-  it.each(["custom-tools", "__proto__", "constructor"])(
-    "preserves unknown capability %s as a generic chip",
-    (cap) => {
-      const container = renderChips([cap]);
-      const chip = container.querySelector('[role="listitem"]');
+  it("preserves prototype-named capabilities as generic chips", () => {
+    const cap = "__proto__";
+    const container = renderChips([cap]);
+    const chip = container.querySelector('[role="listitem"]');
 
-      expect(chip?.textContent?.trim()).toBe(cap);
-      expect(chip?.getAttribute("title")).toBe(cap);
-      expect(chip?.querySelector("svg")).not.toBeNull();
-    },
-  );
+    expect(chip?.textContent?.trim()).toBe(cap);
+    expect(chip?.getAttribute("title")).toBe(cap);
+    expect(chip?.querySelector("svg")).not.toBeNull();
+  });
 
   it.each([
     { runtimes: [], overflow: 4 },

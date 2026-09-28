@@ -7,16 +7,24 @@ import type { BoardReport } from "../boards/board-report.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
 });
@@ -137,6 +145,7 @@ describe("native report authoring", () => {
         pluginKind: "session:report",
         props: updated,
       });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
         props: updated,

@@ -92,20 +92,13 @@ function normalizeToolSchemasIfChanged(
   });
 }
 
-function inspectUnsupportedToolSchemas(
+function inspectToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
-  unsupportedKeywords: ReadonlySet<string>,
+  inspect: (schema: unknown, path: string) => string[],
 ): ProviderToolSchemaDiagnostic[] {
   return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      unsupportedKeywords,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
+    const violations = inspect(tool.parameters, `${tool.name}.parameters`);
+    return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
   });
 }
 
@@ -134,7 +127,9 @@ export function inspectGeminiToolSchemas(
   /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return inspectUnsupportedToolSchemas(ctx, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS);
+  return inspectToolSchemas(ctx, (schema, path) =>
+    findUnsupportedSchemaKeywords(schema, path, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS),
+  );
 }
 
 /** Rewrites tool schemas into the JSON Schema subset accepted by llama.cpp GBNF. */
@@ -148,10 +143,7 @@ export function normalizeLlamacppGbnfToolSchemas(
 export function inspectLlamacppGbnfToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findLlamacppGbnfSchemaViolations(tool.parameters, `${tool.name}.parameters`);
-    return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
-  });
+  return inspectToolSchemas(ctx, findLlamacppGbnfSchemaViolations);
 }
 
 /**
@@ -165,18 +157,12 @@ export function normalizeOpenAIToolSchemas(
     return ctx.tools;
   }
   return ctx.tools.map((tool) => {
-    if (tool.parameters == null) {
-      return {
-        ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema({}),
-      };
-    }
-    if (typeof tool.parameters !== "object") {
+    if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
     return {
       ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
+      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
     };
   });
 }
@@ -231,20 +217,15 @@ export function inspectOpenAIToolSchemas(
 export const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["anyOf", "oneOf"]);
 
 function isNullSchemaVariant(schema: unknown): boolean {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+  if (!isSchemaRecord(schema)) {
     return false;
   }
-  const record = schema as Record<string, unknown>;
-  if (record.type === "null") {
-    return true;
-  }
-  if (Array.isArray(record.type) && record.type.length === 1 && record.type[0] === "null") {
-    return true;
-  }
-  if ("const" in record && record.const === null) {
-    return true;
-  }
-  return Array.isArray(record.enum) && record.enum.length === 1 && record.enum[0] === null;
+  return (
+    schema.type === "null" ||
+    (Array.isArray(schema.type) && schema.type.length === 1 && schema.type[0] === "null") ||
+    schema.const === null ||
+    (Array.isArray(schema.enum) && schema.enum.length === 1 && schema.enum[0] === null)
+  );
 }
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
@@ -304,8 +285,8 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   // callers still see every allowed literal. Without this, a Typebox
   // `Type.Union([Type.Literal("a"), Type.Literal("b"), ...])` collapses to
   // only the first const and the model can never pick any other value.
-  if (nonNullVariants.length > 1 && nonNullVariants.every((entry) => isStringConstVariant(entry))) {
-    const enumValues = nonNullVariants.map((entry) => (entry as { const: string }).const);
+  if (nonNullVariants.length > 1 && nonNullVariants.every(isStringConstVariant)) {
+    const enumValues = nonNullVariants.map((entry) => entry.const);
     const merged: Record<string, unknown> = {
       ...normalized,
       type: "string",
@@ -349,11 +330,7 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
 }
 
 function isStringConstVariant(entry: unknown): entry is { const: string } {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  const record = entry as Record<string, unknown>;
-  return typeof record.const === "string";
+  return isSchemaRecord(entry) && typeof entry.const === "string";
 }
 
 function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown> {
@@ -565,7 +542,9 @@ export function inspectDeepSeekToolSchemas(
   /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return inspectUnsupportedToolSchemas(ctx, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS);
+  return inspectToolSchemas(ctx, (schema, path) =>
+    findUnsupportedSchemaKeywords(schema, path, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS),
+  );
 }
 
 /**

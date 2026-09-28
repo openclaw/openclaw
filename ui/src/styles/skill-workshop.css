@@ -1051,15 +1051,19 @@
 }
 
 .sw-revision-dialog__close {
+  display: grid;
+  place-items: center;
   width: 30px;
   height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--muted);
-  font: inherit;
-  font-size: 20px;
-  line-height: 1;
+}
+
+.sw-revision-dialog__close svg {
+  width: 16px;
+  height: 16px;
 }
 
 .sw-revision-dialog__close:hover:not(:disabled) {

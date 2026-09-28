@@ -73,6 +73,7 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
         environmentService: params.environments,
         deviceId: moveTarget.deviceId,
         runtimeId: runtime,
+        executionMode,
         requirement: devicePlacement,
         config,
       });

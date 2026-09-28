@@ -41,11 +41,7 @@ function nodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
 }
 
 function fakeBroker() {
-  type AttachedStream = {
-    auth: "vnc-password";
-    vncPassword: string;
-    stream: PassThrough;
-  };
+  type AttachedStream = Awaited<ReturnType<NodeDesktopStreamBroker["mint"]>["attached"]>;
   const attachments: Array<ReturnType<typeof deferred<AttachedStream>>> = [];
   const streams: PassThrough[] = [];
   const broker = {
@@ -64,14 +60,19 @@ function fakeBroker() {
   } as unknown as NodeDesktopStreamBroker;
   return {
     broker,
-    attachNext() {
+    attachNext(
+      metadata: Omit<AttachedStream, "stream"> = {
+        auth: "vnc-password",
+        vncPassword: "worker-password",
+      },
+    ) {
       const attached = attachments.shift();
       if (!attached) {
         throw new Error("expected pending desktop attach");
       }
       const stream = new PassThrough();
       streams.push(stream);
-      attached.resolve({ auth: "vnc-password", vncPassword: "worker-password", stream });
+      attached.resolve({ ...metadata, stream });
       return stream;
     },
     streams,
@@ -110,8 +111,98 @@ describe("worker node desktop carrier", () => {
   support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => vi.restoreAllMocks());
 
+  it("reloads desktop policy without replacing workers or closing other desktop sources", async () => {
+    const record = await support.seedReadyNodeDesktop("worker-desktop-policy");
+    const proof = nodeProof(record.nodeDeviceId!);
+    const transport = pendingTransport({ proof, isProofCurrent: () => true });
+    const streamed = fakeBroker();
+    const registry = createDesktopSessionRegistry();
+    const carrier = createWorkerNodeDesktopCarrier({
+      store: support.testState.store,
+      desktopRegistry: registry,
+    });
+    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+    support.testState.config.cloudWorkers!.desktop = false;
+    const workerService = support.createService(support.createProvider(), {
+      nodeDesktopCarrier: carrier,
+    });
+    await registry.activate({ sourceKey: "host", ownerEpoch: 1 });
+    const hostClosed = vi.fn();
+    const hostObserver = registry.attachObserver("host", {
+      ownerEpoch: 1,
+      control: false,
+      close: hostClosed,
+    });
+    const pendingNode = createDeferred<NodeWorkerSupervisorNodeProof>();
+    try {
+      expect(workerService.get(record.environmentId)?.desktopAvailable).toBe(false);
+      await expect(
+        workerService.observeDesktop({ environmentId: record.environmentId, control: false }),
+      ).rejects.toThrow("worker desktop observe is disabled");
+
+      support.testState.config.cloudWorkers!.desktop = true;
+      await workerService.reconcileDesktopPolicy();
+      expect(workerService.get(record.environmentId)?.desktopAvailable).toBe(true);
+      const observing = workerService.observeDesktop({
+        environmentId: record.environmentId,
+        control: false,
+      });
+      await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+      const stream = streamed.attachNext();
+      await observing;
+      const workerClosed = vi.fn();
+      registry.attachObserver(record.environmentId, {
+        ownerEpoch: record.ownerEpoch,
+        control: false,
+        close: workerClosed,
+      });
+      const getCurrentNode = vi
+        .spyOn(transport.transport, "getCurrentNode")
+        .mockReturnValue(pendingNode.promise);
+      const pendingObservation = workerService
+        .observeDesktop({ environmentId: record.environmentId, control: false })
+        .catch((error: unknown) => error);
+      const pendingLaunch = workerService
+        .launchDesktopApp({ environmentId: record.environmentId, app: "browser" })
+        .catch((error: unknown) => error);
+      await support.waitForFast(() => expect(getCurrentNode).toHaveBeenCalledTimes(2));
+
+      support.testState.config.cloudWorkers!.desktop = false;
+      await workerService.reconcileDesktopPolicy();
+      expect(await pendingObservation).toBeInstanceOf(Error);
+      expect(await pendingLaunch).toMatchObject({ code: "invalid_state" });
+      expect(stream.destroyed).toBe(true);
+      expect(workerClosed).toHaveBeenCalledOnce();
+      expect(hostClosed).not.toHaveBeenCalled();
+      expect(transport.invoke).toHaveBeenCalledOnce();
+      expect(workerService.get(record.environmentId)).toMatchObject({
+        state: record.state,
+        ownerEpoch: record.ownerEpoch,
+        leaseId: record.leaseId,
+        desktopAvailable: false,
+        desktopApps: [],
+      });
+
+      pendingNode.resolve(proof);
+      support.testState.config.cloudWorkers!.desktop = true;
+      await workerService.reconcileDesktopPolicy();
+      const reopened = workerService.observeDesktop({
+        environmentId: record.environmentId,
+        control: false,
+      });
+      await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledTimes(2));
+      streamed.attachNext();
+      await expect(reopened).resolves.toMatchObject({ transport: "rfb" });
+    } finally {
+      pendingNode.resolve(proof);
+      hostObserver?.release();
+      await workerService.stop();
+      await registry.stopAll();
+    }
+  });
+
   it("releases abandoned observer slots when requesting connections close", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-cancel-churn");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-cancel-churn");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const streamed = fakeBroker();
@@ -150,7 +241,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("releases abandoned observations without disconnecting the requester or taking control", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-abandon");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-abandon");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const streamed = fakeBroker();
@@ -200,7 +291,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("joins invocation settlement when owner stop overlaps observation release", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-release-stop");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-release-stop");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const invocation = deferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
@@ -252,7 +343,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("joins a retiring epoch when stopAll interrupts its replacement", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-replacement-stop");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-replacement-stop");
     let current = record;
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
@@ -317,66 +408,108 @@ describe("worker node desktop carrier", () => {
     }
   });
 
-  it("observes an exact durable node desktop without SSH and preauthenticates it", async () => {
-    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-    const client = { invalidated: false };
-    const requester = {
-      signal: new AbortController().signal,
-      isCurrent: () => !client.invalidated,
-    };
-    const record = support.seedReadyNodeDesktop("worker-node-desktop-observe");
-    let nowMs = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    let current: WorkerEnvironmentRecord | undefined = record;
-    let proofCurrent = true;
-    const proof = nodeProof(record.nodeDeviceId!);
-    const transport = pendingTransport({ proof, isProofCurrent: () => proofCurrent });
+  it.each([undefined, "worker"])(
+    "observes an exact durable node desktop with lease username %s",
+    async (username) => {
+      const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+      const client = { invalidated: false };
+      const requester = {
+        signal: new AbortController().signal,
+        isCurrent: () => !client.invalidated,
+      };
+      const record = await support.seedReadyNodeDesktop("worker-node-desktop-observe");
+      if (username) {
+        record.desktop = { ...record.desktop!, username };
+      }
+      let nowMs = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      let current: WorkerEnvironmentRecord | undefined = record;
+      let proofCurrent = true;
+      const proof = nodeProof(record.nodeDeviceId!);
+      const transport = pendingTransport({ proof, isProofCurrent: () => proofCurrent });
+      const streamed = fakeBroker();
+      const registry = createDesktopSessionRegistry({ lingerMs: 1 });
+      const carrier = createWorkerNodeDesktopCarrier({
+        store: { get: () => current },
+        desktopRegistry: registry,
+      });
+      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+
+      const observing = carrier.observe({ record, control: false, requester });
+      await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+      nowMs = 50_000;
+      const credentials = username
+        ? { username, password: "worker-password" }
+        : { password: "worker-password" };
+      streamed.attachNext({
+        auth: username ? "ard-account" : "vnc-password",
+        vncPassword: "worker-password",
+      });
+
+      await expect(observing).resolves.toMatchObject({
+        transport: "rfb",
+        wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
+        expiresAtMs: 110_000,
+        control: false,
+      });
+      expect(await observing).not.toHaveProperty("vncPassword");
+      expect(await observing).not.toHaveProperty("preauth");
+      expect(mint.mock.calls[0]?.[0].preauth).toEqual({
+        auth: username ? "ard-account" : "vnc-password",
+        credentials,
+      });
+      const mintedRequester = mint.mock.calls[0]?.[0].requester;
+      expect(mintedRequester).toBe(requester);
+      expect(mintedRequester?.isCurrent()).toBe(true);
+      client.invalidated = true;
+      expect(mintedRequester?.isCurrent()).toBe(false);
+      expect(requester.signal.aborted).toBe(false);
+      expect(transport.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: {
+            ticket: "a".repeat(48),
+            attachPath: `/node-desktop/attach?ticket=${"a".repeat(48)}`,
+            port: 5900,
+            passwordFilePath: "/var/lib/crabbox/vnc.password",
+            ...(username ? { username } : {}),
+          },
+          timeoutMs: 0,
+        }),
+      );
+
+      current = undefined;
+      proofCurrent = false;
+      await carrier.stop(record.environmentId, record.ownerEpoch);
+      expect(streamed.streams[0]?.destroyed).toBe(true);
+    },
+  );
+
+  it.each([
+    { auth: "ard-account" as const },
+    { auth: "vnc-password" as const, vncPassword: "secret" },
+  ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
+    const record = await support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
+    record.desktop = { ...record.desktop!, username: "worker" };
+    const transport = pendingTransport({
+      proof: nodeProof(record.nodeDeviceId!),
+      isProofCurrent: () => true,
+    });
     const streamed = fakeBroker();
-    const registry = createDesktopSessionRegistry({ lingerMs: 1 });
     const carrier = createWorkerNodeDesktopCarrier({
-      store: { get: () => current },
-      desktopRegistry: registry,
+      store: { get: () => record },
+      desktopRegistry: createDesktopSessionRegistry(),
     });
     carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-
-    const observing = carrier.observe({ record, control: false, requester });
+    const observing = carrier.observe({ record, control: false });
     await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
-    nowMs = 50_000;
-    streamed.attachNext();
-
-    await expect(observing).resolves.toMatchObject({
-      transport: "rfb",
-      wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
-      expiresAtMs: 110_000,
-      control: false,
-    });
-    expect(await observing).not.toHaveProperty("vncPassword");
-    const mintedRequester = mint.mock.calls[0]?.[0].requester;
-    expect(mintedRequester).toBe(requester);
-    expect(mintedRequester?.isCurrent()).toBe(true);
-    client.invalidated = true;
-    expect(mintedRequester?.isCurrent()).toBe(false);
-    expect(requester.signal.aborted).toBe(false);
-    expect(transport.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: {
-          ticket: "a".repeat(48),
-          attachPath: `/node-desktop/attach?ticket=${"a".repeat(48)}`,
-          port: 5900,
-          passwordFilePath: "/var/lib/crabbox/vnc.password",
-        },
-        timeoutMs: 0,
-      }),
-    );
-
-    current = undefined;
-    proofCurrent = false;
-    await carrier.stop(record.environmentId, record.ownerEpoch);
-    expect(streamed.streams[0]?.destroyed).toBe(true);
+    const stream = streamed.attachNext(metadata);
+    await expect(observing).rejects.toThrow("managed authentication");
+    expect(stream.destroyed).toBe(true);
+    await carrier.stopAll();
   });
 
   it("cancels and joins an admitted app launch before its first microtask", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
       isProofCurrent: () => true,
@@ -434,7 +567,7 @@ describe("worker node desktop carrier", () => {
       }),
     ],
   ] as const)("rejects an attach after the durable %s changes", async (_name, mutate) => {
-    const record = support.seedReadyNodeDesktop(`worker-node-desktop-stale-${_name}`);
+    const record = await support.seedReadyNodeDesktop(`worker-node-desktop-stale-${_name}`);
     let current: WorkerEnvironmentRecord | undefined = record;
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
@@ -455,7 +588,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("rejects an attach after the node pairing proof changes", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-desktop-stale-pairing");
+    const record = await support.seedReadyNodeDesktop("worker-node-desktop-stale-pairing");
     let proofCurrent = true;
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
@@ -478,7 +611,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("deduplicates one exact launch and aborts it on owner teardown", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-desktop-launch");
+    const record = await support.seedReadyNodeDesktop("worker-node-desktop-launch");
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
       isProofCurrent: () => true,
@@ -517,7 +650,7 @@ describe("worker node desktop carrier", () => {
     { name: "missing receipt", payloadJSON: null, succeeds: false },
     { name: "open receipt", payloadJSON: '{"status":"ready","extra":true}', succeeds: false },
   ])("validates the closed node launcher $name result", async (testCase) => {
-    const record = support.seedReadyNodeDesktop(
+    const record = await support.seedReadyNodeDesktop(
       `worker-node-desktop-${testCase.name.replaceAll(" ", "-")}`,
     );
     const proof = nodeProof(record.nodeDeviceId!);
@@ -552,7 +685,9 @@ describe("worker node desktop carrier", () => {
   it.each(["durable owner", "pairing proof"] as const)(
     "rejects a successful launch receipt after the %s becomes stale",
     async (staleBoundary) => {
-      const record = support.seedReadyNodeDesktop(`worker-node-launch-stale-${staleBoundary}`);
+      const record = await support.seedReadyNodeDesktop(
+        `worker-node-launch-stale-${staleBoundary}`,
+      );
       let current: WorkerEnvironmentRecord | undefined = record;
       let proofCurrent = true;
       const proof = nodeProof(record.nodeDeviceId!);

@@ -1,9 +1,10 @@
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import type { SharedGitHubPublicationSession } from "./github-publication-shared-read.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import {
   digestGitHubPublicationRequest,
   ensureGitHubPublicationStore,
@@ -17,14 +18,12 @@ import {
   WORKSPACE_TREE,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
+  systemPublicationRequester,
 } from "./github-publication.test-support.js";
-import {
-  repositoryGitHubPublicationDigest,
-  type RepositoryGitHubPublicationRow,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-export const sharedPublicationSession: SharedGitHubPublicationSession = {
+export const sharedPublicationSession: PublicationSessionIdentity = {
   sessionId: SESSION_ID,
   sessionKey: SESSION_KEY,
   agentId: "main",
@@ -40,7 +39,7 @@ export function sharedPublicationCoordinator() {
 export function insertSharedWorktreeReceipt(
   requestId: string,
   options: {
-    session?: SharedGitHubPublicationSession;
+    session?: PublicationSessionIdentity;
     idempotencyKey?: string;
     createdAtMs?: number;
     worktreeId?: string;
@@ -62,6 +61,8 @@ export function insertSharedWorktreeReceipt(
       requestDigest: digestGitHubPublicationRequest({ ...request, sessionId: session.sessionId }),
       sessionId: session.sessionId,
       lifecycleRevision: session.lifecycleRevision ?? null,
+      requester: systemPublicationRequester.snapshot,
+      assertCurrent: systemPublicationRequester.assertCurrent,
       now: options.createdAtMs ?? 1_000,
       worktree: {
         id: options.worktreeId ?? "worktree-1",
@@ -111,6 +112,7 @@ export function repositoryReceipt(
     request_id: "repository-request",
     idempotency_key: "repository-key",
     request_digest: "",
+    requester_authority_json: null,
     session_id: SESSION_ID,
     session_lifecycle_revision: null,
     session_key: SESSION_KEY,

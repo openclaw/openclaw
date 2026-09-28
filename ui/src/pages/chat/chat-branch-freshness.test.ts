@@ -23,10 +23,6 @@ describe("chat branch freshness", () => {
       ...overrides,
     });
     if (!overrides.sessions) {
-      vi.spyOn(host.sessions, "reconcileChanged").mockImplementation(() => ({
-        applied: false,
-        result: host.sessions.state.result,
-      }));
       vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
       vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
     }
@@ -77,8 +73,10 @@ describe("chat branch freshness", () => {
           runId: "replacement-run",
           state: "delta",
           deltaText: "Replacement",
+          message: { role: "assistant", content: [{ type: "text", text: "Replacement" }] },
         },
       });
+      expect(state.chatStream).toBe("Replacement");
       expect(listBranches).not.toHaveBeenCalled();
       handlePageGatewayEvent(state, {
         type: "event",

@@ -81,13 +81,13 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const sessionOperations = new Set<string>();
-  const computerLifetime = new AbortController();
+  const connectionToolLifetime = new AbortController();
   const cleanup = () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    computerLifetime.abort(new Error("Worker computer connection closed"));
+    connectionToolLifetime.abort(new Error("Worker tool connection closed"));
     clearTimeout(expiryTimer);
     sessionOperations.clear();
     params.socket.off("message", onMessage);
@@ -325,6 +325,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === "worker.sessions.spawn" ||
       parsed.method === "worker.sessions.send" ||
       parsed.method === "worker.portal" ||
+      parsed.method === "worker.presence" ||
       parsed.method === "worker.computer" ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
@@ -371,6 +372,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === "worker.sessions.spawn" ||
       parsed.method === "worker.sessions.send" ||
       parsed.method === "worker.portal" ||
+      parsed.method === "worker.presence" ||
       parsed.method === "worker.computer";
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {
@@ -385,11 +387,16 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       }
       sessionOperations.add(parsed.id);
       let outcome: "returned" | "threw" = "returned";
-      // Release the frame queue while retaining shutdown admission. Desktop input
-      // belongs to this socket; durable session work survives response-transport loss.
+      // Desktop input and live reads belong to this socket; durable session work
+      // survives response-transport loss. Neither may block the heartbeat queue.
       void params.connectionWork.track(() =>
         runWithGatewayIndependentRootWorkContinuation(
-          () => dispatch(parsed.method === "worker.computer" ? computerLifetime.signal : undefined),
+          () =>
+            dispatch(
+              parsed.method === "worker.computer" || parsed.method === "worker.presence"
+                ? connectionToolLifetime.signal
+                : undefined,
+            ),
           "worker:dispatch",
         )
           .catch(() => {

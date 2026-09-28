@@ -12,16 +12,22 @@ import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveCanvasDocumentsDir } from "./documents.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { readCanvasDocumentHtmlSource, resolveCanvasDocumentsDir } from "./documents.js";
 import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
-const WIDGET_CODE_MAX_CHARS = 262_144;
-const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
+const WIDGET_HTML_MAX_UTF8_BYTES = 10 * 1024 * 1024;
+const PINNED_WIDGET_MAX_UTF8_BYTES = WIDGET_HTML_MAX_UTF8_BYTES;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
 
@@ -31,7 +37,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -519,9 +527,9 @@ describe("show_widget", () => {
     await expect(
       tool.execute("oversized", {
         title: "Too large",
-        widget_code: "x".repeat(WIDGET_CODE_MAX_CHARS + 1),
+        widget_code: "x".repeat(WIDGET_HTML_MAX_UTF8_BYTES + 1),
       }),
-    ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_CODE_MAX_CHARS} characters)`);
+    ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_HTML_MAX_UTF8_BYTES} bytes)`);
   });
 
   it("rejects pinning without a session before creating a Canvas document", async () => {
@@ -538,33 +546,36 @@ describe("show_widget", () => {
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 
-  it("rejects multibyte pin input that exceeds the wrapped UTF-8 budget", async () => {
-    const stateDir = await createStateDir();
-    const callGateway = vi.fn();
-    const title = "Multibyte";
-    const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
-    const widgetCode = "é".repeat(
-      Math.floor((PINNED_WIDGET_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1,
-    );
-    expect(widgetCode.length).toBeLessThan(WIDGET_CODE_MAX_CHARS);
-    expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
-      PINNED_WIDGET_MAX_UTF8_BYTES,
-    );
-    const tool = createShowWidgetTool({
-      stateDir,
-      sessionId: "wrapped-budget",
-      agentSessionKey: "agent:main:wrapped-budget",
-      callGateway,
-    });
+  it.each([true, false])(
+    "rejects multibyte input over the wrapped UTF-8 budget (pin=%s)",
+    async (pin) => {
+      const stateDir = await createStateDir();
+      const callGateway = vi.fn();
+      const title = "Multibyte";
+      const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
+      const widgetCode = "é".repeat(
+        Math.floor((PINNED_WIDGET_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1,
+      );
+      expect(Buffer.byteLength(widgetCode, "utf8")).toBeLessThan(WIDGET_HTML_MAX_UTF8_BYTES);
+      expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
+        PINNED_WIDGET_MAX_UTF8_BYTES,
+      );
+      const tool = createShowWidgetTool({
+        stateDir,
+        sessionId: "wrapped-budget",
+        agentSessionKey: "agent:main:wrapped-budget",
+        callGateway,
+      });
 
-    await expect(
-      tool.execute("pin", { title, widget_code: widgetCode, pin: true }),
-    ).rejects.toThrow(
-      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
-    );
-    expect(callGateway).not.toHaveBeenCalled();
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
-  });
+      await expect(tool.execute("pin", { title, widget_code: widgetCode, pin })).rejects.toThrow(
+        pin
+          ? `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`
+          : `widget document after wrapping exceeds maximum size (${WIDGET_HTML_MAX_UTF8_BYTES} bytes)`,
+      );
+      expect(callGateway).not.toHaveBeenCalled();
+      await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+    },
+  );
 
   it("does not create an inline Canvas document when dashboard pinning fails", async () => {
     const stateDir = await createStateDir();
@@ -623,7 +634,7 @@ describe("show_widget", () => {
       `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
     );
     expect(html).toContain("font-src data:");
-    expect(html).toContain("img-src data:; connect-src 'none'");
+    expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain("--accent:#bd4531");
     expect(html).toContain("--accent:#ff5c5c");
@@ -657,6 +668,8 @@ describe("show_widget", () => {
     ["qualified Main", "agent:main:pinned", "main", false],
     ["explicit Research global", "global", "research", false],
     ["Research global with retained Main", "global", "research", true],
+    ["large HTML", "agent:main:large-widget", "main", false],
+    ["wrapped HTML", "agent:main:wrapped-widget", "main", false],
   ] as const)(
     "creates and refreshes pinned HTML in %s",
     async (_label, sessionKey, agentId, retainedMain) => {
@@ -718,17 +731,26 @@ describe("show_widget", () => {
             : {}),
           callGateway,
         });
-      const result = await pinWidget("<p>ready</p>", true);
+      const initialHtml =
+        _label === "large HTML"
+          ? `<p>${"é".repeat(2 * 1024 * 1024)}</p>`
+          : _label === "wrapped HTML"
+            ? `<p>${"x".repeat(250 * 1024)}</p>`
+            : "<p>ready</p>";
+      const result = await pinWidget(initialHtml, true);
       const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
       expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
-        html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
+        html: buildWidgetDocument(pinnedTitle, initialHtml),
         revision: 1,
       });
       expect((await store.getSnapshot(target)).widgets[0]?.title).toBe(pinnedTitle);
       expect((await store.getSnapshot(target)).widgets[0]?.presentation).toBe("frameless");
       expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
       expect(result.boardWidgetName).toBe("release-status");
+      expect((await readCanvasDocumentHtmlSource(result.viewId, { stateDir })).html).toContain(
+        initialHtml,
+      );
       expect(broadcast).toHaveBeenCalledWith(
         "board.changed",
         { sessionKey: eventSessionKey, revision: 1, widget: "release-status" },

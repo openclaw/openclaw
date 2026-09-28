@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.moderation behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";

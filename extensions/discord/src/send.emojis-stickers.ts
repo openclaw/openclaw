@@ -1,4 +1,3 @@
-// Discord plugin module implements send.emojis stickers behavior.
 import type { RESTGetAPIGuildEmojisResult } from "discord-api-types/v10";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import {

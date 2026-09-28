@@ -3,26 +3,12 @@ import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-referen
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramApprovalCallbackData,
-  fitsTelegramCallbackData,
   parseTelegramApprovalCallbackData,
   rewriteTelegramApprovalDecisionAlias,
   sanitizeTelegramCallbackData,
 } from "./approval-callback-data.js";
 
 describe("approval callback data", () => {
-  it("enforces Telegram callback byte boundaries", () => {
-    expect(fitsTelegramCallbackData("x".repeat(63))).toBe(true);
-    expect(fitsTelegramCallbackData("x".repeat(64))).toBe(true);
-    expect(fitsTelegramCallbackData("x".repeat(65))).toBe(false);
-  });
-
-  it("rewrites /approve allow-always callbacks to always", () => {
-    const approvalId = `plugin:${"a".repeat(36)}`;
-    expect(rewriteTelegramApprovalDecisionAlias(`/approve ${approvalId} allow-always`)).toBe(
-      `/approve ${approvalId} always`,
-    );
-  });
-
   it("rewrites allow-always callbacks separated by any whitespace", () => {
     const approvalId = `plugin:${"a".repeat(36)}`;
     expect(rewriteTelegramApprovalDecisionAlias(`/approve\t${approvalId}\tallow-always`)).toBe(

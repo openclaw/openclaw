@@ -1,4 +1,7 @@
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
 import {
@@ -38,23 +41,25 @@ function useHost(host: Host, options: { beforeWrite?: () => void; compareError?:
       }
       return store;
     });
-  vi.spyOn(state, "openKeyedStore").mockImplementation(<T>(storeOptions: OpenKeyedStoreOptions) => {
-    const store = openKeyedStore<T>(storeOptions);
-    if (host === "2026.9.4") {
-      delete store.observe;
-      delete store.compareAndApply;
-    } else if (store.compareAndApply && (options.beforeWrite || options.compareError)) {
-      const compareAndApply = store.compareAndApply.bind(store);
-      store.compareAndApply = async (...args) => {
-        if (options.compareError) {
-          throw options.compareError;
-        }
-        options.beforeWrite?.();
-        return await compareAndApply(...args);
-      };
-    }
-    return store;
-  });
+  vi.spyOn(state, "openKeyedStore").mockImplementation(
+    <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
+      const store = openKeyedStore<T>(storeOptions);
+      if (host === "2026.9.4") {
+        delete store.observe;
+        delete store.compareAndApply;
+      } else if (store.compareAndApply && (options.beforeWrite || options.compareError)) {
+        const compareAndApply = store.compareAndApply.bind(store);
+        store.compareAndApply = async (...args) => {
+          if (options.compareError) {
+            throw options.compareError;
+          }
+          options.beforeWrite?.();
+          return await compareAndApply(...args);
+        };
+      }
+      return store;
+    },
+  );
   return syncOpen;
 }
 

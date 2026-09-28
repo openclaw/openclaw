@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -8,10 +9,6 @@ import {
   isModelSelectionLocked,
 } from "../../sessions/model-overrides.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -30,6 +27,10 @@ import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../media-generation-activity.js";
 import { findModelInCatalog, prepareModelRunCapabilities } from "../model-catalog-lookup.js";
 import {
   resolveConfiguredThinkingDefault,
@@ -37,15 +38,17 @@ import {
 } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import { measureAgentStartup } from "../startup-timing.js";
 import {
+  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
-  needsThinkHydration,
 } from "../thinking-runtime.js";
 import {
   createAgentAttemptLifecycleCallbacks,
@@ -245,7 +248,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   for (;;) {
     try {
       liveSwitchMediaTaskIds = sessionKey
-        ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+        ? getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId)
         : new Set<string>();
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
@@ -269,9 +272,11 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       let attemptMediaTaskIds = liveSwitchMediaTaskIds;
       const currentAttemptCommittedCronMedia = () =>
         Boolean(
-          sessionKey && hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds),
+          sessionKey &&
+          hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds, sessionAgentId),
         );
       const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
+        preparedRunAdmission: params.preparedRunAdmission,
         selection: {
           cfg,
           provider,
@@ -327,6 +332,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             const nextSessionEntry = { ...sessionEntry };
             clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
             sessionEntry = await persistAgentSession({
+              agentId: sessionAgentId,
               sessionStore,
               sessionKey,
               storePath,
@@ -349,7 +355,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = sessionKey
-            ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+            ? getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId)
             : new Set<string>();
           attemptLifecycleState.lifecycleError = undefined;
           attemptLifecycleState.lifecycleFinishing = false;
@@ -383,19 +389,17 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             providerOverride === defaultProvider && modelOverride === defaultModel
               ? configuredDefaultAuthProfileId
               : undefined;
-          const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-            provider: providerOverride,
-            entry: attemptSessionEntry,
-            cfg,
-          });
-          const candidateRuntime = resolveEffectiveAgentRuntime({
-            cfg,
-            provider: providerOverride,
-            modelId: modelOverride,
-            agentId: sessionAgentId,
-            sessionKey,
-            sessionEntry: attemptSessionEntry,
-          });
+          const agentHarnessRuntimeOverride = runOptions.agentHarnessRuntimeOverride;
+          const candidateRuntime =
+            agentHarnessRuntimeOverride ??
+            resolveEffectiveAgentRuntime({
+              cfg,
+              provider: providerOverride,
+              modelId: modelOverride,
+              agentId: sessionAgentId,
+              sessionKey,
+              sessionEntry: attemptSessionEntry,
+            });
           const candidateConfiguredThinkLevel =
             immutableThinkLevel ??
             resolveConfiguredThinkingDefault({
@@ -554,6 +558,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       if (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason)) {
         throw params.opts.abortSignal?.reason;
       }
+      // The embedded runtime can settle before the command's outer signal is aborted.
+      if (terminal.outcome.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON) {
+        throw createAgentRunRestartAbortError();
+      }
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       fallbackExhausted = fallbackResult.outcome === "exhausted";
@@ -584,7 +592,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         }
         if (
           sessionKey &&
-          hasNewGeneratedMediaTaskForSessionKey(sessionKey, liveSwitchMediaTaskIds)
+          hasNewGeneratedMediaTaskForSessionKey(sessionKey, liveSwitchMediaTaskIds, sessionAgentId)
         ) {
           await deferredLifecycle.complete();
           throw err;
@@ -611,11 +619,12 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         providerForAuthProfileValidation = err.provider;
         if (sessionEntry) {
           sessionEntry = { ...sessionEntry };
-          if (err.agentRuntimeOverride) {
-            sessionEntry.agentRuntimeOverride = err.agentRuntimeOverride;
-          } else {
-            delete sessionEntry.agentRuntimeOverride;
-          }
+          applyModelRuntimeDirective(
+            sessionEntry,
+            err.agentRuntimeOverride
+              ? { kind: "set", runtime: err.agentRuntimeOverride }
+              : { kind: "clear" },
+          );
           sessionEntry.authProfileOverride = err.authProfileId;
           sessionEntry.authProfileOverrideSource = err.authProfileId
             ? err.authProfileIdSource

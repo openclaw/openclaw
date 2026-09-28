@@ -17,8 +17,9 @@ import { registerPreparedModelRuntimePublicationListener } from "../../agents/pr
 import type { OpenClawConfig } from "../../config/types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it("models.list retains a failed renewal before shared worker recovery", async () => {
+it("models.list retains a failed renewal before shared worker recovery", async ({ signal }) => {
   const state = await createOpenClawTestState({
     label: "catalog-worker-recovery",
     env: {
@@ -150,7 +151,14 @@ it("models.list retains a failed renewal before shared worker recovery", async (
           ...(selectedProvider ? { provider: selectedProvider } : {}),
         });
       const savedConfig = await fs.readFile(state.configPath, "utf8");
-      const initial = await list(true);
+      const refresh = (selectedProvider?: string) =>
+        waitForCatalogPublication({
+          signal,
+          start: () => list(true, selectedProvider),
+          read: () => list(false, selectedProvider),
+          ready: (result) => !result.pendingProviders?.length,
+        });
+      const initial = await refresh();
       expect(
         initial.models
           .filter((row) => providers.includes(row.provider))
@@ -259,14 +267,14 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       });
       expect(await fs.readFile(state.configPath, "utf8")).toBe(savedConfig);
       expect(requests).toBe(failedRequests);
-      expect((await list(true, sibling)).refreshFailed).toBe(true);
+      expect((await refresh(sibling)).refreshFailed).toBe(true);
       expect(requests).toBe(failedRequests);
       advertised = ["original", "recovered"];
       hold = false;
       for (const response of held.splice(0)) {
         reply(response);
       }
-      const refreshed = await list(true, provider);
+      const refreshed = await refresh(provider);
       expect(
         refreshed.models.filter((row) => row.provider === provider).map((row) => row.id),
       ).toEqual(["original", "recovered"]);

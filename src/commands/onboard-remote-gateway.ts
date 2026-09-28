@@ -10,10 +10,10 @@ import type {
   WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDeviceIdentityForGatewayCall } from "../gateway/call-device-auth.js";
 import {
   isGatewayClientRequestError,
   isGatewayTransportError,
-  resolveDeviceIdentityForGatewayCall,
   type CallGatewayCliOptions,
 } from "../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -40,6 +40,7 @@ type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 type RemoteGatewayInferenceTarget = {
   config: OpenClawConfig;
   gatewayUrl: string;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -55,58 +56,19 @@ type RemoteGatewayInferenceOnboardingDeps = {
 function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
     candidates: result.candidates.map((candidate) => ({
-      kind: candidate.kind,
-      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
-      label: candidate.label,
-      detail: candidate.detail,
-      modelRef: candidate.modelRef,
-      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
-      ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
-      ...(candidate.website !== undefined ? { website: candidate.website } : {}),
+      ...candidate,
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
-      ...(candidate.credentials !== undefined ? { credentials: candidate.credentials } : {}),
     })),
-    manualProviders: result.manualProviders.map((provider) => ({
-      id: provider.id,
-      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
-      label: provider.label,
-      ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
-      ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
-      ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
-      ...(provider.website !== undefined ? { website: provider.website } : {}),
-    })),
-    authOptions: (result.authOptions ?? []).map((option) =>
-      Object.assign(
-        {
-          id: option.id,
-          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
-          label: option.label,
-          kind: option.kind,
-          featured: option.featured,
-          ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
-        },
-        option.hint !== undefined ? { hint: option.hint } : {},
-        option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
-        option.icon !== undefined ? { icon: option.icon } : {},
-        option.website !== undefined ? { website: option.website } : {},
-      ),
+    manualProviders: result.manualProviders.map(
+      ({ groupLabel: _groupLabel, ...provider }) => provider,
     ),
+    authOptions: result.authOptions ?? [],
     ...(result.prepareOptions !== undefined
       ? {
-          prepareOptions: result.prepareOptions.map((option) =>
-            Object.assign(
-              {
-                id: option.id,
-                label: option.label,
-                ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
-              },
-              option.brandId !== undefined ? { brandId: option.brandId } : {},
-              option.hint !== undefined ? { hint: option.hint } : {},
-              option.icon !== undefined ? { icon: option.icon } : {},
-              option.website !== undefined ? { website: option.website } : {},
-            ),
+          prepareOptions: result.prepareOptions.map(
+            ({ actionLabel: _actionLabel, ...option }) => option,
           ),
         }
       : {}),
@@ -183,6 +145,7 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
       remote: {
         ...target.config.gateway?.remote,
         url: target.gatewayUrl,
+        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
       },
     },
   };
@@ -248,10 +211,9 @@ export async function runRemoteGatewayInferenceOnboarding(
     await callGateway<T>({
       ...params,
       config: boundConfig,
-      // Authenticated calls can pin the URL directly. Auth-free loopback
-      // Gateways use the equivalently pinned config target because URL
-      // overrides intentionally require explicit credentials.
-      ...(explicitAuth ? { url: target.gatewayUrl } : {}),
+      // Preserve configured SSH routing across RPCs; an explicitly selected
+      // listener must not acquire that route merely because its URL matches.
+      ...(explicitAuth && !target.configuredRemote ? { url: target.gatewayUrl } : {}),
       ...(target.token ? { token: target.token } : {}),
       ...(target.password ? { password: target.password } : {}),
       ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
@@ -486,6 +448,7 @@ export async function runRemoteGatewayInferenceOnboarding(
         ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
+          ...(target.configuredRemote ? { configuredRemote: true } : {}),
           ...(target.token ? { token: target.token } : {}),
           ...(target.password ? { password: target.password } : {}),
           ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),

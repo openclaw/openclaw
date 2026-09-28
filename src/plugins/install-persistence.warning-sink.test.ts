@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   configWriteMock,
+  createEmptyUninstallActions,
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginSnapshotReportMock,
   loadPluginManifestRegistryMock,
@@ -43,7 +44,7 @@ describe("plugin install persistence warning audiences", () => {
       ok: true,
       config: {},
       pluginId: "workboard",
-      actions: {},
+      actions: createEmptyUninstallActions(),
       directoryRemoval: { target: "/private/previous-source/workboard" },
     });
     applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
@@ -104,7 +105,7 @@ describe("plugin install persistence warning audiences", () => {
   it("preserves owner-authored exclusive-slot warnings verbatim", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const warn = vi.fn();
-    const warning = 'Exclusive slot "memory" switched from "memory-core" to "workboard".';
+    const warning = 'Disabled other "memory" slot plugins: memory-core.';
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         recordPluginManifestInstallOwner(
@@ -161,7 +162,7 @@ describe("plugin install persistence warning audiences", () => {
         ok: true,
         config: {},
         pluginId: "workboard",
-        actions: {},
+        actions: createEmptyUninstallActions(),
         directoryRemoval: { target: "/private/previous-source/workboard" },
       });
       applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({

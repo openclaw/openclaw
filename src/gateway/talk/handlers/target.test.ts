@@ -27,7 +27,7 @@ import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
-  bootstrap: vi.fn(async () => undefined),
+  bootstrap: vi.fn(async () => "Agent context fixture."),
   createRelay: vi.fn(() => ({
     relaySessionId: "test-relay",
     provider: "test-voice",
@@ -42,7 +42,7 @@ vi.mock("../../../talk/provider-resolver.js", () => ({
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: mocks.bootstrap,
+  resolveRealtimeVoiceAgentContextInstructions: mocks.bootstrap,
 }));
 vi.mock("../relay/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../relay/index.js")>()),
@@ -127,7 +127,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   createdCalls.length = 0;
   createBrowserSession.mockReset().mockResolvedValue(browserSession);
-  mocks.bootstrap.mockReset().mockResolvedValue(undefined);
+  mocks.bootstrap.mockReset().mockResolvedValue("Agent context fixture.");
   setActivePluginRegistry(createEmptyPluginRegistry());
   const provider = {
     id: "test-voice",
@@ -643,7 +643,8 @@ describe("Talk target preparation through Gateway authorization", () => {
     const started = createDeferredCore();
     mocks.bootstrap.mockImplementationOnce(async () => {
       started.resolve();
-      return await gate.promise;
+      await gate.promise;
+      return "Agent context fixture.";
     });
     const pending = dispatch("talk.client.create", createParams);
     await started.promise;

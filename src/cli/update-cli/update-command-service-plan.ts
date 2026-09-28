@@ -16,12 +16,24 @@ import {
   formatServiceInspectionReason,
   type ServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
-import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceState,
+import {
+  gatewayServiceCommandMatchesRoot,
+  resolveGatewayServiceInstallationRefreshRoot,
+  resolveManagedServiceNodeRunner,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
+import {
+  hasGatewayServiceDefinitionOverrides,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceState,
+  type GatewayServiceUnitInspection,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  type GatewayService,
+} from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -39,6 +51,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -48,10 +61,10 @@ import {
   type UpdateRecoveryStep,
 } from "../../shared/update-outcome.js";
 import { resolveNodeVersionManager } from "../../shared/version-manager-path.js";
-import { CLI_NAME } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
+import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 import type {
   ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
@@ -63,31 +76,22 @@ export type ManagedServiceRootRedirect = {
   previousRoot: string;
 };
 
-export function collectServiceInspectionFailureFacts(
-  verdict: ManagedGatewayUpdateVerdict | undefined,
-): UpdateFailureFact[] | undefined {
-  return verdict?.kind === "unavailable"
-    ? [
-        createUpdateFailureFact({
-          check: "managed-service",
-          code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.message,
-        }),
-      ]
-    : undefined;
-}
-
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
-  constructor(message: string, cause: unknown, inspectionReason?: ServiceInspectionReason) {
-    super(message, { cause });
+  constructor(
+    message: string,
+    cause: unknown,
+    inspectionReason?: ServiceInspectionReason,
+    code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
+  ) {
+    super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts = [
       createUpdateFailureFact({
         check: "managed-service",
-        code: inspectionReason ?? "service-ownership-unverified",
-        message,
+        code: inspectionReason ?? code ?? "service-ownership-unverified",
+        message: this.message,
       }),
     ];
   }
@@ -100,11 +104,14 @@ export function assertGatewayServiceAdmissionUnchanged(
   const expectedVerdict = expectedService?.serviceUpdateVerdict;
   if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
     throw new GatewayServiceUpdateOwnershipError(
-      "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
+      serviceUpdateVerdict.kind === "unavailable"
+        ? "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
+        : "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
       undefined,
       serviceUpdateVerdict.kind === "unavailable"
         ? serviceUpdateVerdict.inspectionReason
         : undefined,
+      serviceUpdateVerdict.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   if (
@@ -117,6 +124,8 @@ export function assertGatewayServiceAdmissionUnchanged(
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service definition changed after database admission; retry against its current configuration.",
       undefined,
+      undefined,
+      "service-definition-changed",
     );
   }
 }
@@ -139,7 +148,12 @@ export function assertGatewayServiceManagementAllowedForUpdate(
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new GatewayServiceUpdateOwnershipError(message, err);
+    throw new GatewayServiceUpdateOwnershipError(
+      message,
+      err,
+      undefined,
+      "service-mutation-refused",
+    );
   }
 }
 
@@ -157,10 +171,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
   }
   if (process.platform === "freebsd") {
-    return (
-      `${GATEWAY_SERVICE_INSPECTION_WARNING} ` +
-      "On FreeBSD, use the Gateway's rc.d or foreground process owner for service management."
-    );
+    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
   const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
@@ -191,6 +202,8 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root?: string;
   state: GatewayServiceState;
   retainedCommand?: boolean;
+  allowIncompleteInspection?: boolean;
+  allowInstallRootChange?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const { state } = params;
   const { command } = state;
@@ -213,19 +226,27 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
       ? { kind: "absent" }
       : unavailable();
   }
+  // Direct Windows actions are readable, but the updater cannot restore them
+  // through its managed CMD/VBS definition and control owners.
+  if (process.platform === "win32" && !command.sourcePath) {
+    return unavailable();
+  }
   if (
-    state.loadState.status === "unknown" ||
-    (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
-    (process.platform === "linux" && observedSystemdManagerUid(state) === undefined)
+    !params.allowIncompleteInspection &&
+    (state.loadState.status === "unknown" ||
+      (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
+      (process.platform === "linux" && observedSystemdManagerUid(state) === undefined))
   ) {
     return unavailable();
   }
-  // Stable updaters through 2026.9.4 omit known-empty systemd override metadata.
-  // Keep their fingerprint while the full snapshot retains authored defaults for runtime pinning.
-  const { managedDefinition: _managedDefinition, managedOverrides, ...effectiveCommand } = command;
-  const serialized = stableStringify(
-    managedOverrides && Object.keys(managedOverrides).length === 0 ? effectiveCommand : command,
-  );
+  // Updaters through 2026.9.4 omit selection provenance and known-empty systemd overrides.
+  // Keep their fingerprint while discovery and runtime pinning retain the full snapshot.
+  const { startupEntryPaths: _startupEntryPaths, ...fingerprintCommand } = command;
+  if (!hasGatewayServiceDefinitionOverrides(fingerprintCommand)) {
+    delete fingerprintCommand.managedDefinition;
+    delete fingerprintCommand.managedOverrides;
+  }
+  const serialized = stableStringify(fingerprintCommand);
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
   }
@@ -241,6 +262,18 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     return unavailable();
   }
   if (ownsRoot === false) {
+    const serviceRoot = params.allowInstallRootChange
+      ? await resolveGatewayServiceInstallationRefreshRoot({ root, state })
+      : undefined;
+    if (serviceRoot) {
+      return {
+        kind: "owned",
+        root: serviceRoot,
+        fingerprint: sha256Hex(serialized),
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
+    }
     return { kind: "foreign" };
   }
   const fingerprint = sha256Hex(serialized);
@@ -254,23 +287,61 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     : { kind: "unresolved", root, fingerprint };
 }
 
+/** Update ownership requires the effective loaded command and an admitted manager route. */
+export function readGatewayServiceStateForUpdate(
+  service: GatewayService,
+  env: NodeJS.ProcessEnv | undefined,
+  timeoutMs?: number,
+  inspection?: { managerUid: number | undefined; assertCurrent: () => void },
+): Promise<GatewayServiceState> {
+  const read = (loadForInspection?: GatewayServiceUnitInspection) =>
+    readGatewayServiceState(service, {
+      env,
+      requireEffective: true,
+      requireLoadedCommand: true,
+      loadForInspection,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+      timeoutMs,
+    });
+  if (process.platform !== "linux" || inspection?.managerUid === undefined) {
+    return read();
+  }
+  const { managerUid } = inspection;
+  // systemd may collect a stopped unit; loading its metadata retains both owners.
+  return withGatewayServiceOperationLock(env ?? process.env, async (assertNative) => {
+    const assertCurrent = () => {
+      assertNative();
+      inspection.assertCurrent();
+    };
+    assertCurrent();
+    const state = await read({ managerUid, assertCurrent, assertReadCurrent: assertNative });
+    assertCurrent();
+    return state;
+  });
+}
+
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
-export async function readManagedGatewayServiceForUpdate(env: NodeJS.ProcessEnv) {
+export async function readManagedGatewayServiceForUpdate(
+  env: NodeJS.ProcessEnv,
+  root?: string,
+  allowInstallRootChange = false,
+) {
   return await withCommandProcessScope(async () => {
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
       service = resolveGatewayService();
-      const state = await readGatewayServiceState(service, {
-        env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, env);
       if (!state.command) {
         return null;
       }
-      const inspection = await inspectManagedGatewayServiceBeforeUpdate({ state });
-      return inspection.kind === "owned" ? { command: state.command, verdict: inspection } : null;
+      const inspection = await inspectManagedGatewayServiceBeforeUpdate({
+        state,
+        root,
+        allowInstallRootChange,
+      });
+      return inspection.kind === "owned"
+        ? { ...state, command: state.command, verdict: inspection }
+        : null;
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
         throw error;
@@ -295,7 +366,7 @@ export async function readManagedGatewayServiceForUpdate(env: NodeJS.ProcessEnv)
   });
 }
 
-type PackageRuntimePreflight = {
+export type PackageRuntimePreflight = {
   nodeRunner?: string;
   replacedNodeRunner?: string;
   targetVersion?: string;
@@ -315,6 +386,8 @@ export async function resolvePackageRuntimePreflight(params: {
   invocationCwd?: string;
   /** An already-current source checkout retains its launcher across a global-prefix switch. */
   sourceRoot?: string;
+  fallbackNodeRunner?: string;
+  runtimeRecovery?: PackageRuntimeRecovery;
 }): Promise<
   Result<PackageRuntimePreflight, string> & {
     failureFacts?: UpdateFailureFact[];
@@ -323,7 +396,11 @@ export async function resolvePackageRuntimePreflight(params: {
 > {
   return await withCommandProcessScope(async () => {
     const nodeRunner = normalizeOptionalString(
-      params.alreadyCurrent
+      params.alreadyCurrent &&
+        !(
+          params.service?.serviceUpdateVerdict?.kind === "owned" &&
+          params.service.serviceUpdateVerdict.requiresInstallRootRefresh
+        )
         ? (params.service?.serviceNodeRunner ?? params.nodeRunner)
         : params.nodeRunner,
     );
@@ -366,13 +443,14 @@ export async function resolvePackageRuntimePreflight(params: {
       params.service.serviceUpdateVerdict?.kind === "owned" &&
       params.service.serviceUpdateVerdict.refreshDefinition;
     const fallbackNodeRunner =
-      params.shouldRestart &&
+      params.fallbackNodeRunner ??
+      (params.shouldRestart &&
       nodeRunner &&
       (params.alreadyCurrent
         ? canRefreshCurrentService
         : await gatewayServiceCommandUsesRoot({ root: params.root }))
         ? resolveNodeRunner()
-        : undefined;
+        : undefined);
     if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
       const fallbackRuntime = await resolvePackageRuntimeForPreflight({
         nodeRunner: fallbackNodeRunner,
@@ -391,6 +469,22 @@ export async function resolvePackageRuntimePreflight(params: {
     }
     if (satisfies !== false) {
       return ok(unchangedRuntime);
+    }
+    if (params.runtimeRecovery && target.nodeEngine) {
+      const { resolveTargetNodeRuntime } =
+        await import("./update-command-node-runtime-resolution.js");
+      const recovered = await resolveTargetNodeRuntime({
+        engine: target.nodeEngine,
+        recovery: params.runtimeRecovery,
+        timeoutMs: params.timeoutMs,
+      });
+      if (recovered) {
+        return ok({
+          nodeRunner: recovered,
+          replacedNodeRunner: nodeRunner ?? resolveNodeRunner(),
+          targetVersion,
+        });
+      }
     }
     const runtimeLabel = runtime.nodeRunner
       ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
@@ -530,21 +624,13 @@ async function tryRealpathOrResolve(value: string): Promise<string> {
   return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
 }
 
-export function resolveManagedServiceNodeRunner(
-  command: GatewayServiceCommandConfig | null,
-): string | undefined {
-  const args = command?.programArguments ?? [];
-  // Native heap flags and dev loaders separate the executable from the entrypoint.
-  const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
-  const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
-  return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
-}
-
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  rebind?: boolean;
 }): Promise<{
   rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
   nodeRunner?: string;
   serviceUnitTarget?: string;
 }> {
@@ -559,7 +645,8 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
-  const command = (await readManagedGatewayServiceForUpdate(process.env))?.command ?? null;
+  const inspected = await readManagedGatewayServiceForUpdate(process.env);
+  const command = inspected?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
   if (!layout?.packageRootReal) {
@@ -569,14 +656,28 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   await pkgOwnership.assertUnowned(serviceRoot);
   const serviceNode = resolveManagedServiceNodeRunner(command);
   if (
+    layout.entrypointSourceCheckout &&
+    (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
+  ) {
+    return { rootRedirect: null, serviceUnitTarget };
+  }
+  if (
     serviceRoot &&
-    layout.packageRootReal &&
     layout.entrypointSourceCheckout !== true &&
     (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
   ) {
+    // Only an owned, writable definition can move from serving A to invoking B.
+    // Windows/overridden definitions retain the existing service-root update path.
+    const canRebind =
+      params.rebind !== false &&
+      process.platform !== "win32" &&
+      !hasGatewayServiceDefinitionOverrides(command) &&
+      inspected?.verdict.refreshDefinition === true;
     return {
       serviceUnitTarget,
-      rootRedirect: { root: serviceRoot, previousRoot: params.root },
+      ...(canRebind
+        ? { rootRedirect: null, serviceRoot }
+        : { rootRedirect: { root: serviceRoot, previousRoot: params.root } }),
       ...(serviceNode ? { nodeRunner: serviceNode } : {}),
     };
   }
@@ -609,66 +710,7 @@ export async function gatewayServiceCommandUsesRoot(params: {
         ? ((await readManagedGatewayServiceForUpdate(params.env ?? process.env))?.command ?? null)
         : null
       : params.command;
-  const layout = await summarizeGatewayServiceLayout(command);
-  const serviceRoot = layout?.packageRoot;
-  const serviceEntrypoint = layout?.entrypoint;
-  if (
-    !serviceRoot ||
-    !serviceEntrypoint ||
-    (!path.isAbsolute(serviceEntrypoint) && !path.win32.isAbsolute(serviceEntrypoint))
-  ) {
-    return null;
-  }
-  const [expectedRootReal, serviceRootReal] = await Promise.all([
-    tryRealpathOrResolve(expectedRoot),
-    tryRealpathOrResolve(serviceRoot),
-  ]);
-  if (expectedRootReal === serviceRootReal) {
-    return true;
-  }
-  // Paired read-only release mounts have different paths but the same directory
-  // identity. Copies of another release must remain foreign.
-  const [expected, actual] = await Promise.all(
-    [expectedRootReal, serviceRootReal].map((root) => fs.stat(root).catch(() => null)),
-  );
-  if (expected && actual && expected.dev === actual.dev && expected.ino === actual.ino) {
-    return true;
-  }
-  const managed = command?.managedDefinition;
-  if (
-    !managed ||
-    (await gatewayServiceCommandUsesRoot({ root: expectedRoot, command: managed })) !== true
-  ) {
-    return false;
-  }
-  const namespace = path.dirname(expectedRootReal);
-  const managedLayout = await summarizeGatewayServiceLayout(managed);
-  const stableEntry = path.join(
-    namespace,
-    "current",
-    "dist",
-    path.basename(managedLayout?.entrypoint ?? ""),
-  );
-  if (serviceEntrypoint !== stableEntry) {
-    return false;
-  }
-  // Deployment-owned current points into this installation's releases, either
-  // by symlink or by a paired bind mount. Unrelated namespaces remain foreign.
-  const releases = path.join(namespace, "releases");
-  if (serviceRootReal.startsWith(`${releases}${path.sep}`)) {
-    return true;
-  }
-  try {
-    for await (const entry of await fs.opendir(releases)) {
-      const candidate = await fs.lstat(path.join(releases, entry.name));
-      if (actual && candidate.dev === actual.dev && candidate.ino === actual.ino) {
-        return true;
-      }
-    }
-  } catch {
-    // Without directory identity proof, the override cannot authorize lifecycle actions.
-  }
-  return false;
+  return await gatewayServiceCommandMatchesRoot(expectedRoot, command);
 }
 
 export async function resolveUpdatedGatewayRestartPort(params: {
@@ -696,44 +738,4 @@ export async function resolveUpdatedGatewayRestartPort(params: {
     }).readBestEffortConfig();
   }
   return resolveGatewayPort(config, env);
-}
-
-/** Describe the selected plan without changing roots, runtime, or service authority. */
-export function formatManagedServicePackageUpdatePlan(params: {
-  rootRedirect: ManagedServiceRootRedirect | null;
-  nodeRunner?: string;
-}): Array<{ level: "muted" | "warn"; message: string }> {
-  const { rootRedirect, nodeRunner } = params;
-  if (rootRedirect) {
-    return [
-      {
-        level: "muted",
-        message: `Targeting managed gateway service package root: ${rootRedirect.root}`,
-      },
-      {
-        level: "warn",
-        message: `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-      },
-      {
-        level: "muted",
-        message: `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
-      },
-      ...(nodeRunner
-        ? [{ level: "muted" as const, message: `Managed gateway service Node: ${nodeRunner}` }]
-        : []),
-    ];
-  }
-  return nodeRunner
-    ? [
-        {
-          level: "warn",
-          message: `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
-        },
-        {
-          level: "muted",
-          message:
-            "Using the managed service Node for this update so the gateway can start after the upgrade.",
-        },
-      ]
-    : [];
 }

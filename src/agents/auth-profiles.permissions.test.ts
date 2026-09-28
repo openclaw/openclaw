@@ -1,5 +1,6 @@
 // Auth-profile saves must not report a failed transaction after rows became durable.
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,21 +9,6 @@ import {
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-
-const chmodFailHook = vi.hoisted(() => ({
-  error: undefined as Error | undefined,
-}));
-
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  const chmodSync: typeof actual.chmodSync = ((target: unknown, mode: unknown) => {
-    if (chmodFailHook.error) {
-      throw chmodFailHook.error;
-    }
-    return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
-  }) as typeof actual.chmodSync;
-  return { ...actual, chmodSync, default: { ...actual, chmodSync } };
-});
 
 const {
   readPersistedAuthProfileStoreRaw,
@@ -40,9 +26,22 @@ const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-a
 const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function withChmodFailure(error: Error, operation: () => void): void {
+  const chmod = vi.spyOn(fs, "chmodSync").mockImplementation(() => {
+    throw error;
+  });
+  try {
+    // Native auth-store bindings and Vitest imports must observe the same builtin failure.
+    syncBuiltinESMExports();
+    operation();
+  } finally {
+    chmod.mockRestore();
+    syncBuiltinESMExports();
+  }
+}
+
 describe("auth-profile database permission repair", () => {
   afterEach(() => {
-    chmodFailHook.error = undefined;
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
@@ -67,21 +66,20 @@ describe("auth-profile database permission repair", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(resolveAuthProfileDatabasePath(agentDir), 0o644);
     }
-    chmodFailHook.error = permissionError;
+    withChmodFailure(permissionError, () => {
+      expect(() =>
+        saveAuthProfileStoreIfPersistenceSnapshotMatches({
+          agentDir,
+          snapshot,
+          store: next,
+          options: {
+            filterExternalAuthProfiles: false,
+            syncExternalCli: false,
+          },
+        }),
+      ).toThrow(permissionError);
+    });
 
-    expect(() =>
-      saveAuthProfileStoreIfPersistenceSnapshotMatches({
-        agentDir,
-        snapshot,
-        store: next,
-        options: {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
-        },
-      }),
-    ).toThrow(permissionError);
-
-    chmodFailHook.error = undefined;
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(initial);
   });
 
@@ -103,15 +101,14 @@ describe("auth-profile database permission repair", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(resolveAuthProfileDatabasePath(agentDir), 0o644);
     }
-    chmodFailHook.error = permissionError;
+    withChmodFailure(permissionError, () => {
+      expect(() =>
+        runAuthProfileWriteTransaction(agentDir, (database) => {
+          saveAuthProfileStore(next, agentDir, undefined, database);
+        }),
+      ).toThrow(permissionError);
+    });
 
-    expect(() =>
-      runAuthProfileWriteTransaction(agentDir, (database) => {
-        saveAuthProfileStore(next, agentDir, undefined, database);
-      }),
-    ).toThrow(permissionError);
-
-    chmodFailHook.error = undefined;
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(initial);
     expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toEqual(initial);
   });

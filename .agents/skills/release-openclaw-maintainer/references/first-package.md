@@ -30,8 +30,9 @@ ClawHub package.
   first; do not create placeholder versions or a fake beta. Alpha,
   extended-stable, unselected packages, and direct stable bootstrap without the
   attested parent remain unsupported. Configure the package's GitHub trusted
-  publisher for `plugin-npm-release.yml` / `npm-release` after first publication,
-  then run its read-only OIDC preflight before the next release. Same-byte
+  publisher for `plugin-npm-release.yml` / `npm-publish` after first publication,
+  then run its read-only OIDC preflight from a protected `release-publish/*`
+  tooling tag before the next release. Same-byte
   retries do not republish; a selector mismatch needs selector recovery.
 - Bootstrap a new ClawHub package only from the trusted workflow source:
   `gh workflow run plugin-clawhub-new.yml --ref main -f plugins=@openclaw/name -f ref=<full-release-sha> -f pretag_validation=true -f dry_run=true`.
@@ -56,7 +57,10 @@ ClawHub package.
   unique terminal readback artifact and bind its main-only workflow SHA/attempt,
   target SHA, requested packages, package artifact ID/name/digest, and
   per-package SHA-256/size/npm integrity metadata. The parent approval attests a
-  separate exact trusted-main child workflow SHA; the child run and protected
-  approval must match it. Rerun-failed recovery may reuse a prior package
+  separate exact trusted-main child workflow SHA; the parent-dispatched child
+  must run it. Direct human recovery dispatches a fresh child from `main` with
+  the original child's inputs; `main` must contain the approved SHA, the
+  attested approval still binds it, the completed parent may have failed, and
+  the `clawhub-plugin-bootstrap` gate still applies. Rerun-failed recovery may reuse a prior package
   artifact only when the exact producer job succeeded. Final evidence must also
   preserve the locked ClawHub version, lock SHA-256, and npm integrity.

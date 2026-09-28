@@ -7,10 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import {
-  withPluginRuntimePluginScope,
-  withPluginRuntimeRegistryScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { copyPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -45,14 +42,13 @@ function runWithPluginToolScope<T>(
   registry: PluginRegistry,
   run: () => T,
 ): T {
-  return withPluginRuntimeRegistryScope(registry, () =>
-    withPluginRuntimePluginScope(
-      {
-        pluginId: entry.pluginId,
-        pluginSource: entry.source,
-      },
-      run,
-    ),
+  return withPluginRuntimePluginScope(
+    {
+      pluginId: entry.pluginId,
+      pluginSource: entry.source,
+    },
+    run,
+    registry,
   );
 }
 

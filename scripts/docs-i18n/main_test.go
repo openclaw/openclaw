@@ -65,6 +65,22 @@ func (errorTranslator) TranslateRaw(context.Context, string, string, string) (st
 
 func (errorTranslator) Close() {}
 
+func TestProcessFileRejectsFailedHTMLTranslation(t *testing.T) {
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "page.md")
+	if err := os.WriteFile(sourcePath, []byte("<div>Translate this text.</div>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	_, _, err := processFile(context.Background(), errorTranslator{}, tm, docsRoot, sourcePath, "en", "de")
+	if err == nil || err.Error() != "codex exec failed: exit status 1" {
+		t.Fatalf("expected HTML translation failure, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "de", "page.md")); !os.IsNotExist(err) {
+		t.Fatalf("failed translation wrote an output page: %v", err)
+	}
+}
+
 type partialFailTranslator struct{}
 
 func (partialFailTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {

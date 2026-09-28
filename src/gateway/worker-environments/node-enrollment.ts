@@ -2,7 +2,6 @@ import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { removePairedDeviceRole } from "../../infra/device-pairing.js";
 import {
@@ -39,6 +38,18 @@ type WorkerNodeEnrollmentManagerOptions = {
   now?: () => number;
 };
 
+function isProvisioningOwner(
+  current: WorkerEnvironmentRecord | undefined,
+  owner: WorkerEnvironmentRecord,
+): current is WorkerEnvironmentRecord {
+  return (
+    current?.state === "provisioning" &&
+    current.destroyRequestedAtMs === null &&
+    current.provisionOperationId === owner.provisionOperationId &&
+    current.ownerEpoch === owner.ownerEpoch
+  );
+}
+
 export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentManagerOptions) {
   const now = options.now ?? Date.now;
   const controller = new AbortController();
@@ -58,7 +69,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
       useLocalGateway: config.gateway?.mode === "remote",
-      publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
+      publicUrl: resolveConfiguredPairingPublicUrl(config),
+      publicOriginPreference: "prefer",
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
     });
@@ -90,12 +102,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     const admission = options.store.get(record.environmentId);
-    if (
-      admission?.state !== "provisioning" ||
-      admission.destroyRequestedAtMs !== null ||
-      admission.provisionOperationId !== record.provisionOperationId ||
-      admission.ownerEpoch !== record.ownerEpoch
-    ) {
+    if (!isProvisioningOwner(admission, record)) {
       throw new Error("Worker node enrollment is no longer provisioning");
     }
     // Reserve the generation before asynchronous preparation, so a stale completion
@@ -119,13 +126,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const current = () => {
       enrollmentSignal.throwIfAborted();
       const live = options.store.get(record.environmentId);
-      if (
-        active.get(record.environmentId) !== binding ||
-        live?.state !== "provisioning" ||
-        live.destroyRequestedAtMs !== null ||
-        live.provisionOperationId !== record.provisionOperationId ||
-        live.ownerEpoch !== record.ownerEpoch
-      ) {
+      if (active.get(record.environmentId) !== binding || !isProvisioningOwner(live, record)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       return live;
@@ -176,6 +177,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     bundle: TransferArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
@@ -203,17 +205,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     record: WorkerEnvironmentRecord,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeEnrollment> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
       requireCurrent();
-      let current = options.store.ensureNodeEnrollment(record.environmentId);
-      if (
-        current.state !== "provisioning" ||
-        current.destroyRequestedAtMs !== null ||
-        current.provisionOperationId !== record.provisionOperationId ||
-        current.ownerEpoch !== record.ownerEpoch
-      ) {
+      let current = await options.store.ensureNodeEnrollment(record.environmentId);
+      requireCurrent();
+      if (!isProvisioningOwner(current, record)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       let mode:
@@ -233,7 +232,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         });
         requireCurrent();
         if (issued.status === "completed") {
-          current = options.store.ensureNodeEnrollment(record.environmentId);
+          current = await options.store.ensureNodeEnrollment(record.environmentId);
+          requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }
@@ -243,8 +243,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const resolved = await resolvePairingSetupFromConfig(config, {
             env: process.env,
             useLocalGateway: config.gateway?.mode === "remote",
-            publicUrl:
-              resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
+            publicUrl: resolveConfiguredPairingPublicUrl(config),
+            publicOriginPreference: "prefer",
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
             issuedBootstrap: issued,
             localTlsFingerprint: options.getLocalTlsFingerprint?.(),
@@ -272,10 +272,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         return (
           active.get(owner.environmentId) === binding &&
           !enrollmentSignal.aborted &&
-          live?.state === "provisioning" &&
-          live.destroyRequestedAtMs === null &&
-          live.provisionOperationId === record.provisionOperationId &&
-          live.ownerEpoch === record.ownerEpoch &&
+          isProvisioningOwner(live, record) &&
           live.nodeSetupId === owner.nodeSetupId &&
           live.nodeDeviceId === owner.nodeDeviceId
         );
@@ -296,12 +293,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             enrollmentSignal.throwIfAborted();
             const live = options.store.get(owner.environmentId);
             if (
-              !live ||
-              live.destroyRequestedAtMs !== null ||
-              live.state !== "provisioning" ||
-              live.provisionOperationId !== owner.provisionOperationId ||
+              !isProvisioningOwner(live, owner) ||
               live.nodeSetupId !== owner.nodeSetupId ||
-              live.ownerEpoch !== owner.ownerEpoch ||
               active.get(owner.environmentId) !== binding
             ) {
               throw new Error("Worker node enrollment is no longer current");
@@ -311,11 +304,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
               enrollmentSignal.throwIfAborted();
               const latest = options.store.get(owner.environmentId);
               if (
-                !latest ||
-                latest.state !== "provisioning" ||
-                latest.destroyRequestedAtMs !== null ||
-                latest.provisionOperationId !== owner.provisionOperationId ||
-                latest.ownerEpoch !== owner.ownerEpoch ||
+                !isProvisioningOwner(latest, owner) ||
                 latest.nodeSetupId !== owner.nodeSetupId ||
                 latest.nodeDeviceId !== live.nodeDeviceId ||
                 active.get(owner.environmentId) !== binding

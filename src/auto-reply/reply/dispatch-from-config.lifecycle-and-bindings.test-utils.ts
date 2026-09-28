@@ -19,10 +19,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
-  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,

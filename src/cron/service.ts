@@ -66,7 +66,10 @@ export class CronService implements CronServiceContract {
     this.startInProgress += 1;
     this.state.schedulerStarted = false;
     try {
-      await lifecycleOps.start(this.state);
+      const start = () => lifecycleOps.start(this.state);
+      await (this.state.deps.runSchedulerOwned
+        ? this.state.deps.runSchedulerOwned(start)
+        : start());
       if (generation !== this.state.lifecycleGeneration) {
         lifecycleOps.stop(this.state);
         return;

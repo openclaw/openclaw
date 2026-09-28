@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
@@ -8,10 +7,12 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
@@ -170,7 +171,9 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
           await model.click();
           // A failed background refresh must not add chrome above a usable list.
-          await composer.locator('[data-chat-model-option="openai/gpt-5.4"]').waitFor();
+          await revealChatModelOption(
+            composer.locator('[data-chat-model-option="openai/gpt-5.4"]'),
+          );
           if (route === "new") {
             // An absent CLI group can mean discovery has not started, or a completed empty result.
             await expect

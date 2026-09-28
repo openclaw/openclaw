@@ -191,6 +191,7 @@ export async function isSessionCatalogThreadVisible(params: {
       cfg: config,
       fallbackAgentId: params.fallbackAgentId,
       projection,
+      sessionKeys: host.sessions.flatMap(({ sessionKey }) => (sessionKey ? [sessionKey] : [])),
     });
     const instances = new Map();
     planningEntries.captureHostInstances(host, instances);

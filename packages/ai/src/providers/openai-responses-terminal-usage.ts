@@ -23,6 +23,7 @@ export function isResponsesOutputLimitToolCallError(
       ({ type, details }) =>
         type === "openai_responses_terminal" &&
         details?.eventType === "response.incomplete" &&
+        details.stopReason === "length" &&
         details.incompleteReason === "max_output_tokens",
     ) === true
   );

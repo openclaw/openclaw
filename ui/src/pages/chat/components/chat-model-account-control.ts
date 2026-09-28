@@ -13,7 +13,7 @@ import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-acc
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
-import { highlightModelRow, pickerMenu } from "./chat-model-picker-search.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelAccountsEnglish();
 
@@ -116,11 +116,13 @@ export function renderChatModelAccountControl(params: {
           canonicalModelAuthProviderId(provider),
       )
       .flatMap((p) => p.profiles) ?? [];
-  const subscriptions = profiles.filter((p) => p.type === "oauth" || p.type === "token");
   const email = (profileId: string | undefined) =>
-    subscriptions.length > 1
-      ? subscriptions.find((p) => p.profileId === profileId)?.email
-      : undefined;
+    profiles.find((profile) => profile.profileId === profileId)?.email;
+  const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
+  const selectedLabel = selectedProfile?.displayName || selection.label;
+  const selectedIdentity = [
+    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+  ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??
     (account &&
@@ -137,7 +139,7 @@ export function renderChatModelAccountControl(params: {
     [
       {
         value: currentValue,
-        label: selection.label,
+        label: selectedLabel,
         description:
           email(currentId) ??
           description(
@@ -205,6 +207,7 @@ export function renderChatModelAccountControl(params: {
           class="chat-controls__provider-heading chat-controls__account-heading"
           type="button"
           data-chat-account-group-toggle
+          data-chat-model-group-toggle
           aria-expanded=${currentInventory.open}
           ?disabled=${params.disabled}
           @click=${() => {
@@ -225,7 +228,9 @@ export function renderChatModelAccountControl(params: {
             >${icons.users}</span
           >
           <span class="chat-controls__provider-label">${t("chat.modelAccounts.section")}</span>
-          <span class="chat-controls__account-selection">${selection.label}</span>
+          <span class="chat-controls__account-selection" title=${selectedIdentity}
+            >${selectedIdentity}</span
+          >
           <span class="chat-controls__inline-select-chevron" aria-hidden="true"
             >${currentInventory.open ? icons.chevronUp : icons.chevronDown}</span
           >
@@ -254,14 +259,7 @@ export function renderChatModelAccountControl(params: {
                 ?hidden=${!currentInventory.open}
                 aria-disabled=${option.disabled ? "true" : nothing}
                 ?disabled=${params.disabled || (option.disabled && option.value !== "more")}
-                @mouseenter=${(event: MouseEvent) => {
-                  // SAFETY: Bound to each account option button's mouseenter event.
-                  const row = event.currentTarget as HTMLButtonElement;
-                  const menu = pickerMenu(row);
-                  if (menu) {
-                    highlightModelRow(menu, row);
-                  }
-                }}
+                @mouseenter=${handleModelOptionMouseEnter}
                 @click=${(event: MouseEvent) => selectAccount(option.value, event)}
               >
                 <span class="chat-controls__model-option-provider" aria-hidden="true"

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -48,7 +48,7 @@ async function withDelayedStore(
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => storePath,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = createPluginStateKeyedStoreForTests<T>("voice-call", options);
         return {
           ...store,

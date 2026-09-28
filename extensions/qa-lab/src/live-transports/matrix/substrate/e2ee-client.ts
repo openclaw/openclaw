@@ -179,7 +179,10 @@ function createMatrixQaPluginStateKeyedStore<T>(
     lookup: async (...args) => syncStore.lookup(...args),
     lookupMany: async (...args) => syncStore.lookupMany(...args),
     consume: async (...args) => syncStore.consume(...args),
-    delete: async (...args) => syncStore.delete(...args),
+    delete: async (key, opts) => {
+      opts?.assertCurrent?.();
+      return syncStore.delete(key);
+    },
     entries: async () => syncStore.entries(),
     clear: async () => syncStore.clear(),
   };

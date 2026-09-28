@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { prepareSubagentSessionListReadCache } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -55,6 +56,7 @@ function sessionStoreTargetsFixture(params: {
           storeTarget: { agentId, storePath: params.storePath },
           entry,
           readSourceEntry,
+          resolveSourceKey: (sourceKey: string) => sourceKey,
         },
       ] as const;
     }),
@@ -74,6 +76,7 @@ export async function listSessionFixture(
     projectionTiming?: SessionListProjectionTiming;
   },
 ) {
+  await prepareSubagentSessionListReadCache();
   const store = params.entryFilter
     ? Object.fromEntries(
         Object.entries(params.store).filter(([key, entry]) => params.entryFilter!(key, entry)),

@@ -1,4 +1,5 @@
 // Memory Core tests cover tools.recall tracking plugin behavior.
+import type { MemoryCorpusSearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   clearMemoryPluginState,
@@ -127,43 +128,69 @@ describe("memory_search recall tracking", () => {
     }
   });
 
-  it("reinforces only primary results shown after corpus balancing, preserving raw evidence", async () => {
-    const rawResults = Array.from({ length: 4 }, (_, index) => ({
-      path: `memory/2026-04-0${index + 1}.md`,
-      startLine: 1,
-      endLine: 2,
-      score: 0.9 - index / 10,
-      snippet: `Remember item ${index + 1}. <!-- importance: 8 -->`,
-      source: "memory" as const,
-    }));
-    setMemorySearchImpl(async () => rawResults);
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [
-        { corpus: "wiki", path: "summary.md", score: 1, snippet: "Compiled summary." },
-      ],
-      get: async () => null,
-    });
-    const tool = createMemorySearchToolOrThrow({
-      config: {
-        memory: { citations: "on" },
-        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
-      },
-    });
+  it.each(["on", "off"] as const)(
+    "reinforces only surfaced raw evidence with citations %s",
+    async (citations) => {
+      const rawResults = Array.from({ length: 4 }, (_, index) =>
+        Object.freeze({
+          path: `memory/2026-04-0${index + 1}.md`,
+          startLine: 1,
+          endLine: 2,
+          score: 0.9 - index / 10,
+          snippet: `  Remember item ${index + 1}. <!-- importance: 8 -->`,
+          source: "memory" as const,
+        }),
+      );
+      const wiki = Object.freeze({
+        corpus: "wiki",
+        path: "summary.md",
+        score: 1,
+        snippet: "Compiled summary.",
+      });
+      setMemorySearchImpl(async () => rawResults);
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => [wiki],
+        get: async () => null,
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          memory: { citations },
+          plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+        },
+      });
 
-    const result = await tool.execute("balanced_recall", {
-      query: "remember",
-      corpus: "all",
-      maxResults: 2,
-    });
+      const result = await tool.execute("balanced_recall", {
+        query: "remember",
+        corpus: "all",
+        maxResults: 2,
+      });
 
-    await vi.dynamicImportSettled();
-    expect(result.details).toMatchObject({
-      results: [{ path: "summary.md" }, { path: "memory/2026-04-01.md" }],
-    });
-    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ results: [rawResults[0]] }),
-    );
-  });
+      await vi.dynamicImportSettled();
+      const presented = (
+        result.details as { results: Array<MemorySearchResult | MemoryCorpusSearchResult> }
+      ).results;
+      expect(presented).toEqual([
+        wiki,
+        {
+          ...rawResults[0],
+          corpus: "memory",
+          snippet:
+            citations === "on"
+              ? "  Remember item 1.\n\nSource: memory/2026-04-01.md#L1-L2"
+              : "  Remember item 1.",
+          citation: citations === "on" ? "memory/2026-04-01.md#L1-L2" : undefined,
+        },
+      ]);
+      expect(presented[1]).not.toBe(rawResults[0]);
+      expect(Object.hasOwn(presented[1]!, "citation")).toBe(true);
+      expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ results: [rawResults[0]] }),
+      );
+      expect(recallTrackingMock.recordShortTermRecalls.mock.calls[0]?.[0].results[0]).toBe(
+        rawResults[0],
+      );
+    },
+  );
 
   it("does not block tool results on slow best-effort recall writes", async () => {
     let resolveRecall: (() => void) | undefined;

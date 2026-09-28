@@ -1,11 +1,13 @@
 // Facade runtime helpers load plugin API facades from installed plugin packages.
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import {
+  isPluginSourceModulePath,
+  tryNativeRequireModule,
+} from "../plugins/native-module-require.js";
 import { getPluginCacheRoot, getPluginCacheSource } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
@@ -79,12 +81,6 @@ function resolveFacadeModuleLocation(
 
 type FacadeActivationCheckRuntimeModule = typeof import("./facade-activation-check.runtime.js");
 
-const nodeRequire = createRequire(import.meta.url);
-const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
-  "./facade-activation-check.runtime.js",
-  "./facade-activation-check.runtime.ts",
-] as const;
-
 function getFacadeActivationCheckRuntimeModule(): FacadeActivationCheckRuntimeModule | undefined {
   const cached =
     getPluginCacheSource(CURRENT_MODULE_PATH).variants.get("activation-runtime")?.exports?.value;
@@ -98,8 +94,8 @@ function setFacadeActivationCheckRuntimeModule(module: FacadeActivationCheckRunt
   });
 }
 
-function throwFacadeActivationCheckRuntimeUnavailable(): never {
-  throw new Error("Unable to load facade activation check runtime");
+function throwFacadeActivationCheckRuntimeUnavailable(cause?: unknown): never {
+  throw new Error("Unable to load facade activation check runtime", { cause });
 }
 
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
@@ -107,37 +103,28 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
   if (cached) {
     return cached;
   }
-  for (const native of [true, false]) {
-    for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
-      let loaded: FacadeActivationCheckRuntimeModule;
-      try {
-        loaded = (
-          native
-            ? nodeRequire(candidate)
-            : getCachedPluginModuleLoader({
-                modulePath: candidate,
-                importerUrl: import.meta.url,
-                loaderFilename: import.meta.url,
-                tryNative: false,
-              })(candidate)
-        ) as FacadeActivationCheckRuntimeModule;
-      } catch {
-        continue;
-      }
-      if (loaded) {
-        setFacadeActivationCheckRuntimeModule(loaded);
-        return loaded;
-      }
-      // A successful but falsy export ends this loader's candidate search.
-      break;
+  try {
+    const modulePath = fileURLToPath(
+      new URL(
+        isPluginSourceModulePath(CURRENT_MODULE_PATH)
+          ? "./facade-activation-check.runtime.ts"
+          : "./facade-activation-check.runtime.js",
+        import.meta.url,
+      ),
+    );
+    const native = tryNativeRequireModule(modulePath);
+    if (!native.ok) {
+      throw new Error(`Host facade activation runtime requires native loading: ${modulePath}`);
     }
+    const loaded = native.moduleExport as FacadeActivationCheckRuntimeModule;
+    setFacadeActivationCheckRuntimeModule(loaded);
+    return loaded;
+  } catch (error) {
+    return throwFacadeActivationCheckRuntimeUnavailable(error);
   }
-  return throwFacadeActivationCheckRuntimeUnavailable();
 }
 
-// Async twin of loadFacadeActivationCheckRuntime for async call sites: dynamic
-// import resolves the source graph under vitest where the sync createRequire/jiti
-// candidates cannot, and warms the shared memo so subsequent sync loads reuse it.
+// Async and synchronous host readers share the same native module and memo.
 async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
   const module =
     getFacadeActivationCheckRuntimeModule() ??

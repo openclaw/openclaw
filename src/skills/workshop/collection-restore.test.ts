@@ -60,6 +60,45 @@ function restore() {
 }
 
 describe("skill collection backup and restore", () => {
+  it("retains matching skill and backup roots when the caller changes its agent directory", async () => {
+    const header = "---\nname: procedure\ndescription: Procedure\n---\n\n";
+    const originalA = header + "# Original A\n";
+    const originalB = header + "# Original B\n";
+    const sharedReviewed = header + "# Shared reviewed content\n";
+    const agentDirA = state.agentDir("main");
+    const agentDirB = state.path("other-agent");
+    const seedAgentBackup = async (agentDir: string, original: string) => {
+      const config = { agents: { list: [{ id: "main", agentDir }] } };
+      const root = resolveWorkshopSkillsDir(config, "main", state.env);
+      const backups = resolveSkillCollectionBackupRoot(config, "main", state.env);
+      const file = path.join(root, "procedure", "SKILL.md");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, original, "utf8");
+      await seedLegacyCollectionBackup(root, backups, () =>
+        fs.writeFile(file, sharedReviewed, "utf8"),
+      );
+      return file;
+    };
+    const fileA = await seedAgentBackup(agentDirA, originalA);
+    const fileB = await seedAgentBackup(agentDirB, originalB);
+    const agent = { id: "main", agentDir: agentDirA };
+    const config = { agents: { list: [agent] } };
+
+    const restoring = restoreLatestSkillCollectionBackup({
+      workspaceDir: skillsRoot,
+      config,
+      agentId: "main",
+      env: state.env,
+    });
+    agent.agentDir = agentDirB;
+    const result = await restoring;
+
+    expect(result.restored).toEqual(["procedure"]);
+    expect(result.removed).toEqual([]);
+    await expect.soft(fs.readFile(fileA, "utf8")).resolves.toBe(originalA);
+    await expect.soft(fs.readFile(fileB, "utf8")).resolves.toBe(sharedReviewed);
+  });
+
   it("restores updates and drops, removes review-created skills, and preserves later files", async () => {
     const updated = await writeSkill("updated", "# Original\n");
     await writeSkill("dropped", "# Dropped\n");
@@ -141,7 +180,7 @@ describe("skill collection backup and restore", () => {
     await expect(fs.readFile(file, "utf8")).resolves.toContain("# Reviewed");
   });
 
-  it.each(["unchanged", "edited", "file-deleted", "subtree-deleted"])(
+  it.each(["edited", "file-deleted", "subtree-deleted"])(
     "preserves a legacy backup with %s deep content when its digest cannot be verified",
     async (deepContent) => {
       const file = await writeSkill("procedure", "# Original\n");
@@ -171,7 +210,7 @@ describe("skill collection backup and restore", () => {
         path.join(savedSkill, "SKILL.md"),
         savedDeep,
         path.join(backupDir, "manifest.json"),
-        ...(["unchanged", "edited"].includes(deepContent) ? [currentDeep] : []),
+        ...(deepContent === "edited" ? [currentDeep] : []),
       ];
       const before = await Promise.all(files.map((entry) => fs.readFile(entry)));
       dispatchChange.mockClear();

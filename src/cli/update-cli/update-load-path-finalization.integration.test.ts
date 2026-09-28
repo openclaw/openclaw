@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import * as ledger from "../../infra/update-run-ledger.js";
+import * as interruption from "../../infra/update-run-interruption.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -53,6 +53,11 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
       await fs.writeFile(
         state.path("package.json"),
         JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+      );
+      await fs.mkdir(state.path("dist"));
+      await fs.writeFile(
+        state.path("dist/build-info.json"),
+        JSON.stringify({ buildId: "installed-candidate-build" }),
       );
       const pluginId = "local-provider";
       const localDir = state.statePath("plugins-local", pluginId);
@@ -124,12 +129,8 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           }
           const initialParent = getUpdateRun(parent.runId);
           if (command === "resume-write-failure") {
-            const recordStep = ledger.recordUpdateRunStep;
-            vi.spyOn(ledger, "recordUpdateRunStep").mockImplementation((...args) => {
-              if (args[1].step.startsWith("warning:finalize:plugins:")) {
-                throw new Error("synthetic update history is busy");
-              }
-              return recordStep(...args);
+            vi.spyOn(interruption, "recordPostCoreUpdateEvidence").mockImplementation(() => {
+              throw new Error("synthetic update history is busy");
             });
           }
           const resultPath = state.path("plugins-result.json");
@@ -139,6 +140,17 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
               // A published parent can terminate its child as soon as this file appears.
               if (recordsWarning) {
                 expect(getUpdateRun(parent.runId)?.steps).toContainEqual(expectedStep);
+                expect(getUpdateRun(parent.runId)?.steps).toContainEqual(
+                  expect.objectContaining({
+                    step: "finalize:installed-candidate",
+                    status: "completed",
+                    detail: JSON.stringify({
+                      version: "2026.9.4",
+                      buildId: "installed-candidate-build",
+                    }),
+                  }),
+                );
+                expect(getUpdateRun(parent.runId)?.after).toEqual({});
               } else {
                 expect(getUpdateRun(parent.runId)).toEqual(initialParent);
               }
@@ -166,10 +178,12 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           });
           expect(getUpdateRun(parent.runId)?.status).toBe("running");
           if (!recordsWarning) {
+            const reason =
+              command === "resume-unowned"
+                ? "Cannot verify a live parent for the inherited update history."
+                : "synthetic update history is busy";
             expect(errors).toHaveBeenCalledWith(
-              expect.stringContaining(
-                "Plugin update warnings could not be saved to update history",
-              ),
+              `Post-core update evidence could not be saved: ${reason} Update completion may require Doctor verification.`,
             );
           }
           // Published parents close their run without projecting plugin warning rows.

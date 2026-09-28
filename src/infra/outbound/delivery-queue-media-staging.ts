@@ -8,10 +8,11 @@ import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   createDeliveryQueueMediaRetentionInDatabase,
-  loadDeliveryQueueMediaRetentionSnapshotInDatabase,
+  type loadDeliveryQueueMediaRetentionSnapshotInDatabase,
 } from "./delivery-queue-media-staging.kernel.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 
@@ -47,12 +48,12 @@ export function cancelDeliveryQueueMediaRetention(
 }
 
 /** Captures staging expiry and all media custody on the same connection. */
-export function loadDeliveryQueueMediaRetentionSnapshot(
+export async function loadDeliveryQueueMediaRetentionSnapshot(
   params: { expireBeforeMs: number; stateDir?: string },
   context?: DeliveryQueueStateContext,
-): ReturnType<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase> {
-  return loadDeliveryQueueMediaRetentionSnapshotInDatabase(
-    openOpenClawStateDatabase({ env: resolveDeliveryQueueStateEnv(params.stateDir, context) }),
-    params,
-  );
+): Promise<ReturnType<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>> {
+  return executeDeliveryQueueOperation(context, params.stateDir, {
+    type: "deliveryQueue.mediaRetentionSnapshot",
+    input: { expireBeforeMs: params.expireBeforeMs },
+  });
 }

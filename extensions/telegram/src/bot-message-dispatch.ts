@@ -1,19 +1,16 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
   createDeliveryState,
   deliverFallback,
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
-import {
-  cleanupDrafts,
-  createDraftState,
-  prepareAnswerLaneForToolProgress,
-  waitForDraftEvents,
-} from "./bot-message-dispatch-draft.js";
-import { createProgressState } from "./bot-message-dispatch-progress.js";
+import { cleanupDrafts, createDraftState } from "./bot-message-dispatch-draft.js";
+import { createProgressState, settleFailedFinalDelivery } from "./bot-message-dispatch-progress.js";
 import { createReplyState } from "./bot-message-dispatch-reply.js";
 import {
   createFreshTelegramSessionEntryLoader,
@@ -33,7 +30,6 @@ import {
   getAgentScopedMediaLocalRoots,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
-  resolveMarkdownTableMode,
 } from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
@@ -46,6 +42,7 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -88,7 +85,7 @@ function includeStickerDescription(params: {
 }
 
 function resolveTelegramQuoteContext(params: {
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
   replyToMode: DispatchTelegramMessageParams["replyToMode"];
 }) {
   const { context, replyToMode } = params;
@@ -163,7 +160,7 @@ function resolveTelegramQuoteContext(params: {
 
 async function prepareTelegramSticker(params: {
   cfg: DispatchTelegramMessageParams["cfg"];
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
@@ -225,7 +222,7 @@ async function prepareTelegramSticker(params: {
 function scheduleDmTopicLabel(params: {
   bot: DispatchTelegramMessageParams["bot"];
   cfg: DispatchTelegramMessageParams["cfg"];
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
   isFirstTurnInSession: boolean;
   telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
 }) {
@@ -292,18 +289,19 @@ export const dispatchTelegramMessage = async (
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
-  const dispatchContext = resolveDispatchTelegramContext({ context });
+  const dispatchContext = await resolveDispatchTelegramContext({ context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
-  const tableMode = resolveMarkdownTableMode({
+  const richMessagesParams = {
     cfg,
-    channel: "telegram",
     accountId: dispatchContext.route.accountId,
-    supportsBlockTables: telegramCfg.richMessages === true,
-  });
+    accountConfig: telegramCfg,
+  };
+  const richMessages = resolveTelegramRichMessages(richMessagesParams);
+  const tableMode = resolveTelegramTableMode(richMessagesParams);
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
@@ -337,16 +335,13 @@ export const dispatchTelegramMessage = async (
     replyQuotePosition: quote.replyQuotePosition,
     replyQuoteText: quote.replyQuoteText,
     resolvedReasoningLevel,
+    richMessages,
     statusReactionController: status.controller,
     tableMode,
     telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
-  const progressState = createProgressState(
-    turnConfig,
-    draftState,
-    async () => await prepareAnswerLaneForToolProgress(turn),
-  );
+  const progressState = createProgressState(turnConfig, draftState, () => turn);
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
   const turn: TelegramDispatchTurn = {
     ...turnConfig,
@@ -354,7 +349,7 @@ export const dispatchTelegramMessage = async (
     ...progressState,
     ...deliveryState,
     ...createReplyState(),
-    queuedFinal: false,
+    finalDispatchClaimed: false,
     noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
@@ -397,15 +392,21 @@ export const dispatchTelegramMessage = async (
       turnDispatched = await runTelegramDispatchTurn(turn);
     } catch (err) {
       turn.dispatchError = err;
+      turn.previewLifecycle.observeFailure(
+        isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+      );
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
       // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
       turn.progressCompositor.cancel();
-      await waitForDraftEvents(turn);
+      await turn.draftEventQueue;
       try {
         await finalizePendingAnswerBlockDraft(turn);
       } catch (err) {
         turn.dispatchError ??= err;
+        turn.previewLifecycle.observeFailure(
+          isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+        );
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
       await cleanupDrafts(turn, isDispatchSuperseded());
@@ -424,18 +425,24 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  const deliverySummary = turn.deliveryState.snapshot();
+  let deliverySummary = turn.deliveryState.snapshot();
+  if (!turn.sendPolicyDenied && deliverySummary.failedNonSilent > 0) {
+    await settleFailedFinalDelivery(turn);
+    deliverySummary = turn.deliveryState.snapshot();
+  }
   let sentFallback = false;
   const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
-    turn.finalReplyOutcome !== "suppressed" &&
+    !turn.previewLifecycle.finalSuppressed &&
     !turn.sendPolicyDenied &&
+    !turn.finalDispatchClaimed &&
     (!suppressFailureFallback || turn.agentRunFailed) &&
-    !turn.finalAnswerDelivered &&
+    !turn.previewLifecycle.finalDelivered &&
     (terminalFailure ||
-      deliverySummary.failedNonSilent > 0 ||
-      (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback));
+      (!turn.progressContinuationAdopted &&
+        (deliverySummary.failedNonSilent > 0 ||
+          (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
     const fallbackText = terminalFailure
       ? "Something went wrong while processing your request. Please try again."
@@ -451,12 +458,12 @@ export const dispatchTelegramMessage = async (
 
   if (
     !sentFallback &&
-    turn.finalReplyOutcome !== "suppressed" &&
+    !turn.previewLifecycle.finalSuppressed &&
     !turn.sendPolicyDenied &&
     !turn.dispatchError &&
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&
-    !turn.queuedFinal &&
+    !turn.finalDispatchClaimed &&
     turn.noVisibleReplyFallbackEligible
   ) {
     sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
@@ -464,27 +471,28 @@ export const dispatchTelegramMessage = async (
     silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
       hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),
       hasChatId: dispatchContext.chatId != null,
-      queuedFinal: turn.queuedFinal,
+      finalDispatchClaimed: turn.finalDispatchClaimed,
       sentFallback,
     });
   }
 
+  const intentionalNoResponse =
+    turn.previewLifecycle.finalSuppressed ||
+    turn.sendPolicyDenied ||
+    turn.suppressSilentReplyFallback;
   const hasFinalResponse =
-    turn.finalReplyOutcome === "suppressed" ||
-    turn.finalAnswerDelivered ||
-    sentFallback ||
-    turn.suppressSilentReplyFallback ||
-    turn.queuedFinal;
-  const hasVisibleResponse =
-    turn.finalReplyOutcome === "suppressed" ||
-    deliverySummary.delivered ||
-    sentFallback ||
-    turn.suppressSilentReplyFallback ||
-    turn.queuedFinal;
+    intentionalNoResponse ||
+    turn.previewLifecycle.finalDelivered ||
+    turn.progressContinuationAdopted ||
+    sentFallback;
+  const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
-    turn.finalReplyOutcome !== "suppressed" &&
-    !turn.finalAnswerDelivered &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
+    !intentionalNoResponse &&
+    !turn.previewLifecycle.finalDelivered &&
+    !turn.progressContinuationAdopted &&
+    (turn.previewLifecycle.finalFailed ||
+      deliverySummary.skippedNonSilent > 0 ||
+      deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     turn.dispatchError ??
     (deliveryFailureWithoutFinalResponse
@@ -493,17 +501,18 @@ export const dispatchTelegramMessage = async (
         )
       : null);
 
-  if (status.controller && !hasVisibleResponse) {
+  if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
     status.finalizeInBackground({ outcome: "error" }, "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
+    !turn.finalDispatchClaimed &&
     ((turn.dispatchError != null && !hasFinalResponse) ||
       (turn.dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
-  if (!hasVisibleResponse) {
+  if (!hasVisibleResponse && !intentionalNoResponse) {
     return { kind: "completed" };
   }
 
@@ -520,7 +529,9 @@ export const dispatchTelegramMessage = async (
         outcome:
           turn.agentRunFailed ||
           turn.dispatchError != null ||
-          (!turn.finalAnswerDelivered && sentFallback)
+          turn.previewLifecycle.finalFailed ||
+          (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+          sentFallback
             ? "error"
             : "done",
       },

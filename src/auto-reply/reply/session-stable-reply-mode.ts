@@ -22,7 +22,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";

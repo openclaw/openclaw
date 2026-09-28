@@ -1,8 +1,8 @@
 // Xai API module exposes the plugin public contract.
-import {
+export {
   applyXaiModelCompat,
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  normalizeNativeXaiModelId,
+  normalizeNativeXaiModelId as normalizeXaiModelId,
   XAI_TOOL_SCHEMA_PROFILE,
 } from "./model-compat.js";
 
@@ -22,7 +22,4 @@ export {
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 export { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-export { applyXaiModelCompat, HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING, XAI_TOOL_SCHEMA_PROFILE };
 export { resolveXaiTransport } from "./provider-routing.js";
-
-export { normalizeNativeXaiModelId as normalizeXaiModelId };

@@ -5,7 +5,10 @@
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
@@ -135,6 +138,23 @@ class ProviderErrorBodyTimeout extends Error {
     this.name = "ProviderErrorBodyTimeout";
     this.timeoutError = timeoutError;
   }
+}
+
+/** Summarizes transport failures before the logger applies diagnostic redaction. */
+export function summarizeProviderTransportError(error: unknown): string {
+  const record = asOptionalObjectRecord(error);
+  if (!record) {
+    return `type=${typeof error}`;
+  }
+  const cause = asOptionalObjectRecord(record.cause);
+  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
+  return [
+    `name=${read(record.name)}`,
+    `code=${read(record.code)}`,
+    `causeName=${read(cause?.name)}`,
+    `causeCode=${read(cause?.code)}`,
+    `message=${error instanceof Error ? error.message : read(record.message)}`,
+  ].join(" ");
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
@@ -374,22 +394,18 @@ export async function createProviderHttpError(
   label: string,
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpError> {
-  const info = await extractProviderErrorInfo(response, options);
+  const { detail, ...info } = await extractProviderErrorInfo(response, options);
   return new ProviderHttpError(
     formatProviderHttpErrorMessage({
       label,
       status: response.status,
-      detail: info.detail,
+      detail,
       requestId: info.requestId,
       statusPrefix: options?.statusPrefix,
     }),
     {
       status: response.status,
-      code: info.code,
-      type: info.type,
-      body: info.body,
-      requestId: info.requestId,
-      retryAfterMs: info.retryAfterMs,
+      ...info,
     },
   );
 }

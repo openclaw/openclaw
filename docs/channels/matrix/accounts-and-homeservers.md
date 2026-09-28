@@ -149,6 +149,9 @@ Matrix accepts these target forms anywhere OpenClaw asks for a room or user targ
 
 Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw keeps internal session keys canonical for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
 
+Config-backed peer and group listings use the selected account's allowlists and
+configured rooms without loading stored Matrix credentials.
+
 Live directory lookup uses the logged-in Matrix account:
 
 - User lookups query the Matrix user directory on that homeserver.

@@ -1,6 +1,17 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { extractErrorHttpStatus, parseApiErrorInfo } from "../../shared/assistant-error-format.js";
-import { isSessionTranscriptValidationErrorMessage } from "./message-patterns.js";
+import {
+  extractErrorHttpStatus,
+  formatTransportErrorCopy,
+  parseApiErrorInfo,
+} from "../../shared/assistant-error-format.js";
+import { classifyFailoverSignalCore } from "./classify-core.js";
+import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
+import {
+  isServerErrorMessage,
+  isSessionTranscriptValidationErrorMessage,
+} from "./message-patterns.js";
+import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
 
 export const ERROR_PREFIX_RE =
@@ -153,4 +164,61 @@ export function renderAssistantFormatFailureCopy(message: {
     }
   }
   return undefined;
+}
+
+/** Classify saved error facts without loading providers or publishing their raw diagnostics. */
+export function renderRecordedAssistantFailureCopy(message: {
+  errorMessage?: unknown;
+  errorBody?: unknown;
+  errorCode?: unknown;
+  errorType?: unknown;
+}): string | undefined {
+  const formatCopy = renderAssistantFormatFailureCopy(message);
+  if (formatCopy) {
+    return formatCopy;
+  }
+  const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+  if (raw === "Worker inference result exceeds the transcript message limit.") {
+    return "The worker could not save the model response because it exceeded the message size limit. Retry with a smaller response or continue on the Gateway. Earlier actions may have completed; verify their results before continuing.";
+  }
+  if (
+    raw ===
+    "Cloud worker could not preserve authoritative provider replay. Stop or reclaim the cloud worker, then retry locally."
+  ) {
+    return "The worker could not preserve the model's continuation data. Stop or reclaim the worker, then retry on the Gateway. Earlier actions may have completed; verify their results before continuing.";
+  }
+  const info = parseApiErrorInfo(raw);
+  const code = typeof message.errorCode === "string" ? message.errorCode : info?.code;
+  const status = extractErrorHttpStatus(raw)?.code;
+  const classification = classifyFailoverSignalCore({
+    message: raw,
+    code,
+    errorType: typeof message.errorType === "string" ? message.errorType : info?.type,
+    status,
+    details: extractFailoverSignalDetails(message.errorBody),
+  });
+  if (
+    classification?.kind === "context_overflow" ||
+    [message.errorCode, message.errorType, raw].some(
+      (value) =>
+        typeof value === "string" &&
+        (normalizeLowercaseStringOrEmpty(value) === "context_overflow" ||
+          isContextOverflowErrorFromTables(value)),
+    )
+  ) {
+    return "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
+  }
+  const classifiedCopy = renderAssistantRequestFailureCopy({
+    code,
+    status,
+    // The legacy timeout retry bucket also includes explicit server failures.
+    reason:
+      classification?.reason === "timeout" && isServerErrorMessage(raw)
+        ? "server_error"
+        : classification?.reason,
+  });
+  if (status !== undefined || (classification && classification.reason !== "timeout")) {
+    return classifiedCopy;
+  }
+  return formatTransportErrorCopy([raw, code].filter(Boolean).join(" ")) ?? classifiedCopy;
 }

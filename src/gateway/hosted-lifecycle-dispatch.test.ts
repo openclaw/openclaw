@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readLatestAssistantReply } from "../agents/run-wait.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { deleteCronSessionViaGateway } from "../cron/isolated-agent/session-cleanup.js";
@@ -25,6 +24,7 @@ import {
   getInProcessGatewayRequestContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { bindGatewayLifecycleRequest } from "./server-recovery-runtime-context.js";
 
 const socketCall = vi.spyOn(gatewayCall, "callGateway");
 afterAll(() => socketCall.mockRestore());
@@ -118,7 +118,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     );
     const cleanup = () =>
       deleteSubagentSessionForCleanup({
-        callGateway: subagentRegistryDeps.callGateway,
+        callGateway: (request) => bindGatewayLifecycleRequest()(request),
         gatewayBinding: { resolveGatewayContext },
         childSessionKey: "agent:main:subagent:child",
         expectedSessionId: "child-session",
@@ -176,7 +176,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     let current = true;
     const cleanup = () =>
       deleteSubagentSessionForCleanup({
-        callGateway: subagentRegistryDeps.callGateway,
+        callGateway: (request) => bindGatewayLifecycleRequest()(request),
         gatewayBinding: { resolveGatewayContext: () => context },
         childSessionKey: "agent:main:subagent:child",
         expectedSessionId: "child-session",

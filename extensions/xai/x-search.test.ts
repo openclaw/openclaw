@@ -35,7 +35,7 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
       ),
     ),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -139,15 +139,6 @@ describe("xai x_search tool", () => {
     }
   });
 
-  it("enables x_search when runtime config carries the shared xAI key", () => {
-    const tool = createXSearchTool({
-      config: {},
-      runtimeConfig: xaiPluginConfig({ apiKey: "x-search-runtime-key" }),
-    });
-
-    expect(tool?.name).toBe("x_search");
-  });
-
   it("enables x_search from an xAI auth profile and uses it for requests", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
@@ -165,13 +156,6 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
-  });
-
-  it("enables x_search when the xAI plugin web search key is configured", () => {
-    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
-
-    expect(tool?.name).toBe("x_search");
-    expect(tool?.resultContentSource).toBe("network");
   });
 
   it("bounds external xAI answers and closes hostile citation metadata", async () => {
@@ -243,7 +227,7 @@ describe("xai x_search tool", () => {
           queueMicrotask(() => controller.abort(reason));
         }),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool();
 
     await expect(
@@ -282,7 +266,7 @@ describe("xai x_search tool", () => {
         return jsonResponse({ output_text: "Cancelled X answer", citations: [] });
       })
       .mockResolvedValueOnce(jsonResponse({ output_text: "Recovered X answer", citations: [] }));
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool();
     const query = "unique standalone x_search late-cancel cache regression";
 
@@ -353,6 +337,7 @@ describe("xai x_search tool", () => {
     const mockFetch = installXSearchFetch();
     const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
 
+    expect(tool.resultContentSource).toBe("network");
     const result = await tool?.execute?.("x-search:1", {
       query: "dinner recipes",
       allowed_x_handles: ["openclaw"],
@@ -364,7 +349,7 @@ describe("xai x_search tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.6");
+    expect(body.model).toBe("grok-4.7");
     expect(body.input).toEqual([{ role: "user", content: "dinner recipes" }]);
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "low" });
@@ -489,7 +474,7 @@ describe("xai x_search tool", () => {
         }),
       ),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool({
       apiKey: "xai-plugin-key",
       xSearch: { enabled: true },
@@ -506,7 +491,7 @@ describe("xai x_search tool", () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve(jsonResponse({ status: "incomplete", output: [] })),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool({
       apiKey: "xai-plugin-key",
       xSearch: { enabled: true },

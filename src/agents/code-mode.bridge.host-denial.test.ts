@@ -101,8 +101,8 @@ function createHostHarness(
 }
 
 describe("Code Mode subscribed host denial", () => {
-  afterEach(() => {
-    resetCodeModeTestState();
+  afterEach(async () => {
+    await resetCodeModeTestState();
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
     vi.restoreAllMocks();

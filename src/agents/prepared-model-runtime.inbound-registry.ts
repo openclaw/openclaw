@@ -156,7 +156,9 @@ export function prepareWorkspacePluginRegistries(
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
   getConfiguredHarnessRuntimes?: () => readonly string[],
   basePluginIds?: readonly string[],
-  registryResources?: PreparedModelRuntimeBuildResources,
+  loadRuntimeRegistry:
+    | PreparedModelRuntimeBuildResources["load"]
+    | typeof loadAgentRuntimePluginRegistryHandle = loadAgentRuntimePluginRegistryHandle,
   purpose?: RuntimePluginLoadPurpose,
 ): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
   // Passive reads stay runtime-free; catalog workers and executable probes carry explicit scope.
@@ -190,9 +192,6 @@ export function prepareWorkspacePluginRegistries(
   }
   primaryRegistry ??= reusableGeneration?.mediaCapabilityProviderSource?.registry ?? baseRegistry;
   let loadedPrimaryRegistry: PluginRegistry | undefined;
-  const loadRuntimeRegistry = registryResources
-    ? registryResources.load.bind(registryResources)
-    : loadAgentRuntimePluginRegistryHandle;
   const runtimePluginRegistry =
     purpose === "model-catalog" || input.runtimePluginSelections || !baseRegistry
       ? loadRuntimeRegistry(

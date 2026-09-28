@@ -25,7 +25,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
   @property({ attribute: false })
-  onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
+  onMenuPointerMove?: (trigger: HTMLElement, event: PointerEvent) => void;
   @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
   private readonly avatarLoader = new IdentityAvatarController(this);
@@ -49,9 +49,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
           aria-label="${this.agentName} · ${menuLabel}"
-          @pointerenter=${(event: PointerEvent) => {
+          @pointermove=${(event: PointerEvent) => {
             if (this.switcherAvailable && event.currentTarget instanceof HTMLElement) {
-              this.onMenuPointerEnter?.(event.currentTarget, event);
+              this.onMenuPointerMove?.(event.currentTarget, event);
             }
           }}
           @pointerleave=${() => this.onMenuPointerLeave?.()}

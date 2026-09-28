@@ -41,7 +41,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent) =>
+      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
         actual.withSqliteReclamationWorker(
           options,
           claim,
@@ -51,7 +51,9 @@ vi.mock(
               originalRun({
                 ...params,
                 onCommitRequest: () => {
-                  checkpoint.startForeground?.();
+                  if (params.plan.kind === "entry") {
+                    checkpoint.startForeground?.();
+                  }
                   return params.onCommitRequest();
                 },
               }),
@@ -63,6 +65,7 @@ vi.mock(
             }
           },
           assertRequestCurrent,
+          signal,
         )) satisfies typeof actual.withSqliteReclamationWorker,
     };
   },
@@ -218,7 +221,7 @@ describe("agent session persistence during reclamation", () => {
         published.push(event.message.customType);
       }
     });
-    checkpoint.startForeground = () => {
+    checkpoint.startForeground = vi.fn(() => {
       const message = {
         customType: "admission-proof",
         content: "The unrelated transcript write must settle.",
@@ -229,7 +232,7 @@ describe("agent session persistence during reclamation", () => {
       message.content = "Caller changed the input after submission.";
       // Publication must wait for this operation's writer admission to settle.
       publishedDuringCommitAuthorization = [...published];
-    };
+    });
     const deletion = await deleteSessionEntryLifecycle({
       archiveTranscript: true,
       commitGuard: () => {},
@@ -241,6 +244,7 @@ describe("agent session persistence during reclamation", () => {
     );
     const outcomes = await Promise.allSettled(write ? [write] : []);
     expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(checkpoint.startForeground).toHaveBeenCalledOnce();
     expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(publishedDuringCommitAuthorization).toEqual([]);
     expect(published).toEqual(["admission-proof"]);

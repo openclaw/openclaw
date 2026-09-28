@@ -10,7 +10,3 @@ export const MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE = [
   "Then run `openclaw configure` and choose llama.cpp to set up the managed llama-server.",
   "Then restart OpenClaw and retry: openclaw memory status --deep",
 ].join("\n");
-
-export function createMissingLocalMemoryEmbeddingProviderError(): Error {
-  return new Error(MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE);
-}

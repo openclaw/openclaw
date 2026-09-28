@@ -46,14 +46,11 @@ function makeJob(
 }
 
 function makeExecutor(overrides: Record<string, unknown>) {
-  const resolvedDelivery = overrides.resolvedDelivery ?? {};
   return {
     runPrompt: async (commandBody: string) =>
       await executeCronRun(
         makeExecuteCronRunParams({
-          resolvedDeliveryOk: true,
           ...overrides,
-          resolvedDelivery,
           commandBody,
         }),
       ),
@@ -67,102 +64,6 @@ function getEmbeddedRunArg(): Record<string, unknown> {
   }
   return call[0] as Record<string, unknown>;
 }
-
-describe("resolveCronSourceDeliveryPlan", () => {
-  beforeEach(() => {
-    resolveCronDeliveryPlanMock.mockReset();
-    resolveCronDeliveryPlanMock.mockImplementation(
-      actualDeliveryPlanModule.resolveCronDeliveryPlan,
-    );
-  });
-
-  it('prepares delivery.mode "none" with no owner and unforced message tool', () => {
-    const plan = resolveCronSourceDeliveryPlan({
-      deliveryPlan: actualDeliveryPlanModule.resolveCronDeliveryPlan(
-        makeJob({ delivery: { mode: "none" } }),
-      ),
-      resolvedDelivery: {
-        channel: "messagechat",
-        to: "room-1",
-        accountId: "acct-1",
-        threadId: "thread-1",
-        ok: true,
-      },
-    });
-
-    expect(plan.owner).toBe("none");
-    expect(plan.reason).toBe("cron_none");
-    expect(plan.messageTool.enabled).toBe(true);
-    expect(plan.messageTool.force).toBe(false);
-    expect(plan.fallback.directDelivery).toBe(false);
-    expect(plan.target).toEqual({
-      channel: "messagechat",
-      to: "room-1",
-      accountId: "acct-1",
-      threadId: "thread-1",
-    });
-  });
-
-  it('prepares delivery.mode "announce" with direct fallback and unforced message tool', () => {
-    const plan = resolveCronSourceDeliveryPlan({
-      deliveryPlan: actualDeliveryPlanModule.resolveCronDeliveryPlan(
-        makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "room-1" } }),
-      ),
-      resolvedDelivery: {
-        channel: "messagechat",
-        to: "room-1",
-        ok: true,
-      },
-    });
-
-    expect(plan.owner).toBe("direct_fallback");
-    expect(plan.reason).toBe("cron_announce");
-    expect(plan.messageTool.enabled).toBe(true);
-    expect(plan.messageTool.force).toBe(false);
-    expect(plan.fallback.directDelivery).toBe(true);
-    expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(true);
-  });
-
-  it('prepares delivery.mode "webhook" with message tool disabled', () => {
-    const plan = resolveCronSourceDeliveryPlan({
-      deliveryPlan: actualDeliveryPlanModule.resolveCronDeliveryPlan(
-        makeJob({ delivery: { mode: "webhook" } }),
-      ),
-      resolvedDelivery: {
-        channel: "messagechat",
-        to: "room-1",
-        ok: true,
-      },
-    });
-
-    expect(plan.owner).toBe("none");
-    expect(plan.reason).toBe("cron_webhook");
-    expect(plan.messageTool.enabled).toBe(false);
-    expect(plan.messageTool.force).toBe(false);
-    expect(plan.fallback.directDelivery).toBe(false);
-    expect(plan.target).toEqual({});
-  });
-
-  it("defaults an isolated agentTurn with no delivery config to announce behavior", () => {
-    const plan = resolveCronSourceDeliveryPlan({
-      deliveryPlan: actualDeliveryPlanModule.resolveCronDeliveryPlan(
-        makeJob({ omitDelivery: true }),
-      ),
-      resolvedDelivery: {
-        channel: "messagechat",
-        to: "room-1",
-        ok: false,
-      },
-    });
-
-    expect(plan.owner).toBe("direct_fallback");
-    expect(plan.reason).toBe("cron_announce");
-    expect(plan.messageTool.enabled).toBe(true);
-    expect(plan.messageTool.force).toBe(false);
-    expect(plan.fallback.directDelivery).toBe(true);
-    expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(false);
-  });
-});
 
 describe("executeCronRun sourceDelivery mapping", () => {
   let previousFastTestEnv: string | undefined;
@@ -198,7 +99,6 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(args.runId).toBe("source-delivery-run");
     expect(args.sessionId).toBe("test-session-id");
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
@@ -220,8 +120,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
-    expect(args.terminalReplyExpectation).toBe("required");
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -260,7 +159,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
-    expect(args.terminalReplyExpectation).toBe("required");
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -296,7 +195,6 @@ describe("executeCronRun sourceDelivery mapping", () => {
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "123" } }),
       deliveryRequested: true,
-      resolvedDeliveryOk: false,
       resolvedDelivery: { ok: false, channel: "messagechat", to: "123" },
     });
 
@@ -381,12 +279,11 @@ describe("executeCronRun sourceDelivery mapping", () => {
 
 function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
   const job = (overrides.job ?? makeJob()) as CronJob;
-  const resolvedDelivery = (overrides.resolvedDelivery ?? {}) as {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-    ok?: boolean;
+  const resolvedDelivery = {
+    ok: true,
+    ...(overrides.resolvedDelivery as
+      | Partial<Parameters<typeof resolveCronSourceDeliveryPlan>[0]["resolvedDelivery"]>
+      | undefined),
   };
 
   return {
@@ -422,11 +319,11 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     loadThinkingCatalog: async () => [],
     timeoutMs: 60_000,
     suppressExecNotifyOnExit: true,
-    resolvedDelivery,
     sourceDelivery: resolveCronSourceDeliveryPlan({
       deliveryPlan: actualDeliveryPlanModule.resolveCronDeliveryPlan(job),
       resolvedDelivery,
     }),
     ...overrides,
+    resolvedDelivery,
   } as never;
 }

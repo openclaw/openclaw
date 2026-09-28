@@ -22,13 +22,6 @@ internal val WearChatMessage.chatRole: WearChatRole
       else -> WearChatRole.SYSTEM
     }
 
-internal data class WearAgentSummary(
-  val id: String,
-  val name: String,
-  val emoji: String?,
-  val selected: Boolean,
-)
-
 internal data class WearSessionSummary(
   val id: String,
   val title: String?,
@@ -44,7 +37,10 @@ internal data class WearModelSummary(
 
 internal data class WearConversationSnapshot(
   val gatewayState: WearGatewayState,
-  val agents: List<WearAgentSummary> = emptyList(),
+  val phoneNodeId: String? = null,
+  val activeAgentId: String? = null,
+  val replyTextSupported: Boolean = false,
+  val agents: List<WearAgent> = emptyList(),
   val agentControlsSupported: Boolean = false,
   val gatewayControlsSupported: Boolean = false,
   val activeSessionId: String? = null,
@@ -113,16 +109,11 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     )
 
   return WearConversationSnapshot(
+    phoneNodeId = phoneNodeId,
+    activeAgentId = selectedSession?.agentId ?: activeAgentId,
+    replyTextSupported = WearProxyCapability.ReplyText in proxyCapabilities,
     gatewayState = if (connected) WearGatewayState.CONNECTED else WearGatewayState.DISCONNECTED,
-    agents =
-      agents.map { agent ->
-        WearAgentSummary(
-          id = agent.id,
-          name = agent.name,
-          emoji = agent.emoji,
-          selected = agent.id == activeAgentId,
-        )
-      },
+    agents = agents.map { agent -> agent.copy(selected = agent.id == activeAgentId) },
     agentControlsSupported = WearProxyCapability.AgentControls in proxyCapabilities,
     gatewayControlsSupported = WearProxyCapability.GatewayControls in proxyCapabilities,
     activeSessionId = selectedSession?.key,

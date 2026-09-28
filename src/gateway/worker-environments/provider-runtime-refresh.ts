@@ -1,6 +1,7 @@
 import type { WorkerProvider } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
@@ -26,7 +27,11 @@ type WorkerRuntimeRefreshOptions = Pick<
   | "credentialBroker"
 > & {
   requireCurrentOwner: (record: WorkerEnvironmentRecord) => WorkerEnvironmentRecord;
-  stopOwner: (record: WorkerEnvironmentRecord) => Promise<WorkerEnvironmentRecord>;
+  stopOwner: (
+    record: WorkerEnvironmentRecord,
+    reason: undefined,
+    runtimeRefresh: { assertCurrent: () => void },
+  ) => Promise<WorkerEnvironmentRecord>;
   identityResolverFor: (
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
@@ -44,7 +49,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     identityResolverFor,
   } = options;
   const { ensurePendingCredential } = options.credentialBroker;
-  const refreshRuntime = async (
+  return async (
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     installation: WorkerInstallationArtifact | undefined,
@@ -52,8 +57,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
   ) => {
     if (
       !installation ||
-      (record.bootstrapReceipt &&
-        verifyWorkerAdmissionHandshake(record.bootstrapReceipt, installation))
+      (record.bootstrapReceipt && sameWorkerBuild(record.bootstrapReceipt, installation))
     ) {
       return;
     }
@@ -65,78 +69,83 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       throw serviceError("invalid_state", "Worker runtime refresh requires an admitted lease");
     }
     const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : undefined;
-    const assertOwnerCurrent = () => {
+    let placementAuthority:
+      | Awaited<ReturnType<WorkerSessionPlacementGate["prepareWorkerRuntimeRefresh"]>>
+      | undefined;
+    if (record.state === "attached") {
+      if (!sessionId || !options.placementStore) {
+        throw serviceError("invalid_state", "Worker runtime refresh requires its placement");
+      }
+      placementAuthority = await options.placementStore.prepareWorkerRuntimeRefresh({
+        sessionId,
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+      });
+    }
+    const assertCurrent = () => {
       signal?.throwIfAborted();
       const current = requireCurrentOwner(record);
       if (options.isStopping() || current.destroyRequestedAtMs !== null) {
         throw serviceError("invalid_state", "Worker runtime refresh owner is stopping");
       }
-      if (record.state === "attached") {
-        if (!sessionId || !options.placementStore) {
-          throw serviceError("invalid_state", "Worker runtime refresh requires its placement");
-        }
-        return options.placementStore.assertWorkerRuntimeRefresh({
-          sessionId,
-          environmentId: record.environmentId,
-          ownerEpoch: record.ownerEpoch,
-        });
-      }
-      return undefined;
+      placementAuthority?.assertCurrent();
     };
-    const expectedPlacementGeneration = assertOwnerCurrent();
-    const assertCurrent = () => {
-      if (assertOwnerCurrent() !== expectedPlacementGeneration) {
-        throw serviceError("invalid_state", "Worker runtime refresh placement changed");
-      }
-    };
-    // Stop the old process and revoke its credential, but retain the epoch: it also owns
-    // the node workspace directory. A new turn gets a new claim and credential below.
-    await stopOwner(record);
-    assertCurrent();
-    const receipt = await callBootstrap(installation, async (timeoutSignal) => {
-      const refreshSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    try {
       assertCurrent();
-      if (record.nodeDeviceId) {
-        if (installation.install !== "bundle" || !options.ensureNodeWorkerBundle) {
-          throw new Error("Worker node bundle installer is unavailable");
+      // Stop the old process and revoke its credential, but retain the epoch: it also owns
+      // the node workspace directory. A new turn gets a new claim and credential below.
+      await stopOwner(record, undefined, { assertCurrent });
+      assertCurrent();
+      const receipt = await callBootstrap(installation, async (timeoutSignal) => {
+        const refreshSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+        assertCurrent();
+        if (record.nodeDeviceId) {
+          if (installation.install !== "bundle" || !options.ensureNodeWorkerBundle) {
+            throw new Error("Worker node bundle installer is unavailable");
+          }
+          return options.ensureNodeWorkerBundle({
+            deviceId: record.nodeDeviceId,
+            artifact: installation,
+            prewarm: record.profileSnapshot.executionMode !== "remote-exec",
+            signal: refreshSignal,
+            assertCurrent,
+          });
         }
-        return options.ensureNodeWorkerBundle({
-          deviceId: record.nodeDeviceId,
-          artifact: installation,
-          prewarm: record.profileSnapshot.executionMode !== "remote-exec",
+        if (!record.sshEndpoint) {
+          throw new Error("Worker runtime refresh has no transport");
+        }
+        return options.bootstrapWorker({
+          operationId: record.provisionOperationId,
+          sshEndpoint: record.sshEndpoint,
+          installation,
+          resolveIdentity: identityResolverFor(record, provider, record.leaseId!),
           signal: refreshSignal,
           assertCurrent,
         });
+      });
+      assertCurrent();
+      if (!sameWorkerBuild(receipt, installation)) {
+        throw new Error("Worker runtime refresh returned a mismatched build receipt");
       }
-      if (!record.sshEndpoint) {
-        throw new Error("Worker runtime refresh has no transport");
-      }
-      return options.bootstrapWorker({
-        operationId: record.provisionOperationId,
-        sshEndpoint: record.sshEndpoint,
-        installation,
-        resolveIdentity: identityResolverFor(record, provider, record.leaseId!),
-        signal: refreshSignal,
+      const refreshed = await store.refreshBootstrapReceipt({
+        environmentId: record.environmentId,
+        ...(record.state === "attached"
+          ? {
+              expectedState: record.state,
+              expectedPlacementGeneration: placementAuthority!.generation,
+              expectedReclaimResult: placementAuthority!.reclaimResult,
+            }
+          : { expectedState: record.state }),
+        expectedOwnerEpoch: record.ownerEpoch,
+        expectedNodeDeviceId: record.nodeDeviceId,
+        expectedBootstrapReceipt: record.bootstrapReceipt,
+        bootstrapReceipt: { ...receipt, installKind: "bundle" },
         assertCurrent,
       });
-    });
-    assertCurrent();
-    if (!verifyWorkerAdmissionHandshake(receipt, installation)) {
-      throw new Error("Worker runtime refresh returned a mismatched build receipt");
+      assertCurrent();
+      await ensurePendingCredential(refreshed, sessionId ?? null);
+    } finally {
+      placementAuthority?.release();
     }
-    const refreshed = store.refreshBootstrapReceipt({
-      environmentId: record.environmentId,
-      ...(record.state === "attached"
-        ? { expectedState: record.state, expectedPlacementGeneration: expectedPlacementGeneration! }
-        : { expectedState: record.state }),
-      expectedOwnerEpoch: record.ownerEpoch,
-      expectedNodeDeviceId: record.nodeDeviceId,
-      expectedBootstrapReceipt: record.bootstrapReceipt,
-      bootstrapReceipt: { ...receipt, installKind: "bundle" },
-      assertCurrent,
-    });
-    ensurePendingCredential(refreshed, sessionId ?? null);
   };
-
-  return refreshRuntime;
 }

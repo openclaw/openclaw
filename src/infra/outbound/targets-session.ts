@@ -8,7 +8,7 @@ import {
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   isNormalizedMessageChannel,
   normalizeMessageChannel,
@@ -128,10 +128,7 @@ export function resolveSessionDeliveryTarget(params: {
         ? requested
         : undefined;
 
-  const rawExplicitTo =
-    typeof params.explicitTo === "string" && params.explicitTo.trim()
-      ? params.explicitTo.trim()
-      : undefined;
+  const rawExplicitTo = normalizeOptionalString(params.explicitTo);
 
   const explicitPrefixedChannel =
     requestedChannel === "last" ? resolveTargetPrefixedChannel(rawExplicitTo) : undefined;
@@ -160,12 +157,8 @@ export function resolveSessionDeliveryTarget(params: {
   const explicitThreadIdSource = explicitThreadId != null ? "explicit" : undefined;
 
   let to = explicitTo;
-  if (!to && lastTo) {
-    if (channel && channel === lastChannel) {
-      to = lastTo;
-    } else if (params.allowMismatchedLastTo) {
-      to = lastTo;
-    }
+  if (!to && lastTo && ((channel && channel === lastChannel) || params.allowMismatchedLastTo)) {
+    to = lastTo;
   }
 
   const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");

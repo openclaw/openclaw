@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { writeConfigFile } from "../config/config.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import {

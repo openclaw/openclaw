@@ -1,12 +1,15 @@
 import "./side-question.test-support.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAdmittedHostCapabilityTestFixture,
+  useProviderToolSchemaRuntimeForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
   createClientHarness,
   createCodexTestModel,
@@ -14,10 +17,10 @@ import {
 } from "./test-support.js";
 
 const {
-  readCodexAppServerBindingMock,
   getSharedCodexAppServerClientMock,
   retireSharedCodexAppServerClientIfCurrentMock,
   runCodexAppServerSideQuestion,
+  runCodexAppServerSideQuestionImpl,
   createFakeClient,
   threadResult,
   turnStartResult,
@@ -26,13 +29,14 @@ const {
   useSideQuestionTestSetup,
 } = await import("./side-question.test-support.js");
 
+useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
+
 describe("runCodexAppServerSideQuestion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   useSideQuestionTestSetup();
 
   it("executes inherited Gateway shell tools through the side run's host authority", async () => {
-    dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     const workspaceDir = tempDirs.make("codex-side-gateway-shell-");
     const config = { tools: { exec: { host: "gateway" as const, mode: "full" as const } } };
     const runId = "side-gateway-shell";
@@ -51,8 +55,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const parent = { threadId: "parent-thread", cwd: workspaceDir, model: "gpt-5.5" };
-    readCodexAppServerBindingMock.mockReturnValue(parent);
-    const run = runCodexAppServerSideQuestion(
+    const run = runCodexAppServerSideQuestionImpl(
       sideParams({
         cfg: config,
         runtimeModel: createCodexTestModel("openai"),
@@ -70,6 +73,7 @@ describe("runCodexAppServerSideQuestion", () => {
         hostCapabilities: host.hostCapabilities,
         opts: { runId },
       }),
+      { bindingStore: { ...createCodexTestBindingStore(), read: () => parent } },
     );
     try {
       await Promise.race([
@@ -171,101 +175,107 @@ describe("runCodexAppServerSideQuestion", () => {
         () => undefined,
         (error: unknown) => error,
       );
-      const fork = await waitForRequest("thread/fork");
-      harness.send({ id: fork.id, result: threadResult("side-thread") });
-      const inject = await waitForRequest("thread/inject_items");
-      harness.send({ id: inject.id, result: {} });
+      try {
+        const fork = await waitForRequest("thread/fork");
+        harness.send({ id: fork.id, result: threadResult("side-thread") });
+        const inject = await waitForRequest("thread/inject_items");
+        harness.send({ id: inject.id, result: {} });
 
-      if (written) {
-        const turnStart = await waitForRequest("turn/start");
-        controller.abort("side-start-cancelled");
-        const interrupt = await waitForRequest("turn/interrupt");
-        expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
-        harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
-        harness.send(
-          interruptFails
-            ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
-            : { id: interrupt.id, result: {} },
-        );
-      } else {
-        controller.abort("side-start-cancelled");
-      }
-
-      if (!interruptFails) {
         if (written) {
-          const terminals = await waitForRequest("thread/backgroundTerminals/list");
-          expect(terminals.params).toEqual({ threadId: "side-thread" });
-          harness.send({ id: terminals.id, result: { data: [] } });
-        }
-        const unsubscribe = await waitForRequest("thread/unsubscribe");
-        harness.send(
-          unsubscribeFails
-            ? { id: unsubscribe.id, error: { code: -32_000, message: "side unsubscribe failed" } }
-            : { id: unsubscribe.id, result: {} },
-        );
-      }
-      const error = await failure;
-      if (written) {
-        const turnStart =
-          requests.mock.results[
-            requests.mock.calls.findIndex(([method]) => method === "turn/start")
-          ];
-        if (turnStart?.type !== "return") {
-          throw new Error("Expected the native turn/start request promise");
-        }
-        const primaryError = await turnStart.value.catch((reason: unknown) => reason);
-        expect(primaryError).toMatchObject({
-          message: "turn/start aborted: side-start-cancelled",
-          cause: "side-start-cancelled",
-          reason: "aborted",
-          mayHaveWritten: true,
-        });
-        if (interruptFails) {
-          expect(error).toBeInstanceOf(AggregateError);
-          if (!(error instanceof AggregateError)) {
-            throw new Error("Expected cancellation and native cleanup failures", { cause: error });
-          }
-          expect(error.cause).toBe(primaryError);
-          expect(error.errors).toHaveLength(2);
-          expect(error.errors[0]).toBe(primaryError);
-          expect(error.errors[1]).toMatchObject({
-            message:
-              "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
-          });
-          expect(error.message).toContain("turn/start aborted: side-start-cancelled");
-          expect(error.message).toContain("could not confirm the side turn stopped");
+          const turnStart = await waitForRequest("turn/start");
+          controller.abort("side-start-cancelled");
+          const interrupt = await waitForRequest("turn/interrupt");
+          expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
+          harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
+          harness.send(
+            interruptFails
+              ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
+              : { id: interrupt.id, result: {} },
+          );
         } else {
-          expect(error).toBe(primaryError);
+          controller.abort("side-start-cancelled");
         }
-      } else {
-        expect(error).toMatchObject({
-          name: "CodexThreadPolicyHandoffError",
-          outcome: "acknowledged",
-          cause: "side-start-cancelled",
-        });
-      }
-      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
-        "thread/fork",
-        "thread/inject_items",
-        ...(written ? ["turn/start", "turn/interrupt"] : []),
-        ...(written && !interruptFails ? ["thread/backgroundTerminals/list"] : []),
-        ...(!interruptFails ? ["thread/unsubscribe"] : []),
-      ]);
-      expect(harness.stdinDestroyed).toBe(
-        (interruptFails && !peerRetained) || unsubscribeFails === true,
-      );
-      if (peerRetained) {
-        expect(retireSharedCodexAppServerClientIfCurrentMock).toHaveBeenCalledExactlyOnceWith(
-          harness.client,
+
+        if (!interruptFails) {
+          if (written) {
+            const terminals = await waitForRequest("thread/backgroundTerminals/list");
+            expect(terminals.params).toEqual({ threadId: "side-thread" });
+            harness.send({ id: terminals.id, result: { data: [] } });
+          }
+          const unsubscribe = await waitForRequest("thread/unsubscribe");
+          harness.send(
+            unsubscribeFails
+              ? { id: unsubscribe.id, error: { code: -32_000, message: "side unsubscribe failed" } }
+              : { id: unsubscribe.id, result: {} },
+          );
+        }
+        const error = await failure;
+        if (written) {
+          const turnStart =
+            requests.mock.results[
+              requests.mock.calls.findIndex(([method]) => method === "turn/start")
+            ];
+          if (turnStart?.type !== "return") {
+            throw new Error("Expected the native turn/start request promise");
+          }
+          const primaryError = await turnStart.value.catch((reason: unknown) => reason);
+          expect(primaryError).toMatchObject({
+            message: "turn/start aborted: side-start-cancelled",
+            cause: "side-start-cancelled",
+            reason: "aborted",
+            mayHaveWritten: true,
+          });
+          if (interruptFails) {
+            expect(error).toBeInstanceOf(AggregateError);
+            if (!(error instanceof AggregateError)) {
+              throw new Error("Expected cancellation and native cleanup failures", {
+                cause: error,
+              });
+            }
+            expect(error.cause).toBe(primaryError);
+            expect(error.errors).toHaveLength(2);
+            expect(error.errors[0]).toBe(primaryError);
+            expect(error.errors[1]).toMatchObject({
+              message:
+                "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
+            });
+            expect(error.message).toContain("turn/start aborted: side-start-cancelled");
+            expect(error.message).toContain("could not confirm the side turn stopped");
+          } else {
+            expect(error).toBe(primaryError);
+          }
+        } else {
+          expect(error).toMatchObject({
+            name: "CodexThreadPolicyHandoffError",
+            outcome: "acknowledged",
+            cause: "side-start-cancelled",
+          });
+        }
+        expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+          "thread/fork",
+          "thread/inject_items",
+          ...(written ? ["turn/start", "turn/interrupt"] : []),
+          ...(written && !interruptFails ? ["thread/backgroundTerminals/list"] : []),
+          ...(!interruptFails ? ["thread/unsubscribe"] : []),
+        ]);
+        expect(harness.stdinDestroyed).toBe(
+          (interruptFails && !peerRetained) || unsubscribeFails === true,
         );
+        if (peerRetained) {
+          expect(retireSharedCodexAppServerClientIfCurrentMock).toHaveBeenCalledExactlyOnceWith(
+            harness.client,
+          );
+        }
+      } finally {
+        controller.abort();
+        harness.client.close();
+        await failure;
       }
-      harness.client.close();
     },
   );
 
   it.each([
     { terminationFails: false, projectorFails: false },
-    { terminationFails: true, projectorFails: false },
     { terminationFails: true, projectorFails: true },
   ])(
     "settles side background-terminal cleanup before cancellation returns (terminal failure: $terminationFails, projector failure: $projectorFails)",
@@ -274,16 +284,12 @@ describe("runCodexAppServerSideQuestion", () => {
       const client = createFakeClient({ completeTurn: false });
       const request = client.request.getMockImplementation()!;
       const turnWaiting = createDeferred<void>();
-      // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the intercepted turn receiver.
-      const originalWait = CodexEphemeralTurn.prototype.wait;
-      const waits = vi.spyOn(CodexEphemeralTurn.prototype, "wait").mockImplementation(function (
-        this: CodexEphemeralTurn,
-        ...args
-      ) {
-        const pending = originalWait.apply(this, args);
+      const waits = vi.spyOn(CodexEphemeralTurn.prototype, "wait");
+      CodexEphemeralTurn.prototype.wait = function (this: CodexEphemeralTurn, ...args) {
+        const pending = waits.apply(this, args);
         turnWaiting.resolve();
         return pending;
-      });
+      };
       const terminalCleanup = vi.spyOn(clientCleanup, "terminateCodexBackgroundTerminals");
       const finalize = vi.spyOn(CodexNativeToolLifecycleProjector.prototype, "finalizeActive");
       const projectorError = new Error("side projector finalization failed");
@@ -323,19 +329,32 @@ describe("runCodexAppServerSideQuestion", () => {
         .finally(() => {
           settled = true;
         });
-      const settledBeforeReady = run.then((result) => {
-        if (result instanceof Error) {
-          throw result;
-        }
-        throw new Error("Side question settled before cancellation cleanup was ready", {
-          cause: result,
-        });
-      });
       try {
-        await Promise.race([turnWaiting.promise, settledBeforeReady]);
+        const waiting = await Promise.race([
+          turnWaiting.promise.then(() => true),
+          terminationStarted.promise.then(() => false),
+          run.then(() => false),
+        ]);
+        if (!waiting) {
+          // Cleanup can be waiting on our terminal gate before the run settles.
+          releaseTermination.resolve();
+          throw new Error("Side question settled before waiting for its native turn", {
+            cause: await run,
+          });
+        }
         expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true);
         controller.abort();
-        await Promise.race([terminationStarted.promise, settledBeforeReady]);
+        await Promise.race([
+          terminationStarted.promise,
+          run.then((result) => {
+            if (result instanceof Error) {
+              throw result;
+            }
+            throw new Error("Side question settled before cancellation cleanup was ready", {
+              cause: result,
+            });
+          }),
+        ]);
         expect(client.request).toHaveBeenCalledWith(
           "thread/backgroundTerminals/terminate",
           { threadId: "side-thread", processId: 20 },

@@ -1,10 +1,8 @@
-// Whatsapp plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
   createChannelApprovalNativeRuntimeAdapter,
-  type PendingApprovalView,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -12,25 +10,18 @@ import {
   buildApprovalReactionPendingContent,
   type ApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-  SystemAgentApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 import {
   registerWhatsAppApprovalReactionTarget,
   unregisterWhatsAppApprovalReactionTarget,
 } from "./approval-reactions.js";
-import { normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
 
 const log = createSubsystemLogger("whatsapp/approvals");
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-type WhatsAppPendingDelivery = ApprovalReactionPendingContent;
 type PreparedWhatsAppApprovalTarget = {
   to: string;
   accountId: string;
@@ -45,16 +36,8 @@ type WhatsAppFinalPayload = {
   text: string;
 };
 
-function buildPendingPayload(params: {
-  request: ApprovalRequest;
-  view: PendingApprovalView;
-  nowMs: number;
-}): WhatsAppPendingDelivery {
-  return buildApprovalReactionPendingContent(params);
-}
-
 export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
-  WhatsAppPendingDelivery,
+  ApprovalReactionPendingContent,
   PreparedWhatsAppApprovalTarget,
   PendingWhatsAppApprovalEntry,
   true,
@@ -66,8 +49,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, nowMs, view }) =>
-      buildPendingPayload({ request, view, nowMs }),
+    buildPendingPayload: buildApprovalReactionPendingContent,
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
@@ -152,20 +134,8 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }))
         ? true
         : null,
-    unbindPending: async ({ entry }) => {
-      await unregisterWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId,
-        remoteJid: entry.remoteJid,
-        messageId: entry.messageId,
-      });
-    },
-    cancelDelivered: async ({ entry }) => {
-      await unregisterWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId,
-        remoteJid: entry.remoteJid,
-        messageId: entry.messageId,
-      });
-    },
+    unbindPending: ({ entry }) => unregisterWhatsAppApprovalReactionTarget(entry),
+    cancelDelivered: ({ entry }) => unregisterWhatsAppApprovalReactionTarget(entry),
   },
   observe: {
     onDeliveryError: ({ error, request }) => {

@@ -52,7 +52,15 @@ avoiding another download. Cloud-enrolled nodes keep their own execution-mode-sp
 installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
-`openclaw connect --service --session-host`. In Control UI New Session, a
+`openclaw connect --service --session-host`.
+
+For a process-scoped host, enroll in the foreground with
+`openclaw connect <join-url> --session-host`. The join URL is single-use; after
+that process stops, restart the host with `openclaw node run --session-host`,
+which reuses the saved pairing. See
+[Reconnect a paired node](/cli/connect#reconnect-a-paired-node).
+
+In Control UI New Session, a
 write-scoped operator chooses either a specific paired device or **Auto**.
 Without an explicit project or folder selection, **New workspace** starts an
 empty isolated workspace without requiring a user Git repository. A selected
@@ -61,6 +69,12 @@ session-owned managed workspace, dispatches it with the exact
 `deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
+
+On POSIX hosts, OpenClaw keeps its managed workspace directories private (`0700`),
+including when the host uses umask `0002`. Existing node-owned workspace ancestry
+is tightened when reopened, so transfers can recover after an update without
+changing the host's umask. Files inside a transferred workspace retain their
+manifest permissions.
 
 The Devices page shows the validated Gateway-owned worker version in the node's
 metadata. If the current artifact is missing or fails validation, Devices shows
@@ -75,6 +89,13 @@ headless node, run `openclaw update` followed by `openclaw node restart`. The
 Gateway does not fall back to the node's local OpenClaw package or an older
 supervisor dialect.
 
+OpenClaw worker turns also require a node that supports the Gateway's captured
+exec policy. If you update the Gateway first, older nodes show **Update required**
+for OpenClaw sessions until you update and reconnect them. Their Codex remote
+execution and other approved node commands retain their existing requirements.
+Updating a node first remains compatible with an older Gateway; the node
+advertises this support only when the Gateway understands it.
+
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. By default, each
 node has one worker slot per available CPU core. Configure the slot count with
@@ -87,14 +108,29 @@ worker encounters an error while stopping. Worker diagnostics retain the shutdow
 failure separately. A worker slot becomes available only after its process tree
 or container has finished cleanup.
 
+Current Linux and macOS node hosts also retain that cleanup ownership when the
+application worker or node host crashes, when the Gateway-provided worker bundle
+supports process lineage. Update the Gateway and update and restart the node host
+to receive this protection; installing a new worker bundle alone does not update
+the node's supervisor. Recovery keeps capacity occupied while the previous owner
+finishes stopping its commands. An upgraded node host preserves the released
+startup message and detached process-group ownership for older worker bundles.
+
+Installed node hosts package the POSIX launch helpers separately to reduce
+per-turn startup work. Update and restart the node host to receive this
+improvement. The worker still waits for its durable launch receipt before
+starting a turn, and cleanup continues to hold its worker slot until the
+process tree is gone.
+
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
-turns additionally require valid exact worker slots with at least one free
-slot. Codex paired-device execution launches its exec-server directly, so it
-does not consume or require a worker slot; instead, its required command must
-appear in the node's effective `invocableCommands`, not merely its declared
-capabilities. A declared command is usable only when the approved pairing and
-Gateway command allowlist both authorize it. Connected non-hosts, ineligible
+turns additionally require captured exec-policy support and valid exact worker
+slots with at least one free slot. Codex paired-device execution launches its
+exec-server directly, so it does not consume or require a worker slot. Its
+required command must appear in the node's effective `invocableCommands`,
+not merely its declared capabilities. A declared command is usable only when
+the approved pairing and Gateway command allowlist both authorize it.
+Connected non-hosts, ineligible
 or saturated hosts, update-required devices, and unavailable hosts remain
 visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
@@ -177,7 +213,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:24.19.0-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.21.0-slim",
     },
   },
 }
@@ -199,7 +235,12 @@ session hosting or the affected launch fails visibly instead of falling back to
 an unisolated worker. Install or start the engine, verify `docker version` or
 `podman version`, and restart the node host.
 
-The default image is `node:24.19.0-slim`; the engine pulls it on first use when it
+Before each container launch, daemon identity revalidation allows up to 30 seconds.
+If an engine command times out, the launch error names the engine and operation
+(for example, `docker info`) and its deadline. It omits command arguments and
+environment values. Check that operation against the selected daemon before retrying.
+
+The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
 to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on
@@ -207,9 +248,13 @@ its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
 image or configure registry access before hosting sessions on an offline or
-restricted node. Existing explicit image settings are preserved; replace older Node
-images with a supported release before upgrading OpenClaw. Worker startup requires
-a supported runtime; older releases may fail before the runtime diagnostic can run.
+restricted node. The default image can advance when OpenClaw updates its dependencies.
+Before upgrading an offline node, preload the new default image or set
+`nodeHost.workerRuns.containerImage` to a supported image already cached on that node.
+For example, a cached `node:24.19.0-slim` remains supported and can be selected explicitly.
+Existing explicit image settings are preserved; replace unsupported Node images before
+upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
+fail before the runtime diagnostic can run.
 
 Each worker container receives only two host bind mounts: its verified worker
 bundle root is read-only, and its assigned session workspace is read-write.

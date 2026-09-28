@@ -101,6 +101,12 @@ export type CronRunStatus = "ok" | "error" | "skipped";
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
+/** Transport evidence for a primary webhook, including an unacknowledged request. */
+export type CronWebhookDeliveryOutcome = {
+  status: "delivered" | "not-delivered" | "unknown";
+  error?: string;
+};
+
 /** Delivery target snapshot recorded for audit/debug output. */
 export type CronDeliveryTraceTarget = NonNullable<CronDeliveryTrace["intended"]>;
 
@@ -351,7 +357,7 @@ export type CronJobState = Omit<
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
   pacedNextRunAtMs?: number;
-  /** Exact recurring slot retained across an out-of-band manual force run. */
+  /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;

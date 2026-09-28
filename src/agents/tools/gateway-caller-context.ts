@@ -9,10 +9,18 @@ import type {
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
-import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
-import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
@@ -34,6 +42,8 @@ type GatewayToolCallerIdentity = {
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
   approvalAuthority?: AgentRunDelegatedAuthority;
+  /** Original operator restriction, separate from this tool/turn's execution lifetime. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   approvalAuthorityCheck?: () => boolean | void;
   /** Exact host-resolved owner of this individual approval request. */
   approvalOwnerPluginId?: string;
@@ -44,6 +54,8 @@ type GatewayToolCallerIdentity = {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Synchronous host-owned fence for tool effects and decision receipts. */
   receiptAuthority?: () => boolean | void;
+  /** Captured conversation policy for tools delegated through another tool's transport. */
+  assertToolAllowed?: (toolName: string) => void;
   /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
   workerTurnClaim?: WorkerSessionTurnClaim;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -101,13 +113,15 @@ function bindGatewayToolContextResolver(
   if (!admittedContext) {
     return () => undefined;
   }
-  return () => {
+  const resolveAdmittedContext = () => {
     try {
       return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
     } catch {
       return undefined;
     }
   };
+  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
+  return resolveAdmittedContext;
 }
 
 type AdmittedGatewayToolCallerParams = {
@@ -157,11 +171,13 @@ export function createAdmittedGatewayToolCallerIdentity(
     return undefined;
   }
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  const operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   return {
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
+    ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
@@ -199,6 +215,7 @@ export function captureGatewayToolCallerAssertion(): ((method?: string) => void)
   const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
   return (method) => {
+    caller.operatorAuthority?.assertCurrent();
     if (!isCurrent || signals.some((signal) => signal.aborted) || isCurrent() === false) {
       throw new Error("agent tool caller authority is no longer active");
     }
@@ -235,7 +252,29 @@ export async function withGatewayToolCallerIdentity<T>(
     inheritedOwner?.fullPermission === false || identity.fullPermission === false
       ? false
       : (inheritedOwner?.fullPermission ?? identity.fullPermission);
-  const approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
+  let approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
+  if (
+    inheritedOwner?.approvalAuthority &&
+    identity.approvalAuthority &&
+    inheritedOwner.approvalAuthority !== identity.approvalAuthority
+  ) {
+    if (
+      validateAgentRunDelegatedAuthority(
+        identity.approvalAuthority,
+        inheritedOwner.approvalAuthority,
+      )
+    ) {
+      approvalAuthority = identity.approvalAuthority;
+    } else if (
+      !validateAgentRunDelegatedAuthority(
+        inheritedOwner.approvalAuthority,
+        identity.approvalAuthority,
+      )
+    ) {
+      throw new Error("agent tool caller approval scopes do not retain the same source");
+    }
+  }
+  const operatorAuthority = inheritedOwner?.operatorAuthority ?? identity.operatorAuthority;
   const approvalAuthorityCheck =
     inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;
   const signedAgentRuntimeIdentityToken =
@@ -247,6 +286,20 @@ export async function withGatewayToolCallerIdentity<T>(
     inheritedOwner?.receiptAuthority,
     identity.receiptAuthority,
   );
+  const toolPolicyAssertions = [
+    ...new Set(
+      [inheritedOwner?.assertToolAllowed, identity.assertToolAllowed].filter(
+        (assertion): assertion is (toolName: string) => void => assertion !== undefined,
+      ),
+    ),
+  ];
+  const assertToolAllowed = toolPolicyAssertions.length
+    ? (toolName: string) => {
+        for (const assertion of toolPolicyAssertions) {
+          assertion(toolName);
+        }
+      }
+    : undefined;
   const approvalSignals = [
     ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
   ];
@@ -287,6 +340,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
+      ...(operatorAuthority ? { operatorAuthority } : {}),
       ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
       ...(identity.approvalOwnerPluginId?.trim()
         ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
@@ -303,6 +357,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
       ...(receiptAuthority ? { receiptAuthority } : {}),
+      ...(assertToolAllowed ? { assertToolAllowed } : {}),
       ...(approvalSignals.length ? { approvalSignals } : {}),
       ...(workerTurnClaim ? { workerTurnClaim } : {}),
       ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
@@ -343,7 +398,9 @@ export function wrapToolWithGatewayCallerIdentity(
     execute: async (...args) =>
       await withGatewayToolCallerIdentity(identity, async () => await tool.execute?.(...args)),
   };
-  copyAgentToolMetadata(tool, wrapped);
+  copyAgentToolMetadata(tool, wrapped, (source) =>
+    wrapToolWithGatewayCallerIdentity(source, identity),
+  );
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrapped, async (params) => {

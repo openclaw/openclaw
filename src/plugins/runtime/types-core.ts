@@ -1,12 +1,12 @@
-// Core runtime types define system, config, and task helper contracts for plugins.
+// Core runtime types define system, config, and execution helper contracts for plugins.
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
-import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
-import type { PluginRuntimeTasks } from "./runtime-tasks.types.js";
+import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
 type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
@@ -23,6 +23,8 @@ type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "s
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
+  /** Revalidate caller authority at guarded publication; accepted writes still settle. */
+  assertCurrent?: () => void;
   envSnapshotForRestore?: Record<string, string | undefined>;
   expectedConfigPath?: string;
   unsetPaths?: string[][];
@@ -267,7 +269,10 @@ export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
   messages: [{ role: "user"; content: string }];
   execution: {
-    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    /**
+     * Fresh completion through the configured agent runtime with no supplied tools.
+     * Agents API may retain service-owned helpers; it cannot guarantee zero tools.
+     */
     mode: "isolated-agent-runtime";
     /** Exact credential owner. Requires host-granted plugin policy. */
     authProfileId?: string;
@@ -330,6 +335,7 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
+  decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
@@ -511,7 +517,7 @@ export type PluginRuntimeCore = {
       options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
     ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
     openKeyedStore: <T>(
-      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+      options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
     /**
      * @deprecated Use openKeyedStore and await its operations. The synchronous
@@ -522,7 +528,7 @@ export type PluginRuntimeCore = {
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
-    ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+    ) => import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
       TPayload,
       TMetadata,
       TCompletedMetadata
@@ -532,7 +538,7 @@ export type PluginRuntimeCore = {
         CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
         "queue"
       > & {
-        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+        queue?: import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
           TPayload,
           TMetadata,
           TCompletedMetadata
@@ -542,7 +548,6 @@ export type PluginRuntimeCore = {
       },
     ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
-  tasks: PluginRuntimeTasks;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
     acquireLocalService: (

@@ -145,7 +145,8 @@ session key, a prepared fallback agent, or a persisted fixed-store owner.
 
 The older `resolveSessionAgentIds` and `resolveSessionAgentId` Plugin SDK
 exports preserve ambient system-agent fallback only when strict resolution
-fails because no owner was supplied. They do not override explicit,
+fails because no owner was supplied. These aliases treat empty or whitespace-only
+agent IDs as omitted; strict resolvers reject supplied blank IDs. They do not override explicit,
 agent-scoped, persisted, conflicting, or retired owner outcomes. These aliases
 are deprecated as of August 29, 2026, and remain available through November 29, 2026. Removal also requires a published-plugin reader sweep and explicit
 breaking-release approval.
@@ -233,3 +234,17 @@ consume it.
 Release notes should include upcoming plugin deprecations with target dates
 and links to migration docs, before a compatibility path moves to
 `removal-pending` or `removed`.
+
+## Related
+
+<CardGroup cols={3}>
+  <Card title="SDK migration" href="/plugins/sdk-migration" icon="arrow-right-arrow-left">
+    Removed surfaces, their replacements, and the removal timeline.
+  </Card>
+  <Card title="Plugin manifest" href="/plugins/manifest" icon="file-code">
+    The manifest fields a compatibility record can deprecate.
+  </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins" icon="wrench">
+    Installing, updating, and inspecting installed plugins.
+  </Card>
+</CardGroup>

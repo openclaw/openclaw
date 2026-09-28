@@ -8,12 +8,14 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
+import type { WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const runtime = vi.hoisted(() => ({
   mainThread: true,
   environment: new Map<unknown, unknown>(),
   selectedPath: undefined as string | undefined,
   launches: 0,
+  pools: new Set<{ close: () => Promise<void> }>(),
   dlopen: vi.fn(),
   select: vi.fn<(path: string) => void>(),
   getEnvironmentData: vi.fn<(key: unknown) => unknown>(),
@@ -27,20 +29,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 vi.mock("node:module", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:module")>();
-  return {
-    createRequire: (...args: Parameters<typeof actual.createRequire>) => {
-      const require = actual.createRequire(...args);
-      return Object.assign((specifier: string) => {
-        if (specifier === "bun:ffi") {
-          return { dlopen: runtime.dlopen, FFIType: { cstring: 0, i32: 1 } };
-        }
-        if (specifier === "bun:sqlite") {
-          return { Database: { setCustomSQLite: runtime.select } };
-        }
-        return require(specifier);
-      }, require);
-    },
+  const createRequire = (...args: Parameters<typeof actual.createRequire>) => {
+    const require = actual.createRequire(...args);
+    return Object.assign((specifier: string) => {
+      if (specifier === "bun:ffi") {
+        return { dlopen: runtime.dlopen, FFIType: { cstring: 0, i32: 1 } };
+      }
+      if (specifier === "bun:sqlite") {
+        return { Database: { setCustomSQLite: runtime.select } };
+      }
+      return require(specifier);
+    }, require);
   };
+  return new Proxy(actual, {
+    get: (target, property, receiver) =>
+      property === "createRequire" ? createRequire : Reflect.get(target, property, receiver),
+  });
 });
 
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -59,6 +63,19 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           throw new Error("Worker started before its SQLite library owner completed selection");
         }
         super(...args);
+      }
+    },
+  };
+});
+
+vi.mock("./worker-task-pool.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./worker-task-pool.js")>();
+  return {
+    ...actual,
+    WorkerTaskPool: class<Input, Output> extends actual.WorkerTaskPool<Input, Output> {
+      constructor(options: WorkerTaskPoolOptions<Output>) {
+        super(options);
+        runtime.pools.add(this);
       }
     },
   };
@@ -126,9 +143,13 @@ beforeEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
-      await Promise.all([...stores].map((store) => store.close()));
+      await Promise.all([
+        ...[...stores].map((store) => store.close()),
+        ...[...runtime.pools].map((pool) => pool.close()),
+      ]);
     } finally {
       stores.clear();
+      runtime.pools.clear();
       restoreProperty(globalThis, selectionKey, previousSelection);
       restoreProperty(process, "versions", previousVersions);
       restoreProperty(process, "platform", previousPlatform);
@@ -159,6 +180,66 @@ async function openStore(databasePath: string) {
 }
 
 describe("Bun SQLite process selection and worker inheritance", () => {
+  it.each(["sqlite-target", "model-context", "session-entry", "branch-summaries"] as const)(
+    "prepares SQLite before a cold %s read without creating an absent store",
+    async (kind) => {
+      const directory = tempDirs.make("bun-session-worker-selection-");
+      const stateDir = path.join(directory, "state");
+      const storePath = path.join(directory, "absent.sqlite");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:cold-selection",
+        sessionId: "cold-selection",
+        storePath,
+      };
+      const reader = await import("../config/sessions/session-transcript-read-worker-runtime.js");
+      switch (kind) {
+        case "sqlite-target": {
+          const { prepareSqliteTranscriptReadScope } =
+            await import("../config/sessions/session-accessor.sqlite-scope.js");
+          expect(await prepareSqliteTranscriptReadScope(target)).toMatchObject({
+            agentId: target.agentId,
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            path: storePath,
+          });
+          break;
+        }
+        case "model-context":
+          expect(await reader.readSessionTranscriptModelContextAsync(target, undefined)).toEqual({
+            events: [],
+          });
+          break;
+        case "session-entry": {
+          const { buildSessionEntry } =
+            await import("../../packages/memory-host-sdk/src/host/session-files.js");
+          expect(await buildSessionEntry(path.join(directory, "transcript.jsonl"), target)).toBe(
+            null,
+          );
+          break;
+        }
+        case "branch-summaries":
+          expect(
+            await reader.runSessionBranchSummaryWorkerRequest(
+              {
+                database: { agentId: target.agentId, path: storePath },
+                databaseIdentity: "absent-database",
+                sessionKey: target.sessionKey,
+                sessionId: target.sessionId,
+              },
+              new AbortController().signal,
+            ),
+          ).toEqual({ status: "missing-session" });
+          break;
+      }
+      expect(runtime.launches).toBeGreaterThan(0);
+      expect(runtime.selectedPath).toBe("/fixture/sqlite.dylib");
+      expect(existsSync(storePath)).toBe(false);
+      expect(existsSync(stateDir)).toBe(false);
+    },
+  );
+
   it("inherits the completed custom selection without repeating Bun's one-shot native hook", async () => {
     const parent = await import("./bun-sqlite-library.js");
     const selected = parent.ensureSqliteLibrarySelected();

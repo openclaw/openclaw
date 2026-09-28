@@ -8,6 +8,7 @@ import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 const TELEGRAM_TARGET = "-1001234567890";
+const TYPING_INTERVAL_SECONDS = 2;
 
 function installHeartbeatTypingPlugin(params: {
   sendTyping: NonNullable<NonNullable<ChannelPlugin["heartbeat"]>["sendTyping"]>;
@@ -83,21 +84,46 @@ function expectTypingCall(
   expect(params.to).toBe(expected.to);
 }
 
+async function runHeartbeatWithFakeIntervals(options: Parameters<typeof runHeartbeatOnce>[0]) {
+  // Keep typing refreshes independent of storage and dispatch wall time.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    return await runHeartbeatOnce(options);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("runHeartbeatOnce heartbeat typing", () => {
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it("starts and clears typing around a heartbeat run", async () => {
+  it("keeps typing alive during a heartbeat run and clears it once", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const sendTyping = vi.fn(async () => undefined);
       const clearTyping = vi.fn(async () => undefined);
       installHeartbeatTypingPlugin({ sendTyping, clearTyping });
-      const cfg = createHeartbeatConfig({ tmpDir, storePath });
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        agents: { defaults: { typingIntervalSeconds: TYPING_INTERVAL_SECONDS } },
+      });
       await seedTelegramSession(storePath, cfg);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const typingCounts: Array<{ sent: number; cleared: number }> = [];
+      const recordTypingCounts = () =>
+        typingCounts.push({
+          sent: sendTyping.mock.calls.length,
+          cleared: clearTyping.mock.calls.length,
+        });
+      replySpy.mockImplementation(async () => {
+        recordTypingCounts();
+        await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_SECONDS * 1000);
+        recordTypingCounts();
+        return { text: "HEARTBEAT_OK" };
+      });
 
-      await runHeartbeatOnce({
+      await runHeartbeatWithFakeIntervals({
         cfg,
         deps: {
           getReplyFromConfig: replySpy,
@@ -105,14 +131,16 @@ describe("runHeartbeatOnce heartbeat typing", () => {
           nowMs: () => 0,
         },
       });
+      recordTypingCounts();
 
-      expect(sendTyping).toHaveBeenCalledOnce();
-      expect(clearTyping).toHaveBeenCalledOnce();
+      // Before the reply, after one configured keepalive interval, and after the run.
+      expect(typingCounts).toEqual([
+        { sent: 1, cleared: 0 },
+        { sent: 2, cleared: 0 },
+        { sent: 2, cleared: 1 },
+      ]);
       expectTypingCall(sendTyping, { cfg, to: TELEGRAM_TARGET });
       expectTypingCall(clearTyping, { cfg, to: TELEGRAM_TARGET });
-      expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
-        replySpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
     });
   });
 
@@ -125,7 +153,7 @@ describe("runHeartbeatOnce heartbeat typing", () => {
       await seedTelegramSession(storePath, cfg);
       replySpy.mockRejectedValue(new Error("model unavailable"));
 
-      const result = await runHeartbeatOnce({
+      const result = await runHeartbeatWithFakeIntervals({
         cfg,
         deps: {
           getReplyFromConfig: replySpy,
@@ -140,68 +168,31 @@ describe("runHeartbeatOnce heartbeat typing", () => {
     });
   });
 
-  it("does not type when typingMode is never", async () => {
+  it.each([
+    {
+      name: "typingMode is never",
+      agents: { defaults: { typingMode: "never" } },
+    },
+    {
+      name: "a per-agent typingMode overrides the default",
+      agents: {
+        defaults: { typingMode: "instant" },
+        entries: { main: { typingMode: "never" } },
+      },
+    },
+    {
+      name: "chat heartbeat delivery is disabled",
+      channelHeartbeatVisibility: { showAlerts: false, showOk: false, useIndicator: true },
+    },
+  ] satisfies Array<{
+    name: string;
+    agents?: OpenClawConfig["agents"];
+    channelHeartbeatVisibility?: Record<string, unknown>;
+  }>)("does not type when $name", async ({ name: _name, ...overrides }) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const sendTyping = vi.fn(async () => undefined);
       installHeartbeatTypingPlugin({ sendTyping });
-      const cfg = createHeartbeatConfig({
-        tmpDir,
-        storePath,
-        agents: { defaults: { typingMode: "never" } },
-      });
-      await seedTelegramSession(storePath, cfg);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: {
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
-      });
-
-      expect(sendTyping).not.toHaveBeenCalled();
-    });
-  });
-
-  it("honors a per-agent typingMode override", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const sendTyping = vi.fn(async () => undefined);
-      installHeartbeatTypingPlugin({ sendTyping });
-      const cfg = createHeartbeatConfig({
-        tmpDir,
-        storePath,
-        agents: {
-          defaults: { typingMode: "instant" },
-          entries: { main: { typingMode: "never" } },
-        },
-      });
-      await seedTelegramSession(storePath, cfg);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: {
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
-      });
-
-      expect(sendTyping).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not type when chat heartbeat delivery is disabled", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const sendTyping = vi.fn(async () => undefined);
-      installHeartbeatTypingPlugin({ sendTyping });
-      const cfg = createHeartbeatConfig({
-        tmpDir,
-        storePath,
-        channelHeartbeatVisibility: { showAlerts: false, showOk: false, useIndicator: true },
-      });
+      const cfg = createHeartbeatConfig({ tmpDir, storePath, ...overrides });
       await seedTelegramSession(storePath, cfg);
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 

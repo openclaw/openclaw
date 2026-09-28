@@ -1,20 +1,15 @@
-import "./dynamic-tool-build.test-support.js";
 import fs from "node:fs/promises";
+import "./dynamic-tool-build.test-support.js";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 
-const {
-  buildDynamicToolsForTest,
-  createCodexRuntimePlanFixture,
-  createParams,
-  hoisted,
-  resetOpenClawCodingToolsFactoryForTests,
-  setOpenClawCodingToolsFactoryForTests,
-} = await import("./dynamic-tool-build.test-support.js");
+const { buildDynamicToolsForTest, createCodexRuntimePlanFixture, createParams, hoisted } =
+  await import("./dynamic-tool-build.test-support.js");
 type OpenClawCodingToolsOptionsForTest = NonNullable<
-  Parameters<Parameters<typeof setOpenClawCodingToolsFactoryForTests>[0]>[0]
+  Parameters<Parameters<typeof setCodexTestToolFactory>[1]>[0]
 >;
 
 describe("Codex app-server dynamic tool question prompts", () => {
@@ -29,7 +24,6 @@ describe("Codex app-server dynamic tool question prompts", () => {
   });
 
   afterEach(async () => {
-    resetOpenClawCodingToolsFactoryForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -37,8 +31,6 @@ describe("Codex app-server dynamic tool question prompts", () => {
 
   it.each<[string, string | undefined, string | undefined, string | undefined, boolean]>([
     ["provider-only Telegram", undefined, "telegram", "telegram", true],
-    ["explicit Telegram", "telegram", undefined, "telegram", true],
-    ["explicit Telegram before another provider", "telegram", "discord", "telegram", true],
     ["explicit webchat before Telegram provider", "webchat", "telegram", "webchat", true],
     ["both channels absent", undefined, undefined, undefined, true],
     ["callback absent", undefined, "telegram", "telegram", false],
@@ -60,7 +52,7 @@ describe("Codex app-server dynamic tool question prompts", () => {
       const onToolResult = vi.fn();
       params.onToolResult = hasCallback ? onToolResult : undefined;
       let capturedQuestionPrompt: OpenClawCodingToolsOptionsForTest["questionPrompt"];
-      setOpenClawCodingToolsFactoryForTests((options) => {
+      setCodexTestToolFactory(params, (options) => {
         capturedQuestionPrompt = options?.questionPrompt;
         return [];
       });

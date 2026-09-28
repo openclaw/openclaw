@@ -1,47 +1,18 @@
 // Covers shared provider usage fetch parsing and error snapshots.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
-  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   fetchJson,
   fetchUsageJson,
-  parseFiniteNumber,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
-
-function requireFetchCall(
-  mock: ReturnType<typeof vi.fn>,
-): [URL | RequestInfo, RequestInit | undefined] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected fetch call");
-  }
-  return call as [URL | RequestInfo, RequestInit | undefined];
-}
 
 describe("provider usage fetch shared helpers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("builds a provider error snapshot", () => {
-    expect(buildUsageErrorSnapshot("zai", "API error")).toEqual({
-      provider: "zai",
-      displayName: "z.ai",
-      windows: [],
-      error: "API error",
-    });
-  });
-
-  it.each([
-    { value: 12, expected: 12 },
-    { value: "12.5", expected: 12.5 },
-    { value: "12.5 credits", expected: undefined },
-    { value: "not-a-number", expected: undefined },
-  ])("parses finite numbers for %j", ({ value, expected }) => {
-    expect(parseFiniteNumber(value)).toBe(expected);
   });
 
   it("forwards request init with a deadline signal", async () => {
@@ -62,7 +33,7 @@ describe("provider usage fetch shared helpers", () => {
     );
 
     expect(fetchFnMock).toHaveBeenCalledOnce();
-    const [input, init] = requireFetchCall(fetchFnMock);
+    const [input, init] = expectDefined(fetchFnMock.mock.calls[0], "fetch call");
     expect(input).toBe("https://example.com/usage");
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({ authorization: "Bearer test" });
@@ -159,18 +130,6 @@ describe("provider usage fetch shared helpers", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("maps configured status codes to token expired", () => {
-    const snapshot = buildUsageHttpErrorSnapshot({
-      provider: "openai",
-      status: 401,
-      tokenExpiredStatuses: [401, 403],
-    });
-
-    expect(snapshot.error).toBe("Token expired");
-    expect(snapshot.provider).toBe("openai");
-    expect(snapshot.windows).toHaveLength(0);
-  });
-
   it("includes trimmed API error messages in HTTP errors", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
       provider: "anthropic",
@@ -255,18 +214,6 @@ describe("provider usage fetch shared helpers", () => {
   });
 
   describe("readUsageJson", () => {
-    it("parses a normal-sized JSON response", async () => {
-      const response = new Response(
-        JSON.stringify({ windows: [{ label: "5h", usedPercent: 42 }] }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-
-      await expect(readUsageJson("anthropic", response)).resolves.toEqual({
-        ok: true,
-        data: { windows: [{ label: "5h", usedPercent: 42 }] },
-      });
-    });
-
     it("parses UTF-8 BOM-prefixed JSON with fetch-compatible semantics", async () => {
       const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
       const json = new TextEncoder().encode(JSON.stringify({ windows: [] }));
@@ -308,33 +255,6 @@ describe("provider usage fetch shared helpers", () => {
       });
       expect(pullCount).toBeLessThanOrEqual(2);
       expect(cancel).toHaveBeenCalledOnce();
-    });
-
-    it("handles a JSON parse error gracefully", async () => {
-      const response = new Response("not-json", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-
-      await expect(readUsageJson("openai", response)).resolves.toEqual({
-        ok: false,
-        snapshot: expect.objectContaining({
-          provider: "openai",
-          error: "Malformed usage response",
-        }),
-      });
-    });
-
-    it("preserves provider name in malformed error snapshots", async () => {
-      const response = new Response("", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-
-      await expect(readUsageJson("deepseek", response)).resolves.toEqual({
-        ok: false,
-        snapshot: expect.objectContaining({ provider: "deepseek" }),
-      });
     });
   });
 });

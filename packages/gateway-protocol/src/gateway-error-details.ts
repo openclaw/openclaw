@@ -41,6 +41,8 @@ export const GatewayErrorDetailCodes = {
   SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
   GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+  TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
+  TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -123,6 +125,12 @@ export type SessionWorkspaceRecoveryRequiredErrorDetails = {
 };
 
 /** Structured details emitted by method-level failures. */
+export type TaskWorktreeSourceRequiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED;
+  cwd: string;
+};
+
+/** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
   | MissingScopeErrorDetails
@@ -135,7 +143,9 @@ export type GatewayErrorDetails =
   | WizardNotFoundErrorDetails
   | SetupAdmissionBusyErrorDetails
   | GitHubPublicationSelectionRejectedErrorDetails
-  | SessionWorkspaceRecoveryRequiredErrorDetails;
+  | SessionWorkspaceRecoveryRequiredErrorDetails
+  | TaskWorktreeSourceRequiredErrorDetails
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
 type GatewayErrorLike = {
   code?: unknown;

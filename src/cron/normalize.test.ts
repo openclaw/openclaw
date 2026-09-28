@@ -145,6 +145,91 @@ describe("normalizeCronJobCreate", () => {
     },
   );
 
+  describe.each(["create", "patch"] as const)("%s authority envelopes", (mode) => {
+    const normalize = mode === "create" ? normalizeCreate : normalizePatch;
+    const envelopes = {
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "local" },
+        channelRequester: CHANNEL_REQUESTER,
+      },
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 0,
+      },
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "test-runtime",
+        namespace: "test.authority",
+        payload: { tools: [{ id: "read", enabled: true }] },
+      },
+    };
+
+    it("does not materialize omitted, undefined, or inherited authority fields", () => {
+      for (const input of [
+        {},
+        {
+          scheduledToolPolicy: undefined,
+          toolsAllowProvenance: undefined,
+          toolsAllowExecTarget: undefined,
+          toolsAllowExecTargetRequirement: undefined,
+          runtimeAuthority: undefined,
+        },
+        Object.create(envelopes) as UnknownRecord,
+      ]) {
+        const normalized = normalize(input);
+
+        expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+        expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+        expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+        expect(normalized).not.toHaveProperty("toolsAllowExecTargetRequirement");
+        expect(normalized).not.toHaveProperty("runtimeAuthority");
+      }
+    });
+
+    it("retains valid envelopes without mutating or freezing the input", () => {
+      const input = structuredClone(envelopes);
+
+      const normalized = normalize(input);
+
+      expect(normalized).toMatchObject(envelopes);
+      expect(input).toEqual(envelopes);
+      const authority = child(normalized, "runtimeAuthority");
+      const payload = child(authority, "payload");
+      expect(authority).not.toBe(input.runtimeAuthority);
+      expect(payload).not.toBe(input.runtimeAuthority.payload);
+      expect(Object.isFrozen(authority)).toBe(true);
+      expect(Object.isFrozen(payload)).toBe(true);
+      expect(Object.isFrozen((payload.tools as unknown[])[0])).toBe(true);
+      expect(Object.isFrozen(input.runtimeAuthority)).toBe(false);
+      expect(Object.isFrozen(input.runtimeAuthority.payload)).toBe(false);
+      expect(Object.isFrozen(input.runtimeAuthority.payload.tools[0])).toBe(false);
+    });
+
+    it("retains a recovery marker while dropping invalid peer envelopes", () => {
+      const normalized = normalize({
+        scheduledToolPolicy: { version: 2, mode: "trusted" },
+        toolsAllowProvenance: { version: 2, source: "authenticated-requester" },
+        toolsAllowExecTarget: { version: 1, host: "remote" },
+        toolsAllowExecTargetRequirement: null,
+        runtimeAuthority: { ...envelopes.runtimeAuthority, version: 2 },
+      });
+
+      expect(normalized.toolsAllowExecTargetRequirement).toEqual({
+        version: 1,
+        recoveryRequired: true,
+      });
+      expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+      expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+      expect(normalized).not.toHaveProperty("runtimeAuthority");
+    });
+  });
+
   it.each(["create", "patch"] as const)(
     "does not promote prototype-only schedule fields during %s normalization",
     (mode) => {
@@ -311,6 +396,19 @@ describe("normalizeCronJobCreate", () => {
   it("preserves explicit exact cron schedule", () => {
     const schedule = mainSchedule({ kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 });
     expect(schedule.staggerMs).toBe(0);
+  });
+  it.each(["1e3", "42.8", "0x10", "abc", "", null, {}, 8_640_000_000_000_001])(
+    "rejects invalid explicit cron stagger %j before create or patch defaults",
+    (staggerMs) => {
+      const schedule = { kind: "cron", expr: "0 * * * *", staggerMs };
+      expect(() => createMain({ schedule })).toThrow(/staggerMs/);
+      expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
+    },
+  );
+  it("still strips an invalid stagger from a non-cron schedule", () => {
+    const schedule = { kind: "every", everyMs: 60_000, staggerMs: "abc" };
+    expect(createMain({ schedule }).schedule).toEqual(EVERY_SCHEDULE);
+    expect(normalizePatch({ schedule }).schedule).toEqual(EVERY_SCHEDULE);
   });
   it("defaults deleteAfterRun for one-shot schedules", () => {
     const normalized = createMain({ schedule: { kind: "at", at: "2026-01-12T18:00:00Z" } });

@@ -20,6 +20,7 @@ vi.mock("./attempt-subscription-cleanup.js", () => ({
   cleanupEmbeddedAttemptResources: hoisted.cleanupEmbeddedAttemptResources,
 }));
 
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 
@@ -111,6 +112,39 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("blocked", null, {
       blockedBy: "before_agent",
     });
+  });
+
+  it("re-reads cancellation after draining transcript writes before resource cleanup", async () => {
+    const controller = new AbortController();
+    const drain = createDeferred();
+    const draining = createDeferred();
+    const abortSettle = createDeferred();
+    const buildAbortSettlePromise = vi.fn(() => abortSettle.promise);
+    const input = createInput({
+      attempt: { runId: "run-1", sessionId: "session-1", abortSignal: controller.signal },
+      buildAbortSettlePromise,
+    });
+    input.transcriptLifecycle.beginCleanup.mockImplementation(async () => {
+      draining.resolve();
+      await drain.promise;
+    });
+    const cleanup = cleanupEmbeddedAttemptSessionPhase(input as never);
+    await draining.promise;
+    controller.abort();
+    expect(hoisted.cleanupEmbeddedAttemptResources).not.toHaveBeenCalled();
+    drain.resolve();
+    await cleanup;
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aborted: true,
+        abortSignal: controller.signal,
+        abortSettlePromise: abortSettle.promise,
+      }),
+    );
+    expect(buildAbortSettlePromise).toHaveBeenCalledOnce();
+    expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledOnce();
+    abortSettle.resolve();
   });
 
   it("re-reads abort state after trajectory flushing", async () => {

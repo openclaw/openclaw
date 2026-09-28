@@ -9,6 +9,7 @@ import {
   navigateToControlUiSession,
   type ControlUiMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -469,6 +470,7 @@ suite.define(() => {
       await picker.locator("summary").click();
       await gateway.waitForRequest("models.list");
       await expect.poll(() => options.count()).toBe(2);
+      await revealChatModelOption(options.last());
       await expect.poll(() => options.last().isVisible()).toBe(true);
       await expect.poll(() => options.first().textContent()).toContain("GPT-5.6 Sol");
       await expect.poll(() => options.first().textContent()).toContain("Default");
@@ -514,7 +516,7 @@ suite.define(() => {
           path: `${artifactDir}/auth-cold-model-picker.png`,
         });
       }
-      await options.first().click();
+      await selectChatModelOption(options.first());
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
     });
@@ -704,7 +706,9 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
-      await composer.locator('[data-chat-model-option="openai/startup-model"]').waitFor();
+      await revealChatModelOption(
+        composer.locator('[data-chat-model-option="openai/startup-model"]'),
+      );
       expect(await gateway.getRequests("models.list")).toHaveLength(1);
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
@@ -719,6 +723,9 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
 
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
+      await revealChatModelOption(
+        composer.locator('[data-chat-model-option="anthropic/discovered-model"]'),
+      );
       await expect
         .poll(() =>
           composer.locator('[data-chat-model-option="anthropic/discovered-model"]').isVisible(),
@@ -790,6 +797,9 @@ suite.define(() => {
 
       await pickerTrigger.click();
       expect(await gateway.getRequests("models.list")).toHaveLength(2);
+      await revealChatModelOption(
+        composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'),
+      );
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);
@@ -833,6 +843,9 @@ suite.define(() => {
       await gateway.setMethodResponse("models.list", { models: [existing, firstOpen] });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await trigger.click();
+      await revealChatModelOption(
+        composer.locator('[data-chat-model-option="example/first-open"]'),
+      );
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/first-open"]').isVisible())
         .toBe(true);
@@ -890,6 +903,9 @@ suite.define(() => {
 
       expect(reopened).toEqual({ open: true, connected: true });
       expect(await gateway.getRequests("models.list")).toHaveLength(previousRequestCount);
+      await revealChatModelOption(
+        composer.locator('[data-chat-model-option="example/first-open"]'),
+      );
       expect(
         await composer.locator('[data-chat-model-option="example/first-open"]').isVisible(),
       ).toBe(true);

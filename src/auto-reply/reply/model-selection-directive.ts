@@ -10,6 +10,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
+import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 export { modelKey };
@@ -171,6 +172,7 @@ export function resolveModelDirectiveSelection(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
+  operatorModelPolicy?: PreparedOperatorModelPolicy;
   cfg?: OpenClawConfig;
   agentId?: string;
   rawRuntime?: string | undefined;
@@ -188,12 +190,11 @@ export function resolveModelDirectiveSelection(params: {
 
   const rawTrimmed = raw.trim();
   const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
-
-  const pickAliasForKey = (provider: string, model: string): string | undefined =>
-    aliasIndex.byKey.get(modelKey(provider, model))?.[0];
+  const allows = (ref: { provider: string; model: string }) =>
+    policy.allows(ref) && (params.operatorModelPolicy?.allows(ref) ?? true);
 
   const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
-    const alias = pickAliasForKey(provider, model);
+    const alias = aliasIndex.byKey.get(modelKey(provider, model))?.[0];
     return {
       provider,
       model,
@@ -223,7 +224,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
-      if (model.endsWith("*") || !policy.allows({ provider, model })) {
+      if (model.endsWith("*") || !allows({ provider, model })) {
         continue;
       }
       if (providerFilter && provider !== providerFilter) {
@@ -234,28 +235,16 @@ export function resolveModelDirectiveSelection(params: {
 
     // Also allow partial alias matches when the user didn't specify a provider.
     if (!paramsLocal.provider) {
-      const aliasMatches: Array<{ provider: string; model: string }> = [];
       for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
-        if (!aliasKey.includes(fragment)) {
+        if (!aliasKey.includes(fragment) || !allows(entry.ref)) {
           continue;
         }
-        aliasMatches.push({
-          provider: entry.ref.provider,
-          model: entry.ref.model,
-        });
-      }
-      for (const match of aliasMatches) {
-        if (!policy.allows(match)) {
-          continue;
-        }
-        if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
-          candidates.push(match);
+        if (
+          !candidates.some((c) => c.provider === entry.ref.provider && c.model === entry.ref.model)
+        ) {
+          candidates.push({ provider: entry.ref.provider, model: entry.ref.model });
         }
       }
-    }
-
-    if (candidates.length === 0) {
-      return {};
     }
 
     const scored = candidates
@@ -323,6 +312,16 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
+  if (
+    params.operatorModelPolicy &&
+    !params.operatorModelPolicy.allows(resolved.ref) &&
+    (rawLower.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
+  ) {
+    return {
+      error:
+        "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
+    };
+  }
   const explicitSelection = {
     selection: {
       provider: resolved.ref.provider,
@@ -331,7 +330,7 @@ export function resolveModelDirectiveSelection(params: {
       ...(resolved.alias ? { alias: resolved.alias } : {}),
     },
   };
-  const permitted = policy.allows(resolved.ref);
+  const permitted = allows(resolved.ref);
   // Preserve catalog hints for bare fragments, while explicit routes and aliases
   // depend only on policy, never on finite picker membership.
   if (

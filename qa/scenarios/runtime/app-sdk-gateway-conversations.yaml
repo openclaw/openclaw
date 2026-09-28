@@ -14,13 +14,12 @@ scenario:
       - app-sdk.session-send
       - app-sdk.session-controls
       - app-sdk.toolspace
-      - app-sdk.tasks
   objective: Exercise the source-internal App SDK preview across isolated Gateway WebSocket connections, conversation handles, and the supported resource namespaces without treating the private package as published.
   successCriteria:
     - Explicit Gateway URLs and tokens complete the WebSocket challenge and connection handshake.
     - Agent handles start runs, wait for completion, and cancel through Gateway RPC.
     - Session helpers create, resolve, send, abort, patch, and compact reusable conversations.
-    - Agent, tool, and task namespaces issue the expected Gateway methods and return SDK-level results.
+    - Agent and tool namespaces issue the expected Gateway methods and return SDK-level results.
   docsRefs:
     - docs/gateway/external-apps.md
     - docs/gateway/protocol.md

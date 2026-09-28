@@ -95,7 +95,7 @@ export function createHeartbeatDispatch(
 }
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
-  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Run `openclaw config set agents.defaults.heartbeat.target "none"` to keep these internal.';
 const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
 
 function prepareHeartbeatTargetAwareness(params: {
@@ -158,29 +158,6 @@ function prepareHeartbeatTargetAwareness(params: {
     });
     return undefined;
   }
-}
-
-/**
- * Determines whether to set an indicator type for heartbeat delivery.
- * This is used when delivery would otherwise be suppressed but we still want
- * to indicate that the heartbeat completed successfully.
- *
- * Returns "alert" when alerts are disabled but delivery would otherwise succeed,
- * and "sent" when the heartbeat was sent. Returns undefined in all other cases.
- */
-function shouldSetIndicator(
-  noChannelTarget: boolean,
-  visibility: { showAlerts: boolean; useIndicator: boolean },
-): "sent" | "alert" | undefined {
-  if (noChannelTarget || !visibility.useIndicator) {
-    return undefined;
-  }
-  // When alerts are disabled, use "alert" indicator to show heartbeat was processed.
-  if (!visibility.showAlerts) {
-    return "alert";
-  }
-  // Otherwise, heartbeat was sent successfully.
-  return "sent";
 }
 
 /** Monitoring decides which final is public before ordinary dispatch can send it. */
@@ -269,10 +246,13 @@ async function prepareHeartbeatDispatchReply(
       }
     }
   }
-  // Unselected payloads never acquire delivery custody. Their exact prepared
+  // Quiet and unselected payloads never acquire delivery custody. Their exact prepared
   // intents may retire; queued or unknown recovery ownership is untouched.
   for (const reply of replies) {
-    if (reply !== selected && outcome.kind !== "failure") {
+    if (
+      (execution !== "failed" && response?.notify === false) ||
+      (reply !== selected && outcome.kind !== "failure")
+    ) {
       await suppressPendingFinalDelivery(reply, { preserveActivity: true });
     }
   }
@@ -465,9 +445,10 @@ async function prepareHeartbeatDispatchReply(
             status: "skipped",
             reason: noChannelTarget ? (delivery.reason ?? "no-target") : "alerts-disabled",
             hasMedia: outcome.mediaUrls.length > 0,
-            indicatorType: shouldSetIndicator(noChannelTarget, visibility)
-              ? resolveIndicatorType("sent")
-              : undefined,
+            indicatorType:
+              !noChannelTarget && visibility.useIndicator
+                ? resolveIndicatorType("sent")
+                : undefined,
           },
       !failed,
     );

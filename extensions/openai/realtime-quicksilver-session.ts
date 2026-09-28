@@ -1,5 +1,5 @@
 // Native GPT-Live browser sessions: WebRTC offer broker plus gateway-owned sideband control.
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -29,13 +29,12 @@ import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
 } from "./realtime-quicksilver-session-limit.js";
-import {
-  connectOpenAIQuicksilverSideband,
-  type OpenAIQuicksilverSocketFactory,
-} from "./realtime-quicksilver-sideband.js";
+import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocketFactory } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
+  createOpenAIQuicksilverRequestIds,
   hangupOpenAIRealtimeCall,
   type OpenAIQuicksilverAuth,
   type OpenAIQuicksilverInitialItem,
@@ -249,11 +248,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       const offer: PendingOffer = {
         auth,
         expiresAt,
-        requestIds: {
-          realtimeSessionId: randomUUID(),
-          sessionId: randomUUID(),
-          threadId: randomUUID(),
-        },
+        requestIds: createOpenAIQuicksilverRequestIds(),
         request: { ...request, model, voice },
         nativeControl,
         timer: setTimeout(

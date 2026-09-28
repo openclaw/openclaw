@@ -16,19 +16,20 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunRecordsForTests,
+} from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
   findActiveCronRunReceiptInDatabase,
+  finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -49,7 +50,6 @@ afterEach(() => {
     stop(state);
   }
   states.clear();
-  resetTaskRegistryForTests({ persist: false });
 });
 
 function commandJob(id: string, nextRunAtMs = NOW): CronJob {
@@ -88,7 +88,8 @@ async function setupOwnerlessJob(
 }
 
 function history(storePath: string, jobId: string, runId?: string) {
-  return readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId, runId }).entries;
+  return readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId, runId })
+    .entries;
 }
 
 function receipts(storePath: string, jobId: string) {
@@ -153,10 +154,9 @@ describe("ownerless reservation and manual completion", () => {
       let runId: string | undefined;
       if (mode === "manual") {
         const ack = await enqueueRun(state, job.id, "force");
-        if (!ack.ok || !("enqueued" in ack) || !ack.enqueued) {
-          throw new Error("Expected an acknowledged manual run");
-        }
-        runId = ack.runId;
+        expect(ack).toEqual({ ok: true, ran: false, reason: "ownerless" });
+        runId = events.find((event) => event.action === "finished")?.runId;
+        expect(runId).toEqual(expect.any(String));
         await finished.promise;
         await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
       } else {
@@ -173,22 +173,13 @@ describe("ownerless reservation and manual completion", () => {
         expect.objectContaining(terminal),
       ]);
       expect(history(storePath, job.id, runId)).toEqual([expect.objectContaining(terminal)]);
-      const tasks = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-        runtime: "cron",
-        sourceId: job.id,
-      });
+      const tasks = readCronRunRecordsForTests(job.id);
       expect(tasks).toHaveLength(1);
       expect(tasks[0]).toMatchObject({
-        scopeKind: "system",
-        ownerKey: "",
-        requesterSessionKey: "",
         status: "failed",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
       });
       expect(tasks[0]?.agentId).toBeUndefined();
-      expect(tasks[0]?.requesterAgentId).toBeUndefined();
-      expect(tasks[0]?.childSessionKey).toBeUndefined();
+      expect(tasks[0]?.sessionKey).toBeUndefined();
       expect(receipts(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
       const persisted = (await loadCronStore(storePath)).jobs[0]!;
@@ -204,7 +195,7 @@ describe("ownerless reservation and manual completion", () => {
     },
   );
 
-  it("preserves the original scheduled slot when an ownerless manual run waits past it", async () => {
+  it("rejects an ownerless manual run before a blocked command lane without consuming its schedule", async () => {
     const scheduledAt = NOW + 1_000;
     const job = commandJob("ownerless-delayed-manual", scheduledAt);
     const { state, storePath, finished, execute } = await setupOwnerlessJob(job);
@@ -220,9 +211,8 @@ describe("ownerless reservation and manual completion", () => {
     try {
       await entered.promise;
       const ack = await enqueueRun(state, job.id, "force");
-      if (!ack.ok || !("enqueued" in ack) || !ack.enqueued) {
-        throw new Error("Expected an acknowledged delayed run");
-      }
+      expect(ack).toEqual({ ok: true, ran: false, reason: "ownerless" });
+      expect(getTotalQueueSize()).toBe(1);
       vi.setSystemTime(scheduledAt + 1);
       release.resolve();
       await blocker;
@@ -236,8 +226,8 @@ describe("ownerless reservation and manual completion", () => {
       });
       expect(persisted.state.nextRunAtMs).toBe(scheduledAt);
       expect(resolveCronJobConfigRevision(persisted)).toBe(revision);
-      expect(history(storePath, job.id, ack.runId)).toEqual([
-        expect.objectContaining({ runId: ack.runId, status: "skipped", nextRunAtMs: scheduledAt }),
+      expect(history(storePath, job.id)).toEqual([
+        expect.objectContaining({ status: "skipped", nextRunAtMs: scheduledAt }),
       ]);
       expect(execute).not.toHaveBeenCalled();
     } finally {
@@ -354,13 +344,14 @@ describe("ownerless skip transaction guards", () => {
     const job = commandJob("ownerless-live-receipt");
     const { state, storePath, events, execute } = await setupOwnerlessJob(job, () => owner);
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "ops",
       startedAtMs: NOW,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
         resolveAgentId: () => "ops",

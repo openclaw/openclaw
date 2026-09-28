@@ -13,6 +13,7 @@ import {
   waitForReliabilityWorkerMessage,
   type ReliabilityWorkerExit,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type WriterReadyMessage = {
   kind: "ready";
@@ -72,7 +73,7 @@ export function startWriter(databasePath: string, profile: ProfileConfig): Write
       String(profile.writerPauseMs),
     ],
     {
-      execArgv: ["--import", "tsx"],
+      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
       serialization: "json",
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },

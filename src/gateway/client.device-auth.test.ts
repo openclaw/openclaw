@@ -118,16 +118,12 @@ it.each(
   ),
 )(
   "uses exact $name comparison privately (origin: $origin, rotated: $rotated)",
-  ({ token, malformed, origin, rotated }) => {
+  async ({ token, malformed, origin, rotated }) => {
     fixture.token = token;
     fixture.malformed = malformed;
     const deps = host(origin);
     const scope = { deviceId: "fixture-device", role: "operator" };
-    const loaded = deps.load(scope);
-    assert(
-      !(loaded instanceof Promise),
-      "the synchronous facade must return its load result inline",
-    );
+    const loaded = await deps.load(scope);
     if (origin || malformed || token === undefined) {
       expect(loaded).toBeNull();
     } else {
@@ -136,7 +132,7 @@ it.each(
     if (rotated) {
       fixture.token = "fixture-newer";
     }
-    const stored = deps.store({
+    const stored = await deps.store({
       ...scope,
       token: "fixture-issued",
       scopes: [],
@@ -165,16 +161,12 @@ it.each(
 
 it.each([false, true])(
   "cleans exact raw legacy bytes without redirecting receipt cleanup (origin: %s)",
-  (origin) => {
+  async (origin) => {
     fixture.token = " fixture-existing ";
     const deps = host(origin, false, false);
     const scope = { deviceId: "fixture-device", role: "operator" };
-    const loaded = deps.load(scope);
-    assert(
-      !(loaded instanceof Promise),
-      "the synchronous facade must return its load result inline",
-    );
-    expect(deps.clear({ ...scope, expectedToken: "fixture-existing" })).toBe(true);
+    await deps.load(scope);
+    expect(await deps.clear({ ...scope, expectedToken: "fixture-existing" })).toBe(true);
     expect(fixture.token).toBeUndefined();
     expect(fixture.clear).toHaveBeenLastCalledWith({
       ...scope,
@@ -183,7 +175,7 @@ it.each([false, true])(
       observedToken: " fixture-existing ",
     });
     fixture.token = "fixture-newer";
-    expect(deps.clear({ ...scope, expectedToken: "fixture-issued" })).toBe(false);
+    expect(await deps.clear({ ...scope, expectedToken: "fixture-issued" })).toBe(false);
     expect(fixture.token).toBe("fixture-newer");
     expect(fixture.clear).toHaveBeenLastCalledWith({
       ...scope,
@@ -193,10 +185,10 @@ it.each([false, true])(
   },
 );
 
-it("keeps explicit read-only origin auth off storage reads and writes", () => {
+it("keeps explicit read-only origin auth off storage reads and writes", async () => {
   const deps = host(true, true);
   const scope = { deviceId: "fixture-device", role: "operator" };
-  expect(deps.load(scope)).toBeNull();
+  expect(await deps.load(scope)).toBeNull();
   expect(
     deps.store({ ...scope, token: "fixture-issued", scopes: [], expectedToken: null }),
   ).toBeUndefined();

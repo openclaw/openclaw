@@ -9,6 +9,9 @@ title: "Team setup"
 
 This guide sets up one OpenClaw gateway that a whole team uses: a bot in the workspace chat you already have, shared sessions everyone can open and steer in the Control UI, and roles that bound what each person can do. It is the same product as the [personal assistant setup](/start/openclaw) - team operation is configuration, not a separate edition.
 
+For an always-on Linux deployment with Cloudflare Access, GitHub identity sync,
+role bootstrap, and operations, follow [Deploy a team server](/gateway/team-server).
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).

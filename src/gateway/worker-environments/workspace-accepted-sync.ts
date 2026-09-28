@@ -123,7 +123,10 @@ function createAcceptedWorkspacePublisher(params: {
     }
 
     const transactionNonce = randomBytes(16).toString("hex");
-    const transactionCommand = async (action: "apply" | "rollback" | "commit" | "settle") =>
+    const transactionCommand = async (
+      action: "begin" | "apply" | "rollback" | "commit" | "settle",
+      input?: string,
+    ) =>
       await params.runWorkspaceCommand({
         transportRetry: "never",
         argv: [
@@ -134,29 +137,17 @@ function createAcceptedWorkspacePublisher(params: {
           params.remoteWorkspaceDir,
           transactionNonce,
         ],
+        ...(input === undefined ? {} : { input }),
       });
     const settleIndeterminatePublication = async (
       operation: "apply" | "commit",
       publicationFailure: unknown,
     ): Promise<AcceptedWorkspaceSettlementOutcome> => {
-      let settled: SpawnResult;
       try {
-        settled = await transactionCommand("settle");
-      } catch (observationFailure) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          observationFailure,
-        );
-      }
-      if (!workerWorkspaceCommandSucceeded(settled)) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          workspaceSyncError(settled),
-        );
-      }
-      try {
+        const settled = await transactionCommand("settle");
+        if (!workerWorkspaceCommandSucceeded(settled)) {
+          throw workspaceSyncError(settled);
+        }
         return parseAcceptedWorkspaceSettlement(settled.stdout);
       } catch (observationFailure) {
         throw new AcceptedWorkspacePublicationIndeterminateError(
@@ -198,18 +189,7 @@ function createAcceptedWorkspacePublisher(params: {
     };
     let transactionBegun = false;
     try {
-      const begun = await params.runWorkspaceCommand({
-        transportRetry: "never",
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
-          "begin",
-          params.remoteWorkspaceDir,
-          transactionNonce,
-        ],
-        input: JSON.stringify([...changed]),
-      });
+      const begun = await transactionCommand("begin", JSON.stringify([...changed]));
       if (!workerWorkspaceCommandSucceeded(begun)) {
         throw workspaceSyncError(begun);
       }

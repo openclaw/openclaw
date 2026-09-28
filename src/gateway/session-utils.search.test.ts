@@ -1,8 +1,18 @@
-import { describe, expect, test, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { filterAndSortSessionEntries, prepareSessionRowSelection } from "./session-utils-list.js";
+import * as display from "./session-utils-display.js";
+import {
+  filterAndSortSessionEntries,
+  listProjectedSessions,
+  prepareSessionRowSelection,
+} from "./session-utils-list.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
@@ -66,6 +76,57 @@ function selectSessionKeys(params: {
 }
 
 describe("filterAndSortSessionEntries search", () => {
+  test("prepares workspace identity names before selection and refreshes them after edits", async () => {
+    const workspace = tempDirs.make("openclaw-search-identity-");
+    const identityPath = path.join(workspace, "IDENTITY.md");
+    await fs.writeFile(identityPath, "- Name: Astronomy\n");
+    const cfg: OpenClawConfig = { agents: { entries: { main: { workspace } } } };
+    const key = "agent:main:session";
+    const projection = createSessionRowProjectionFixture({
+      cfg,
+      store: { [key]: { sessionId: "workspace-identity", updatedAt: 1 } },
+    });
+    const search = async (value: string) =>
+      (await listProjectedSessions({ projection, opts: { search: value } })).sessions.map(
+        (row) => row.key,
+      );
+    try {
+      expect(await search("Astronomy")).toEqual([key]);
+      await fs.writeFile(`${identityPath}.next`, "- Name: Chemistry\n");
+      await fs.rename(`${identityPath}.next`, identityPath);
+      expect(await search("Astronomy")).toEqual([]);
+      expect(await search("Chemistry")).toEqual([key]);
+    } finally {
+      projection.dispose();
+    }
+  });
+
+  test("reuses static search facts until the resident entry is replaced", () => {
+    const key = "agent:main:search-revision";
+    const entry = { sessionId: "search-revision", updatedAt: 1, label: "First Title" };
+    const projection = createSessionRowProjectionFixture({ cfg: baseCfg, store: { [key]: entry } });
+    const displayName = vi.spyOn(display, "resolveGatewaySessionDisplayName");
+    const search = (query: string) =>
+      filterAndSortSessionEntries(prepareSessionRowSelection(projection, { search: query })).map(
+        ([selected]) => selected,
+      );
+    try {
+      expect(search("FIRST")).toEqual([key]);
+      displayName.mockClear();
+      expect(search("TITLE")).toEqual([key]);
+      expect(displayName).not.toHaveBeenCalled();
+      projection.setEntry(key, { ...entry, label: "Second Name" });
+      expect(search("FIRST")).toEqual([]);
+      expect(search("SECOND")).toEqual([key]);
+      displayName.mockClear();
+      expect(search("NAME")).toEqual([key]);
+      expect(displayName).not.toHaveBeenCalled();
+    } finally {
+      displayName.mockRestore();
+      projection.dispose();
+    }
+  });
+
   test("returns all sessions when search is empty or missing", () => {
     for (const opts of [{ search: "" }, {}]) {
       expect(selectSessionKeys({ opts })).toHaveLength(3);

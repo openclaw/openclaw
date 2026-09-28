@@ -38,10 +38,6 @@ type LegacyOAuthSidecarStore = AuthProfileRepairCandidate & {
   profiles: LegacyOAuthSidecarProfile[];
 };
 
-type LegacyOAuthUnreferencedSidecar = {
-  sidecarPath: string;
-};
-
 type LegacyOAuthSidecarRepairResult = {
   detected: string[];
   changes: string[];
@@ -81,7 +77,7 @@ function resolveLegacyOAuthSidecarStore(
 function listUnreferencedLegacyOAuthSidecars(
   referencedRefIds: Set<string>,
   env: NodeJS.ProcessEnv,
-): LegacyOAuthUnreferencedSidecar[] {
+): string[] {
   const sidecarDir = path.join(resolveOAuthDir(env), LEGACY_OAUTH_SECRET_DIRNAME);
   let entries: fs.Dirent[];
   try {
@@ -99,7 +95,7 @@ function listUnreferencedLegacyOAuthSidecars(
     }
     const sidecarPath = path.join(sidecarDir, entry.name);
     return isLegacyOAuthSidecarPayload(loadJsonFileThroughSymlink(sidecarPath))
-      ? [{ sidecarPath }]
+      ? [sidecarPath]
       : [];
   });
 }
@@ -129,12 +125,6 @@ function applyLegacyOAuthSidecarMaterial(params: {
   return true;
 }
 
-function backupLegacyOAuthSidecarStore(authPath: string, now: () => number): string {
-  const backupPath = `${authPath}.oauth-ref.${now()}.bak`;
-  fs.copyFileSync(authPath, backupPath);
-  return backupPath;
-}
-
 /**
  * Migrates legacy Codex OAuth sidecar secrets back into inline auth profile credentials.
  *
@@ -158,10 +148,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   const unreferencedSidecars = listUnreferencedLegacyOAuthSidecars(referencedRefIds, env);
 
   const result: LegacyOAuthSidecarRepairResult = {
-    detected: [
-      ...stores.map((entry) => entry.authPath),
-      ...unreferencedSidecars.map((entry) => entry.sidecarPath),
-    ],
+    detected: [...stores.map((entry) => entry.authPath), ...unreferencedSidecars],
     changes: [],
     warnings: [],
   };
@@ -230,7 +217,8 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
     }
 
     try {
-      const backupPath = backupLegacyOAuthSidecarStore(store.authPath, now);
+      const backupPath = `${store.authPath}.oauth-ref.${now()}.bak`;
+      fs.copyFileSync(store.authPath, backupPath);
       if (!("version" in store.raw)) {
         store.raw.version = AUTH_STORE_VERSION;
       }

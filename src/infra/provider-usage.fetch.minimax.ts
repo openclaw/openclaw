@@ -209,10 +209,6 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
   return undefined;
 }
 
-function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  return readTrimmedStringAlias(record, keys);
-}
-
 function parseEpoch(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     const timestampMs = value < 1e12 ? Math.floor(value * 1000) : Math.floor(value);
@@ -583,8 +579,8 @@ export async function fetchMinimaxUsage(
   const modelName =
     chatRemains && typeof chatRemains.model_name === "string" ? chatRemains.model_name : undefined;
   const plan =
-    pickString(usageRecord, PLAN_KEYS) ??
-    pickString(payload, PLAN_KEYS) ??
+    readTrimmedStringAlias(usageRecord, PLAN_KEYS) ??
+    readTrimmedStringAlias(payload, PLAN_KEYS) ??
     (modelName ? `Coding Plan · ${modelName}` : undefined);
 
   return {

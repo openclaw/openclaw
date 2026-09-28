@@ -1,5 +1,5 @@
 // Defines the top-level OpenClaw configuration type.
-import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
+import type { z } from "zod";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { ConfigIncludeOwnership } from "./includes.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
@@ -27,56 +27,22 @@ import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
+import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
+import type { SecuritySchema } from "./zod-schema.root-support.js";
 
 /** One persisted suppression for a known security audit finding. */
-export type SecurityAuditSuppression = {
-  /** Exact security audit check id to suppress. */
-  checkId: string;
-  /** Optional case-insensitive substring required in the finding title. */
-  titleIncludes?: string;
-  /** Optional case-insensitive substring required in the finding detail. */
-  detailIncludes?: string;
-  /** Operator rationale for accepting this standing finding. */
-  reason?: string;
-};
+export type SecurityConfig = NonNullable<z.input<typeof SecuritySchema>>;
+export type SecurityAuditSuppression = NonNullable<
+  NonNullable<SecurityConfig["audit"]>["suppressions"]
+>[number];
 
-export type SecurityConfig = {
-  /** Security audit policy and accepted standing findings. */
-  audit?: {
-    /** Accepted security audit findings to omit from active summary/findings. */
-    suppressions?: SecurityAuditSuppression[];
-  };
-  installPolicy?: {
-    /**
-     * Enable operator-owned install policy. When true without an exec command,
-     * install/update attempts fail closed for supported targets.
-     */
-    enabled?: boolean;
-    /** Supported install targets. Omit to cover every supported target. */
-    targets?: Array<"skill" | "plugin">;
-    /**
-     * Trusted local policy command. Transport intentionally mirrors exec
-     * SecretRef provider fields: absolute command, no shell, bounded output,
-     * explicit env allowlist, and secure path checks.
-     */
-    exec?: {
-      source: "exec";
-      command: string;
-      args?: string[];
-      timeoutMs?: number;
-      noOutputTimeoutMs?: number;
-      maxOutputBytes?: number;
-      env?: Record<string, string>;
-      passEnv?: string[];
-      trustedDirs?: string[];
-    };
-  };
-};
+export type SurfaceConfigEntry = NonNullable<z.input<typeof OpenClawSchemaShape.surfaces>>[string];
 
-export type SurfaceConfigEntry = {
-  /** Surface-specific silent reply policy for channels or UI integrations. */
-  silentReply?: SilentReplyPolicyShape;
-};
+type RootMetaConfig = NonNullable<z.input<typeof OpenClawSchemaShape.meta>>;
+type RootWizardConfig = NonNullable<z.input<typeof OpenClawSchemaShape.wizard>>;
+type RootUpdateConfig = NonNullable<z.input<typeof OpenClawSchemaShape.update>>;
+type RootUiConfig = NonNullable<z.input<typeof OpenClawSchemaShape.ui>>;
+type RootAttachmentsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.attachments>>;
 
 /** Top-level OpenClaw config as read from user/project config files. */
 export type OpenClawConfig = {
@@ -84,12 +50,7 @@ export type OpenClawConfig = {
   audit?: AuditConfig;
   /** JSON schema URL used by editors and generated config files. */
   $schema?: string;
-  meta?: {
-    /** Last OpenClaw version that wrote this config. */
-    lastTouchedVersion?: string;
-    /** One-time doctor migrations already applied to this config. */
-    migrations?: { modelPolicyAllowlist?: true; utilityModelSeparation?: true };
-  };
+  meta?: RootMetaConfig;
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
   /** Named access groups used by channel/provider policy allowlists. */
@@ -112,82 +73,19 @@ export type OpenClawConfig = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
-  wizard?: {
-    /** Guided-onboarding discovery consent: "full" scans silently, "guarded" asks first. */
-    accessMode?: "full" | "guarded";
-    /** Offer installed-application plugin and skill recommendations during onboarding. */
-    appRecommendations?: boolean;
-    lastRunAt?: string;
-    lastRunVersion?: string;
-    lastRunCommit?: string;
-    lastRunCommand?: string;
-    lastRunMode?: "local" | "remote";
-    securityAcknowledgedAt?: string;
-  };
+  wizard?: RootWizardConfig;
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
-  update?: {
-    /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
-    channel?: "stable" | "extended-stable" | "beta" | "dev";
-    /** Check for updates on gateway start; disabling also prevents anonymous update pings. */
-    checkOnStart?: boolean;
-    /** Core auto-update policy for package installs. */
-    auto?: {
-      /** Enable background auto-update checks and apply logic. Default: false. */
-      enabled?: boolean;
-    };
-  };
+  update?: RootUpdateConfig;
   /** Explicit operator consent for anonymous feature statistics in the daily update check. */
   telemetry?: TelemetryConfig;
   /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
-  ui?: {
-    /** Accent color for OpenClaw UI chrome (hex). */
-    seamColor?: string;
-    /**
-     * Operator display preferences. Canonical config home so agents can
-     * change them through the approval gate and clients stay in sync; the
-     * Control UI mirrors them into browser storage for instant boot.
-     */
-    prefs?: {
-      /** Control UI theme. */
-      theme?:
-        | "claw"
-        | "knot"
-        | "dash"
-        | "absolutely"
-        | "tide"
-        | "beacon"
-        | "phosphor"
-        | "crt"
-        | "manuscript"
-        | "rose"
-        | "miami"
-        | "custom";
-      /** Light/dark preference. */
-      themeMode?: "light" | "dark" | "system";
-      /** User-selected Control UI accent color (#RRGGBB). */
-      accent?: string;
-      /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
-      locale?: string;
-      /** Show model thinking output in chat. */
-      chatShowThinking?: boolean;
-      /** Show tool call cards in chat. */
-      chatShowToolCalls?: boolean;
-      /** Keep model commentary in Control UI transcripts after a run. */
-      chatPersistCommentary?: boolean;
-      /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
-      chatSendShortcut?: "enter" | "modifier-enter";
-      /** Follow-up handling while a run is active; unset uses the server queue mode. */
-      chatFollowUpMode?: "steer" | "queue";
-      /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
-      sidebarEntries?: string[];
-    };
-  };
+  ui?: RootUiConfig;
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
   /** Skill loading and bundled skill configuration. */
@@ -212,10 +110,7 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  attachments?: {
-    /** Optional retention window for persisted inbound media cleanup. */
-    ttlHours?: number;
-  };
+  attachments?: RootAttachmentsConfig;
   /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
   /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
@@ -310,6 +205,8 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Internal include-expanded authored values paired with sourceConfigBeforeMigrations. */
+  authoredConfig?: OpenClawConfig;
   /** Include/env-resolved source before raw compatibility migrations. */
   sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**

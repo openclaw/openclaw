@@ -263,6 +263,27 @@ Register each capability inside `register(api)` alongside your existing
     close calls during the provider invocation are no-ops; terminal callbacks
     must not wait for their own disposal.
 
+    Continuous mono PCM16/24 kHz bridges may implement
+    `setAudioOutputPort(output)` to bind a worker-owned playback sink before
+    connecting. `RealtimeVoiceAudioOutputPort` carries a transferable Node
+    `MessagePort` and a shared close fence: its first `Int32` is `0` while
+    open and permanently `1` after revocation. With this sink bound, send
+    PCM and clear events through the port instead of `onAudio` and
+    `onClearAudio`; keep transcripts, delegation, and lifecycle callbacks on
+    the host. `createRealtimeVoiceAudioPortSender` provides a bounded queue,
+    copied buffer ownership, one outstanding audio message, and ordered
+    clears. A receiver may send `{ type: "flush", marker }`; the sender replies
+    with `{ type: "flushed", marker }` only after its queued and outstanding
+    PCM has been acknowledged, including when there was no audio. A newer flush
+    marker supersedes an older pending marker. This is local sink admission,
+    not proof of audible playback or future provider silence. Consumers use it
+    to order control-plane completion behind already-submitted media.
+    The receiver acknowledges audio with `{ type: "ack" }`, checks
+    the fence before accepting audio, and closes its playback resources when
+    the port closes. Do not use this path to bypass host response or
+    wake-name admission. The sink owner revokes the fence before asynchronous
+    teardown so queued audio cannot enter a replacement call.
+
     Bundled lazy providers use `createLazyRealtimeVoiceBridgeLifecycle` from
     the private-local `openclaw/plugin-sdk/realtime-voice-provider` surface
     to own loading, callback fencing, and awaited disposal. It claims a
@@ -358,6 +379,12 @@ Register each capability inside `register(api)` alongside your existing
     are contained without task fallthrough. `onTranscript` retains its `void`
     callback contract, including assignable async handlers and close-time final
     transcript flushing.
+
+    Providers with cumulative provisional transcripts can pass
+    `{ textMode: "snapshot" }` as the fourth `onTranscript` argument. The gateway
+    relay forwards it to the browser, which replaces the provisional text in place.
+    Omit this metadata for incremental fragments. Publish one final per utterance
+    at the provider's actual completion boundary, not for every provisional snapshot.
 
     A host `runAgentConsult` rejection named `AbortError` represents
     cancellation, even when the provider's own signal is still live. Do not

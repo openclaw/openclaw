@@ -10,7 +10,6 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
-import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -31,6 +30,7 @@ registerNewSessionSetupEnglish();
 // silently eat an Enter press again.
 type SilentSubmitGate = "submitting" | "empty-draft";
 type ReasonedSubmitGate =
+  | "initial-turn-rejected"
   | "preference-restore"
   | "model-setup"
   | "route-pending"
@@ -87,6 +87,7 @@ export function readNewSessionSubmissionAccess(options: {
     const createAccess = readSessionMethodAccess(gateway, {
       method: "sessions.create",
       params: createParams,
+      sessionScope: true,
     });
     if (!createAccess.allowed || !target) {
       return createAccess;
@@ -111,13 +112,14 @@ export function requiresNewSessionModelSetup(options: {
 }): boolean {
   const { snapshot, gateway, place, pendingPlacement } = options;
   const selectedAgent = place.selectedAgent();
-  return requiresChatModelSetup({
+  const agents = snapshot.context?.agents.state;
+  return place.modelControl.requiresModelSetup({
     catalog:
       catalog.isTarget(snapshot.data) ||
       place.remotePlacement ||
       Boolean(pendingPlacement.sessionKey),
     connected: gateway.connected,
-    agentsLoaded: snapshot.context?.agents.state.agentsList !== null,
+    agentsLoaded: Boolean(agents?.agentsList && !agents.agentsListCached),
     selectedAgentFound: selectedAgent !== undefined,
     agentModel: selectedAgent?.model?.primary,
   });
@@ -248,6 +250,16 @@ export function resolveNewSessionSubmitBlock(
     return retryReady
       ? emptyDraftBlock(host, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
+  }
+  if (snapshot.context?.agents.state.agentsListCached) {
+    return {
+      gate: "agents",
+      reason: t(
+        snapshot.context.agents.state.agentsError
+          ? "newSession.agentDefaultsUnavailable"
+          : "newSession.loadingAgentDefaults",
+      ),
+    };
   }
   const modelUnavailableMessage =
     kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());

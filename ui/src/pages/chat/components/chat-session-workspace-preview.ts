@@ -5,7 +5,6 @@ import {
   setSessionWorkspaceError,
   isCurrentSessionWorkspace,
   openSessionWorkspacePreview,
-  requestWorkspaceUpdate,
 } from "./chat-session-workspace-state.ts";
 import type {
   SessionWorkspaceHost,
@@ -168,7 +167,7 @@ export function openWorkspaceItem<T>(
     } catch (error) {
       fail(formatUiError(error));
     } finally {
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
     }
   })();
 }

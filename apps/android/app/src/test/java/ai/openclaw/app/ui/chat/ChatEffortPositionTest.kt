@@ -17,7 +17,7 @@ class ChatEffortPositionTest {
   @Test
   fun advertisedLevelsShareOneEvenSliderAndNeedleScale() {
     val expectedFractions = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
-    val expectedAngles = listOf(150f, 210f, 270f, 330f, 390f)
+    val expectedAngles = listOf(180f, 210f, 240f, 270f, 300f)
 
     options.forEachIndexed { index, option ->
       val position = resolveChatEffortPosition(option.id, options)

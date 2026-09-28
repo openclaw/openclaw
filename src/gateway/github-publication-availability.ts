@@ -83,7 +83,7 @@ export function matchesCurrentGitHubPublicationIdentity(params: {
   });
 }
 
-type PublicationSessionIdentity = {
+export type PublicationSessionIdentity = {
   sessionId: string;
   sessionKey: string;
   agentId: string;
@@ -122,7 +122,7 @@ function readPublicationWorktreeOwner(
     worktree.branch !== entry.worktree.branch ||
     worktree.repoRoot !== entry.worktree.repoRoot
   ) {
-    throw new Error("GitHub publication session worktree owner changed.");
+    throw new GitHubPublicationSessionChangedError();
   }
   if (
     expected &&

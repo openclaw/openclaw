@@ -54,7 +54,7 @@ describe("UsagePage detail identity", () => {
   ])(
     "retires a selected range during $refresh instance replacement with $points points (active drag: $activeDrag)",
     async ({ refresh, points, activeDrag }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const timestamp = new Date().setHours(12, 0, 0, 0);
       let sessionId = "original-instance";
       let series = usagePoints(timestamp, 3);
@@ -79,7 +79,7 @@ describe("UsagePage detail identity", () => {
             })),
           };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
@@ -128,7 +128,7 @@ describe("UsagePage detail identity", () => {
   ])(
     "retires old-$replacement details and pending recovery during $refresh overview refresh",
     async ({ replacement, refresh }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const retired = deferred<SessionUsageTimeSeries>();
       let agentId = "main";
       let sessionId = "original-instance";
@@ -160,7 +160,7 @@ describe("UsagePage detail identity", () => {
             ? { logs: [{ timestamp: 1, role: "user", content: "Original turn" }] }
             : { sessionId: "original-instance", points: [] };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const context = contextWithClient(client);
@@ -226,7 +226,7 @@ describe("UsagePage detail identity", () => {
   ])(
     "retains healthy details and range during $refresh refresh of optional instance $sessionId",
     async ({ sessionId, refresh }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const points = usagePoints(new Date().setHours(12, 0, 0, 0), 3);
       let label = "Original summary";
       const request = vi.fn(async (method: string) => {
@@ -250,7 +250,7 @@ describe("UsagePage detail identity", () => {
         if (method === "sessions.usage.timeseries") {
           return { sessionId, points };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
@@ -295,7 +295,7 @@ describe("UsagePage detail identity", () => {
   ])(
     "binds context response $returned to optional captured instance $captured",
     async ({ captured, returned, conflict }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       let returnedId = returned;
       let report = "Initial context";
       const session = {
@@ -316,9 +316,7 @@ describe("UsagePage detail identity", () => {
             ],
           };
         }
-        return method === "usage.cost"
-          ? snapshot.costSummary
-          : { providers: [], logs: [], points: [] };
+        return { providers: [], logs: [], points: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);

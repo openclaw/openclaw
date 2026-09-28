@@ -20,6 +20,7 @@ import {
   reconcileSessionChanged,
 } from "../sessions/reconcile.ts";
 import { createSessionEventSubscriptionOwner } from "../sessions/session-event-subscription.ts";
+import { canApplySessionListSnapshot } from "../sessions/session-list-query.ts";
 import { buildSessionListParams } from "../sessions/session-requests.ts";
 import { selectableAgentsList } from "./display.ts";
 import { agentRosterCards } from "./roster-activity.ts";
@@ -157,20 +158,31 @@ class RosterActivityStore {
       return;
     }
     const info = readSessionChangedEvent(event.payload);
+    // Recaps are absent from this roster's ordinary session-list projection.
+    if (event.event === "sessions.changed" && info?.reason === "activity-summary") {
+      return;
+    }
+    const snapshotApplied =
+      this.current.error === null &&
+      !this.activeRequest &&
+      canApplySessionListSnapshot(this.current.result, event.payload, {
+        archivedFilter: "all",
+        involvingMe: this.involvingMe,
+      });
     const reconciled = reconcileSessionChanged(this.current.result, event.payload, {
       archivedFilter: "all",
     });
     if (reconciled.result !== this.current.result) {
       this.publishResult(reconciled.result);
     }
+    if (snapshotApplied) {
+      return;
+    }
     const ended =
       info?.hasActiveRun === false || (info?.status != null && info.status !== "running");
-    // Streaming messages do not invalidate the roster. A terminal snapshot can
-    // replace a known member just as in the primary session catalog.
-    if (
-      event.event === "session.message" &&
-      (!ended || (reconciled.row && info?.archived !== true && !this.involvingMe))
-    ) {
+    // Streaming messages do not establish membership; terminal snapshots use
+    // the same admission decision as sessions.changed.
+    if (event.event === "session.message" && !ended) {
       return;
     }
     this.revokeRequest();

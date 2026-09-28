@@ -4,6 +4,7 @@ export type { Generated, Selectable } from "kysely";
 export { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 export {
   openSqliteWorkerStore,
+  runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
   SqliteWorkerError,
   type SqliteWorkerBackend,

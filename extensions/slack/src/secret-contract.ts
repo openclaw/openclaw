@@ -1,4 +1,3 @@
-// Slack plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,
@@ -53,36 +52,25 @@ export function collectRuntimeConfigAssignments(params: {
       hasOwnProperty(relay as Record<string, unknown>, "authToken")
     );
   };
-  collectConditionalChannelFieldAssignments({
-    channelKey: "slack",
-    field: "appToken",
-    channel: slack,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
-    topLevelActiveWithoutAccounts: baseMode === "socket",
-    topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled && !hasOwnProperty(account, "appToken") && resolveAccountMode(account) === "socket",
-    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "socket",
-    topInactiveReason: "no enabled Slack socket-mode surface inherits this top-level appToken.",
-    accountInactiveReason: "Slack account is disabled or not running in socket mode.",
-  });
-  collectConditionalChannelFieldAssignments({
-    channelKey: "slack",
-    field: "signingSecret",
-    channel: slack,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
-    topLevelActiveWithoutAccounts: baseMode === "http",
-    topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled &&
-      !hasOwnProperty(account, "signingSecret") &&
-      resolveAccountMode(account) === "http",
-    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "http",
-    topInactiveReason: "no enabled Slack HTTP-mode surface inherits this top-level signingSecret.",
-    accountInactiveReason: "Slack account is disabled or not running in HTTP mode.",
-  });
+  for (const [field, mode, label] of [
+    ["appToken", "socket", "socket"],
+    ["signingSecret", "http", "HTTP"],
+  ] as const) {
+    collectConditionalChannelFieldAssignments({
+      channelKey: "slack",
+      field,
+      channel: slack,
+      surface,
+      defaults: params.defaults,
+      context: params.context,
+      topLevelActiveWithoutAccounts: baseMode === mode,
+      topLevelInheritedAccountActive: ({ account, enabled }) =>
+        enabled && !hasOwnProperty(account, field) && resolveAccountMode(account) === mode,
+      accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === mode,
+      topInactiveReason: `no enabled Slack ${label}-mode surface inherits this top-level ${field}.`,
+      accountInactiveReason: `Slack account is disabled or not running in ${label} mode.`,
+    });
+  }
   collectNestedChannelFieldAssignments({
     channelKey: "slack",
     nestedKey: "relay",

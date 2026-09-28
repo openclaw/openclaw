@@ -1,9 +1,3 @@
-/**
- * Browser action request normalization.
- *
- * Converts loosely typed route bodies into the closed BrowserActRequest union
- * used by Playwright and Chrome MCP action executors.
- */
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
@@ -90,26 +84,11 @@ export function canonicalizeActTargetIds(
   return null;
 }
 
-function normalizeFields(rawFields: unknown) {
-  return normalizeBrowserFormFields(Array.isArray(rawFields) ? rawFields : []);
-}
-
 function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
   return normalizeActRequest(value as Record<string, unknown>, { source: "batch", depth });
-}
-
-function readActionNonNegativeInteger(
-  body: Record<string, unknown>,
-  key: string,
-): number | undefined {
-  return readRouteNonNegativeInteger(body[key], key);
-}
-
-function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
-  return readRouteTimerTimeoutMs(body.timeoutMs);
 }
 
 function readBoundedActionDurationMs(
@@ -119,7 +98,7 @@ function readBoundedActionDurationMs(
   maxMs: number,
 ): number | undefined {
   return normalizeActBoundedNonNegativeMs(
-    readActionNonNegativeInteger(body, key),
+    readRouteNonNegativeInteger(body[key], key),
     fieldName,
     maxMs,
   );
@@ -144,7 +123,6 @@ function definedAction<T extends BrowserActRequest>(action: T): T {
   return action;
 }
 
-/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch"; depth?: number },
@@ -181,7 +159,7 @@ export function normalizeActRequest(
         "click delayMs",
         ACT_MAX_CLICK_DELAY_MS,
       );
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({
         kind,
         ref,
@@ -212,7 +190,7 @@ export function normalizeActRequest(
         "clickCoords delayMs",
         ACT_MAX_CLICK_DELAY_MS,
       );
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, x, y, targetId, doubleClick, button, delayMs, timeoutMs });
     }
     case "type": {
@@ -227,7 +205,7 @@ export function normalizeActRequest(
       }
       const submit = toBoolean(body.submit);
       const slowly = toBoolean(body.slowly);
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, ref, selector, text, targetId, submit, slowly, timeoutMs });
     }
     case "insertText": {
@@ -241,7 +219,7 @@ export function normalizeActRequest(
       if (!key) {
         throw new Error("press requires key");
       }
-      const delayMs = readActionNonNegativeInteger(body, "delayMs");
+      const delayMs = readRouteNonNegativeInteger(body.delayMs, "delayMs");
       return definedAction({ kind, key, targetId, delayMs });
     }
     case "hover":
@@ -251,7 +229,7 @@ export function normalizeActRequest(
       if (!ref && !selector) {
         throw new Error(`${kind} requires ref or selector`);
       }
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, ref, selector, targetId, timeoutMs });
     }
     case "drag": {
@@ -265,7 +243,7 @@ export function normalizeActRequest(
       if (!endRef && !endSelector) {
         throw new Error("drag requires endRef or endSelector");
       }
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({
         kind,
         startRef,
@@ -284,15 +262,15 @@ export function normalizeActRequest(
       if ((!ref && !selector) || !values.length) {
         throw new Error("select requires ref/selector and values");
       }
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, ref, selector, values, targetId, timeoutMs });
     }
     case "fill": {
-      const fields = normalizeFields(body.fields);
+      const fields = normalizeBrowserFormFields(Array.isArray(body.fields) ? body.fields : []);
       if (!fields.length) {
         throw new Error("fill requires fields");
       }
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, fields, targetId, timeoutMs });
     }
     case "resize": {
@@ -330,7 +308,7 @@ export function normalizeActRequest(
           "wait requires at least one of: timeMs, text, textGone, selector, url, loadState, fn",
         );
       }
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({
         kind,
         timeMs,
@@ -350,7 +328,7 @@ export function normalizeActRequest(
         throw new Error("evaluate requires fn");
       }
       const ref = toStringOrEmpty(body.ref) || undefined;
-      const timeoutMs = readActionTimeoutMs(body);
+      const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, fn, ref, targetId, timeoutMs });
     }
     case "close": {

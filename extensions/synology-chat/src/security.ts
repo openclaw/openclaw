@@ -2,10 +2,7 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -13,6 +10,7 @@ import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { getSynologyRuntime } from "./runtime.js";
 
 /**
  * Validate webhook token using constant-time comparison.
@@ -32,7 +30,7 @@ export async function authorizeUserForDmWithIngress(params: {
   allowedUserIds: string[];
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getSynologyRuntime().channel.inbound.ingress.resolveStable({
     channelId: "synology-chat",
     accountId: params.accountId,
     identity: {

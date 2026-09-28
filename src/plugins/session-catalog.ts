@@ -29,6 +29,8 @@ export type SessionCatalogListProviderParams = {
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
+  /** True when the caller accepts retained/pending hosts and later authoritative onHost updates. */
+  allowPartialResults?: boolean;
   /** Register host publication before the logical list settles; includes the onHost callback. */
   waitUntil?: (completion: Promise<void>) => void;
   /** Catalog owner retirement, independent of the requesting connection's lifetime. */
@@ -108,6 +110,9 @@ export interface SessionCatalogEntrySummary {
 
 /** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
+  /** Opaque immutable-entry revision, including config and selection scope. Cache only derived
+   * facts by this token; release entry references when the list closes. Not live authority. */
+  revision?: object;
   entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
   /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
   entriesForCatalog?: () => SessionCatalogAgentEntry[];
@@ -224,6 +229,7 @@ export type SessionCatalogProvider = {
     agentId?: string;
     hostId: string;
     threadId: string;
+    sourceHomeId?: string;
   }) => Promise<SessionCatalogTerminalPlan>;
   startTerminalSession?: (
     request: SessionCatalogStartTerminalProviderParams,

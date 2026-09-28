@@ -53,7 +53,7 @@ extension OpenClawChatViewModel {
             (entry.agentId ?? self.currentSessionSnapshot().deliveryAgentID) == target.agentID
     }
 
-    var canRequestSessionCompact: Bool {
+    public var canRequestSessionCompact: Bool {
         !self.isCompacting &&
             !self.isSending &&
             !self.hasBlockingRunActivity &&
@@ -338,22 +338,13 @@ extension OpenClawChatViewModel {
                 }
             }
             switch action {
-            case .pin:
+            case .pin, .unpin:
                 try await routeLease.patchSession(
                     key: key,
                     agentID: targets[key]?.agentID,
                     label: nil,
                     category: nil,
-                    pinned: true,
-                    archived: nil,
-                    unread: nil)
-            case .unpin:
-                try await routeLease.patchSession(
-                    key: key,
-                    agentID: targets[key]?.agentID,
-                    label: nil,
-                    category: nil,
-                    pinned: false,
+                    pinned: action == .pin,
                     archived: nil,
                     unread: nil)
             case .archive:
@@ -523,6 +514,7 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.input = result.editorText ?? ""
+            self.narration = ChatNarration()
             self.restoreEditorAttachments(result.editorAttachments)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
@@ -671,10 +663,6 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func refreshSessionBranchesForMenuPresentation() async {
-        await self.refreshSessionBranches()
-    }
-
     var canSwitchSessionBranch: Bool {
         !self.hasBlockingRunActivity &&
             !self.isSending &&
@@ -725,6 +713,7 @@ extension OpenClawChatViewModel {
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
+            self.narration = ChatNarration()
             await self.reconcileSessionBranchChange(
                 switchActivity,
                 confirmedLeafEntryID: normalizedLeafEntryID)

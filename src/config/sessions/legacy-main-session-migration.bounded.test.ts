@@ -93,7 +93,7 @@ function recordTranscriptReads() {
     [eager, streamed].flatMap((spy) =>
       spy.mock.calls.flatMap(([, query]) => {
         const compiled = query.compile();
-        return /^select .* from "transcript_events"/.test(compiled.sql)
+        return /^select\b[\s\S]*\bfrom "transcript_events"/.test(compiled.sql)
           ? [{ eager: spy === eager, parameters: compiled.parameters }]
           : [];
       }),

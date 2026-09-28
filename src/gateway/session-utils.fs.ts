@@ -1,16 +1,15 @@
 // Transcript artifact usage, previews, and response bounds.
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { findExistingTranscriptPath } from "./session-transcript-archive-reader.js";
 import {
   createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
 import { isOversizedTranscriptLine } from "./session-transcript-record-parser.js";
-import type { SessionPreviewItem } from "./session-utils.types.js";
 
 export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
@@ -58,19 +57,12 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
       }
       let normalizedMessage: Record<string, unknown>;
       try {
-        const record = JSON.parse(line) as Record<string, unknown>;
-        if (
-          !record.message ||
-          typeof record.message !== "object" ||
-          Array.isArray(record.message)
-        ) {
+        const record = asOptionalRecord(JSON.parse(line));
+        const message = asOptionalRecord(record?.message);
+        if (!record || !message) {
           continue;
         }
-        const message = record.message as Record<string, unknown>;
-        const usage =
-          message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
-            ? message.usage
-            : record.usage;
+        const usage = asOptionalRecord(message.usage) ?? asOptionalRecord(record.usage);
         normalizedMessage = {
           ...message,
           ...(typeof message.provider !== "string" && typeof record.provider === "string"
@@ -79,7 +71,7 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
           ...(typeof message.model !== "string" && typeof record.model === "string"
             ? { model: record.model }
             : {}),
-          ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
+          ...(usage ? { usage } : {}),
         };
       } catch {
         continue;
@@ -90,23 +82,4 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   } catch {
     return null;
   }
-}
-
-export function buildSessionPreviewItems(
-  messages: readonly unknown[],
-  maxItems: number,
-  maxChars: number,
-  view: "display" | "model-context" = "display",
-): SessionPreviewItem[] {
-  const items: SessionPreviewItem[] = [];
-  // Rejected rows do not consume the limit; older text cannot affect a full preview.
-  for (let index = messages.length - 1; index >= 0 && items.length < maxItems; index -= 1) {
-    const projected = projectSessionDisplayMessage(messages[index], { maxChars, view });
-    if (!projected) {
-      continue;
-    }
-    items.push(projected);
-  }
-
-  return items.toReversed();
 }

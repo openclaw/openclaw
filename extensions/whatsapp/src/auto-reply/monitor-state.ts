@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements monitor state behavior.
 import {
   channelReadyPatch,
   channelStoppedPatch,

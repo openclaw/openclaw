@@ -5,6 +5,7 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob, CronJobPatch, CronStoredJob } from "../types.js";
 import { computeJobNextRunAtMs, hasScheduledNextRunAtMs, isJobEnabled } from "./jobs-scheduling.js";
+import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 
 /** Keep the harness-owned immutable envelope intact when copying mutable job fields. */
 export function cloneCronJobForMutation(job: CronStoredJob): CronStoredJob {
@@ -113,7 +114,13 @@ export function finalizeUpdatedJob(params: {
     // trigger mode that produced it. Configuration changes release both the
     // slot and its provenance so natural schedule math can take ownership.
     nextJob.state.pacedNextRunAtMs = undefined;
-    nextJob.state.forcePreservedNextRunAtMs = undefined;
+    // Enablement alone cannot consume a one-shot retained by manual verification.
+    nextJob.state.forcePreservedNextRunAtMs = cronSchedulingInputsEqual(
+      { ...job, enabled: nextJob.enabled },
+      nextJob,
+    )
+      ? resolveForcePreservedOneShotAtMs(job)
+      : undefined;
     if (isJobEnabled(nextJob)) {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {

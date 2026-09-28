@@ -578,7 +578,7 @@
   flex: 0 1 auto;
   max-width: 140px;
   overflow: hidden;
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-overflow: ellipsis;
@@ -595,9 +595,8 @@
 }
 
 .session-kind--direct {
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
 }
-
 .session-kind--group {
   color: var(--info);
 }
@@ -986,57 +985,6 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-details-empty {
-  padding: 4px 0;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-checkpoint-list {
-  display: grid;
-}
-
-.session-checkpoint-card {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) 0;
-}
-
-.session-checkpoint-card + .session-checkpoint-card {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.session-checkpoint-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.session-checkpoint-card__header strong,
-.session-checkpoint-card__delta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-checkpoint-card__delta {
-  flex: 0 1 auto;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-checkpoint-card__summary {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.session-checkpoint-card__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 /* --- Narrow layouts --- */

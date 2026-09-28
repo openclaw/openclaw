@@ -135,7 +135,10 @@ describe("system-scope effective command", () => {
       if (user === "2001") {
         await expect(command).resolves.toMatchObject({ environment: { HOME: "/home/gateway" } });
       } else {
-        await expect(command).rejects.toThrow("run Doctor as the service's User= account");
+        await expect(command).rejects.toMatchObject({
+          reason: "systemd-account-refused",
+          message: expect.stringContaining("run Doctor as the service's User= account"),
+        });
         await expect(readSystemdServiceExecStart(env)).resolves.toMatchObject({
           sourcePath: target.unitPath,
         });
@@ -146,7 +149,11 @@ describe("system-scope effective command", () => {
   it.each(["uid", "replacement"])("rejects an unverified system manager: %s", async (fault) => {
     managerUid = fault === "uid" ? 2001 : 0;
     managerChanges = fault === "replacement";
-    await expect(readSystemdServiceExecStart(env, { requireEffective: true })).rejects.toThrow();
+    await expect(
+      readSystemdServiceExecStart(env, { requireEffective: true }),
+    ).rejects.toMatchObject({
+      reason: "systemd-manager-changed",
+    });
   });
 
   it.each(["HOME", "HOME=/home/gateway"])(

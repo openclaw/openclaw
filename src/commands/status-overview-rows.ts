@@ -12,10 +12,8 @@ import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
-import {
-  buildStatusOverviewRowsFromSurface,
-  type StatusOverviewSurface,
-} from "./status-overview-surface.ts";
+import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
   buildStatusEventsValue,
@@ -31,7 +29,6 @@ import {
   buildStatusHeartbeatValue,
   buildStatusLastHeartbeatValue,
   buildStatusMemoryValue,
-  buildStatusTasksValue,
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
@@ -42,6 +39,7 @@ type StatusDegradationSummary = Pick<
   | "degradedPlugins"
   | "startupMigrationWarning"
   | "startupRecoveryWarning"
+  | "installationReplacementWarning"
   | "secretEgressProxy"
 >;
 
@@ -55,6 +53,12 @@ function buildStatusDegradationRows(
   }
   if (summary.startupRecoveryWarning) {
     rows.push({ Item: "Session recovery", Value: decorate(summary.startupRecoveryWarning) });
+  }
+  if (summary.installationReplacementWarning) {
+    rows.push({
+      Item: "Installation replaced",
+      Value: decorate(summary.installationReplacementWarning),
+    });
   }
   if (summary.secretEgressProxy) {
     const status = summary.secretEgressProxy;
@@ -125,11 +129,6 @@ export function buildStatusCommandOverviewRows(
   const eventsValue = buildStatusEventsValue({
     queuedSystemEvents: params.summary.queuedSystemEvents,
   });
-  const tasksValue = buildStatusTasksValue({
-    summary: params.summary,
-    warn: params.warn,
-    muted: params.muted,
-  });
   const probesValue = buildStatusProbesValue({
     health: params.health,
     ok: params.ok,
@@ -139,6 +138,7 @@ export function buildStatusCommandOverviewRows(
   const lastHeartbeatValue = buildStatusLastHeartbeatValue({
     deep: params.opts.deep,
     gatewayReachable: params.surface.gatewayReachable,
+    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     lastHeartbeat: params.lastHeartbeat,
     warn: params.warn,
     muted: params.muted,
@@ -173,8 +173,8 @@ export function buildStatusCommandOverviewRows(
         ? params.ok("enabled · anonymous feature stats")
         : params.muted("disabled · update checks only");
   const hostDesktopValue = formatHostDesktopStatus(params.summary.hostDesktop);
-  return buildStatusOverviewRowsFromSurface({
-    surface: params.surface,
+  return buildStatusOverviewSurfaceRows({
+    ...params.surface,
     decorateOk: params.ok,
     decorateWarn: params.warn,
     decorateTailscaleOff: params.muted,
@@ -197,7 +197,6 @@ export function buildStatusCommandOverviewRows(
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
-      { Item: "Tasks", Value: tasksValue },
       {
         Item: "Backups",
         Value: buildBackupStatusValue({
@@ -238,8 +237,8 @@ export function buildStatusAllOverviewRows(params: {
     }>;
   };
 }) {
-  return buildStatusOverviewRowsFromSurface({
-    surface: params.surface,
+  return buildStatusOverviewSurfaceRows({
+    ...params.surface,
     includeBackendStateWhenOn: true,
     includeDnsNameWhenOff: true,
     prefixRows: [

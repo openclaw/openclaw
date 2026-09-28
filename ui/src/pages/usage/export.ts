@@ -1,5 +1,6 @@
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -7,6 +8,8 @@ import type { GatewayPageController } from "../../lit/gateway-page-controller.ts
 import { currentLocalDate, toUsageErrorMessage } from "./helpers.ts";
 import { createUsageRequest } from "./request.ts";
 import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
+
+registerUsageEnglish();
 
 // Logical keys can be reused after deletion; context belongs to a concrete session.
 function sessionIdentity({ agentId, key, sessionId }: UsageSessionEntry): string {

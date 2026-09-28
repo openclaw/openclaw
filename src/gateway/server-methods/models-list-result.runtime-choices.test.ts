@@ -224,7 +224,10 @@ describe("models.list configured runtime choices", () => {
               contextWindow: 32_000,
               reasoning: false,
               input: ["text"],
-              thinkingLevels: [{ id: "off", label: "off" }],
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "ultra", label: "ultra" },
+              ],
             });
           } else {
             expect(choice).not.toHaveProperty("contextWindow");

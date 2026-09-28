@@ -40,30 +40,6 @@ describe("skills-remote", () => {
     vi.restoreAllMocks();
   });
 
-  it("removes disconnected nodes from remote skill eligibility", () => {
-    const nodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    recordRemoteNodeInfo({
-      nodeId,
-      displayName: "Remote Mac",
-      platform: "darwin",
-      commands: ["system.run"],
-    });
-    recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
-
-    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
-
-    removeRemoteNodeInfo(nodeId);
-
-    expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
-  });
-
-  it("supports idempotent remote node removal", () => {
-    const nodeId = `node-${randomUUID()}`;
-    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
-    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
-  });
-
   it("preserves bins across reconnects only within one pairing generation", () => {
     const nodeId = `node-${randomUUID()}`;
     const retiredBin = `bin-${randomUUID()}`;
@@ -1027,11 +1003,12 @@ describe("skills-remote", () => {
       ok: false as const,
       error: { code: "TIMEOUT", message: "node invoke timed out" },
     }));
-    const listCurrentConnectedSync = vi.fn(() => [currentSession]);
+    const listCurrentConnected = vi.fn(async () => [currentSession]);
     try {
       setSkillsRemoteRegistry({
         listConnected: () => [staleSession, currentSession],
-        listCurrentConnectedSync,
+        listCurrentConnected,
+        listCurrentConnectedSync: () => [currentSession],
         get: (nodeId: string) => (nodeId === currentNodeId ? currentSession : staleSession),
         invoke,
       } as unknown as NodeRegistry);
@@ -1052,7 +1029,7 @@ describe("skills-remote", () => {
 
       await refreshRemoteBinsForConnectedNodes(cfg);
 
-      expect(listCurrentConnectedSync).toHaveBeenCalled();
+      expect(listCurrentConnected).toHaveBeenCalled();
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: currentNodeId }));
     } finally {

@@ -64,7 +64,9 @@ describe("renderProviderUsageDetails", () => {
       expect(container.textContent).toContain("43 requests");
       expect(container.textContent).toContain("gpt-5.5");
       expect(container.textContent).toContain("Responses");
-      const bars = container.querySelectorAll<HTMLElement>(".provider-cost-chart span");
+      const chart = container.querySelector('[role="group"][aria-label="Daily provider cost"]');
+      expect(chart).not.toBeNull();
+      const bars = chart!.querySelectorAll<HTMLElement>('[role="img"]');
       expect(bars).toHaveLength(2);
       expect(bars?.[0]?.style.height).toBe("100%");
       expect(bars?.[1]?.style.height).toBe("0%");

@@ -5,11 +5,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { extractServerUiPrefs } from "./server-prefs-state.ts";
 import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
-  changedServerUiPrefs,
   flushServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPref,
@@ -149,7 +149,12 @@ describe("server pref extraction", () => {
 
     const beforeReset = loadSettings();
     const afterReset = resetServerUiPref("theme", state);
-    expect(changedServerUiPrefs(beforeReset, afterReset)).toEqual({ theme: null });
+    expect(changedServerUiPrefs(beforeReset, afterReset)).toEqual({
+      theme: null,
+      accent: "theme",
+      fontUi: null,
+      fontChat: null,
+    });
   });
 });
 
@@ -325,6 +330,7 @@ describe("changedServerUiPrefs", () => {
         sidebarLiveActivity: false,
         chatMessageMaxWidth: "82%",
         showAdvancedSettings: true,
+        openLinksExternally: true,
       }),
     ).toBeNull();
   });

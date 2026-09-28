@@ -11,7 +11,6 @@ import {
   zoomMeetingStatusScript,
   zoomMeetingTranscriptScript,
 } from "./zoom-meetings-page-scripts.js";
-import { ZOOM_MEETINGS_NODE_COMMAND } from "./zoom-meetings-platform-constants.js";
 import {
   isRecoverableZoomMeetingTab,
   isSameZoomMeetingUrl,
@@ -75,7 +74,7 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
         ? "Zoom guest in Chrome on a paired node"
         : "Zoom guest in the OpenClaw Chrome profile",
   },
-  nodeCommandName: ZOOM_MEETINGS_NODE_COMMAND,
+  nodeCommandName: "zoommeetings.chrome",
   nodeConfigPath: "plugins.entries.zoom-meetings.config.chromeNode.node",
   urls: {
     validateAndNormalize: normalizeZoomMeetingUrl,

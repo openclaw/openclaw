@@ -40,7 +40,7 @@ export function renderPluginDetailShell(props: {
   backLabel: string;
   onBack: () => void;
   titleAction?: TemplateResult;
-  identity: TemplateResult;
+  identity: TemplateResult | typeof nothing;
   icon?: TemplateResult;
   readme?: TemplateResult;
   sidebar?: TemplateResult;
@@ -54,7 +54,7 @@ export function renderPluginDetailShell(props: {
     ${renderPluginDetailBreadcrumb(props)}
     <div class="plugin-catalog-detail__hero">
       ${props.icon ? html`<div class="plugin-catalog-detail__icon" aria-hidden="true">${props.icon}</div>` : nothing}
-      <main>
+      <div class="plugin-catalog-detail__heading">
         <div class="plugin-catalog-detail__title-row">
           <h1 id=${titleId}>${props.name}</h1>
         </div>
@@ -65,17 +65,14 @@ export function renderPluginDetailShell(props: {
             : nothing
         }
         <div class="plugin-catalog-detail__actions">${props.titleAction ?? nothing}</div>
-      </main>
+      </div>
     </div>
     <div class="plugin-catalog-detail__content">
       <section class="plugin-catalog-detail__panel">${props.panel}</section>
       ${props.sidebar ? html`<aside class="plugin-catalog-detail__sidebar">${props.sidebar}</aside>` : nothing}
       ${
         props.readme
-          ? html`<section class="plugin-catalog-detail__readme-section">
-              <h2>${t("pluginsPage.detailTabs.readme")}</h2>
-              ${props.readme}
-            </section>`
+          ? html`<section class="plugin-catalog-detail__readme-section">${props.readme}</section>`
           : nothing
       }
     </div>

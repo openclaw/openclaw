@@ -91,6 +91,12 @@ type TuiCommandRow = readonly [
 
 const TUI_COMMAND_ROWS = [
   ["help", "Show slash command help", "/help"],
+  [
+    "browser-setup",
+    "Set up Chrome on the TUI process host (not the Gateway)",
+    "/browser-setup [inspect|install|verify] (TUI process host)",
+    ["inspect", "install", "verify"],
+  ],
   ["question", "Reopen the pending agent question", "/question"],
   [
     "commands",

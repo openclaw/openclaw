@@ -10,7 +10,11 @@ import {
   rowToEntry,
   type PluginStateDatabase,
 } from "./plugin-state-store.kernel.js";
-import { PluginStateStoreError, type PluginStateEntry } from "./plugin-state-store.types.js";
+import {
+  PluginStateStoreError,
+  type PluginStateEntry,
+  type PluginStateKeyRange,
+} from "./plugin-state-store.types.js";
 
 export function lookupPluginStateEntries(
   store: PluginStateDatabase,
@@ -74,11 +78,7 @@ export function listPluginStateEntries(
 export type PluginStateKeyRangeParams = {
   pluginId: string;
   namespace: string;
-  keyStartInclusive: string;
-  keyEndExclusive: string;
-  limit: number;
-  order?: "asc" | "desc";
-};
+} & PluginStateKeyRange;
 
 export function validatePluginStateKeyRange(params: PluginStateKeyRangeParams): void {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
@@ -88,11 +88,22 @@ export function validatePluginStateKeyRange(params: PluginStateKeyRangeParams): 
       message: "Plugin state key-range limit must be a positive safe integer.",
     });
   }
-  if (params.keyStartInclusive >= params.keyEndExclusive) {
+  if (
+    typeof params.keyStartInclusive !== "string" ||
+    typeof params.keyEndExclusive !== "string" ||
+    Buffer.compare(Buffer.from(params.keyStartInclusive), Buffer.from(params.keyEndExclusive)) >= 0
+  ) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",
       operation: "entries",
       message: "Plugin state key range must have an increasing exclusive upper bound.",
+    });
+  }
+  if (params.order !== undefined && params.order !== "asc" && params.order !== "desc") {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key-range order must be asc or desc.",
     });
   }
 }

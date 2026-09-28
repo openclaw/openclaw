@@ -54,16 +54,6 @@ suite.define(() => {
         await notice.getByText("View-only subagent", { exact: true }).waitFor();
         await progress.waitFor();
         expect(await shell.locator("textarea").count()).toBe(0);
-        expect(
-          await notice.evaluate((element) =>
-            Boolean(
-              element.previousElementSibling?.classList.contains("agent-chat__progress-float"),
-            ),
-          ),
-        ).toBe(true);
-        expect(
-          await notice.evaluate((element) => element === element.parentElement?.lastElementChild),
-        ).toBe(true);
         if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
           await progress.locator("summary").click();
         }
@@ -94,22 +84,28 @@ suite.define(() => {
           footerTop,
           0,
         );
+        await notice.getByRole("button", { name: "Open parent session", exact: true }).click({
+          trial: true,
+        });
         await progress.locator("summary").click();
         await expect.poll(() => progress.getAttribute("open")).toBeNull();
         await notice.getByRole("button", { name: "Open parent session", exact: true }).click();
         const input = shell.locator(".agent-chat__input");
         await input.locator("textarea").fill("Continue the review");
         await progress.waitFor();
-        expect(
-          await input.evaluate((element) =>
-            Boolean(
-              element.previousElementSibling?.classList.contains("agent-chat__progress-float"),
-            ),
-          ),
-        ).toBe(true);
-        expect(
-          await input.evaluate((element) => element === element.parentElement?.lastElementChild),
-        ).toBe(true);
+        await expect
+          .poll(() =>
+            input.evaluate((element) => {
+              const inputBounds = element.getBoundingClientRect();
+              const progressBounds = element
+                .closest(".agent-chat__composer-shell")!
+                .querySelector(".session-progress-card--composer")!
+                .getBoundingClientRect();
+              return progressBounds.bottom <= inputBounds.top && inputBounds.bottom <= innerHeight;
+            }),
+          )
+          .toBe(true);
+        await input.locator(".chat-send-btn--send:visible").click({ trial: true });
         expect(await pane.getByText("View-only subagent", { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests("progressCard.get")).toContainEqual(
           expect.objectContaining({

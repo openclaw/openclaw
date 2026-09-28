@@ -12,7 +12,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { loadDeliveryQueueEntry, upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { loadDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import type { LegacyQueuedDelivery, QueuedDelivery } from "./outbound/delivery-queue-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./outbound/prepared-batch.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
@@ -22,6 +23,39 @@ let stateDir: string;
 let pluginFile: string;
 let eventsFile: string;
 let cfg: OpenClawConfig;
+
+async function writePluginFixture({ failDisposal = false }: { failDisposal?: boolean } = {}) {
+  await fs.writeFile(
+    pluginFile,
+    `module.exports = {
+    id: "doctor-outbound-fixture",
+    register(api) {
+      const record = (value) => require("node:fs").appendFileSync(${JSON.stringify(eventsFile)}, value + "\\n");
+      api.on("reply_payload_sending", (event) => {
+        record("reply");
+        return { payload: { ...event.payload, text: event.payload.text + "|reply" } };
+      });
+      api.on("message_sending", (event) => {
+        if (api.runtime.config.current().plugins.entries["doctor-outbound-fixture"].enabled !== true) {
+          throw new Error("migration modifier lost its configured runtime");
+        }
+        record("message");
+        return { content: event.content + "|message" };
+      });
+      api.lifecycle.onDispose(async () => {
+        await require("node:fs/promises").appendFile(${JSON.stringify(eventsFile)}, "dispose\\n");
+      });
+      ${failDisposal ? 'api.registerRuntimeLifecycle({ id: "receipt-failure", dispose() { throw new Error("synthetic outbound disposal failure"); } });' : ""}
+      api.registerChannel({ plugin: {
+        id: "matrix", meta: { id: "matrix", label: "Fixture", selectionLabel: "Fixture", docsPath: "/fixture", blurb: "Synthetic" },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
+        outbound: { deliveryMode: "direct", sendText: async () => { throw new Error("migration must not send"); } },
+      } });
+    },
+  };`,
+  );
+}
 
 beforeEach(async () => {
   const home = temporary.make("openclaw-doctor-outbound-");
@@ -44,35 +78,7 @@ beforeEach(async () => {
       configSchema: { type: "object" },
     }),
   );
-  await fs.writeFile(
-    pluginFile,
-    `module.exports = {
-    id: "doctor-outbound-fixture",
-    register(api) {
-      const record = (value) => require("node:fs").appendFileSync(${JSON.stringify(eventsFile)}, value + "\\n");
-      api.on("reply_payload_sending", (event) => {
-        record("reply");
-        return { payload: { ...event.payload, text: event.payload.text + "|reply" } };
-      });
-      api.on("message_sending", (event) => {
-        if (api.runtime.config.current().plugins.entries["doctor-outbound-fixture"].enabled !== true) {
-          throw new Error("migration modifier lost its configured runtime");
-        }
-        record("message");
-        return { content: event.content + "|message" };
-      });
-      api.lifecycle.onDispose(async () => {
-        await require("node:fs/promises").appendFile(${JSON.stringify(eventsFile)}, "dispose\\n");
-      });
-      api.registerChannel({ plugin: {
-        id: "matrix", meta: { id: "matrix", label: "Fixture", selectionLabel: "Fixture", docsPath: "/fixture", blurb: "Synthetic" },
-        capabilities: { chatTypes: ["direct"] },
-        config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
-        outbound: { deliveryMode: "direct", sendText: async () => { throw new Error("migration must not send"); } },
-      } });
-    },
-  };`,
-  );
+  await writePluginFixture();
   cfg = {
     plugins: {
       allow: ["doctor-outbound-fixture"],
@@ -127,7 +133,7 @@ describe("Doctor outbound preparation", () => {
       if (kind === "file") {
         await fs.writeFile(source, bytes);
       } else {
-        upsertDeliveryQueueEntry({
+        seedDeliveryQueueEntry({
           stateDir,
           queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
           entry: {
@@ -148,6 +154,11 @@ describe("Doctor outbound preparation", () => {
       expect(getGlobalHookRunner()).toBeNull();
       const result = await repair();
       expect(result.warnings).toEqual([]);
+      expect(result.stepReceipts.find((receipt) => receipt.id === "delivery-queues")).toMatchObject(
+        {
+          outcome: "completed",
+        },
+      );
       expect(loadDeliveryQueueEntry("outbound-prepared-v1", "from-file", stateDir)).toMatchObject({
         preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
       });
@@ -159,9 +170,22 @@ describe("Doctor outbound preparation", () => {
     },
   );
 
+  it("records a refused delivery migration when its resource disposer fails", async () => {
+    await writePluginFixture({ failDisposal: true });
+    seedDeliveryQueueEntry({ queueName: "outbound", entry: legacy("disposal-failure"), stateDir });
+
+    const result = await repair();
+
+    expect(result.stepReceipts.find((receipt) => receipt.id === "delivery-queues")).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "step-threw" },
+    });
+    expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
+  });
+
   it("preserves an unclaimed SQLite legacy row when its plugin cannot load", async () => {
     const entry = legacy("sqlite-only");
-    upsertDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
+    seedDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
     await fs.writeFile(pluginFile, 'throw new Error("synthetic plugin unavailable");');
     const result = await repair();
     expect(result.warnings.join("\n")).toContain("synthetic plugin unavailable");
@@ -179,7 +203,7 @@ describe("Doctor outbound preparation", () => {
       to: "!synthetic:example",
       preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "already prepared" }]),
     };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: "outbound-prepared-migration-v1",
       stateDir,
       entry,

@@ -7,7 +7,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -41,8 +44,9 @@ beforeAll(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
 });
 
-afterAll(() => {
+afterAll(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });

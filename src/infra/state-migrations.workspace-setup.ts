@@ -426,6 +426,7 @@ async function migrateOneSource(params: {
   let hasSource: boolean;
   let hasClaim: boolean;
   try {
+    await sourceClaim.recoverLinkedMove();
     hasSource = await sourceClaim.exists();
     hasClaim = await sourceClaim.exists(true);
   } catch (error) {

@@ -142,7 +142,8 @@ export function inMemoryIO(
     current: () => structuredClone(store.plugins ?? {}),
     currentConfig: () => structuredClone(store),
     readConfig: () => Promise.resolve(structuredClone(store)),
-    mutate: async (update) => {
+    mutate: async (update, assertCurrent) => {
+      assertCurrent?.();
       update(store);
     },
   };

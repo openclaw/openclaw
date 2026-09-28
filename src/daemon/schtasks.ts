@@ -16,5 +16,4 @@ export {
   isScheduledTaskEnabled,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
-  readWindowsStartupFallbackRuntimeForUpdate,
 } from "./schtasks-runtime.js";

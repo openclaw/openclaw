@@ -183,7 +183,7 @@ it("preserves separately restored launchd enable policy across bootstrap", async
     const args = { ...serviceArgs(fence), preserveAutoStart: true };
     await startLaunchAgent(args);
   });
-  expect(calls).toEqual(["kickstart", "bootstrap", "kickstart"]);
+  expect(calls).toEqual(["kickstart", "print-disabled", "bootstrap", "kickstart"]);
 });
 
 it("refuses task start after registration inspection revokes its real executor", async () => {

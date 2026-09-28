@@ -17,6 +17,9 @@ const CompactCronJobSchema = Type.Object(
   {
     id: job.id,
     name: job.name,
+    agentId: job.agentId,
+    // Protocol-v4 compact replies from older Gateways omit the update timestamp.
+    updatedAtMs: Type.Optional(job.updatedAtMs),
     declarationKey: job.declarationKey,
     displayName: job.displayName,
     owner: job.owner,
@@ -43,6 +46,8 @@ const CompactCronJobSchema = Type.Object(
     lastRunAtMs: nullableNumber,
     lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),
     lastRunError: nullableString,
+    runningAtMs: job.state.properties.runningAtMs,
+    autoDisabled: job.state.properties.autoDisabled,
     lastDelivered: job.lastDelivered,
     lastDeliveryStatus: job.lastDeliveryStatus,
     lastDeliveryError: job.lastDeliveryError,

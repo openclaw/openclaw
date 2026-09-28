@@ -1,14 +1,9 @@
-/**
- * Anthropic media-understanding provider descriptor. It routes image and native
- * document description through the shared model-backed media helpers.
- */
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 
-/** Media-understanding provider for Anthropic Claude models. */
 export const anthropicMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "anthropic",
   capabilities: ["image"],
-  defaultModels: { image: "claude-opus-5" },
+  defaultModels: { image: "claude-opus-5-5" },
   autoPriority: { image: 20 },
   nativeDocumentInputs: ["pdf"],
   describeImage: undefined,

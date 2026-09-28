@@ -22,7 +22,7 @@ function row(threadId: string): CodexCatalogIndexRow {
 
 describe("remote resident snapshot recovery", () => {
   it("finishes reconnect hydration after an offline snapshot refresh and resumes periodic currency", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const startOptions: CodexAppServerStartOptions = {
       transport: "websocket",
       command: "codex",
@@ -67,7 +67,7 @@ describe("remote resident snapshot recovery", () => {
       ]);
 
       readNative.mockResolvedValue({ rows: [row("later")] });
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
       await vi.waitFor(async () => {
         expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
           "later",

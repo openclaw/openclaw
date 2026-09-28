@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveXaiCatalogEntry } from "../model-definitions.js";
+import { isXaiGrokReleaseAtLeast } from "../model-id.js";
 import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
@@ -64,7 +65,7 @@ export function resolveXaiToolDefaultReasoningEffort(
   preferred: "none" | "low",
 ): "none" | "low" | undefined {
   // Per-model tool defaults must survive changes to the setup default.
-  return model === "grok-4.3" || model === "grok-4.6" ? preferred : undefined;
+  return model === "grok-4.3" || isXaiGrokReleaseAtLeast(model, [4, 6]) ? preferred : undefined;
 }
 
 function buildXaiResponsesToolBody(params: {
@@ -117,18 +118,18 @@ export async function requestXaiResponsesTool<T>(
   );
 }
 
-function extractXaiWebSearchContent(
+export function requireXaiResponseTextAndCitations(
   data: XaiWebSearchResponse,
+  label: string,
   maxContentChars?: number,
 ): {
-  text: string | undefined;
-  annotationCitations: string[];
+  content: string;
+  citations: string[];
   truncated?: true;
   retainedRawChars?: number;
   inlineCitationOffsetsSafe?: false;
 } {
   const textParts: string[] = [];
-  const annotationCitations = new Set<string>();
   const pendingAnnotations: Array<{ rawOffset: number; annotations: unknown }> = [];
   let remainingRawChars = maxContentChars;
   let completeRawPrefix = true;
@@ -185,56 +186,36 @@ function extractXaiWebSearchContent(
     truncated ||= bounded.truncated;
     retainedRawChars = bounded.retainedRawChars;
   }
-  for (const annotation of pendingAnnotations) {
-    if (annotation.rawOffset < retainedRawChars) {
-      collectUrlCitations(annotation.annotations, annotationCitations);
-    }
-  }
-  const inlineCitationOffsetsSafe = text === rawText.slice(0, retainedRawChars);
-  return {
-    text: text || undefined,
-    annotationCitations: [...annotationCitations],
-    ...(truncated ? { truncated: true } : {}),
-    ...(maxContentChars === undefined ? {} : { retainedRawChars }),
-    ...(inlineCitationOffsetsSafe ? {} : { inlineCitationOffsetsSafe: false as const }),
-  };
-}
-
-export function requireXaiResponseTextAndCitations(
-  data: XaiWebSearchResponse,
-  label: string,
-  maxContentChars?: number,
-): {
-  content: string;
-  citations: string[];
-  truncated?: true;
-  retainedRawChars?: number;
-  inlineCitationOffsetsSafe?: false;
-} {
-  const { text, annotationCitations, truncated, retainedRawChars, inlineCitationOffsetsSafe } =
-    extractXaiWebSearchContent(data, maxContentChars);
   if (!text) {
     throw new Error(`${label}: no answer text returned; try a simpler request`);
   }
-  const explicitCitations = new Set<string>();
+  const citations = new Set<string>();
   if (Array.isArray(data.citations)) {
     let scanned = 0;
     for (const citation of data.citations) {
-      if (++scanned > XAI_CITATION_MAX_SCAN || explicitCitations.size >= XAI_CITATION_MAX_COUNT) {
+      if (++scanned > XAI_CITATION_MAX_SCAN || citations.size >= XAI_CITATION_MAX_COUNT) {
         break;
       }
       const url = normalizeXaiCitationUrl(citation);
       if (url) {
-        explicitCitations.add(url);
+        citations.add(url);
       }
     }
   }
+  if (citations.size === 0) {
+    for (const annotation of pendingAnnotations) {
+      if (annotation.rawOffset < retainedRawChars) {
+        collectUrlCitations(annotation.annotations, citations);
+      }
+    }
+  }
+  const inlineCitationOffsetsSafe = text === rawText.slice(0, retainedRawChars);
   return {
     content: text,
-    citations: explicitCitations.size > 0 ? [...explicitCitations] : annotationCitations,
+    citations: [...citations],
     ...(truncated ? { truncated: true } : {}),
-    ...(retainedRawChars === undefined ? {} : { retainedRawChars }),
-    ...(inlineCitationOffsetsSafe === false ? { inlineCitationOffsetsSafe: false as const } : {}),
+    ...(maxContentChars === undefined ? {} : { retainedRawChars }),
+    ...(inlineCitationOffsetsSafe ? {} : { inlineCitationOffsetsSafe: false as const }),
   };
 }
 

@@ -5,7 +5,6 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -483,15 +482,15 @@ internal fun parseGatewayCronRunOutcome(root: JsonObject?): GatewayCronRunOutcom
   val ok = value.optionalBoolean("ok") ?: return null
   if (!ok) return GatewayCronRunOutcome.Rejected
   if (value.optionalBoolean("ran") == true) {
-    return GatewayCronRunOutcome.Started(runId = value.string("runId"))
+    return GatewayCronRunOutcome.Started(runId = value.nonBlankString("runId"))
   }
   if (value.optionalBoolean("enqueued") == true) {
-    val runId = value.string("runId") ?: return null
+    val runId = value.nonBlankString("runId") ?: return null
     return GatewayCronRunOutcome.Started(runId = runId)
   }
   if (value.optionalBoolean("ran") != false) return null
   val reason =
-    when (value.string("reason")) {
+    when (value.nonBlankString("reason")) {
       "not-due" -> GatewayCronRunSkipReason.NotDue
       "already-running" -> GatewayCronRunSkipReason.AlreadyRunning
       "restart-recovery-pending" -> GatewayCronRunSkipReason.RestartRecoveryPending
@@ -509,14 +508,14 @@ internal fun parseGatewayCronRunHistory(entries: JsonArray?): List<GatewayCronRu
       val ts = value.long("ts") ?: return@mapNotNull null
       GatewayCronRunSummary(
         ts = ts,
-        runId = value.string("runId"),
-        status = value.string("status"),
-        summary = value.string("summary"),
-        error = value.string("error"),
+        runId = value.nonBlankString("runId"),
+        status = value.nonBlankString("status"),
+        summary = value.nonBlankString("summary"),
+        error = value.nonBlankString("error"),
         durationMs = value.long("durationMs"),
-        deliveryStatus = value.string("deliveryStatus"),
-        sessionKey = value.string("sessionKey"),
-        model = value.string("model"),
+        deliveryStatus = value.nonBlankString("deliveryStatus"),
+        sessionKey = value.nonBlankString("sessionKey"),
+        model = value.nonBlankString("model"),
       )
     }.orEmpty()
 
@@ -691,17 +690,5 @@ private fun parseOptionalNonNegativeLong(
   require(parsed != null && parsed >= 0L) { "$label must be a non-negative number of milliseconds." }
   return parsed
 }
-
-private fun JsonObject.string(key: String): String? =
-  this[key]
-    .asStringOrNull()
-    ?.trim()
-    ?.takeIf { it.isNotEmpty() }
-
-private fun JsonObject.long(key: String): Long? =
-  (this[key] as? JsonPrimitive)
-    ?.content
-    ?.trim()
-    ?.toLongOrNull()
 
 private fun JsonObject.optionalBoolean(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull

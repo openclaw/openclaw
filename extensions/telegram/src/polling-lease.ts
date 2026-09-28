@@ -1,4 +1,3 @@
-// Telegram plugin module implements polling lease behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
@@ -143,18 +142,12 @@ export async function acquireTelegramPollingLease(
   const fingerprint = fingerprintTelegramBotToken(opts.token);
   const waitMs = opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS;
   let waitedForPrevious = false;
+  let replacedStoppingPrevious = false;
 
   for (;;) {
     const existing = registry.get(fingerprint);
     if (!existing) {
-      return createLease({
-        accountId: opts.accountId,
-        abortSignal: opts.abortSignal,
-        registry,
-        tokenFingerprint: fingerprint,
-        waitedForPrevious,
-        replacedStoppingPrevious: false,
-      });
+      break;
     }
 
     if (!existing.abortSignal?.aborted) {
@@ -185,15 +178,17 @@ export async function acquireTelegramPollingLease(
       continue;
     }
 
-    return createLease({
-      accountId: opts.accountId,
-      abortSignal: opts.abortSignal,
-      registry,
-      tokenFingerprint: fingerprint,
-      waitedForPrevious,
-      replacedStoppingPrevious: true,
-    });
+    replacedStoppingPrevious = true;
+    break;
   }
+  return createLease({
+    accountId: opts.accountId,
+    abortSignal: opts.abortSignal,
+    registry,
+    tokenFingerprint: fingerprint,
+    waitedForPrevious,
+    replacedStoppingPrevious,
+  });
 }
 
 export async function releaseStoppedTelegramPollingLease(

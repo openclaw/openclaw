@@ -36,8 +36,8 @@ import {
   registerRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
@@ -82,10 +82,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   }),
 }));
 
-import {
-  maybeWakeRequesterAfterAllChildrenSettled,
-  type RequesterSettleWakeBatchState,
-} from "./subagent-announce.requester-settle-wake.js";
+import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
+import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

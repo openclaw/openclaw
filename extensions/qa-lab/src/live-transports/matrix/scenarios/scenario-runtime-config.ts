@@ -1,4 +1,3 @@
-// QA Lab Matrix helper module supports scenario runtime config behavior.
 import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
@@ -162,9 +161,7 @@ export async function runMatrixQaAllowlistHotReloadScenario(
       afterStartAt: blockedStartAt,
       timeoutMs: context.timeoutMs,
     });
-    const { marker: token } = {
-      marker: buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED"),
-    };
+    const token = buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED");
     const blocked = await runNoReplyExpectedScenario({
       accessToken,
       actorId: "observer",
@@ -180,14 +177,15 @@ export async function runMatrixQaAllowlistHotReloadScenario(
       timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
       token,
     });
-    const { body: triggerBody, ...acceptedArtifacts } = accepted;
 
     return {
       artifacts: {
         accepted: {
           actorUserId: context.observerUserId,
-          ...acceptedArtifacts,
-          triggerBody,
+          driverEventId: accepted.driverEventId,
+          reply: accepted.reply,
+          token: accepted.token,
+          triggerBody: accepted.body,
         },
         blocked: blocked.artifacts,
       },

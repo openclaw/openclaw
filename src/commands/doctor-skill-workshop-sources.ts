@@ -2,13 +2,8 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { readAppliedSkillProposalEvents } from "../skills/workshop/store-sqlite-event.js";
-import { validateSkillProposalRecord } from "../skills/workshop/store.js";
-import type { SkillProposalEvent } from "../skills/workshop/types.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
+import { validateSkillProposalRecord } from "../skills/workshop/store-record.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { listLegacyCollectionBackupWorkspaceDirs } from "./doctor-skill-workshop-collection-backups.js";
 import {
   classifyWorkshopRelocation,
@@ -32,34 +27,50 @@ export async function readLegacyWorkshopJson(
   return JSON.parse(read.buffer.toString("utf8"));
 }
 
-export async function readWorkshopMigrationRecords(env: NodeJS.ProcessEnv, includeEvents = false) {
-  const stored = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-    (database) => {
-      let records: LegacyWorkshopProposal[] = [];
-      let appliedEvents: SkillProposalEvent[] = [];
-      if (tableExists(database.db, "skill_workshop_proposals")) {
-        const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
-          database.db,
-        );
-        const rows = executeSqliteQuerySync(
-          database.db,
-          kysely.selectFrom("skill_workshop_proposals").select(["record_json", "owner_agent_id"]),
-        ).rows;
-        records = rows.flatMap((row) => {
-          try {
-            const parsed = validateSkillProposalRecord(JSON.parse(row.record_json));
-            return parsed.ok ? [{ record: parsed.value, ownerAgentId: row.owner_agent_id }] : [];
-          } catch {
-            return [];
-          }
-        });
-        if (includeEvents && tableExists(database.db, "skill_workshop_proposal_events")) {
-          appliedEvents = readAppliedSkillProposalEvents(database.db);
-        }
+export async function readLegacyWorkshopProposals(
+  stateRoot: Root,
+): Promise<LegacyWorkshopProposal[]> {
+  const records: LegacyWorkshopProposal[] = [];
+  for (const entry of await stateRoot.list(LEGACY_WORKSHOP_PROPOSALS_DIR, {
+    withFileTypes: true,
+  })) {
+    if (!entry.isDirectory || !LEGACY_WORKSHOP_PROPOSAL_ID_PATTERN.test(entry.name)) {
+      continue;
+    }
+    try {
+      const parsed = validateSkillProposalRecord(
+        await readLegacyWorkshopJson(
+          stateRoot,
+          `${LEGACY_WORKSHOP_PROPOSALS_DIR}/${entry.name}/proposal.json`,
+          LEGACY_WORKSHOP_MAX_RECORD_BYTES,
+        ),
+      );
+      if (parsed.ok && parsed.value.id === entry.name) {
+        records.push({ record: parsed.value, ownerAgentId: null });
       }
-      return { records, appliedEvents };
+    } catch {
+      // Invalid sidecars cannot establish migration targets; import owns their diagnostics.
+    }
+  }
+  return records;
+}
+
+export async function readWorkshopMigrationRecords(env: NodeJS.ProcessEnv, includeEvents = false) {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  context.admission.assertCurrent();
+  const stored = await runOpenClawStateWorkerOperation(
+    context,
+    async (scope) => {
+      const records = await scope.execute({
+        type: "doctor.workshopMigrationRecords.read",
+        input: { includeEvents },
+      });
+      context.admission.assertCurrent();
+      return records;
     },
-    { env },
+    { existingOnly: true },
   );
   return stored ?? { records: [], appliedEvents: [] };
 }
@@ -71,27 +82,8 @@ export async function listLegacySkillWorkshopWorkspaceDirs(
   const { records } = await readWorkshopMigrationRecords(env);
   const stateDir = resolveStateDir(env);
   if (await pathExists(path.join(stateDir, LEGACY_WORKSHOP_PROPOSALS_DIR))) {
-    const stateRoot = await root(stateDir);
-    for (const entry of await stateRoot.list(LEGACY_WORKSHOP_PROPOSALS_DIR, {
-      withFileTypes: true,
-    })) {
-      if (!entry.isDirectory || !LEGACY_WORKSHOP_PROPOSAL_ID_PATTERN.test(entry.name)) {
-        continue;
-      }
-      try {
-        const parsed = validateSkillProposalRecord(
-          await readLegacyWorkshopJson(
-            stateRoot,
-            `${LEGACY_WORKSHOP_PROPOSALS_DIR}/${entry.name}/proposal.json`,
-            LEGACY_WORKSHOP_MAX_RECORD_BYTES,
-          ),
-        );
-        if (parsed.ok && parsed.value.id === entry.name) {
-          records.push({ record: parsed.value, ownerAgentId: null });
-        }
-      } catch {
-        // Missing or invalid sidecars cannot establish a workspace; import owns their diagnostics.
-      }
+    for (const proposal of await readLegacyWorkshopProposals(await root(stateDir))) {
+      records.push(proposal);
     }
   }
   const { external } = classifyWorkshopRelocation(records, config, env);

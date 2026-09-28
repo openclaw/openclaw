@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 // Accessible names and opacity require real layout; keep the canonical browser-only gate.
@@ -142,7 +143,9 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     );
 
     it("preserves an icon-only GitHub link name while its title hint is reserved for a preview", async () => {
-      const provider = document.createElement("openclaw-github-link-hovercard-provider");
+      const provider = installTestLinkReader(
+        document.createElement("openclaw-link-reader-hovercard-provider"),
+      );
       const link = document.createElement("a");
       link.href = "https://github.com/openclaw/openclaw/pull/99816";
       link.title = "Issue details";

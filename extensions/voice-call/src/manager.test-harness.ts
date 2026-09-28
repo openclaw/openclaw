@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -101,7 +101,7 @@ export function createTestStorePath(): string {
 export function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
@@ -233,7 +233,7 @@ export function createEventManagerHarness() {
     setVoiceCallStateRuntime({
       state: {
         resolveStateDir: () => "",
-        openKeyedStore: (options: OpenKeyedStoreOptions) => {
+        openKeyedStore: (options: OpenAsyncKeyedStoreOptions) => {
           if (shouldFail?.()) {
             throw new Error("synthetic SQLite persistence failure");
           }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readLaunchAgentProgramArguments } from "./launchd.js";
 import { resolveNodeService } from "./node-service.js";
 import { readDaemonRuntimePin } from "./runtime-pin-state.js";
 import type { GatewayServiceCommandConfig, GatewayServiceInstallArgs } from "./service-types.js";
@@ -151,6 +152,46 @@ describe("native service runtime pin persistence", () => {
       });
       await expect(service.install(args)).rejects.toThrow(/readback differs/);
       expect(readDaemonRuntimePin(scope, null).stored).toBe(false);
+    });
+  });
+  it("does not claim an unchanged definition when custody is lost during installed pin readback", async () => {
+    await withOpenClawTestState({ label: "pin-native-custody" }, async (state) => {
+      const scope = { kind: "gateway" as const, env: state.env };
+      const service = resolveGatewayService();
+      const pin = { runtime: "node" as const, path: "/runtime/node" };
+      const args = {
+        env: state.env,
+        stdout: process.stdout,
+        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+      };
+      await service.stage({
+        ...args,
+        runtimePinUpdate: { expected: readDaemonRuntimePin(scope, null), pin },
+      });
+      const previous = native.command;
+      const expected = readDaemonRuntimePin(scope, previous);
+      let current = true;
+      vi.mocked(readLaunchAgentProgramArguments)
+        .mockImplementationOnce(async () => native.command)
+        .mockImplementationOnce(async () => {
+          current = false;
+          return native.command;
+        });
+      const programArguments = [pin.path, "/updated/openclaw.mjs", "gateway"];
+      await expect(
+        service.install({
+          ...args,
+          programArguments,
+          runtimePinUpdate: { expected, pin },
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Custody released during native readback");
+            }
+          },
+        }),
+      ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });
+      expect(native.command?.programArguments).toEqual(programArguments);
+      expect(readDaemonRuntimePin(scope, previous)).toEqual(expected);
     });
   });
   it("refuses a definition changed after planning without writing or clearing prior metadata", async () => {

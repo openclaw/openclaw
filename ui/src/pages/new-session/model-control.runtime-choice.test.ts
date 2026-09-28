@@ -5,7 +5,7 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
+import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
 const agent: GatewayAgentRow = { id: "main", model: { primary: "openai/gpt-5.6-sol" } };
 const models: ModelCatalogEntry[] = [
@@ -102,7 +102,12 @@ describe("new-session runtime choice", () => {
   it("keeps the same-name runtime choice through preferences and create while using its own capabilities", async () => {
     const { context } = contextWith(models);
     const gatewayUrl = "ws://runtime-choice.example";
-    const changed = vi.fn((selection) => patchNewSessionPreference(gatewayUrl, "main", selection));
+    const changed = vi.fn((selection) =>
+      replaceBrowserPreference(gatewayUrl, "main", {
+        ...loadNewSessionPreference(gatewayUrl, "main"),
+        ...selection,
+      }),
+    );
     const control = new NewSessionModelControl(() => undefined, changed);
     control.load(context, "main", true, { agent });
     try {

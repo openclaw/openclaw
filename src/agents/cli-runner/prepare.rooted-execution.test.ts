@@ -114,7 +114,7 @@ describe("rooted CLI preparation", () => {
     }
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
-    fixture.cleanup();
+    await fixture.cleanup();
   });
 
   async function prepare(overrides: Partial<RunCliAgentParams> = {}) {

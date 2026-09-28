@@ -33,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
-let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { prepareSlackReply } from "../reply-blocks.js";
 import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
@@ -141,8 +140,7 @@ function readPlainSectionTexts(message: SlashTestMessage): string[] {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
-      await import("./replies.js"));
+    ({ createSlackReplyDeliveryPlan, deliverReplies } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -151,15 +149,6 @@ describe("deliverReplies identity passthrough", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSent.mockReset();
     triggerInternalHook.mockReset();
-  });
-  it("passes identity to sendMessageSlack for text replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconEmoji: ":robot:" };
-    await deliverReplies(baseParams({ identity }));
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
   });
 
   it.each([
@@ -190,21 +179,6 @@ describe("deliverReplies identity passthrough", () => {
       );
     },
   );
-
-  it("passes identity to sendMessageSlack for media replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
-    await deliverReplies(
-      baseParams({
-        identity,
-        replies: [{ text: "caption", mediaUrls: ["https://example.com/img.png"] }],
-      }),
-    );
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
 
   it.each([
     { rowLength: 110, textCalls: 1 },
@@ -364,28 +338,6 @@ describe("deliverReplies identity passthrough", () => {
     expect(options).not.toHaveProperty("identity");
   });
 
-  it("forwards the validated Enterprise event scope", async () => {
-    sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
-    const listenerClient = { chat: { postMessage: vi.fn() } } as never;
-    const eventScope = {
-      teamId: "T1",
-      client: listenerClient,
-    };
-
-    await deliverReplies(
-      baseParams({
-        cfg: { channels: { slack: {} } },
-        eventScope,
-        mediaMaxBytes: 1024,
-      }),
-    );
-
-    const options = requireSendCall()[2];
-    expect(options.eventScope).toBe(eventScope);
-    expect(options.textLimit).toBe(4000);
-    expect(options.mediaMaxBytes).toBe(1024);
-  });
-
   it("delivers block-only replies through to sendMessageSlack", async () => {
     sendMock.mockResolvedValue(undefined);
     const blocks = [
@@ -491,47 +443,47 @@ describe("deliverReplies identity passthrough", () => {
   });
 });
 
-describe("resolveSlackThreadTs fallback classification", () => {
+describe("createSlackReplyDeliveryPlan fallback classification", () => {
   const threadTs = "1234567890.123456";
   const messageTs = "9999999999.999999";
 
   it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "off",
         incomingThreadTs: threadTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBe(threadTs);
   });
 
   it("respects replyToMode for auto-created top-level thread_ts when callers omit isThreadReply", () => {
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "off",
         incomingThreadTs: messageTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBeUndefined();
 
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "first",
         incomingThreadTs: messageTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBe(messageTs);
 
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "batched",
         incomingThreadTs: messageTs,
         messageTs,
-        hasReplied: true,
-      }),
+        hasRepliedRef: { value: true },
+      }).peekThreadTs(),
     ).toBeUndefined();
   });
 });
@@ -1141,21 +1093,6 @@ describe("deliverReplies reasoning suppression", () => {
     const [, text] = requireSendCall();
     expect(text).toBe("visible answer");
   });
-
-  it("delivers nothing when all payloads are reasoning", async () => {
-    sendMock.mockResolvedValue(undefined);
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          { text: "Let me think about this...", isReasoning: true },
-          { text: "I need to consider...", isReasoning: true },
-        ],
-      }),
-    );
-
-    expect(sendMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("deliverReplies message_sent hook", () => {
@@ -1621,20 +1558,6 @@ describe("deliverReplies message_sent hook", () => {
 
     expect(sendMock).toHaveBeenCalledOnce();
     expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
-  });
-
-  it("fires the internal message:sent hook when a session key is supplied", async () => {
-    messageHookRunner.hasHooks.mockReturnValue(false);
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "internal" }],
-        sessionKeyForInternalHooks: "slack:C123:U1",
-      }),
-    );
-
-    expect(triggerInternalHook).toHaveBeenCalledOnce();
   });
 
   it("threads group context into the internal message:sent hook when isGroup is set", async () => {

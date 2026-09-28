@@ -1,4 +1,3 @@
-// Discord plugin module implements outbound components behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   createLazyRuntimeModule,

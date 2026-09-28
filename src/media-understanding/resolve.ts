@@ -4,6 +4,8 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
@@ -18,6 +20,7 @@ import {
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
+  DEFAULT_TIMEOUT_SECONDS,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
@@ -27,6 +30,42 @@ export type ResolvedMediaModelEntry = {
   entry: MediaUnderstandingModelConfig;
   secretOwnerId?: string;
 };
+
+class MediaCliModelUnavailableError extends Error {
+  constructor(
+    readonly reason: "cli-missing-command" | "cli-missing-attachment-arg",
+    message: string,
+  ) {
+    super(`${reason}; ${message}`);
+  }
+}
+
+/** Resolve executable CLI inputs without making invalid media config startup-fatal. */
+export function resolveCliModelEntry(
+  entry: MediaUnderstandingModelConfig,
+): Result<{ command: string; args: string[] }, MediaCliModelUnavailableError> {
+  const command = normalizeOptionalString(entry.command);
+  if (!command) {
+    return err(
+      new MediaCliModelUnavailableError(
+        "cli-missing-command",
+        'Set command to the media executable and args to pass the attachment, for example ["{{AttachmentPath}}"].',
+      ),
+    );
+  }
+  const args = entry.args;
+  // No stdin is supplied, so empty args cannot carry the attachment. Nonempty
+  // literal/custom argv is a shipped command contract; interpolation is optional.
+  if (!Array.isArray(args) || args.length === 0) {
+    return err(
+      new MediaCliModelUnavailableError(
+        "cli-missing-attachment-arg",
+        'Set args to pass the attachment, for example ["{{AttachmentPath}}"]. CLI stdin is not supplied.',
+      ),
+    );
+  }
+  return ok({ command, args });
+}
 
 /** Default per-provider media-understanding runtime timeout in milliseconds. */
 const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
@@ -52,7 +91,7 @@ export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): num
 }
 
 /** Resolves the provider prompt and appends length guidance for non-audio outputs. */
-export function resolvePrompt(
+function resolvePrompt(
   capability: MediaUnderstandingCapability,
   prompt?: string,
   maxChars?: number,
@@ -65,7 +104,7 @@ export function resolvePrompt(
 }
 
 /** Resolves the effective max response characters for a model entry and capability. */
-export function resolveMaxChars(params: {
+function resolveMaxChars(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
@@ -95,6 +134,39 @@ export function resolveMaxBytes(params: {
     return configured;
   }
   return DEFAULT_MAX_BYTES[params.capability];
+}
+
+export function resolveEntryRunOptions(params: {
+  capability: MediaUnderstandingCapability;
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  config?: MediaUnderstandingConfig;
+}): {
+  maxBytes: number;
+  maxChars?: number;
+  timeoutMs: number;
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+} {
+  const { capability, entry, cfg } = params;
+  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
+  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const timeoutMs = resolveTimeoutMs(
+    entry.timeoutSeconds ??
+      params.config?.timeoutSeconds ??
+      cfg.tools?.media?.[capability]?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS[capability],
+  );
+  const configuredPrompt =
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
+  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  return {
+    maxBytes,
+    maxChars,
+    timeoutMs,
+    prompt,
+    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
+  };
 }
 
 /** Maps the message context to an allow/deny decision for configured media scope rules. */

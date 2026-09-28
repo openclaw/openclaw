@@ -5,6 +5,7 @@ import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
+import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess, resolveDiscordVoiceAccessTarget } from "./owner-access.js";
 import {
@@ -20,14 +21,17 @@ import {
   type VoiceSessionEntry,
 } from "./session.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
-import { resolveDiscordTranscriptsCapture } from "./transcripts-source.js";
+import {
+  bindDiscordCaptureReceipts,
+  resolveDiscordTranscriptsCapture,
+} from "./transcripts-source.js";
 import {
   DiscordVoiceFollowing,
   normalizeVoiceChannelResidencies,
   type VoiceChannelResidency,
 } from "./voice-following.js";
 import { DiscordVoiceReceive } from "./voice-receive.js";
-import { destroyVoiceConnectionSafely, DiscordVoiceSessions } from "./voice-session.js";
+import { DiscordVoiceSessions } from "./voice-session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
@@ -56,7 +60,7 @@ type CaptureJoinOrigin = {
   isResidencyUnchanged: () => boolean;
 };
 
-export class DiscordVoiceManager {
+export class DiscordVoiceManager implements DiscordVoiceListenerManager {
   private sessions = new Map<string, VoiceSessionEntry>();
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
@@ -120,6 +124,8 @@ export class DiscordVoiceManager {
       params.accountId,
     );
     this.receive = new DiscordVoiceReceive({
+      bindCaptureReceipts: ({ guildId, channelId }) =>
+        bindDiscordCaptureReceipts({ accountId: params.accountId, guildId, channelId }, this),
       readPolicy: this.readPolicy,
       accountId: params.accountId,
       admissionAllowFrom,
@@ -137,14 +143,13 @@ export class DiscordVoiceManager {
       speakerContext,
     });
     this.following = new DiscordVoiceFollowing({
-      accountId: params.accountId,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
       botUserId: () => this.botUserId,
       client: params.client,
       deleteRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.delete(guildId),
       destroyed: () => this.destroyed,
-      destroyVoiceConnection: destroyVoiceConnectionSafely,
+      stopTransport: (guildId) => this.voiceSessions.stopTransport(guildId),
       discordConfig: params.discordConfig,
       getRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.get(guildId),
       getSession: (guildId) => this.sessions.get(guildId),
@@ -631,7 +636,7 @@ export class DiscordVoiceManager {
   }
 
   private resolveAutoJoinTarget(guildId: string): VoiceChannelResidency | undefined {
-    return this.autoJoinChannels.toReversed().find((entry) => entry.guildId === guildId.trim());
+    return this.autoJoinChannels.findLast((entry) => entry.guildId === guildId.trim());
   }
 
   private countHumanParticipants(target: { guildId: string; channelId: string }): number | null {

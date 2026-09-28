@@ -2,7 +2,6 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,6 +15,12 @@ import {
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { generateSecureUuid } from "./secure-random.js";
+import {
+  getSystemEventStorePath,
+  isSystemEventStoreCurrent,
+  registerSystemEventStoreOwner,
+  recordSystemEventStoreReplaced,
+} from "./system-event-ownership.js";
 
 export type SystemEvent = {
   /**
@@ -28,6 +33,7 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  sessionStorePath?: string | null;
 };
 
 const MAX_EVENTS = 20;
@@ -39,10 +45,24 @@ type SessionQueue = {
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
 
-const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-and-restart");
+const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-only");
+registerSystemEventStoreOwner(SYSTEM_EVENT_QUEUES_KEY, () => {
+  for (const [key, entry] of queues) {
+    const retained = entry.queue.filter((event) =>
+      isSystemEventStoreCurrent(key, event.sessionStorePath),
+    );
+    if (retained.length === entry.queue.length) {
+      continue;
+    }
+    entry.queue = retained;
+    resetQueueState(key, entry);
+    recordSystemEventStoreReplaced();
+  }
+});
 
 type SystemEventOptions = {
   sessionKey: string;
+  sessionStorePath?: string | null;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
@@ -111,6 +131,14 @@ function enqueueOwnedSystemEventEntry(
   receiptOptions?: ReceiptOptions,
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
+  const sessionStorePath =
+    options.sessionStorePath === undefined
+      ? getSystemEventStorePath(key)
+      : options.sessionStorePath;
+  if (!isSystemEventStoreCurrent(key, sessionStorePath)) {
+    recordSystemEventStoreReplaced();
+    return null;
+  }
   const entry = getOrCreateSessionQueue(key);
   const cleaned = text.trim();
   if (!cleaned) {
@@ -147,6 +175,7 @@ function enqueueOwnedSystemEventEntry(
     id: generateSecureUuid(),
     text: cleaned,
     ts: Date.now(),
+    ...(sessionStorePath === undefined ? {} : { sessionStorePath }),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
   };
@@ -203,21 +232,17 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
-  return (
-    left.text === right.text &&
-    left.ts === right.ts &&
-    (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
-  );
-}
-
 function matchesConsumedSystemEvent(queued: SystemEvent, consumed: SystemEvent): boolean {
   if (consumed.id !== undefined) {
     // Queue-owned IDs govern modern consumption; only legacy ID-less snapshots use structure.
     return queued.id === consumed.id;
   }
-  return areLegacySystemEventsEqual(queued, consumed);
+  return (
+    queued.text === consumed.text &&
+    queued.ts === consumed.ts &&
+    (queued.contextKey ?? null) === (consumed.contextKey ?? null) &&
+    areDeliveryContextsEqual(queued.deliveryContext, consumed.deliveryContext)
+  );
 }
 
 function resetQueueState(key: string, entry: SessionQueue) {
@@ -226,14 +251,8 @@ function resetQueueState(key: string, entry: SessionQueue) {
     queues.delete(key);
     return;
   }
-  for (let index = entry.queue.length - 1; index >= 0; index -= 1) {
-    const contextKey = expectDefined(entry.queue[index], "queue entry at index").contextKey ?? null;
-    if (contextKey !== null) {
-      entry.lastContextKey = contextKey;
-      return;
-    }
-  }
-  entry.lastContextKey = null;
+  entry.lastContextKey =
+    entry.queue.findLast((event) => event.contextKey != null)?.contextKey ?? null;
 }
 
 export function consumeSelectedSystemEventEntries(

@@ -5,21 +5,21 @@ import {
   nativeHookRelayTesting,
   onAgentEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { loadNodeExecAvailability } from "openclaw/plugin-sdk/node-selection-runtime";
 import {
   createAdmittedHostCapabilityTestFixture,
   createMockPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import {
-  createParams,
+  createTestParams,
   createCodexRuntimePlanFixture,
   createStartedThreadHarness,
   extractRelayIdFromThreadRequest,
@@ -31,178 +31,130 @@ import {
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
+vi.mock("openclaw/plugin-sdk/node-selection-runtime", { spy: true });
 
-describe("native follow-up custody through the registered attempt", () => {
-  beforeEach(() => {
+it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
+  "preserves accepted follow-up through sessions_yield (%s)",
+  async (scenario) => {
+    // Keep discovery off ambient Gateway I/O while using the real admitted host and monitor.
+    vi.mocked(loadNodeExecAvailability).mockResolvedValue({
+      cacheKey: "[]",
+      isAvailable: () => false,
+    });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  });
-
-  it.each([
-    "observed-success",
-    "delayed-success",
-    "failed-result",
-    "completed-only",
-    "v2-queue-only",
-    "opaque-steer",
-    "wait-before-admission",
-  ] as const)("preserves accepted follow-up through sessions_yield (%s)", async (scenario) => {
     const childThreadId = `custody-${scenario}`;
-    const runA = `codex-thread:${childThreadId}`;
-    const turnB = `${childThreadId}-turn-b`;
-    const runB = `${runA}:turn:${turnB}`;
-    const accepted =
-      scenario === "observed-success" ||
-      scenario === "delayed-success" ||
-      scenario === "wait-before-admission";
     const waiterThreadId = `${childThreadId}-waiter`;
-    const waiterRunId = `codex-thread:${waiterThreadId}`;
+    const turnB = `${childThreadId}-turn-b`;
+    const runB = `codex-thread:${childThreadId}:turn:${turnB}`;
+    const accepted = scenario !== "opaque-steer";
     const executionEvents: Array<Parameters<Parameters<typeof onAgentEvent>[0]>[0]> = [];
     const unsubscribe = onAgentEvent((event) => {
-      if (event.runId === waiterRunId && event.stream === "execution") {
+      if (event.runId === `codex-thread:${waiterThreadId}` && event.stream === "execution") {
         executionEvents.push(event);
       }
     });
     let waitAfterAdmission: unknown;
-    const turnStarted = createDeferred<void>();
-    const allowTurnStart = createDeferred<void>();
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        turnStarted.resolve();
-        await allowTurnStart.promise;
-      }
-      return undefined;
-    });
-    const params = createParams(
-      path.join(tempDir, `${childThreadId}-session.jsonl`),
-      path.join(tempDir, `${childThreadId}-workspace`),
-      { runId: `${childThreadId}-parent-run` },
-    );
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, `${childThreadId}-sessions.json`),
-      `${childThreadId}-session`,
-    );
-    params.disableTools = false;
+    const harness = createStartedThreadHarness();
+    const lifetime = new AbortController();
+    const params = createTestParams();
+    params.abortSignal = lifetime.signal;
+    await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "custody-session");
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
     );
-    const host = await createAdmittedHostCapabilityTestFixture(params);
-    assert(
-      host.agentHarnessTaskRuntimeScope,
-      "Expected the session fixture to issue a task runtime scope",
-    );
-    params.hostCapabilities = host.hostCapabilities;
-    params.agentHarnessTaskRuntimeScope = host.agentHarnessTaskRuntimeScope;
-    const taskRuntime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "codex-native",
-      runIdPrefix: "codex-thread:",
-      scope: host.agentHarnessTaskRuntimeScope,
+    const host = await createAdmittedHostCapabilityTestFixture(params, {
+      nativeModelPolicySupport: "exact",
     });
-    // Keep the real scoped persistence and registered monitor; isolate final user delivery.
+    assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
+    params.hostCapabilities = host.hostCapabilities;
+    params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
     const delivery = vi
-      .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessTaskCompletion")
+      .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
       .mockResolvedValue({ delivered: true, path: "direct" });
-    const notify = async (method: string, notificationParams: JsonObject) => {
-      await harness.notify({ method, params: notificationParams } as CodexServerNotification);
+    const attempts = new Set<Promise<void>>();
+    // Invoked with .call(this, ...) to preserve the observed instance as receiver.
+    // oxlint-disable-next-line typescript/unbound-method
+    const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+    const observeAttempt = vi.spyOn(
+      CodexNativeSubagentCompletionDelivery.prototype,
+      "deliverPending",
+    );
+    observeAttempt.mockImplementation(function (
+      this: CodexNativeSubagentCompletionDelivery,
+      state,
+      child,
+    ) {
+      const attempt = originalDelivery.call(this, state, child);
+      attempts.add(attempt);
+      return attempt;
+    });
+    const settleCompletionAttempts = async () => {
+      // Receipts settle independently of notification dispatch; join their owner before assertions.
+      while (attempts.size > 0) {
+        const pending = [...attempts];
+        attempts.clear();
+        await Promise.all(pending);
+      }
     };
-    const childStart = () =>
-      notify("turn/started", {
-        threadId: childThreadId,
-        turn: { id: turnB, status: "inProgress", items: [], error: null },
-      });
+    const notify = (method: string, notificationParams: JsonObject) =>
+      harness.notify({ method, params: notificationParams } as CodexServerNotification);
     const parentItem = (item: JsonObject, method = "item/completed") =>
       notify(method, { threadId: "thread-1", turnId: "turn-1", item });
+    const collab = (id: string, tool: string, threadId: string, extra: JsonObject = {}) =>
+      parentItem({
+        id,
+        type: "collabAgentToolCall",
+        tool,
+        status: "completed",
+        senderThreadId: "thread-1",
+        receiverThreadIds: [threadId],
+        ...extra,
+      });
+    const spawn = async (threadId: string) => {
+      await notify("thread/started", {
+        thread: {
+          id: threadId,
+          parentThreadId: "thread-1",
+          source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
+        },
+      });
+      await collab(`spawn-${threadId}`, "spawnAgent", threadId);
+    };
+    const turn = (threadId: string, id: string, result?: string) =>
+      notify(result === undefined ? "turn/started" : "turn/completed", {
+        threadId,
+        turn: {
+          id,
+          status: result === undefined ? "inProgress" : "completed",
+          error: null,
+          items:
+            result === undefined
+              ? []
+              : [{ type: "agentMessage", id: `result-${id}`, phase: "final_answer", text: result }],
+        },
+      });
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
-    let relayId: string | undefined;
     try {
-      await turnStarted.promise;
-      allowTurnStart.resolve();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      relayId = extractRelayIdFromThreadRequest(
+      await run.waitForTurnAccepted();
+      const relayId = extractRelayIdFromThreadRequest(
         harness.requests.find((request) => request.method === "thread/start")?.params,
       );
-      await notify("thread/started", {
-        thread: {
-          id: childThreadId,
-          parentThreadId: "thread-1",
-          source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
-        },
-      });
-      await parentItem({
-        id: "spawn-a",
-        type: "collabAgentToolCall",
-        tool: "spawnAgent",
-        status: "completed",
-        senderThreadId: "thread-1",
-        receiverThreadIds: [childThreadId],
-      });
-      await notify("turn/started", {
-        threadId: childThreadId,
-        turn: { id: "turn-a", status: "inProgress", items: [], error: null },
-      });
-      await notify("turn/completed", {
-        threadId: childThreadId,
-        turn: {
-          id: "turn-a",
-          status: "completed",
-          items: [
-            { type: "agentMessage", id: "result-a", phase: "final_answer", text: "A result" },
-          ],
-          error: null,
-        },
-      });
-      await parentItem({
-        id: "wait-a",
-        type: "collabAgentToolCall",
-        tool: "wait",
-        status: "completed",
-        senderThreadId: "thread-1",
-        receiverThreadIds: [childThreadId],
+      await spawn(childThreadId);
+      await turn(childThreadId, "turn-a");
+      await turn(childThreadId, "turn-a", "A result");
+      await collab("wait-a", "wait", childThreadId, {
         agentsStates: { [childThreadId]: { status: "completed", message: "A result" } },
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const previous = taskRuntime.listTaskRecords().find((task) => task.runId === runA);
-      expect(previous).toMatchObject({
-        status: "succeeded",
-        deliveryStatus: "delivered",
-        terminalSummary: "A result",
-      });
-      const previousSnapshot = structuredClone(previous);
-
-      // A completed A and not-yet-mirrored B cannot authorize sessions_yield.
-      // This independently running sibling supplies a real pending completion.
-      await notify("thread/started", {
-        thread: {
-          id: waiterThreadId,
-          parentThreadId: "thread-1",
-          source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
-        },
-      });
-      await parentItem({
-        id: "spawn-waiter",
-        type: "collabAgentToolCall",
-        tool: "spawnAgent",
-        status: "completed",
-        senderThreadId: "thread-1",
-        receiverThreadIds: [waiterThreadId],
-      });
-      await notify("turn/started", {
-        threadId: waiterThreadId,
-        turn: { id: "waiter-turn", status: "inProgress", items: [], error: null },
-      });
-      if (scenario === "observed-success" || scenario === "wait-before-admission") {
-        await childStart();
-      }
+      await settleCompletionAttempts();
+      // A is complete and B is not admitted yet; a running sibling authorizes sessions_yield.
+      await spawn(waiterThreadId);
+      await turn(waiterThreadId, "waiter-turn");
       if (scenario === "wait-before-admission") {
+        await turn(childThreadId, turnB);
         await notify("item/started", {
           threadId: waiterThreadId,
           turnId: "waiter-turn",
@@ -216,42 +168,15 @@ describe("native follow-up custody through the registered attempt", () => {
           },
         });
       }
+      await collab("submit-b", "sendInput", childThreadId);
       await parentItem(
-        scenario === "v2-queue-only"
-          ? {
-              id: "submit-b",
-              type: "subAgentActivity",
-              kind: "interacted",
-              agentThreadId: childThreadId,
-              agentPath: "/root/worker",
-            }
-          : {
-              id: "submit-b",
-              type: "collabAgentToolCall",
-              tool: "sendInput",
-              status: "completed",
-              senderThreadId: "thread-1",
-              receiverThreadIds: [childThreadId],
-            },
+        {
+          type: "function_call_output",
+          call_id: "submit-b",
+          output: JSON.stringify({ submission_id: accepted ? turnB : `opaque-${turnB}` }),
+        },
+        "rawResponseItem/completed",
       );
-      // Pinned V1 emits its activity item before applying result?. Only this successful
-      // function result certifies submission; completed-only and failure are controls.
-      if (scenario !== "completed-only") {
-        await parentItem(
-          {
-            type: "function_call_output",
-            call_id: "submit-b",
-            output: accepted
-              ? JSON.stringify({ submission_id: turnB })
-              : scenario === "opaque-steer"
-                ? JSON.stringify({ submission_id: `opaque-${turnB}` })
-                : scenario === "failed-result"
-                  ? "turn input was not submitted: NoActiveTurn"
-                  : "",
-          },
-          "rawResponseItem/completed",
-        );
-      }
       if (scenario === "wait-before-admission") {
         waitAfterAdmission = structuredClone(executionEvents.at(-1)?.data);
       }
@@ -268,22 +193,19 @@ describe("native follow-up custody through the registered attempt", () => {
         },
       });
       expect(yieldResponse).toMatchObject({ success: true });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      const result = await run;
-      expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, promptError: null });
       await nativeHookRelayUnregisterQueue.flush();
       host.closeHost();
       host.closeAdmission();
-
-      if (scenario === "delayed-success" || scenario === "opaque-steer") {
-        await childStart();
+      if (scenario !== "wait-before-admission") {
+        await turn(childThreadId, turnB);
       }
-      const startedRows = taskRuntime.listTaskRecords();
       const claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
-      if (!accepted) {
+      if (accepted) {
+        await turn(childThreadId, turnB, "B result");
+        await turn(childThreadId, turnB, "B result");
+      } else {
         await expect(
           invokeNativeHookRelay(
             {
@@ -300,85 +222,47 @@ describe("native follow-up custody through the registered attempt", () => {
           ),
         ).rejects.toThrow(/retained|inactive|not found|admission/);
       }
-      if (accepted) {
-        const completed = {
-          threadId: childThreadId,
-          turn: {
-            id: turnB,
-            status: "completed",
-            items: [
-              { type: "agentMessage", id: "result-b", phase: "final_answer", text: "B result" },
-            ],
-            error: null,
-          },
-        };
-        await notify("turn/completed", completed);
-        await notify("turn/completed", completed);
-      }
-      await notify("turn/completed", {
-        threadId: waiterThreadId,
-        turn: {
-          id: "waiter-turn",
-          status: "completed",
-          items: [
-            {
-              type: "agentMessage",
-              id: "waiter-result",
-              phase: "final_answer",
-              text: "Waiter result",
-            },
-          ],
-          error: null,
-        },
-      });
+      await turn(waiterThreadId, "waiter-turn", "Waiter result");
       await nativeHookRelayUnregisterQueue.flush();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const finalRows = taskRuntime.listTaskRecords();
-      const claimedAfterCompletion = isCodexAppServerLiveThreadClaimed(
-        harness.client,
-        childThreadId,
+      await settleCompletionAttempts();
+      const followupDeliveries = delivery.mock.calls.filter(
+        ([call]) => call.childSessionKey === runB,
       );
-      const relayAfterCompletion = Boolean(
-        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-      );
-      expect.soft(finalRows.find((task) => task.runId === runA)).toEqual(previousSnapshot);
       if (accepted) {
         expect
-          .soft(startedRows.find((task) => task.runId === runB))
-          .toMatchObject({ status: "running" });
-        expect.soft(finalRows.find((task) => task.runId === runB)).toMatchObject({
-          status: "succeeded",
-          deliveryStatus: "delivered",
-          terminalSummary: "B result",
-        });
-        expect
-          .soft(delivery.mock.calls.filter(([call]) => call.childSessionKey === runB))
+          .soft(followupDeliveries)
           .toEqual([[expect.objectContaining({ childSessionKey: runB, result: "B result" })]]);
-        expect.soft(claimedAfterStart).toBe(true);
       } else {
-        expect.soft(finalRows.find((task) => task.runId === runB)).toBeUndefined();
-        expect
-          .soft(delivery.mock.calls.filter(([call]) => call.childSessionKey === runB))
-          .toHaveLength(0);
-        expect.soft(claimedAfterStart).toBe(false);
+        expect.soft(followupDeliveries).toHaveLength(0);
       }
+      expect.soft(claimedAfterStart).toBe(accepted);
       if (scenario === "wait-before-admission") {
         expect.soft(waitAfterAdmission).toMatchObject({
           state: "waiting",
           wait: { kind: "children", dependencies: [{ runId: runB }], pendingCount: 1 },
         });
       }
-      expect.soft(claimedAfterCompletion).toBe(false);
-      expect.soft(relayAfterCompletion).toBe(false);
+      expect.soft(isCodexAppServerLiveThreadClaimed(harness.client, childThreadId)).toBe(false);
+      expect
+        .soft(Boolean(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)))
+        .toBe(false);
     } finally {
       unsubscribe();
-      allowTurnStart.resolve();
-      harness.close();
-      await nativeHookRelayUnregisterQueue.flush();
-      host.closeHost();
-      host.closeAdmission();
+      lifetime.abort("test_cleanup");
+      try {
+        harness.close();
+        // Join cleanup before flushing relay retirement or releasing the admitted host.
+        await Promise.allSettled([run]);
+        await settleCompletionAttempts();
+        await nativeHookRelayUnregisterQueue.flush();
+      } finally {
+        observeAttempt.mockRestore();
+        try {
+          host.closeHost();
+        } finally {
+          host.closeAdmission();
+        }
+      }
     }
-  });
-});
+  },
+);

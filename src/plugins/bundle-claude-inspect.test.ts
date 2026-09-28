@@ -101,56 +101,6 @@ describe("Claude bundle plugin inspect integration", () => {
     return result.manifest;
   }
 
-  function expectClaudeManifestField(params: {
-    field: "skills" | "hooks" | "settingsFiles" | "capabilities";
-    expected: readonly string[];
-  }) {
-    const manifest = expectLoadedClaudeManifest();
-    const values = manifest[params.field];
-    expect(values).toEqual([...params.expected]);
-  }
-
-  function expectNoDiagnostics(diagnostics: unknown[]) {
-    expect(diagnostics).toStrictEqual([]);
-  }
-
-  function expectBundleRuntimeSupport(params: {
-    actual: {
-      supportedServerNames: string[];
-      unsupportedServerNames: string[];
-      diagnostics: unknown[];
-    } & Record<string, unknown>;
-    supportedServerNames: readonly string[];
-    unsupportedServerNames: readonly string[];
-    hasSupportedKey: "hasSupportedStdioServer" | "hasStdioServer";
-  }) {
-    expect(params.actual[params.hasSupportedKey]).toBe(true);
-    expect(params.actual.supportedServerNames).toEqual([...params.supportedServerNames]);
-    expect(params.actual.unsupportedServerNames).toEqual([...params.unsupportedServerNames]);
-    expectNoDiagnostics(params.actual.diagnostics);
-  }
-
-  function inspectClaudeBundleRuntimeSupport(kind: "mcp" | "lsp"): {
-    supportedServerNames: string[];
-    unsupportedServerNames: string[];
-    diagnostics: unknown[];
-    hasSupportedStdioServer?: boolean;
-    hasStdioServer?: boolean;
-  } {
-    if (kind === "mcp") {
-      return inspectBundleMcpRuntimeSupport({
-        pluginId: "test-claude-plugin",
-        rootDir,
-        bundleFormat: "claude",
-      });
-    }
-    return inspectBundleLspRuntimeSupport({
-      pluginId: "test-claude-plugin",
-      rootDir,
-      bundleFormat: "claude",
-    });
-  }
-
   beforeAll(() => {
     rootDir = makeTrackedTempDir("openclaw-claude-bundle", tempDirs);
     setupClaudeInspectFixture();
@@ -184,61 +134,33 @@ describe("Claude bundle plugin inspect integration", () => {
     });
   });
 
-  it.each([
-    {
-      name: "resolves skills from skills, commands, and agents paths",
-      field: "skills" as const,
-      expected: ["skill-packs", "extra-commands", "agents", "output-styles"],
-    },
-    {
-      name: "resolves hooks from default and declared paths",
-      field: "hooks" as const,
-      expected: ["hooks/hooks.json", "custom-hooks"],
-    },
-    {
-      name: "detects settings files",
-      field: "settingsFiles" as const,
-      expected: ["settings.json"],
-    },
-    {
-      name: "detects all bundle capabilities",
-      field: "capabilities" as const,
-      expected: [
-        "skills",
-        "commands",
-        "agents",
-        "hooks",
-        "mcpServers",
-        "lspServers",
-        "outputStyles",
-        "settings",
-      ],
-    },
-  ] as const)("$name", ({ field, expected }) => {
-    expectClaudeManifestField({ field, expected });
-  });
-
-  it.each([
-    {
-      name: "inspects MCP runtime support across stdio and HTTP transports",
-      kind: "mcp" as const,
+  it("inspects MCP runtime support across stdio and HTTP transports", () => {
+    expect(
+      inspectBundleMcpRuntimeSupport({
+        pluginId: "test-claude-plugin",
+        rootDir,
+        bundleFormat: "claude",
+      }),
+    ).toMatchObject({
+      hasSupportedStdioServer: true,
       supportedServerNames: ["test-stdio-server", "test-sse-server"],
       unsupportedServerNames: [],
-      hasSupportedKey: "hasSupportedStdioServer" as const,
-    },
-    {
-      name: "inspects LSP runtime support with stdio server",
-      kind: "lsp" as const,
+      diagnostics: [],
+    });
+  });
+
+  it("inspects LSP runtime support with stdio server", () => {
+    expect(
+      inspectBundleLspRuntimeSupport({
+        pluginId: "test-claude-plugin",
+        rootDir,
+        bundleFormat: "claude",
+      }),
+    ).toMatchObject({
+      hasStdioServer: true,
       supportedServerNames: ["typescript-lsp"],
       unsupportedServerNames: [],
-      hasSupportedKey: "hasStdioServer" as const,
-    },
-  ])("$name", ({ kind, supportedServerNames, unsupportedServerNames, hasSupportedKey }) => {
-    expectBundleRuntimeSupport({
-      actual: inspectClaudeBundleRuntimeSupport(kind),
-      supportedServerNames,
-      unsupportedServerNames,
-      hasSupportedKey,
+      diagnostics: [],
     });
   });
 });

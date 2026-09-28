@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -15,7 +18,6 @@ import {
   resetSubagentRegistryForTests,
   scheduleSubagentRegistrySweep,
 } from "./subagent-registry.test-helpers.js";
-import { useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 
 const recoverRow = vi.hoisted(() => vi.fn());
 const warn = vi.hoisted(() => vi.fn());
@@ -35,8 +37,8 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function register(runId: string) {
-  registerSubagentRun(
+async function register(runId: string) {
+  await registerSubagentRun(
     createSubagentRunParams({ runId, childSessionKey: `agent:main:subagent:${runId}` }),
   );
 }
@@ -65,7 +67,7 @@ describe("registered subagent sweeper lifecycle", () => {
   });
 
   it("cancels the queued sweep through last-row release and restores registration cadence", async () => {
-    register("released");
+    await register("released");
     await vi.dynamicImportSettled();
     expect(subagentRuns.has("released")).toBe(true);
     releaseSubagentRun("released");
@@ -78,7 +80,7 @@ describe("registered subagent sweeper lifecycle", () => {
     expect(warn).not.toHaveBeenCalled();
 
     resetGatewayWorkAdmission();
-    register("next");
+    await register("next");
     await vi.dynamicImportSettled();
     await advance(59_999);
     expect(recoverRow).not.toHaveBeenCalled();
@@ -90,7 +92,7 @@ describe("registered subagent sweeper lifecycle", () => {
     "resumes retained-row periodic sweeps through repeated activateSubagentRegistry (suspended: %s)",
     async (suspended) => {
       initSubagentRegistry();
-      register("retained");
+      await register("retained");
       activateGatewayRuntime();
       await vi.dynamicImportSettled();
       if (suspended) {
@@ -132,7 +134,7 @@ describe("registered subagent sweeper lifecycle", () => {
     async (released) => {
       const pending = createDeferred<{ status: "handled" }>();
       recoverRow.mockReturnValueOnce(pending.promise);
-      register("active");
+      await register("active");
       await vi.dynamicImportSettled();
       try {
         await advance(60_000);

@@ -1,5 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -31,7 +34,7 @@ describe("Reef inbox cursor persistence", () => {
 
   function createRuntime(legacy = false) {
     const runtime = createPluginRuntimeMock();
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
+    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
       const store = createPluginStateKeyedStoreForTests<T>("reef", {
         ...storeOptions,
         env: { OPENCLAW_STATE_DIR: stateDir },
@@ -44,6 +47,28 @@ describe("Reef inbox cursor persistence", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
     return runtime;
+  }
+
+  function beforeFirstComparison(
+    runtime: ReturnType<typeof createRuntime>,
+    change: () => Promise<void>,
+  ) {
+    const open = runtime.state.openKeyedStore;
+    let changed = false;
+    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
+      const store = open<T>(storeOptions);
+      const compareAndApply = store.compareAndApply!;
+      return {
+        ...store,
+        compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
+          if (!changed) {
+            changed = true;
+            await change();
+          }
+          return compareAndApply(...args);
+        },
+      };
+    };
   }
 
   it.each([false, true])("preserves monotonic progress on an older host: %s", async (legacy) => {
@@ -72,26 +97,13 @@ describe("Reef inbox cursor persistence", () => {
     async (conflict) => {
       const runtime = createRuntime();
       const competing = runtime.state.openKeyedStore(options);
-      const open = runtime.state.openKeyedStore;
-      let competed = false;
-      runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
-        const store = open<T>(storeOptions);
-        const compareAndApply = store.compareAndApply!;
-        return {
-          ...store,
-          compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
-            if (!competed) {
-              competed = true;
-              await competing.register("current", {
-                ...binding,
-                ...(conflict === "different identity" ? { handle: "clawd" } : {}),
-                cursor: 40,
-              });
-            }
-            return await compareAndApply(...args);
-          },
-        };
-      };
+      beforeFirstComparison(runtime, async () => {
+        await competing.register("current", {
+          ...binding,
+          ...(conflict === "different identity" ? { handle: "clawd" } : {}),
+          cursor: 40,
+        });
+      });
       const store = new ReefInboxCursorStore(runtime, binding);
       if (conflict === "different identity") {
         await expect(store.advance(12)).rejects.toThrow("different identity");
@@ -110,22 +122,9 @@ describe("Reef inbox cursor persistence", () => {
     const runtime = createRuntime();
     const competing = runtime.state.openKeyedStore(options);
     await competing.register("current", { ...binding, handle: "clawd", cursor: 3 });
-    const open = runtime.state.openKeyedStore;
-    let repaired = false;
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
-      const store = open<T>(storeOptions);
-      const compareAndApply = store.compareAndApply!;
-      return {
-        ...store,
-        compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
-          if (!repaired) {
-            repaired = true;
-            await competing.register("current", { ...binding, cursor: 5 });
-          }
-          return await compareAndApply(...args);
-        },
-      };
-    };
+    beforeFirstComparison(runtime, async () => {
+      await competing.register("current", { ...binding, cursor: 5 });
+    });
     const store = new ReefInboxCursorStore(runtime, binding);
     await store.advance(12);
     await expect(store.load()).resolves.toBe(12);
@@ -154,7 +153,7 @@ describe("Reef inbox cursor persistence", () => {
     const runtime = createRuntime();
     const open = runtime.state.openKeyedStore;
     const failure = new Error("comparison unavailable");
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => ({
+    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => ({
       ...open<T>(storeOptions),
       compareAndApply: async () => {
         throw failure;

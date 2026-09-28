@@ -14,6 +14,8 @@ export function copyAttemptDeliveryState(
     latestMcpConnectAction: attempt.latestMcpConnectAction ?? previous?.latestMcpConnectAction,
     didSendViaMessagingTool: previous?.didSendViaMessagingTool || attempt.didSendViaMessagingTool,
     sourceReplyDelivered: previous?.sourceReplyDelivered || attempt.sourceReplyDelivered,
+    sourceReplyDeliveryState:
+      attempt.sourceReplyDeliveryState ?? previous?.sourceReplyDeliveryState,
     didDeliverSourceReplyViaMessageTool:
       previous?.didDeliverSourceReplyViaMessageTool === true ||
       attempt.didDeliverSourceReplyViaMessageTool === true,
@@ -49,8 +51,6 @@ export function copyAttemptDeliveryState(
     hasAsyncActivity(attempt.toolMetas)
       ? { asyncWorkStarted: true as const }
       : {}),
-    requesterContinuationSettled:
-      previous?.requesterContinuationSettled || attempt.requesterContinuationSettled,
   };
 }
 

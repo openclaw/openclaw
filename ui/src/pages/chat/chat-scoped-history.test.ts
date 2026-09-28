@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayHarness,

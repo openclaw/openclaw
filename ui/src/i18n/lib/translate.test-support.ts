@@ -1,6 +1,7 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import type { Locale } from "./registry.ts";
 import { i18n } from "./translate.ts";
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
 type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null>;
 type TranslateTestApi = {
@@ -23,14 +24,27 @@ export function createI18nManagerForTesting(
   return getTestApi().createI18nManager(loadLocaleTranslation);
 }
 
-/** Restores both the active locale and its exact persisted preference after a shared-worker test. */
+/** Restores locale, preference, and document attributes after a shared-worker test. */
 export function captureI18nStateForTesting(): () => Promise<void> {
   const previousLocale = i18n.getLocale();
+  const root = typeof document === "undefined" ? undefined : document.documentElement;
+  const attributes = (["lang", "dir"] as const).map(
+    (name) => [name, root?.getAttribute(name)] as const,
+  );
   const storage = getSafeLocalStorage();
   const previousPreference = storage?.getItem("openclaw.i18n.locale") ?? null;
 
   return async () => {
     await i18n.setLocale(previousLocale);
+    // Separate test managers also update the document; the singleton may already
+    // have its original locale and skip document synchronization on restoration.
+    for (const [name, value] of attributes) {
+      if (value == null) {
+        root?.removeAttribute(name);
+      } else {
+        root?.setAttribute(name, value);
+      }
+    }
     if (previousPreference === null) {
       storage?.removeItem("openclaw.i18n.locale");
     } else {

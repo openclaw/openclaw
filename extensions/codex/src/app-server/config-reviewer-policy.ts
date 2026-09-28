@@ -94,7 +94,7 @@ function isTrustedCodexModelBackedOpenAIProvider(
   },
   resolveAuthProviderId: typeof resolveProviderIdForAuth,
 ): boolean {
-  if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
+  if (![params.env?.OPENAI_BASE_URL, params.env?.OPENAI_API_BASE].every(isNativeOpenAIBaseUrl)) {
     return false;
   }
   if (!nativeCodexConfigIsTrustedForModelBackedReview(params)) {
@@ -104,9 +104,6 @@ function isTrustedCodexModelBackedOpenAIProvider(
     params.config,
     resolveAuthProviderId,
   );
-  if (openAIProviders.length === 0) {
-    return true;
-  }
   return openAIProviders.every((openAIProvider) =>
     configuredOpenAIProviderIsTrustedForModelBackedReview(openAIProvider, params.model),
   );
@@ -129,27 +126,15 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
   const bindingModelProvider = params.bindingModelProvider?.trim();
   const currentModel = params.model?.trim();
   const bindingModel = params.bindingModel?.trim();
-  if (bindingModelProvider && currentModel && bindingModel && currentModel === bindingModel) {
-    return {
-      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
-      model: params.model ?? params.bindingModel,
-    };
-  }
-  const currentModelProvider = inferProviderFromModelRef(params.model);
-  if (currentModelProvider) {
-    return {
-      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(currentModelProvider),
-      model: params.model,
-    };
-  }
-  if (bindingModelProvider) {
-    return {
-      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
-      model: params.model ?? params.bindingModel,
-    };
-  }
+  const modelProvider =
+    bindingModelProvider && currentModel && bindingModel && currentModel === bindingModel
+      ? bindingModelProvider
+      : (inferProviderFromModelRef(params.model) ?? bindingModelProvider) ||
+        (params.nativeAuthProfile === true ? "openai" : undefined);
   return {
-    modelProvider: params.nativeAuthProfile === true ? "openai" : undefined,
+    modelProvider: modelProvider
+      ? normalizeCodexModelBackedReviewerPolicyProvider(modelProvider)
+      : undefined,
     model: params.model ?? params.bindingModel,
   };
 }
@@ -251,7 +236,7 @@ function readCodexAppServerConfigToml(
   params: Pick<
     CodexModelBackedReviewerContext,
     "agentDir" | "codexConfigToml" | "env" | "homeScope"
-  >,
+  > & { codexHome?: string },
 ): string | undefined | false {
   if (params.codexConfigToml !== undefined) {
     return params.codexConfigToml ?? undefined;
@@ -271,7 +256,7 @@ export function codexConfigEnablesNativeComputerUse(
   params: Pick<
     CodexModelBackedReviewerContext,
     "agentDir" | "codexConfigToml" | "env" | "homeScope"
-  > & { pluginNames: readonly string[] },
+  > & { codexHome?: string; pluginNames: readonly string[] },
 ): boolean {
   const configToml = readCodexAppServerConfigToml(params);
   if (configToml === false) {
@@ -315,8 +300,13 @@ export function codexConfigEnablesNativeComputerUse(
 }
 
 function resolveCodexAppServerConfigPath(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "env" | "homeScope">,
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "env" | "homeScope"> & {
+    codexHome?: string;
+  },
 ): string | undefined {
+  if (params.codexHome) {
+    return path.join(params.codexHome, CODEX_CONFIG_TOML_FILENAME);
+  }
   if (params.homeScope === "user") {
     return path.join(resolveCodexAppServerUserHomeDir(params.env), CODEX_CONFIG_TOML_FILENAME);
   }
@@ -417,12 +407,6 @@ function isNativeOpenAIBaseUrl(value: unknown): boolean {
   } catch {
     return false;
   }
-}
-
-function openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(
-  env: NodeJS.ProcessEnv | undefined,
-): boolean {
-  return [env?.OPENAI_BASE_URL, env?.OPENAI_API_BASE].every(isNativeOpenAIBaseUrl);
 }
 
 function isNativeChatGPTBaseUrl(value: unknown): boolean {

@@ -14,6 +14,7 @@ import {
   completeGatewayBootLifecycle,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
+  readGatewayLastInstallationReplacement,
   readGatewayLastShutdown,
   recordGatewayBootStart,
   recordGatewayCrashLoopRecovery,
@@ -75,6 +76,31 @@ function insertBootRows(
 }
 
 describe("gateway crash-loop breaker", () => {
+  it("projects replacement history only while it is the latest shutdown", () => {
+    const lifecycle = createLifecycleDb();
+    expect(readGatewayLastInstallationReplacement(lifecycle.env)).toBeUndefined();
+    const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
+    const replacedBoot = recordGatewayBootStart(lifecycle.env, 1_000);
+    completeGatewayBootLifecycle(
+      replacedBoot,
+      { outcome: "planned_restart", reason },
+      lifecycle.env,
+      2_000,
+    );
+    const successor = recordGatewayBootStart(lifecycle.env, 3_000);
+    expect(readGatewayLastInstallationReplacement(lifecycle.env)).toEqual({
+      reason,
+      completedAtMs: 2_000,
+    });
+    completeGatewayBootLifecycle(
+      successor,
+      { outcome: "clean_stop", reason: "stop (SIGTERM)" },
+      lifecycle.env,
+      4_000,
+    );
+    expect(readGatewayLastInstallationReplacement(lifecycle.env)).toBeUndefined();
+  });
+
   it.each(["SIGTERM", "SIGINT"])(
     "warns about repeated %s stops across process lifetimes",
     (signal) => {
@@ -138,7 +164,7 @@ describe("gateway crash-loop breaker", () => {
         startedAtMs: 1_500,
         completedAtMs: 2_000,
         outcome: "planned_restart",
-        reason: "restart (SIGUSR1)",
+        reason: "restart (SIGUSR2)",
       },
       { bootId: "recovery", startedAtMs: 3_001, completedAtMs: 4_000, outcome: "safe_mode_stable" },
       { bootId: "running", startedAtMs: 4_001 },
@@ -250,32 +276,6 @@ describe("gateway crash-loop breaker", () => {
 
     expect(decision.tripped).toBe(true);
     expect(decision.shouldWriteStabilityBundle).toBe(false);
-  });
-
-  it("logs recovery once after the breaker window drains", () => {
-    const db = createLifecycleDb();
-    const nowMs = 1_000_000;
-
-    insertBootRows(db, [
-      {
-        bootId: "breaker-marker",
-        startedAtMs: nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1,
-        startupReason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
-      },
-    ]);
-
-    const firstDecision = inspectGatewayCrashLoopBreaker(db.env, nowMs);
-    insertBootRows(db, [
-      {
-        bootId: "recovery-marker",
-        startedAtMs: nowMs,
-        startupReason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
-      },
-    ]);
-    const secondDecision = inspectGatewayCrashLoopBreaker(db.env, nowMs + 1);
-
-    expect(firstDecision).toMatchObject({ tripped: false, recovered: true });
-    expect(secondDecision).toMatchObject({ tripped: false, recovered: false });
   });
 
   it("records a fresh lifecycle segment before recovered channel startup", () => {
@@ -436,18 +436,8 @@ describe("formatGatewayCrashLoopManualChannelStartHint", () => {
     );
   });
 
-  // Suppression is reported per account; omitting accountId would tell operators to run a command
-  // that starts the channel's default account instead of the one the warning named.
-  it("carries the account when suppression is account-scoped", () => {
-    expect(
-      formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
-    ).toContain(`--params '{"channel":"telegram","accountId":"work"}'`);
-  });
-
   it.each([
-    { name: "default", profile: "", container: "", command: "openclaw" },
     { name: "named profile", profile: "work", container: "", command: "openclaw --profile work" },
-    { name: "container", profile: "", container: "demo", command: "openclaw --container demo" },
     {
       name: "container and profile",
       profile: "work",

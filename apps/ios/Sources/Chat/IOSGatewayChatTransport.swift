@@ -141,9 +141,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             try await transport.requestSessionMutation(request, ifCurrentRoute: route)
         }
         return OpenClawChatNewSessionRouteLease(
-            listAgents: {
-                let data = try await request(OpenClawChatGatewayRequests.agentsList())
-                return try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
+            loadAgents: { onUpdate in
+                try await OpenClawChatAgentsListResponse.load(
+                    request: request,
+                    isCurrent: { await transport.gateway.currentRoute() == route },
+                    onUpdate: onUpdate)
             },
             createSession: { key, label, agentID, parentSessionKey, worktree, worktreeBaseRef in
                 let createRequest = transport.createSessionRequest(
@@ -485,6 +487,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
     }
 
+    func attachmentLimits() async -> GatewayAttachmentLimits? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        return await self.gateway.currentAttachmentLimits(ifCurrentRoute: route)
+    }
+
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let request = OpenClawChatGatewayRequests.progressCardGet(
@@ -655,7 +662,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                     }
                     if let mapped = OpenClawChatGatewayPayloadCodec.event(from: evt) {
                         switch mapped {
-                        case .chatMetadataChanged, .seqGap, .routeChanged:
+                        case .chatMetadataChanged, .modelSelectionChanged, .seqGap, .routeChanged:
                             await self.sourceResourceLoader?.invalidate()
                         default:
                             break

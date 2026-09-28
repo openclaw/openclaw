@@ -123,26 +123,6 @@ enum AppNavigationActions {
     }
 
     static func openAbout() {
-        let build = ArtifactBuildInfo(infoDictionary: Bundle.main.infoDictionary ?? [:])
-        let credits = NSMutableAttributedString(string: String(localized:
-            "Menu bar companion for notifications, screenshots, and privileged agent actions."))
-        credits.append(NSAttributedString(string: "\n\n" + build.copyText + "\n\n"))
-        for (title, address) in [
-            (String(localized: "Website"), "https://openclaw.ai"),
-            (String(localized: "Docs"), "https://docs.openclaw.ai"),
-            (String(localized: "GitHub"), "https://github.com/openclaw/openclaw"),
-            (String(localized: "Discord"), "https://discord.gg/clawd"),
-        ] {
-            credits.append(NSAttributedString(string: title + "\n", attributes: [.link: address]))
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "OpenClaw",
-            .applicationVersion: build.version,
-            .version: build.build,
-            .credits: credits,
-            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"):
-                String(localized: "© 2026 OpenClaw Foundation — MIT License."),
-        ])
+        self.openConnection(tab: .about)
     }
 }

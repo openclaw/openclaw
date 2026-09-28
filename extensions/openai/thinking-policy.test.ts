@@ -14,6 +14,31 @@ function levelIds(params: {
 }
 
 describe("OpenAI thinking route provenance", () => {
+  it.each(["gpt-6-sol", "gpt-6-luna"])("offers supported reasoning for %s", (modelId) => {
+    for (const runtime of ["openclaw", "codex", "auto"]) {
+      const profile = resolveUnifiedOpenAIThinkingProfile(modelId, runtime);
+      expect(profile.defaultLevel).toBe("medium");
+      expect(profile.levels.map((level) => level.id)).toEqual([
+        ...(runtime === "codex" ? [] : ["off"]),
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        ...(runtime === "codex" ? [] : ["ultra"]),
+      ]);
+    }
+    const accountProfile = resolveUnifiedOpenAIThinkingProfile(modelId, "codex", {
+      supportedReasoningEfforts: ["low", "high"],
+    });
+    expect(accountProfile.levels.map((level) => level.id)).toEqual(["low", "high"]);
+    expect(accountProfile.defaultLevel).toBe("low");
+    const explicitOffProfile = resolveUnifiedOpenAIThinkingProfile(modelId, "codex", {
+      supportedReasoningEfforts: ["none", "low"],
+    });
+    expect(explicitOffProfile.levels.map((level) => level.id)).toEqual(["off", "low"]);
+  });
+
   it.each(["openclaw", "codex", "auto"])(
     "offers Astra's supported efforts on the %s runtime",
     (runtime) => {

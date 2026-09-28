@@ -1,5 +1,8 @@
 import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createDeferredCore } from "../shared/deferred.js";
+import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
+import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
 type OAuthLoopbackCallbackResult =
   | { type: "authorization_code"; code: string; state: string }
@@ -102,7 +105,7 @@ function prepareResponse(
   resolveCorsOrigin?: CorsOriginResolver,
 ): void {
   response.setHeader("Cache-Control", "no-store");
-  response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  response.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   const origin = resolveCorsOrigin?.(request.headers.origin);
@@ -181,13 +184,8 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let binding = true;
   const timeoutRef: { current?: NodeJS.Timeout } = {};
   let closePromise: Promise<void> | undefined;
-  let resolveWait!: (result: OAuthLoopbackCallbackResult) => void;
-  let rejectWait!: (error: Error) => void;
-  const waitPromise = new Promise<OAuthLoopbackCallbackResult>((resolve, reject) => {
-    resolveWait = resolve;
-    rejectWait = reject;
-  });
-  void waitPromise.catch(() => undefined);
+  const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
+  void callback.promise.catch(() => undefined);
   const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
   const cleanup = () => {
     if (timeoutRef.current) {
@@ -201,7 +199,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     }
     settled = true;
     cleanup();
-    rejectWait(error instanceof Error ? error : new Error("OAuth callback failed"));
+    callback.reject(error instanceof Error ? error : new Error("OAuth callback failed"));
     void close();
   };
   const onAbort = () => settleError(new Error("OAuth callback cancelled"));
@@ -217,7 +215,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
         return;
       }
       finished = true;
-      resolveWait(result);
+      callback.resolve(result);
       void close();
     };
     response.once("finish", finish);
@@ -226,14 +224,18 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const renderSuccess =
     params.renderSuccess ??
     (() => ({
-      body: "Authorization received; return to the terminal while OpenClaw finishes.",
-      contentType: "text/plain; charset=utf-8",
+      body: renderOAuthPage({
+        title: "Authorization received",
+        heading: "Authorization received",
+        message: "Return to the terminal while OpenClaw finishes.",
+      }),
+      contentType: "text/html; charset=utf-8",
     }));
   const renderError =
     params.renderError ??
     ((message: string) => ({
-      body: message,
-      contentType: "text/plain; charset=utf-8",
+      body: oauthErrorHtml(message),
+      contentType: "text/html; charset=utf-8",
     }));
   const respond = (response: ServerResponse, status: number, rendered: RenderedResponse) => {
     response.writeHead(status, { "Content-Type": rendered.contentType });
@@ -316,7 +318,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     params.timeoutMs,
   );
   return {
-    waitForCallback: () => waitPromise,
+    waitForCallback: () => callback.promise,
     close: async () => {
       if (!settled) {
         settleError(new Error("OAuth callback cancelled"));

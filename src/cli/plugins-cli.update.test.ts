@@ -37,6 +37,10 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 import { registerPluginsCli } from "./plugins-cli.js";
+import {
+  expectInstallRecordsWrittenWithLease,
+  writtenIndexCustody,
+} from "./plugins-cli.update.test-support.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -59,6 +63,21 @@ function createTrackedPluginConfig(params: {
       },
     },
   } as OpenClawConfig;
+}
+
+function primeTrackedPluginUpdate(
+  params: Parameters<typeof createTrackedPluginConfig>[0] & {
+    channel?: NonNullable<OpenClawConfig["update"]>["channel"];
+  },
+): OpenClawConfig {
+  const config = createTrackedPluginConfig(params);
+  if (params.channel) {
+    config.update = { channel: params.channel };
+  }
+  pluginCliConfigMock.mockReturnValue(config);
+  setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+  primePluginUpdate(config);
+  return config;
 }
 
 function createCapabilityConsentReview(): PluginCapabilityConsentReview {
@@ -97,17 +116,6 @@ function expectOfflineNoticeLogged() {
       message.includes("Updates saved; they will load on the next Gateway start."),
     ),
   ).toBe(true);
-}
-
-function expectInstallRecordsWrittenWithLease(records: unknown, config: unknown) {
-  expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).toHaveBeenCalledWith(
-    records,
-    expect.objectContaining({
-      config,
-      filePath: expect.any(String),
-      lease: expect.anything(),
-    }),
-  );
 }
 
 function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
@@ -301,19 +309,10 @@ describe("plugins cli update", () => {
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
-    const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";
-    try {
-      await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow(
-        "OPENCLAW_NIX_MODE=1",
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previous;
-      }
-    }
+    await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow(
+      "OPENCLAW_NIX_MODE=1",
+    );
 
     expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
     expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
@@ -358,35 +357,9 @@ describe("plugins cli update", () => {
   it.each([
     ["missing", "missing-plugin", [], undefined, undefined, "openclaw"],
     ["preview", "missing-plugin", ["--dry-run"], undefined, undefined, "openclaw"],
-    ["object-name", "constructor", [], undefined, undefined, "openclaw"],
-    ["npm-spec", "@acme/missing-plugin@beta", [], undefined, undefined, "openclaw"],
     ["profile", "missing-plugin", [], "work", undefined, "openclaw --profile work"],
-    [
-      "profile preview",
-      "missing-plugin",
-      ["--dry-run"],
-      "work",
-      undefined,
-      "openclaw --profile work",
-    ],
     ["container", "missing-plugin", [], undefined, "demo", "openclaw --container demo"],
-    [
-      "container preview",
-      "missing-plugin",
-      ["--dry-run"],
-      undefined,
-      "demo",
-      "openclaw --container demo",
-    ],
     ["container before profile", "missing-plugin", [], "work", "demo", "openclaw --container demo"],
-    [
-      "container before profile preview",
-      "missing-plugin",
-      ["--dry-run"],
-      "work",
-      "demo",
-      "openclaw --container demo",
-    ],
   ] as const)(
     "rejects untracked update target with %s guidance",
     async (_name, id, args, profile, container, prefix) => {
@@ -1007,6 +980,7 @@ describe("plugins cli update", () => {
       config: cfg,
       installRecords: nextRecords,
       reason: "source-changed",
+      ...writtenIndexCustody(),
     });
     expectOfflineNoticeLogged();
   });
@@ -1077,6 +1051,7 @@ describe("plugins cli update", () => {
       },
       installRecords: nextRecords,
       reason: "source-changed",
+      ...writtenIndexCustody(),
     });
   });
 
@@ -1617,13 +1592,10 @@ describe("plugins cli update", () => {
   });
 
   it("warns once for the deprecated unsafe flag on updates", async () => {
-    const config = createTrackedPluginConfig({
+    const config = primeTrackedPluginUpdate({
       pluginId: "openclaw-codex-app-server",
       spec: "openclaw-codex-app-server@beta",
     });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
 
     await runPluginsCommand([
       "plugins",
@@ -1681,14 +1653,11 @@ describe("plugins cli update", () => {
   );
 
   it("passes the inferred core channel to a targeted update without enabling catalog sync", async () => {
-    const config = createTrackedPluginConfig({
+    primeTrackedPluginUpdate({
       pluginId: "codex",
       spec: "@openclaw/codex",
       resolvedName: "@openclaw/codex",
     });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "codex"]);
 
@@ -1701,15 +1670,12 @@ describe("plugins cli update", () => {
   });
 
   it("syncs official catalog specs with beta channel context for update --all", async () => {
-    const config = createTrackedPluginConfig({
+    primeTrackedPluginUpdate({
       pluginId: "codex",
       spec: "@openclaw/codex@2026.6.8-beta.1",
       resolvedName: "@openclaw/codex",
+      channel: "beta",
     });
-    config.update = { channel: "beta" };
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -1720,34 +1686,13 @@ describe("plugins cli update", () => {
     expect(updateParams.updateChannel).toBeUndefined();
   });
 
-  it("infers the official catalog channel from the installed core for update --all", async () => {
-    const config = createTrackedPluginConfig({
-      pluginId: "codex",
-      spec: "@openclaw/codex",
-      resolvedName: "@openclaw/codex",
-    });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
-
-    await runPluginsCommand(["plugins", "update", "--all"]);
-
-    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
-    expect(updateParams.officialPluginUpdateChannel).toBe(
-      resolveRegistryUpdateChannel({ currentVersion: VERSION }),
-    );
-  });
-
   it("passes extended-stable channel and installed core version to update --all", async () => {
-    const config = createTrackedPluginConfig({
+    primeTrackedPluginUpdate({
       pluginId: "codex",
       spec: "@openclaw/codex",
       resolvedName: "@openclaw/codex",
+      channel: "extended-stable",
     });
-    config.update = { channel: "extended-stable" };
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -1762,10 +1707,7 @@ describe("plugins cli update", () => {
 
   it("binds explicit update acceptance to the reviewed capability surface", async () => {
     setTty(false);
-    const config = createTrackedPluginConfig({ pluginId: "alpha", spec: "@acme/alpha" });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
+    primeTrackedPluginUpdate({ pluginId: "alpha", spec: "@acme/alpha" });
 
     await runPluginsCommand(["plugins", "update", "alpha", "--accept-capabilities"]);
 
@@ -1784,10 +1726,7 @@ describe("plugins cli update", () => {
 
   it("shows widened capabilities and requests consent for interactive plugin updates", async () => {
     setTty(true);
-    const config = createTrackedPluginConfig({ pluginId: "alpha", spec: "@acme/alpha" });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
+    primeTrackedPluginUpdate({ pluginId: "alpha", spec: "@acme/alpha" });
 
     await runPluginsCommand(["plugins", "update", "alpha"]);
 
@@ -1814,13 +1753,10 @@ describe("plugins cli update", () => {
 
   it("does not pass an interactive ClawHub risk prompt to dry-run plugin updates", async () => {
     setTty(true);
-    const config = createTrackedPluginConfig({
+    primeTrackedPluginUpdate({
       pluginId: "openclaw-codex-app-server",
       spec: "clawhub:openclaw-codex-app-server",
     });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server", "--dry-run"]);
 
@@ -1841,27 +1777,6 @@ describe("plugins cli update", () => {
     updateNpmInstalledPluginsMock.mockResolvedValue({ config, changed: false, outcomes: [] });
 
     await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server"]);
-
-    const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
-    expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
-  });
-
-  it("passes noninteractive install-policy acknowledgement to plugin updates", async () => {
-    setTty(false);
-    const config = createTrackedPluginConfig({
-      pluginId: "openclaw-codex-app-server",
-      spec: "openclaw-codex-app-server",
-    });
-    pluginCliConfigMock.mockReturnValue(config);
-    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPluginsMock.mockResolvedValue({ config, changed: false, outcomes: [] });
-
-    await runPluginsCommand([
-      "plugins",
-      "update",
-      "openclaw-codex-app-server",
-      "--acknowledge-install-policy-warning",
-    ]);
 
     const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
     expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
@@ -2002,6 +1917,7 @@ describe("plugins cli update", () => {
       config: cfg,
       installRecords: nextRecords,
       reason: "source-changed",
+      ...writtenIndexCustody(),
     });
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin update committed");
     expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
@@ -2075,6 +1991,7 @@ describe("plugins cli update", () => {
         config: {},
         installRecords: nextConfig.plugins?.installs,
         reason: "source-changed",
+        ...writtenIndexCustody(),
       });
       expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
       expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");

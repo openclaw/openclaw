@@ -1,3 +1,4 @@
+import { resolveAgentModelConfigForRuntime } from "../../agents/agent-scope-config.js";
 /** Builds isolated cron runner config from global defaults plus agent overrides. */
 import type { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
@@ -5,6 +6,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../../config/config.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -24,7 +26,7 @@ export function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawCon
 
 function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
   const {
-    model: overrideModel,
+    model: _agentModelOverride,
     sandbox: _agentSandboxOverride,
     memory: _agentMemoryOverride,
     models: _agentModelsOverride,
@@ -32,26 +34,11 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
     ...agentOverrideRest
   } = agentConfigOverride ?? {};
   return {
-    overrideModel,
+    overrideModel: resolveAgentModelConfigForRuntime(agentConfigOverride),
     definedOverrides: Object.fromEntries(
       Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
     ) as Partial<AgentDefaultsConfig>,
   };
-}
-
-function mergeCronAgentModelOverride(params: {
-  defaults: AgentDefaultsConfig;
-  overrideModel: ResolvedAgentConfig["model"] | undefined;
-}) {
-  const nextDefaults: AgentDefaultsConfig = { ...params.defaults };
-  const existingModel =
-    nextDefaults.model && typeof nextDefaults.model === "object" ? nextDefaults.model : {};
-  if (typeof params.overrideModel === "string") {
-    nextDefaults.model = { ...existingModel, primary: params.overrideModel };
-  } else if (params.overrideModel) {
-    nextDefaults.model = { ...existingModel, ...params.overrideModel };
-  }
-  return nextDefaults;
 }
 
 /** Derives isolated cron agent defaults from one immutable config snapshot. */
@@ -65,10 +52,15 @@ export function resolveCronAgentConfigFromSnapshot(params: {
   );
   // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
   // erases inherited sandbox, memory, model-runtime and request-parameter settings.
-  const agentDefaults = mergeCronAgentModelOverride({
-    defaults: Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
-    overrideModel,
-  });
+  const agentDefaults: AgentDefaultsConfig = {
+    ...Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
+  };
+  const existingModel = toAgentModelListLike(agentDefaults.model) ?? {};
+  if (typeof overrideModel === "string") {
+    agentDefaults.model = { ...existingModel, primary: overrideModel };
+  } else if (overrideModel) {
+    agentDefaults.model = { ...existingModel, ...overrideModel };
+  }
   return {
     runtimeConfig,
     agentDefaults,

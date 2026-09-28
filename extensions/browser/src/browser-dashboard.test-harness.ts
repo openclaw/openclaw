@@ -1,5 +1,6 @@
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -9,8 +10,12 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
+import { getBrowserStateRuntime } from "./browser-runtime-state.js";
 import type { BrowserOpenResult } from "./browser/client.types.js";
-import { initializeBrowserSessionTabStore } from "./browser/session-tab-store.js";
+import {
+  ensureBrowserSessionTabStoreReady,
+  initializeBrowserSessionTabStore,
+} from "./browser/session-tab-store.js";
 
 type DashboardWidgetFixture = {
   name: string;
@@ -39,17 +44,17 @@ export function useBrowserDashboardTestHarness(
     openedTab,
   };
 
-  function installRuntime() {
-    initializeBrowserSessionTabStore({
+  async function installRuntime() {
+    const runtime = initializeBrowserSessionTabStore({
       state: {
-        openSyncKeyedStore: (options) =>
-          createPluginStateSyncKeyedStoreForTests("browser", options),
+        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
       },
       gateway: {
         isAvailable: async () => true,
         request: fixture.readBoard,
       } as PluginRuntime["gateway"],
     });
+    await ensureBrowserSessionTabStoreReady(runtime);
   }
 
   function openedTab(): BrowserOpenResult {
@@ -74,7 +79,7 @@ export function useBrowserDashboardTestHarness(
     return tab;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     fixture.stateDir = tempDirs.make("openclaw-browser-dashboard-");
@@ -112,21 +117,21 @@ export function useBrowserDashboardTestHarness(
       browserInstanceFingerprint: fixture.browserInstance,
     }));
     browser.closeOwned.mockImplementation(
-      async ({ nativeTargetId, expectedBrowserInstanceFingerprint, shouldClose }) => {
+      async ({ nativeTargetId, expectedBrowserInstanceFingerprint, closeIfCurrent }) => {
         if (!fixture.browserRunning) {
           return { status: "unavailable", reason: "browser-identity-lookup-failed" };
         }
         if (expectedBrowserInstanceFingerprint !== fixture.browserInstance) {
           return { status: "ownership-mismatch" };
         }
-        if (shouldClose && !shouldClose()) {
-          return { status: "cancelled" };
-        }
-        fixture.tabs = fixture.tabs.filter((tab) => tab.targetId !== nativeTargetId);
-        return { status: "closed" };
+        const dispatch = async () => {
+          fixture.tabs = fixture.tabs.filter((tab) => tab.targetId !== nativeTargetId);
+          return { status: "closed" as const };
+        };
+        return closeIfCurrent ? await closeIfCurrent(dispatch) : await dispatch();
       },
     );
-    installRuntime();
+    await installRuntime();
   });
 
   afterEach(() => {
@@ -139,4 +144,14 @@ export function useBrowserDashboardTestHarness(
     }
   });
   return fixture;
+}
+
+export function interceptStoreActions(
+  transform: (store: PluginStateKeyedStore<unknown, 2>) => PluginStateKeyedStore<unknown, 2>,
+) {
+  const store = getBrowserStateRuntime().sessionTabs;
+  const withCurrent = store.withCurrent!;
+  return vi
+    .spyOn(store, "withCurrent")
+    .mockImplementation((authority) => transform(withCurrent(authority)));
 }
