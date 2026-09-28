@@ -34,15 +34,21 @@ it sent the card has no field to join on when the click comes back.
 The item key must therefore travel in the click payload the consumer actually receives — the
 inbound text. Two shapes carry it today:
 
-- a **command action** (`action: { type: "command", command: "/verdict approve item-123" }`): the
-  command string arrives verbatim as the inbound turn text, so the item key is in it;
+- a **command callback** — a native button carries `callbackData` plus
+  `callbackDataKind: "command"` (`callbackData: "/verdict approve item-123"`), and the native
+  button parser in `extensions/discord/src/components.parse.ts` reads exactly those two fields.
+  Any button whose `callbackDataKind` is not `"callback"` has its trimmed `callbackData` used
+  verbatim as the inbound turn text, so the item key is in it;
 - the **button label**, when the label is unique per item inside the producer's own namespace —
-  with no command action, the inbound text is derived from the label.
+  with no `callbackData`, the inbound text is derived from the label.
 
-A `callback` action is plugin data, not agent text: its `value` is dispatched to a registered
-interactive handler, and when no plugin claims it the inbound text falls back to the label. Do not
-rely on `value` reaching an agent turn. A component's `custom_id` is opaque in every case and is
-never a place to smuggle meaning.
+The native button spec has no `action` field: `parseButtonSpec` accepts `label`, `style`, `url`,
+`callbackData`, `callbackDataKind`, `emoji`, `disabled`, `reusable` and `allowedUsers`, and silently
+ignores anything else — a producer that ships an `action` object registers no command and gets the
+label-derived fallback. `callbackDataKind: "callback"` is plugin data, not agent text: it is
+dispatched to a registered interactive handler, and when no plugin claims it the inbound text falls
+back to the label, so do not rely on that value reaching an agent turn. A component's `custom_id` is
+opaque in every case and is never a place to smuggle meaning.
 
 ## 2. Where the decision is recorded
 
@@ -69,10 +75,14 @@ decision.
 A components v2 message ships with an empty `content`; any fallback text passed alongside
 `components` is currently discarded, so a client that does not render v2 shows a blank message.
 Because the card can never be the only record, every producer must keep its output legible without
-it: send the decision-relevant text through the normal text body of the same turn, or as a
-follow-up message, so a client (or a human) that only sees plain text still knows what was asked
-and what the current state is. Do not rely on the card's own fallback field to carry that text
-today.
+it, and **that takes a second, text-only send**. Text passed in the same send as `components` does
+not become plain content: `buildDiscordMessagePayload`
+(`extensions/discord/src/send.message-request.ts`) sets `payload.content` only when the request has
+no v2 components, so the text either disappears or ends up inside the v2 container, which is the
+surface that failed to render in the first place. Send the decision-relevant text as its own
+message, with no `components`, so a client (or a human) that only sees plain text still knows what
+was asked and what the current state is. Do not rely on the card's own fallback field to carry that
+text today.
 
 ## 5. Degradation after TTL
 
