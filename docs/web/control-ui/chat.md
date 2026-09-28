@@ -42,7 +42,7 @@ Editing a Side chat draft does not interrupt loading its earlier answers. **Clea
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat with a quoted draft; the main composer stays unchanged. The full selection and comment accompany that Side chat question as bounded, temporary context. They do not appear in the restored text thread after the answer; reselect the passage for a later question.
 
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not

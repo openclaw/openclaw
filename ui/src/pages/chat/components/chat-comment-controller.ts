@@ -80,7 +80,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   protected override updated() {
     if (!this.root) {
-      this.root = this.closest(".chat");
+      this.root = this.closest(".chat-session-rail") ?? this.closest(".chat");
       this.root?.addEventListener("openclaw-comment-action", this.handleCommentAction);
     }
   }

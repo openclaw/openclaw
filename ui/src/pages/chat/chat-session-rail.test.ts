@@ -137,6 +137,43 @@ describe("ChatSessionCompanionThreads", () => {
     ]);
   });
 
+  it("sends a full selected passage as context, not an unsupported file", async () => {
+    const selectedText = "Full selected passage " + "x".repeat(2_000);
+    const request = vi.fn(async (_method: string, _params: unknown) => ({
+      answer: "Answer",
+      ts: 1,
+    }));
+    const client = { request: request as GatewayBrowserClient["request"] };
+    await requestSessionCompanionAnswer(client, "one", "Regarding the selection", "work", [
+      {
+        id: "comment",
+        mimeType: "text/plain",
+        selectionAnnotation: {
+          text: selectedText,
+          comment: "Why does this matter?",
+          sessionKey: "one",
+          start: 2,
+          end: selectedText.length + 2,
+        },
+      },
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.companion.ask",
+      {
+        sessionKey: "one",
+        agentId: "work",
+        question: "Regarding the selection",
+        selectionContext: expect.stringContaining("User comment:\nWhy does this matter?"),
+      },
+      { timeoutMs: 70_000 },
+    );
+    expect(request.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        selectionContext: expect.stringContaining(`Selected text:\n${selectedText}`),
+      }),
+    );
+  });
+
   it("hydrates and retains independent per-session threads", async () => {
     const threads = new ChatSessionCompanionThreads();
     const load = vi.fn(async (sessionKey: string) => ({

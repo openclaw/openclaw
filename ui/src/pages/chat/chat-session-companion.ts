@@ -5,9 +5,11 @@ import type {
   SessionsCompanionResetResult,
   SessionsCompanionStateResult,
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
@@ -16,6 +18,7 @@ import {
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
@@ -410,6 +413,17 @@ export class ChatSessionCompanionThreads {
   }
 }
 
+export function companionSelectionContext(
+  attachments: readonly ChatAttachment[],
+): string | undefined {
+  const selections = attachments.flatMap((attachment) =>
+    attachment.selectionAnnotation
+      ? [formatChatSelectionAnnotation(attachment.selectionAnnotation)]
+      : [],
+  );
+  return selections.length ? selections.join("\n\n") : undefined;
+}
+
 export function requestSessionCompanionAnswer(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
@@ -418,7 +432,12 @@ export function requestSessionCompanionAnswer(
   attachments?: ChatAttachment[],
   uploadConfig?: ApplicationConfigCapability,
 ): Promise<SessionsCompanionAskResult> {
-  if (attachments?.length) {
+  const selectionContext = companionSelectionContext(attachments ?? []);
+  if (selectionContext && selectionContext.length > SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS) {
+    throw new Error(t("chat.attachments.tooLarge", { names: "selection-comment.txt", more: "" }));
+  }
+  const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
+  if (media?.length) {
     assertUploadsEnabled(uploadConfig);
   }
   return client.request<SessionsCompanionAskResult>(
@@ -427,7 +446,8 @@ export function requestSessionCompanionAnswer(
       sessionKey,
       ...(agentId ? { agentId } : {}),
       question,
-      ...(attachments?.length ? { attachments: buildChatApiAttachments(attachments) } : {}),
+      ...(selectionContext ? { selectionContext } : {}),
+      ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
     },
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );

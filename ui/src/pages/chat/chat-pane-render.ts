@@ -87,6 +87,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    const selectionConnectionGeneration = this.connectionGeneration;
     const selectedSession = selectedChatSessionRow(state);
     const providerPaused = Boolean(selectedSession?.providerReview);
     const readTarget = this.resolveChatReadTarget();
@@ -643,7 +644,11 @@ export class ChatPane extends ChatPaneLayoutRender {
         suggestionViewer || catalogKey
           ? undefined
           : (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction),
-      onCompanionPrefill: this.prefillSessionCompanionQuestion,
+      onCompanionStageAttachment: (attachment, sessionKey) =>
+        this.state === state &&
+        this.connectionGeneration === selectionConnectionGeneration &&
+        resolveChatAgentId(state) === currentAgentId &&
+        this.stageSessionCompanionAttachment(attachment, sessionKey),
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => setReply(null),
       onSetReply: sessionDisabledBanner ? undefined : setReply,

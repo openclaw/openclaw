@@ -1,4 +1,7 @@
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -6,6 +9,7 @@ import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   ChatSessionCompanionThreads,
+  companionSelectionContext,
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
   requestSessionCompanionState,
@@ -175,7 +179,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       typeof question === "string"
         ? this.sessionCompanionThreads.view(sessionKey, agentId).attachments
         : question.attachments;
-    if (attachments?.length && !uploadsEnabled(state.uploadConfig)) {
+    if (
+      attachments?.some((attachment) => !attachment.selectionAnnotation) &&
+      !uploadsEnabled(state.uploadConfig)
+    ) {
       showToast({ message: uploadsDisabledMessage() });
       return;
     }
@@ -191,14 +198,36 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };
 
-  protected readonly prefillSessionCompanionQuestion = (question: string) => {
+  protected readonly stageSessionCompanionAttachment = (
+    attachment: ChatAttachment,
+    sourceSessionKey: string,
+  ): boolean => {
     const state = this.state;
-    const sessionKey = state?.sessionKey;
-    if (!sessionKey) {
-      return;
+    if (!state || state.sessionKey !== sourceSessionKey || !attachment.selectionAnnotation) {
+      return false;
     }
-    this.sessionCompanionThreads.setDraft(sessionKey, question, resolveChatAgentId(state));
+    const agentId = resolveChatAgentId(state);
+    const thread = this.sessionCompanionThreads.view(sourceSessionKey, agentId);
+    const nextAttachments = [...(thread.attachments ?? []), attachment];
+    if (
+      (companionSelectionContext(nextAttachments)?.length ?? 0) >
+      SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
+    ) {
+      showToast({
+        message: t("chat.attachments.tooLarge", { names: "selection-comment.txt", more: "" }),
+      });
+      return false;
+    }
+    this.sessionCompanionThreads.setAttachments(sourceSessionKey, nextAttachments, agentId);
+    if (!thread.draft.trim()) {
+      this.sessionCompanionThreads.setDraft(
+        sourceSessionKey,
+        buildCompanionQuestionPrefill(attachment.selectionAnnotation.text) ?? "",
+        agentId,
+      );
+    }
     this.requestSessionRail("open");
+    return true;
   };
 
   protected hydrateSessionCompanion(sessionKey: string): void {

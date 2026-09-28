@@ -133,6 +133,38 @@ describe("session companion embedded invocation", () => {
     });
   });
 
+  it("passes a selected-text comment to the model without persisting it as a file", async () => {
+    const companion = createCompanion();
+    const respond = vi.fn();
+    try {
+      await sessionCompanionHandlers["sessions.companion.ask"]!({
+        params: {
+          sessionKey: question.sessionKey,
+          question: "What changed?",
+          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+        },
+        client: { connId: "selection-connection" },
+        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
+          images: undefined,
+        }),
+      );
+      expect(
+        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
+      ).toEqual([expect.objectContaining({ question: "What changed?" })]);
+    } finally {
+      companion.dispose();
+    }
+  });
+
   it.each([0, 2_000_001])(
     "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
     async (padding) => {

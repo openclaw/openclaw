@@ -7,12 +7,8 @@ import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 
-export function createChatSelectionAttachment(
-  annotation: ChatSelectionAnnotation,
-  limits: ChatAttachmentControlsProps["attachmentLimits"],
-  stagedBytes: number,
-): ChatAttachment | null {
-  const text = [
+export function formatChatSelectionAnnotation(annotation: ChatSelectionAnnotation): string {
+  return [
     `Selected text:\n${annotation.text}`,
     ...(annotation.comment.trim() ? [`User comment:\n${annotation.comment}`] : []),
     [
@@ -23,6 +19,14 @@ export function createChatSelectionAttachment(
       `DOM text UTF-16 range: [${annotation.start}, ${annotation.end})`,
     ].join("\n"),
   ].join("\n\n");
+}
+
+export function createChatSelectionAttachment(
+  annotation: ChatSelectionAnnotation,
+  limits: ChatAttachmentControlsProps["attachmentLimits"],
+  stagedBytes: number,
+): ChatAttachment | null {
+  const text = formatChatSelectionAnnotation(annotation);
   const file = new File([text], "selection-comment.txt", { type: "text/plain" });
   if (admitAttachmentFiles([file], limits, stagedBytes).length === 0) {
     return null;

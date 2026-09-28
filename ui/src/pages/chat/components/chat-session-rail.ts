@@ -1,4 +1,5 @@
 import "../../../styles/chat/session-rail.css";
+import "./chat-comment-controller.ts";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -694,6 +695,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             ? this.renderStarters()
             : nothing
         }
+        <openclaw-chat-comment-controller
+          .paneId=${`side-chat:${this.sessionKey}`}
+          .props=${attachmentProps}
+          .sessionKey=${this.sessionKey}
+          .presented=${this.presented}
+        ></openclaw-chat-comment-controller>
         ${renderSessionRailComposer({ companion, connected: this.connected, pending, sendShortcut: this.sendShortcut, composer: this.composer, attachmentProps, submit: () => this.submit() })}
       </section>
     `;
