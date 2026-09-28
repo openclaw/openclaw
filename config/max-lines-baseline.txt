@@ -36,7 +36,6 @@ extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
-extensions/codex/src/app-server/run-attempt.turn-watches.test.ts
 extensions/codex/src/app-server/runtime-artifact.ts
 extensions/codex/src/app-server/session-binding.test.ts
 extensions/codex/src/app-server/session-binding.ts
