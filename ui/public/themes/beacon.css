@@ -29,6 +29,7 @@
   --primary: #ffc233;
   --primary-hover: #ffd45e;
   --primary-foreground: #000000;
+  --accent-foreground: #000000;
 
   /* Focus is 3px and fully opaque: a translucent ring is the first thing to
      disappear on a poor panel, which is exactly this theme's audience. */
@@ -124,7 +125,9 @@
   --accent-subtle: rgba(0, 0, 0, 0.07);
   --accent-glow: rgba(110, 74, 0, 0.2);
   --primary: #6e4a00;
+  --primary-hover: var(--accent-hover);
   --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
 
   --focus: rgba(110, 74, 0, 0.35);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);

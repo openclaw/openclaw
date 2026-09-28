@@ -186,7 +186,6 @@ function importAndRecordReceipt(params: {
   imported: number;
   preserved: number;
   suppressed: number;
-  receiptAuthoritative: boolean;
 } {
   const sourceKey = resolveLegacyMigrationSourceKey("apns-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
@@ -201,7 +200,6 @@ function importAndRecordReceipt(params: {
           imported: 0,
           preserved: 0,
           suppressed: 0,
-          receiptAuthoritative: true,
         };
       }
 
@@ -274,7 +272,7 @@ function importAndRecordReceipt(params: {
         now,
         reportJson,
       });
-      return { sourceKey, imported, preserved, suppressed, receiptAuthoritative: false };
+      return { sourceKey, imported, preserved, suppressed };
     },
     { env: params.env },
   );

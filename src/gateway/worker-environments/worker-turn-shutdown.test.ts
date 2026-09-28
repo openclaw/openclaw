@@ -69,6 +69,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     environmentId: ENVIRONMENT_ID,
     ownerEpoch: OWNER_EPOCH,
     measureLaunchTurn: fixture.measureLaunchTurn,
+    readLaunchToolNames: fixture.readLaunchToolNames,
     launchTurn,
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,

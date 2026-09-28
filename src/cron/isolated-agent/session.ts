@@ -38,6 +38,22 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
 ] as const satisfies readonly (keyof SessionEntry)[];
 
 const AMBIENT_SESSION_CONTEXT_FIELDS = [
+  // A persistent workspace keeps its containment and inherited child restrictions.
+  "spawnedBy",
+  "spawnDepth",
+  "subagentRole",
+  "subagentControlScope",
+  "inheritedToolPolicyVersion",
+  "inheritedToolAllow",
+  "inheritedToolDeny",
+  "permissionMode",
+  "sandboxMode",
+  "sessionRoot",
+  "spawnedWorkspaceDir",
+  "spawnedCwd",
+  "worktree",
+  "projectId",
+  "repositoryWorkspaceId",
   "elevatedLevel",
   "groupActivation",
   "groupActivationNeedsSystemIntro",

@@ -399,7 +399,7 @@ describe("Gateway agent and artifact APIs", () => {
       } as never,
     });
     expect(
-      attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
+      await attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
     ).toBe(true);
 
     await disconnectGatewayClient(client);
@@ -484,10 +484,10 @@ describe("Gateway agent and artifact APIs", () => {
     await expect(
       client.request("artifacts.get", {
         sessionKey,
-        agentId: "other",
+        agentId: createdAgent.agentId,
         artifactId: artifact.id,
       }),
-    ).rejects.toThrow(/artifact not found/i);
+    ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
 
     await expect(
       client.request("agents.delete", {

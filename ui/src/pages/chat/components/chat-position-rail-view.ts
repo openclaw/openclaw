@@ -23,6 +23,7 @@ type PositionRailViewParams = {
   visibleIds: ReadonlySet<string>;
   rovingId: string;
   previewId: string | null | undefined;
+  hoveredId: string | null;
   bindScroller: (element?: Element) => void;
   bindPreview: (element?: Element) => void;
   onScroll: () => void;
@@ -45,6 +46,7 @@ export function renderChatPositionRailView({
   visibleIds,
   rovingId,
   previewId,
+  hoveredId,
   bindScroller,
   bindPreview,
   onScroll,
@@ -99,6 +101,7 @@ export function renderChatPositionRailView({
               [
                 transcript,
                 count,
+                hoveredId,
                 ...renderedIndexes.flatMap((index) => [
                   index,
                   candidates[index]!.id,
@@ -118,6 +121,7 @@ export function renderChatPositionRailView({
                       ${previous !== undefined && index > previous + 1 ? html`<div aria-hidden="true"></div>` : nothing}
                       <div
                         class="chat-position-rail__item"
+                        ?data-hovered=${marker.id === hoveredId}
                         role="listitem"
                         aria-posinset=${index + 1}
                         aria-setsize=${count}

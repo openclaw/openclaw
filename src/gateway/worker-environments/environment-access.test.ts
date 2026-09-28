@@ -16,7 +16,7 @@ import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerTunnelManager, type WorkerTunnelManager } from "./tunnel.js";
-import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
+import { measureLaunchTurn, readLaunchToolNames } from "./worker-turn-launcher.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -415,6 +415,7 @@ describe("worker environment service", () => {
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
         measureLaunchTurn,
+        readLaunchToolNames,
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 // Npm Package Lock Generator tests cover transient npm package-lock behavior.
 import path from "node:path";
+import { create as createTar } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,
@@ -783,6 +784,111 @@ describe("generate-npm-package-lock", () => {
         overrides,
       ),
     ).toEqual([]);
+  });
+
+  it.each([
+    { name: "minimatch", version: "10.2.5", required: "10.2.6" },
+    { name: "brace-expansion", version: "5.0.9", required: "5.0.12" },
+    { name: "ip-address", version: "10.5.0", required: "10.7.2" },
+  ])(
+    "limits the npm bundled exception for $name to its approved occurrence",
+    ({ name, version, required }) => {
+      for (const change of [
+        "approved",
+        "bundle version",
+        "npm version",
+        "path",
+        "unbundled",
+      ] as const) {
+        const npmVersion = change === "npm version" ? "11.20.1" : "11.20.0";
+        const bundledVersion = change === "bundle version" ? "0.0.1" : version;
+        const npmPath =
+          change === "path" ? "node_modules/other/node_modules/npm" : "node_modules/npm";
+        const childPath = `${npmPath}/node_modules/${name}`;
+        const lockfile = {
+          packages: {
+            "": { dependencies: { npm: npmVersion } },
+            [npmPath]: {
+              version: npmVersion,
+              dependencies: { [name]: bundledVersion },
+              hasShrinkwrap: true,
+            },
+            [childPath]: { version: bundledVersion, inBundle: change !== "unbundled" },
+          },
+        };
+        const rules = { [name]: required };
+        const expectedPaths = change === "approved" ? [] : [childPath];
+        expect(
+          collectOverrideViolations(lockfile, rules).map((entry) => entry.path),
+          change,
+        ).toEqual(expectedPaths);
+        expect(
+          collectPnpmLockViolations(
+            lockfile,
+            new Set([`npm@${npmVersion}`, `${name}@${required}`]),
+            new Map(),
+          ).map((entry) => entry.path),
+          change,
+        ).toEqual([childPath]);
+        expect(disableDependencyShrinkwrapOverrideConflictSources(lockfile, rules), change).toEqual(
+          change === "approved" ? [] : [npmPath],
+        );
+      }
+    },
+  );
+
+  it("authenticates bundled lock entries against the pnpm-locked npm archive", () => {
+    const root = tempDirs.make("openclaw-npm-bundle-");
+    const child = "node_modules/@npmcli/arborist";
+    const childPath = `node_modules/npm/${child}`;
+    mkdirSync(path.join(root, "package", child), { recursive: true });
+    writeFileSync(
+      path.join(root, "package/package.json"),
+      JSON.stringify({ name: "npm", version: "11.20.0" }),
+    );
+    writeFileSync(
+      path.join(root, "package", child, "package.json"),
+      JSON.stringify({ name: "@npmcli/arborist", version: "9.9.2" }),
+    );
+    const archive = path.join(root, "npm.tgz");
+    createTar({ cwd: root, file: archive, sync: true, gzip: true }, ["package"]);
+    const bytes = readFileSync(archive);
+    const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+    const lockfile = {
+      packages: {
+        "node_modules/npm": { version: "11.20.0", integrity },
+        [childPath]: { version: "9.9.2", inBundle: true },
+      },
+    };
+    const pins = new Set(["npm@11.20.0"]);
+    const integrities = new Map([["npm@11.20.0", new Set([integrity])]]);
+    const check = (
+      value: Parameters<typeof collectPnpmLockViolations>[0] = lockfile,
+      tarball = bytes,
+      hashes = integrities,
+    ) => collectPnpmLockViolations(value, pins, hashes, [], tarball);
+    expect(check()).toEqual([]);
+    expect(() => check(lockfile, Buffer.concat([bytes, Buffer.from("changed")]))).toThrow(
+      "integrity",
+    );
+    expect(() => check(lockfile, bytes, new Map())).toThrow("integrity");
+    for (const change of ["version", "path", "unbundled", "name"]) {
+      const entryPath = change === "path" ? `node_modules/other/${child}` : childPath;
+      const changed = {
+        packages: {
+          "node_modules/npm": lockfile.packages["node_modules/npm"],
+          [entryPath]: {
+            version: change === "version" ? "9.9.1" : "9.9.2",
+            inBundle: change !== "unbundled",
+            ...(change === "name" ? { name: "other" } : {}),
+          },
+        },
+      };
+      expect(
+        check(changed).map((entry) => entry.path),
+        change,
+      ).toEqual([entryPath]);
+    }
   });
 
   it("detects npm package-lock entries that bypass the pnpm lock", () => {

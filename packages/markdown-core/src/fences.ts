@@ -30,16 +30,9 @@ export function scanFenceSpans(
 ): { spans: FenceSpan[]; state: FenceScanState } {
   const spans: FenceSpan[] = [];
   const startsAtLineStart = state?.atLineStart ?? true;
-  let open:
-    | {
-        start: number;
-        markerChar: string;
-        markerLen: number;
-        openLine: string;
-        marker: string;
-        indent: string;
-      }
-    | undefined = state?.open ? { ...state.open, start: 0 } : undefined;
+  let open: (NonNullable<FenceScanState["open"]> & { start: number }) | undefined = state?.open
+    ? { ...state.open, start: 0 }
+    : undefined;
 
   // Without LF, only offset zero can be a fence. Sticky matching skips long prose,
   // including inline marker literals; matchAll leaves both shared patterns untouched.

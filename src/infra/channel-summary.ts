@@ -36,22 +36,6 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
-async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
-}
-
-async function listChannelSummaryPlugins(params: {
-  cfg: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): Promise<ChannelPlugin[]> {
-  const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
-  return listReadOnlyChannelPluginsForConfig(params.cfg, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
-}
-
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
@@ -114,7 +98,7 @@ export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
-  const effective = cfg ?? (await loadChannelSummaryConfig());
+  const effective = cfg ?? (await import("../config/config.js")).getRuntimeConfig();
   const lines: string[] = [];
   const { colorize = false, includeAllowFrom = false } = options ?? {};
   const tint = (value: string, color?: (input: string) => string) =>
@@ -122,7 +106,11 @@ export async function buildChannelSummary(
   const sourceConfig = options?.sourceConfig ?? effective;
 
   const plugins =
-    options?.plugins ?? (await listChannelSummaryPlugins({ cfg: effective, sourceConfig }));
+    options?.plugins ??
+    (await import("../channels/plugins/read-only.js")).listReadOnlyChannelPluginsForConfig(
+      effective,
+      { activationSourceConfig: sourceConfig, includeSetupFallbackPlugins: false },
+    );
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =
