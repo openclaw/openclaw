@@ -14,6 +14,7 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
@@ -285,6 +286,15 @@ export async function sendGatewayHello(
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+    const client = context.handler.getClient();
+    if (
+      client?.presenceKey &&
+      !client.invalidated &&
+      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+      !context.handler.isClosed()
+    ) {
+      commitPresence(client.presenceKey, connId);
+    }
     onHelloDelivered();
   } catch (err) {
     if (bootstrapHandoff) {

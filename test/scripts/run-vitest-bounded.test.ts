@@ -264,14 +264,11 @@ syncBuiltinESMExports();
       const pidPath = path.join(root, "builder.pid");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
-      const aiPackageRoot = path.join(repoRoot, "packages/ai");
-      const aiManifest = JSON.parse(
-        fs.readFileSync(path.join(aiPackageRoot, "package.json"), "utf8"),
-      ) as { types: string; exports: Record<string, { types: string }> };
-      const aiDeclarations = [
-        aiManifest.types,
-        ...Object.values(aiManifest.exports).map((entry) => entry.types),
-      ].map((entry) => path.resolve(aiPackageRoot, entry));
+      const aiDeclarations = path.join(root, "ai-declarations");
+      if (outcome === "prebuilt") {
+        // A complete prebuilt generation includes the typed AI package.
+        fs.writeFileSync(aiDeclarations, "");
+      }
       fs.writeFileSync(
         executable,
         `import fs from "node:fs";
@@ -286,24 +283,30 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
   setInterval(() => {}, 1000);
 } else {
+  const failed = ${JSON.stringify(outcome)} === kind + "-failure";
+  if (kind === "ai" && !failed) {
+    fs.writeFileSync(${JSON.stringify(aiDeclarations)}, "");
+  }
   record("end");
-  process.exit(${JSON.stringify(outcome)} === kind + "-failure" ? 7 : 0);
+  process.exit(failed ? 7 : 0);
 }
 `,
       );
       // Preserve the real CLI and managed process owners; replace only the
       // expensive executables so build/read admission remains observable.
+      // The stub AI build publishes its declarations as a fixture receipt, so
+      // the declaration check sees the stub's output, not the checkout's dist.
       fs.writeFileSync(
         preload,
         `import cp from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
-// This fixture tests one E2E setup generation; packed AI declaration repair has its own tests.
-const aiDeclarations = new Set(${JSON.stringify(aiDeclarations)});
+const aiDist = ${JSON.stringify(path.join(repoRoot, "packages/ai/dist") + path.sep)};
 const existsSync = fs.existsSync;
-fs.existsSync = (file) =>
-  (typeof file === "string" && aiDeclarations.has(path.resolve(file))) || existsSync(file);
+fs.existsSync = (entry) =>
+  typeof entry === "string" && entry.startsWith(aiDist) && entry.endsWith(".d.mts")
+    ? existsSync(${JSON.stringify(aiDeclarations)})
+    : existsSync(entry);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
