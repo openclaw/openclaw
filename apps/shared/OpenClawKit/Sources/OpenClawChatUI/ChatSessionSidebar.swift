@@ -315,8 +315,12 @@ struct ChatSessionSidebar: View {
                 Image(systemName: "line.3.horizontal.decrease")
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
+            // Keep the custom label visible when the sidebar's window is inactive.
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
             .help(String(localized: "View options"))
