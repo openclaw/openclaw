@@ -54,12 +54,15 @@ type WorkspaceResultRefUpdate = { ref: string; objectId?: string };
 /** Atomically moves/deletes result refs before their caller changes its durable fence. */
 export async function updateWorkspaceResultRefs(
   root: string,
-  updates: readonly WorkspaceResultRefUpdate[] | (() => readonly WorkspaceResultRefUpdate[]),
+  updates:
+    | readonly WorkspaceResultRefUpdate[]
+    | (() => readonly WorkspaceResultRefUpdate[] | Promise<readonly WorkspaceResultRefUpdate[]>),
   assertCurrent?: () => void,
 ): Promise<void> {
   await withWorkspaceResultRefMutation(root, async (baseEnv) => {
     assertCurrent?.();
-    const current = typeof updates === "function" ? updates() : updates;
+    const current = typeof updates === "function" ? await updates() : updates;
+    assertCurrent?.();
     if (current.length === 0) {
       return;
     }

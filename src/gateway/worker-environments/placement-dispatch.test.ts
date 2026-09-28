@@ -447,7 +447,11 @@ describe("worker placement dispatch", () => {
   });
 
   it("keeps the worker draining when the remote workspace changes after local acceptance", async () => {
-    const harness = createTestHarness({ verifyFails: true });
+    const harness = createTestHarness({
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailureCall: 3,
+    });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -461,7 +465,12 @@ describe("worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: { owner: "worker" },
     });
+    expect(harness.log).toContain("workspace:apply-prepared");
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: null },
+    ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.log).toContain("workspace:resume");
   });
@@ -674,12 +683,7 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "tunnel:attached",
-      "placement:adopted",
-      "workspace",
-    ]);
+    expect(harness.log).toEqual(["environment:reconcile", "tunnel:attached", "placement:adopted"]);
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
@@ -724,7 +728,6 @@ describe("worker placement dispatch", () => {
       "placement:draining",
       "placement:reconciling",
       "placement:failed",
-      "workspace",
     ]);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -834,7 +837,6 @@ describe("worker placement dispatch", () => {
       "teardown:stop",
       "teardown:destroy",
       "placement:failed",
-      "workspace",
     ]);
   });
 
@@ -854,7 +856,6 @@ describe("worker placement dispatch", () => {
       "teardown:stop",
       "teardown:destroy",
       "placement:reclaimed",
-      "workspace",
     ]);
 
     const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;

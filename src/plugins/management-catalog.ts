@@ -326,8 +326,30 @@ export function normalizeFeaturedAt(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
 
+/** Keep authored purpose separate from capability-derived discovery memberships. */
+export function projectPluginCatalogCategoryFacts(
+  manifest: PluginManifestRecord | undefined,
+  enabled: boolean,
+): Pick<PluginCatalogEntry, "categories" | "category" | "capabilityCategories"> {
+  const category = deriveLegacyPluginCategory(manifest);
+  const categories = manifest?.categories;
+  // Speech/transcription alone belongs in Voice; only generation contracts add Media.
+  const mediaGeneration =
+    enabled &&
+    Boolean(
+      manifest?.contracts?.imageGenerationProviders?.length ||
+      manifest?.contracts?.videoGenerationProviders?.length ||
+      manifest?.contracts?.musicGenerationProviders?.length,
+    );
+  return {
+    ...(categories?.length ? { categories: [...categories] } : {}),
+    ...(category ? { category } : {}),
+    ...(mediaGeneration ? { capabilityCategories: ["media"] } : {}),
+  };
+}
+
 /** Preserve the shipped coarse category projection for older catalog clients. */
-export function deriveLegacyPluginCategory(
+function deriveLegacyPluginCategory(
   manifest: PluginManifestRecord | undefined,
 ): string | undefined {
   if (!manifest) {

@@ -20,6 +20,18 @@ struct GatewayEndpoint {
     let mode: String
 }
 
+func resolvedCredential(
+    _ explicit: String?,
+    mode: String,
+    local: String?,
+    remote: String?,
+    inheritConfigCredentials: Bool = true) -> String?
+{
+    if let explicit, !explicit.isEmpty { return explicit }
+    guard inheritConfigCredentials else { return nil }
+    return mode == "remote" ? remote : local
+}
+
 /// Keep standalone CLI reads and configure-remote writes on the same profile.
 /// An explicit config path wins; otherwise the selected state directory owns openclaw.json.
 func resolveOpenClawConfigURL(
@@ -52,7 +64,7 @@ func loadGatewayConfig(from configURL: URL) -> GatewayConfig {
     if let gateway = json["gateway"] as? [String: Any] {
         cfg.mode = gateway["mode"] as? String
         cfg.bind = gateway["bind"] as? String
-        cfg.port = gateway["port"] as? Int ?? parseInt(gateway["port"])
+        cfg.port = parseInt(gateway["port"])
 
         if let auth = gateway["auth"] as? [String: Any] {
             cfg.token = auth["token"] as? String
@@ -60,7 +72,7 @@ func loadGatewayConfig(from configURL: URL) -> GatewayConfig {
         }
         if let remote = gateway["remote"] as? [String: Any] {
             cfg.remoteUrl = remote["url"] as? String
-            cfg.remotePort = remote["remotePort"] as? Int ?? parseInt(remote["remotePort"])
+            cfg.remotePort = parseInt(remote["remotePort"])
             cfg.remoteToken = remote["token"] as? String
             cfg.remotePassword = remote["password"] as? String
         }

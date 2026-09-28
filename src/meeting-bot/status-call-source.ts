@@ -396,17 +396,14 @@ ${withLiveOwnership("  }\n")}${
     if (!clean) return undefined;
     return { speaker: cleanSpeaker || undefined, text: clean };
   };
-  const captionRowIdentity = (row) =>
+  const captionRowIdentity = (row) => {
     // aria-posinset identifies the logical caption item across virtual-list
     // rerenders. DOM ids and data indexes can belong to the recycled element.
-    ["aria-posinset"]
-      .map((name) => {
-        const value = row?.getAttribute?.(name);
-        return typeof value === "string" && value.trim()
-          ? name + ":" + value.trim()
-          : undefined;
-      })
-      .find(Boolean);
+    const value = row?.getAttribute?.("aria-posinset");
+    return typeof value === "string" && value.trim()
+      ? "aria-posinset:" + value.trim()
+      : undefined;
+  };
   const sameCaptionUtterance = (prior, current) => {
     if (prior.rowIdentity || current.rowIdentity) {
       return Boolean(

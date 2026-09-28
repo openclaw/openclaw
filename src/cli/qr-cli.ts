@@ -36,10 +36,6 @@ type QrCliOptions = {
 const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
-function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
-  return trimToUndefined(cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"]);
-}
-
 function shouldResolveLocalGatewayPasswordSecret(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -80,9 +76,6 @@ async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): P
 }
 
 function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
-  if (diagnostics.length === 0) {
-    return;
-  }
   const toStderr = opts.json === true || opts.setupCodeOnly === true;
   for (const entry of diagnostics) {
     const message = theme.warn(`[secrets] ${entry}`);
@@ -160,28 +153,18 @@ export function registerQrCli(program: Command) {
         };
         emitQrSecretResolveDiagnostics(remoteDiagnostics, opts);
 
-        if (token) {
+        const authToken =
+          token || (wantsRemote && !password ? trimToUndefined(cfg.gateway.remote?.token) : "");
+        const authPassword =
+          password || (wantsRemote && !token ? trimToUndefined(cfg.gateway.remote?.password) : "");
+        if (authToken) {
           cfg.gateway.auth.mode = "token";
-          cfg.gateway.auth.token = token;
+          cfg.gateway.auth.token = authToken;
           cfg.gateway.auth.password = undefined;
-        }
-        if (password) {
+        } else if (authPassword) {
           cfg.gateway.auth.mode = "password";
-          cfg.gateway.auth.password = password;
+          cfg.gateway.auth.password = authPassword;
           cfg.gateway.auth.token = undefined;
-        }
-        if (wantsRemote && !token && !password) {
-          const remoteToken = trimToUndefined(cfg.gateway?.remote?.token) ?? "";
-          const remotePassword = trimToUndefined(cfg.gateway?.remote?.password) ?? "";
-          if (remoteToken) {
-            cfg.gateway.auth.mode = "token";
-            cfg.gateway.auth.token = remoteToken;
-            cfg.gateway.auth.password = undefined;
-          } else if (remotePassword) {
-            cfg.gateway.auth.mode = "password";
-            cfg.gateway.auth.password = remotePassword;
-            cfg.gateway.auth.token = undefined;
-          }
         }
         if (
           !wantsRemote &&
@@ -194,7 +177,10 @@ export function registerQrCli(program: Command) {
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
         const publicUrl =
-          explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
+          explicitUrl ??
+          (wantsRemote
+            ? undefined
+            : trimToUndefined(cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"]));
 
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl,

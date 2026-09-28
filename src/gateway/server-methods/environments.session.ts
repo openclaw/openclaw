@@ -8,6 +8,7 @@ import {
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { authorizeSessionSharingTarget } from "../session-sharing.js";
@@ -147,6 +148,16 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
       try {
         const caller = resolveSessionEnvironmentCaller(options, params);
         const { presentation, ...request } = params;
+        if (presentation) {
+          try {
+            resolveGatewayPersonalToolParticipant(options.client?.internal?.agentRuntimeIdentity);
+          } catch (error) {
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)} Create the environment without presentation, then show it with screen (desktop_show or portal_show with environmentId) and user set to the requester's requester_profile.id.`,
+              { cause: error },
+            );
+          }
+        }
         const assertAllowed = presentation
           ? captureSessionEnvironmentToolPolicy(options, caller, "screen").assertAllowed
           : caller.assertCurrent;
