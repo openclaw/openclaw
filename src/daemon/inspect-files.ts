@@ -54,7 +54,6 @@ export async function collectServiceFiles(params: {
   extension: string;
   isPotentialName: (name: string) => boolean;
   errors?: ServiceFileInspectionError[];
-  requireComplete?: boolean;
 }): Promise<ServiceFileEntry[]> {
   const out: ServiceFileEntry[] = [];
   let entries: string[];
@@ -76,7 +75,7 @@ export async function collectServiceFiles(params: {
     try {
       contents = await fs.readFile(fullPath);
     } catch {
-      if (params.requireComplete || params.isPotentialName(name)) {
+      if (params.isPotentialName(name)) {
         params.errors?.push({ source: fullPath, message: "Service path could not be inspected." });
       }
       continue;

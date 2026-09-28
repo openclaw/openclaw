@@ -137,7 +137,6 @@ async function scanLaunchdDir(params: {
   scope: "user" | "system";
   managedLabel?: string;
   selectedName?: string;
-  requireComplete?: boolean;
   errors?: GatewayServiceInventory["errors"];
 }): Promise<InspectedGatewayService[]> {
   const results: InspectedGatewayService[] = [];
@@ -148,7 +147,6 @@ async function scanLaunchdDir(params: {
     extension: ".plist",
     isPotentialName,
     errors: params.errors,
-    requireComplete: params.requireComplete,
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
@@ -157,7 +155,6 @@ async function scanLaunchdDir(params: {
         contents.toString("utf8").replaceAll("\0", ""),
       );
       if (
-        params.requireComplete ||
         isPotentialName(labelFromName) ||
         EXTRA_MARKERS.some((marker) => contentHint.includes(marker))
       ) {
@@ -385,7 +382,6 @@ async function scanGatewayServices(
         scope: "user",
         selectedName: resolveLaunchAgentLabel(env),
         errors,
-        requireComplete,
       })) {
         push(svc);
       }
@@ -395,7 +391,6 @@ async function scanGatewayServices(
           scope: "system",
           selectedName: resolveLaunchAgentLabel(env),
           errors,
-          requireComplete,
         })) {
           push(svc);
         }
@@ -405,7 +400,6 @@ async function scanGatewayServices(
           managedLabel: resolveLaunchAgentLabel(env),
           selectedName: resolveLaunchAgentLabel(env),
           errors,
-          requireComplete,
         })) {
           push(svc);
         }
