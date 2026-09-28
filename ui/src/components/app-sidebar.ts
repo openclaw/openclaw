@@ -78,6 +78,8 @@ import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() teamOnlineExpanded = false;
+  @state() onlineRunningOnly = false;
+  @state() onlineSessionSort: "presence" | "open" | "running" = "presence";
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
