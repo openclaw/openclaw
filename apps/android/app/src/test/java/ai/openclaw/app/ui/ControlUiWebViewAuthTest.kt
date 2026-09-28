@@ -49,7 +49,6 @@ import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.fakes.RoboWebMessagePort
 import org.robolectric.shadow.api.Shadow
-import org.robolectric.shadows.ShadowWebView
 
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -622,20 +621,5 @@ class ControlUiAuthCompatShadow {
       scripts[view] = script
       return ScriptHandler { scripts.remove(view) }
     }
-  }
-}
-
-// Robolectric has real paired message-port fakes but does not implement the
-// WebView main-frame transfer. Capture only that platform boundary.
-@Implements(WebView::class)
-class ControlUiAuthWebViewShadow : ShadowWebView() {
-  val transfers = mutableListOf<Pair<WebMessage, Uri>>()
-
-  @Implementation
-  fun postWebMessage(
-    message: WebMessage,
-    targetOrigin: Uri,
-  ) {
-    transfers.add(message to targetOrigin)
   }
 }
