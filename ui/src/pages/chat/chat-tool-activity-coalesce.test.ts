@@ -34,12 +34,14 @@ describe("tool activity preparation cache", () => {
     const first = coalesceToolActivityMessages(initial);
     expect(prepare).toHaveBeenCalledTimes(3);
     prepare.mockClear();
-    const repeat = coalesceToolActivityMessages(initial.map((row) => ({ ...row })));
+    const repeat = coalesceToolActivityMessages(initial.map((row) => Object.assign({}, row)));
     expect(prepare).not.toHaveBeenCalled();
     expect(repeat).toEqual(first);
     expect(repeat.at(-1)).not.toBe(first.at(-1));
     const returned = repeat.at(-1)!;
-    if (returned.kind !== "message") throw new Error("expected tool message");
+    if (returned.kind !== "message") {
+      throw new Error("expected tool message");
+    }
     returned.duplicateCount = 17;
     returned.key = "mutated returned wrapper";
 

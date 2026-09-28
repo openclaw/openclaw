@@ -154,7 +154,7 @@ describe("message client attribution", () => {
     const initial = cachedGroups([message]);
     const replacement = {
       ...message,
-      __openclaw: { ...message.__openclaw, transport: { clients: [web] } },
+      __openclaw: { ...message["__openclaw"], transport: { clients: [web] } },
     };
     const refreshed = cachedGroups([replacement]);
     expect(initial[0]?.sourceClients).toEqual([cli]);

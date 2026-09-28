@@ -504,7 +504,7 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     for (const item of turn) {
       const message = item.kind === "message" ? asRecord(item.message) : null;
       // Transient wrappers carry independently changing stream/attribution facts.
-      if (item.kind !== "message" || !message || message.__openclawToolStreamLive === true) {
+      if (item.kind !== "message" || !message || message["__openclawToolStreamLive"] === true) {
         result.push(...coalesceTurn(turn));
         return;
       }
@@ -521,10 +521,13 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
       cached?.inputs.length === inputs.length &&
       inputs.every((input, index) => input === cached.inputs[index])
         ? cached
-        : { inputs, items: coalesceTurn(turn).map((item) => ({ ...item })) };
+        : // coalesceTurn can return caller wrappers; store copies so later annotations stay out.
+          { inputs, items: coalesceTurn(turn).map((item) => Object.assign({}, item)) };
     turnsByOwner.set(owner!, entry);
-    // Grouping annotates wrappers. Neither misses nor hits expose cache storage.
-    result.push(...entry.items.map((item) => ({ ...item })));
+    // Grouping annotates wrappers, so stored wrappers are never returned.
+    for (const item of entry.items) {
+      result.push({ ...item });
+    }
   };
   let turn: ChatItem[] = [];
   for (const item of items) {
