@@ -36,6 +36,7 @@ export {
   calculateContextTokens,
   collectEntriesForBranchSummaryFromBranches,
   compact,
+  convertToLlm,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,

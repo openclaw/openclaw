@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { select as clackSelect } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimePaths from "../daemon/runtime-paths.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
 const progressSetLabel = vi.hoisted(() => vi.fn());
@@ -14,6 +15,11 @@ const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+const runExec = vi.hoisted(() => vi.fn());
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec,
+}));
 
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
@@ -86,6 +92,15 @@ describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
+    runExec.mockReset().mockResolvedValue({
+      stdout: JSON.stringify({
+        nodeVersion: "26.8.1",
+        bunVersion: "1.4.2",
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      }),
+      stderr: "",
+    });
     progressSetLabel.mockReset();
     serviceIsLoaded.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue(null);
@@ -179,6 +194,40 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).not.toHaveBeenCalled();
   });
 
+  it("rejects picked Node on a Bun-only host before replacing the service", async () => {
+    const { buildGatewayInstallPlan: realPlan } = await vi.importActual<
+      typeof import("./daemon-install-helpers.js")
+    >("./daemon-install-helpers.js");
+    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    const discoverNode = vi
+      .spyOn(runtimePaths, "resolvePreferredNodePath")
+      .mockResolvedValue(undefined);
+    const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+      status: "supported",
+      version: "1.4.2",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
+    serviceIsLoaded.mockResolvedValue(true);
+    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce("node");
+    buildGatewayInstallPlan.mockImplementationOnce(realPlan);
+    try {
+      await expect(runInstall()).rejects.toThrow("No supported Node runtime was selected");
+      expect(serviceInstall).not.toHaveBeenCalled();
+      expect(serviceUninstall).not.toHaveBeenCalled();
+    } finally {
+      discoverNode.mockRestore();
+      probeBun.mockRestore();
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  });
+
   it("hands the existing service to the replacement installer", async () => {
     serviceIsLoaded.mockResolvedValue(true);
     select.mockResolvedValueOnce("reinstall");
@@ -224,6 +273,31 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["bun", "node"])(
+    "defaults the runtime picker to recorded Bun and honors %s",
+    async (choice) => {
+      const recordedPath = "/opt/recorded/bin/bun";
+      serviceIsLoaded.mockResolvedValue(true);
+      serviceReadCommand.mockResolvedValue({
+        programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
+      });
+      select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(choice);
+
+      expect(await runInstall()).toBe("succeeded");
+
+      expect(select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Gateway service runtime",
+          initialValue: "bun",
+        }),
+      );
+      const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
+      expect(plan?.runtime).toBe(choice);
+      expect(plan?.runtimePath).toBe(choice === "bun" ? recordedPath : undefined);
+      expect(plan?.pinnedRuntimePath).toBeUndefined();
+    },
+  );
+
   it("rethrows install probe failures that are not the known non-fatal Linux systemd cases", async () => {
     serviceIsLoaded.mockRejectedValueOnce(
       new Error("systemctl is-enabled unavailable: read-only file system"),
@@ -265,6 +339,7 @@ describe("maybeInstallDaemon", () => {
       expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
         expect.objectContaining({
           runtime: daemonRuntime ?? "bun",
+          runtimeExplicit: true,
           pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
           existingCommand,
           env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
