@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
+import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
+import { createPendingSendMessage } from "../pages/chat/chat-send-queue-state.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -61,6 +63,62 @@ describe("Gateway self-profile ownership", () => {
     expect(gateway.snapshot.hello?.snapshot).toEqual({ presence: [] });
     gateway.stop();
   });
+
+  it.each([false, true])(
+    "keeps a fast queued send attributed while self loading is pending or fails (%s)",
+    async (fail) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      const deferred = createDeferred<{ profile: UserProfile }>();
+      current().request.mockReturnValue(deferred.promise);
+      const admitted = {
+        ...hello(["operator.read"]),
+        snapshot: {
+          presence: [
+            {
+              instanceId: current().instanceId,
+              user: {
+                id: profile.id,
+                name: profile.displayName ?? undefined,
+                identity: { type: "profile" as const, id: profile.id },
+              },
+            },
+          ],
+        },
+      };
+      current().opts.onHello?.(admitted);
+      const read = gateway.loadSelfProfile();
+      const queued = () =>
+        createPendingSendMessage(
+          makeChatHost({
+            client: gateway.snapshot.client,
+            hello: gateway.snapshot.hello,
+            selfUser: gateway.snapshot.selfUser,
+          }),
+          "hello",
+        )?.item;
+      const pending = queued();
+      expect(pending?.sender).toMatchObject({
+        id: profile.id,
+        name: profile.displayName,
+        identity: { type: "profile", id: profile.id },
+      });
+      if (fail) {
+        deferred.reject(
+          new GatewayRequestError({ code: "UNAVAILABLE", message: "Self read failed" }),
+        );
+        await expect(read).rejects.toThrow("Self read failed");
+      } else {
+        deferred.resolve({ profile });
+        await read;
+      }
+      expect(queued()?.sender?.id).toBe(profile.id);
+      expect(pending?.sender?.id).toBe(profile.id);
+      gateway.connect();
+      expect(queued()?.sender).toBeUndefined();
+      gateway.stop();
+    },
+  );
 
   it("keeps absent grants and identity-less connections unidentified", async () => {
     const { gateway, current } = createStore();
@@ -127,6 +185,51 @@ describe("Gateway self-profile ownership", () => {
     );
     expect(gateway.snapshot.selfUser).toMatchObject({ id: changed.id, name: changed.displayName });
     expect(current().request).toHaveBeenCalledTimes(2);
+    gateway.stop();
+  });
+
+  it("preserves current-profile display events and upload revisions through a pending self read", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().request.mockResolvedValue({ profile });
+    current().opts.onHello?.(hello());
+    await gateway.loadSelfProfile();
+    const pending = createDeferred<{ profile: UserProfile }>();
+    current().request.mockReturnValueOnce(pending.promise);
+    const read = gateway.loadSelfProfile();
+    const user = {
+      id: profile.id,
+      name: "New Name",
+      avatarUrl: "/api/users/profile-1/avatar?v=content-hash",
+    };
+    current().opts.onEvent?.(
+      createGatewayEvent("presence", { presence: [{ instanceId: current().instanceId, user }] }),
+    );
+    pending.resolve({ profile });
+    await read;
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      ...user,
+      email: profile.emails[0],
+      identity: { type: "profile", id: profile.id },
+    });
+    gateway.updateSelfUser?.({ avatarUrl: "/api/users/profile-1/avatar?v=uploaded-content-hash" });
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.avatarUrl).toBe(
+      "/api/users/profile-1/avatar?v=uploaded-content-hash",
+    );
+    gateway.stop();
+  });
+
+  it("refreshes a generated avatar fallback when the self profile changes", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().request.mockResolvedValue({ profile });
+    current().opts.onHello?.(hello());
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=2");
+    current().request.mockResolvedValue({ profile: { ...profile, updatedAt: 3 } });
+    await gateway.loadSelfProfile();
+    expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=3");
     gateway.stop();
   });
 

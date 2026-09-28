@@ -60,6 +60,7 @@ import {
   resolveGatewayCredentialsForUrlEdit,
 } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
 
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
@@ -253,6 +254,8 @@ export function createApplicationGateway(
         setUnavailableDeadline("restartPending", expected);
         setSnapshot({ restartPending: true });
       }
+    } else if (event.event === "presence") {
+      selfProfile.applyPresence(event.payload);
     } else if (
       event.event === "sessions.changed" &&
       asOptionalRecord(event.payload)?.reason === "profile-identity"
@@ -484,7 +487,10 @@ export function createApplicationGateway(
           lastError: null,
           lastErrorCode: null,
           lastErrorAuthReason: null,
-          selfUser: null,
+          selfUser: resolveSelfPresenceUser(
+            readPresenceEntries(hello.snapshot) ?? [],
+            nextClient.instanceId,
+          ),
         });
         if (isCurrentClient(nextClient)) {
           refreshSelfProfile();

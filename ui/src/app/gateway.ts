@@ -34,7 +34,7 @@ export type ApplicationGatewaySnapshot = {
   lastError: string | null;
   lastErrorCode: string | null;
   lastErrorAuthReason?: string | null;
-  /** Canonical authenticated identity loaded for this connection through users.self. */
+  /** This connection owns its identity; users.self resolves the canonical profile. */
   selfUser?: AuthenticatedUser | null;
 };
 
