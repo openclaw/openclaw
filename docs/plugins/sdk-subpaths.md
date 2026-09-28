@@ -331,6 +331,18 @@ does not persist matcher state or migrate configuration for this argument kind.
 Existing string and regex callers remain supported. Older hosts need not support
 matcher objects; plugins using them must require a host version that supports them.
 
+Registered exact secrets only match as whole values. A plugin that redacts a
+clipped prefix of longer text, so it can export that prefix, needs to redact
+past the cut. `getLongestRegisteredSecretLength()` from
+`openclaw/plugin-sdk/logging-core` returns the length of the longest registered
+surface form, counting the URL-encoded and JSON-escaped forms registered with
+each value (0 when none). Redacting that far past the cut masks a registered
+secret that starts before it. `hasConfiguredRedactPatterns()` from the same
+subpath returns whether `logging.redactPatterns` replaces the default string rules. A
+configured rule can need any amount of text after the start of its match, so
+with configured rules no bounded lookahead is enough and the whole value has
+to be redacted.
+
 For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`; a blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
 
 Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It accepts `localhost`, IPv4 loopback literals across `127.0.0.0/8`, `::1`, bracketed IPv6, and IPv4-mapped IPv6 loopback literals. It parses IP literals rather than matching text prefixes, so a DNS name such as `127.0.0.1.evil.com` is not loopback. Use `isPrivateOrLoopbackHost(host)` only when private-network hosts such as RFC 1918 addresses are also valid.

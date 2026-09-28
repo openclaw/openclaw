@@ -140,3 +140,11 @@ export function readLoggingConfig(): LoggingConfig | undefined {
     return undefined;
   }
 }
+
+/**
+ * Whether `logging.redactPatterns` replaces the default string rules. A nonempty list does, and a
+ * configured rule can need any amount of text after the start of its match.
+ */
+export function hasConfiguredRedactPatterns(): boolean {
+  return (readLoggingConfig()?.redactPatterns?.length ?? 0) > 0;
+}

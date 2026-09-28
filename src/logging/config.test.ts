@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { readLoggingConfig } from "./config.js";
+import { hasConfiguredRedactPatterns, readLoggingConfig } from "./config.js";
 import { applyLoggingConfig, resetLogger } from "./logger.js";
 
 const originalArgv = process.argv;
@@ -192,6 +192,15 @@ describe("readLoggingConfig", () => {
         });
       },
     );
+  });
+
+  it("reports whether configured redaction patterns replace the default string rules", () => {
+    // The same reader as the redactor, so the applied runtime snapshot answers; an empty list
+    // keeps the default string rules.
+    applyLoggingConfig({ redactPatterns: ["/custom-only-secret/g"] });
+    expect(hasConfiguredRedactPatterns()).toBe(true);
+    applyLoggingConfig({ redactPatterns: [] });
+    expect(hasConfiguredRedactPatterns()).toBe(false);
   });
 
   it("returns undefined for missing or malformed config files", () => {

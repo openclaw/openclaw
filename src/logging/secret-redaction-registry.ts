@@ -10,6 +10,7 @@ type SecretRedactionRegistryState = {
   registeredValues: Map<string, true>;
   registryRevision: number;
   registeredValueRedactor: SecretValueRedactor | undefined;
+  longestRegisteredValueLength: number | undefined;
 };
 
 // Native and source module copies share membership and matcher invalidation.
@@ -19,12 +20,14 @@ const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
     registeredValues: new Map<string, true>(),
     registryRevision: 0,
     registeredValueRedactor: undefined,
+    longestRegisteredValueLength: undefined,
   }),
 );
 
 function invalidateMatcher(): void {
   state.registryRevision += 1;
   state.registeredValueRedactor = undefined;
+  state.longestRegisteredValueLength = undefined;
 }
 
 function registerOneSecretValue(value: string): void {
@@ -70,6 +73,18 @@ export function hasRegisteredSecretValuesForRedaction(): boolean {
 /** Changes with registry membership, including bounded eviction and test resets. */
 export function getSecretRedactionRegistryRevision(): number {
   return state.registryRevision;
+}
+
+/**
+ * Length of the longest registered surface form, or 0. Registered values only match whole, so
+ * text redacted without its tail must keep this much past a cut to mask a value that starts before it.
+ */
+export function getLongestRegisteredSecretLength(): number {
+  state.longestRegisteredValueLength ??= Math.max(
+    0,
+    ...Array.from(state.registeredValues.keys(), (value) => value.length),
+  );
+  return state.longestRegisteredValueLength;
 }
 
 /** Exact surface forms are already expanded; snapshots must not register them again. */
