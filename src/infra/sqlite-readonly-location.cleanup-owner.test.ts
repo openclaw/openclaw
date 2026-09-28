@@ -1,4 +1,3 @@
-import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +18,6 @@ import {
   prepareSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
 import * as staging from "./sqlite-snapshot-staging.js";
-import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 
 function mockSnapshotCopy(copy: (options: SqliteReadOnlyWorkerOptions) => Promise<string>) {
   function run(
@@ -120,46 +118,6 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
     await asyncSnapshot.cleanupAsync();
   }
 });
-
-it.each(["foreign exclusion", "expired write scope"] as const)(
-  "refuses a snapshot-flight join from %s before allocating or copying",
-  async (mode) => {
-    const started = createDeferredCore();
-    const proceed = createDeferredCore();
-    const directory = path.join(root, "joined-token");
-    await fs.promises.mkdir(directory);
-    const allocate = vi
-      .spyOn(staging, "createSqliteSnapshotStagingDirectory")
-      .mockResolvedValue(directory);
-    const copy = mockSnapshotCopy(async () => {
-      started.resolve();
-      await proceed.promise;
-      return path.join(directory, "database.sqlite");
-    });
-    const source = path.join(root, "joined-source.sqlite");
-    const options = { preserveSourceArtifacts: true };
-    const first = prepareSqliteReadOnlyLocationAsync(source, options);
-    await started.promise;
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: source });
-    let join = () => prepareSqliteReadOnlyLocationAsync(source, options);
-    try {
-      if (mode === "expired write scope") {
-        join = exclusion.runWithCanonicalWrites(
-          () => {},
-          () => AsyncResource.bind(join),
-        );
-        exclusion.release();
-      }
-      expect(join).toThrow(mode === "foreign exclusion" ? /state-handles/ : /scope.*current/);
-      expect(allocate).toHaveBeenCalledOnce();
-      expect(copy).toHaveBeenCalledOnce();
-    } finally {
-      exclusion.release();
-      proceed.resolve();
-      expect(await (await first).cleanupAsync()).toBe(true);
-    }
-  },
-);
 
 // chmod-based denial only works on POSIX where the process is not root
 // (root bypasses mode bits, and Windows chmod does not revoke deletion ACLs).

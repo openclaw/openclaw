@@ -7,7 +7,9 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   releaseChatAttachmentPayloads,
@@ -414,7 +416,11 @@ export function requestSessionCompanionAnswer(
   question: string,
   agentId?: string | null,
   attachments?: ChatAttachment[],
+  uploadConfig?: ApplicationConfigCapability,
 ): Promise<SessionsCompanionAskResult> {
+  if (attachments?.length) {
+    assertUploadsEnabled(uploadConfig);
+  }
   return client.request<SessionsCompanionAskResult>(
     "sessions.companion.ask",
     {

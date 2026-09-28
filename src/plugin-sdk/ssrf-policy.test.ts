@@ -30,7 +30,10 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
   }) as unknown as LookupFn;
 }
 
-describe("ssrfPolicyFromDangerouslyAllowPrivateNetwork", () => {
+describe.each([
+  ["ssrfPolicyFromDangerouslyAllowPrivateNetwork", ssrfPolicyFromDangerouslyAllowPrivateNetwork],
+  ["ssrfPolicyFromAllowPrivateNetwork", ssrfPolicyFromAllowPrivateNetwork],
+] as const)("%s", (_policyName, createPolicy) => {
   it.each([
     ["returns undefined for missing input", undefined, undefined],
     ["returns undefined when private-network access is disabled", false, undefined],
@@ -40,21 +43,7 @@ describe("ssrfPolicyFromDangerouslyAllowPrivateNetwork", () => {
       { allowPrivateNetwork: true },
     ],
   ])("$0", (_name, input, expected) => {
-    expect(ssrfPolicyFromDangerouslyAllowPrivateNetwork(input)).toEqual(expected);
-  });
-});
-
-describe("ssrfPolicyFromAllowPrivateNetwork", () => {
-  it.each([
-    ["returns undefined for missing input", undefined, undefined],
-    ["returns undefined when private-network access is disabled", false, undefined],
-    [
-      "returns an explicit allow-private-network policy when enabled",
-      true,
-      { allowPrivateNetwork: true },
-    ],
-  ])("$0", (_name, input, expected) => {
-    expect(ssrfPolicyFromAllowPrivateNetwork(input)).toEqual(expected);
+    expect(createPolicy(input)).toEqual(expected);
   });
 });
 

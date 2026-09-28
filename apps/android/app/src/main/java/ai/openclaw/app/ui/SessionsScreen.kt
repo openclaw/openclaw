@@ -19,6 +19,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -83,7 +85,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Session browser for active, current, and archived chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -207,10 +208,14 @@ internal fun SessionsScreen(
       }
 
       item {
-        Row(horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
+          verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
+        ) {
           FilterPill(text = nativeString("Recent"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
           FilterPill(text = nativeString("Current"), icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
           FilterPill(text = nativeString("Archived"), icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
+          FilterPill(text = nativeString("Automations"), icon = Icons.Outlined.Schedule, active = filter == SessionFilter.Automations, onClick = { filter = SessionFilter.Automations })
         }
       }
 
@@ -531,49 +536,26 @@ internal fun SessionsScreen(
   }
 
   deleteGroupName?.let { group ->
-    AppAlertDialog(
-      onDismissRequest = { deleteGroupName = null },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete group?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            deleteGroupName = null
-            coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
-          },
-        ) {
-          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { deleteGroupName = null }) {
-          Text(nativeString("Cancel"))
-        }
+    SessionDeleteDialog(
+      title = nativeString("Delete group?"),
+      text = nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group),
+      onDismiss = { deleteGroupName = null },
+      onConfirm = {
+        deleteGroupName = null
+        coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
       },
     )
   }
 
   deleteSessionTarget?.let { session ->
-    AppAlertDialog(
-      onDismissRequest = { deleteSessionTarget = null },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete thread?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("This permanently deletes the thread and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            deleteSessionTarget = null
-            if (!session.matchesGateway(activeGatewayStableId)) return@TextButton
-            coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
-          },
-        ) {
-          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { deleteSessionTarget = null }) {
-          Text(nativeString("Cancel"))
+    SessionDeleteDialog(
+      title = nativeString("Delete thread?"),
+      text = nativeString("This permanently deletes the thread and its transcript."),
+      onDismiss = { deleteSessionTarget = null },
+      onConfirm = {
+        deleteSessionTarget = null
+        if (session.matchesGateway(activeGatewayStableId)) {
+          coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
         }
       },
     )
@@ -581,17 +563,38 @@ internal fun SessionsScreen(
 }
 
 @Composable
+private fun SessionDeleteDialog(
+  title: String,
+  text: String,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surfaceRaised,
+    title = { Text(title, style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    text = { Text(text, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+    confirmButton = {
+      TextButton(onClick = onConfirm) {
+        Text(nativeString("Delete"), color = ClawTheme.colors.danger)
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text(nativeString("Cancel")) }
+    },
+  )
+}
+
+@Composable
 private fun FilterPill(
   text: String,
-  icon: ImageVector? = null,
-  active: Boolean = false,
+  icon: ImageVector,
+  active: Boolean,
   showDot: Boolean = false,
-  dropdown: Boolean = false,
-  onClick: (() -> Unit)? = null,
+  onClick: () -> Unit,
 ) {
   Surface(
-    onClick = onClick ?: {},
-    enabled = onClick != null,
+    onClick = onClick,
     shape = RoundedCornerShape(7.dp),
     color = if (active) ClawTheme.colors.surfaceRaised else Color.Transparent,
     contentColor = ClawTheme.colors.text,
@@ -602,13 +605,10 @@ private fun FilterPill(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text) }
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text)
       Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
       if (showDot) {
         Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
-      }
-      if (dropdown) {
-        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
       }
     }
   }
@@ -866,7 +866,6 @@ private fun sessionColorLabel(name: String?): String =
     else -> nativeString("Default")
   }
 
-/** Category section header; long-press opens the group management menu. */
 @Composable
 private fun SessionGroupHeader(
   title: String,
@@ -987,6 +986,7 @@ internal enum class SessionFilter {
   Recent,
   Current,
   Archived,
+  Automations,
 }
 
 internal data class SessionBrowserSearchState(
@@ -995,7 +995,6 @@ internal data class SessionBrowserSearchState(
   val loading: Boolean,
 )
 
-/** Canonical debounced, gateway-backed search state shared by session browser surfaces. */
 @Composable
 internal fun rememberSessionBrowserSearchState(
   viewModel: MainViewModel,
@@ -1037,7 +1036,6 @@ internal fun rememberSessionBrowserSearchState(
   )
 }
 
-/** Applies the canonical active/current/archived filter and chronological ordering. */
 internal fun resolveSessionBrowserEntries(
   entries: List<ChatSessionEntry>,
   currentSessionKey: String,
@@ -1046,9 +1044,11 @@ internal fun resolveSessionBrowserEntries(
 ): List<ChatSessionEntry> {
   val filtered =
     when (filter) {
-      SessionFilter.Recent -> entries.filter { it.archived != true }
+      SessionFilter.Recent -> entries.filter { isSessionVisibleInNavigation(it, currentSessionKey) }
 
-      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && it.archived != true }
+      SessionFilter.Current -> entries.filter { it.key == currentSessionKey }
+
+      SessionFilter.Automations -> entries.filter { it.archived != true && isAutomationSession(it) }
 
       // Gate on the entry's own archived flag so a pre-toggle active list can
       // never render with archived-only actions while a refetch is in flight.
@@ -1059,6 +1059,24 @@ internal fun resolveSessionBrowserEntries(
   } else {
     filtered.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
   }
+}
+
+private val cronSessionDisplayKey = Regex("^(?:cron:|agent::*[^:]+:+cron:+[^:])")
+
+// Keep the native adapter aligned with src/shared/session-list-visibility.ts and
+// the selected-session exception in ui/src/lib/sessions/navigation.ts.
+internal fun isSessionVisibleInNavigation(
+  session: ChatSessionEntry,
+  currentSessionKey: String,
+): Boolean = session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session))
+
+private fun isAutomationSession(session: ChatSessionEntry): Boolean {
+  if (cronSessionDisplayKey.containsMatchIn(session.key.trim().lowercase()) || session.createdActorType == "system") return true
+  return (session.createdVia == "run" || session.createdVia == "internal") &&
+    session.createdActorType != "human" &&
+    session.label.isNullOrBlank() &&
+    session.displayName.isNullOrBlank() &&
+    session.subject.isNullOrBlank()
 }
 
 internal fun sessionListSubtitle(
@@ -1213,7 +1231,6 @@ private val CollapsedSessionKeysSaver =
     restore = { keys -> keys.toSet() },
   )
 
-/** Projects a flat visible snapshot into section roots and expandable descendants. */
 internal fun buildSessionTreeSections(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
@@ -1230,6 +1247,14 @@ internal fun buildSessionTreeSections(
         val parentKey =
           entry.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
             ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
+        // Ordinary New chats can retain a settings-inheritance parent without being child sessions.
+        if (
+          entry.createdVia == "operator" && entry.spawnDepth == 0 &&
+          entry.spawnedBy.isNullOrBlank() && entry.worktreeId == null &&
+          entry.forkedFromParent != true && entry.classification != "subagent"
+        ) {
+          return@forEach
+        }
         if (parentKey != null && parentKey != entry.key && parentKey in entriesByKey) {
           put(entry.key, parentKey)
         }
@@ -1362,7 +1387,6 @@ internal fun ChatSessionEntry.toActionTarget(gatewayStableId: String?): SessionA
     displayName = displayName,
   )
 
-/** Groups pinned sessions once, followed by alphabetical categories and remaining sessions. */
 internal fun groupSessionEntries(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
@@ -1385,7 +1409,7 @@ internal fun groupSessionEntries(
     if (pinned.isNotEmpty()) add(SessionSection(title = nativeString("Pinned"), entries = pinned))
     categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions, isCategory = true)) }
     if (ungrouped.isNotEmpty()) {
-      add(SessionSection(title = nativeString("Ungrouped").takeIf { categories.isNotEmpty() }, entries = ungrouped))
+      add(SessionSection(title = nativeString("Ungrouped").takeIf { pinned.isNotEmpty() || categories.isNotEmpty() }, entries = ungrouped))
     }
   }
 }
@@ -1396,7 +1420,6 @@ internal enum class SessionEmptyMode {
   SearchNoMatches,
 }
 
-/** Keeps transient search loading distinct from both filter-empty and settled no-match states. */
 internal fun sessionEmptyMode(
   query: String,
   loading: Boolean,
@@ -1407,23 +1430,22 @@ internal fun sessionEmptyMode(
     else -> SessionEmptyMode.SearchNoMatches
   }
 
-/** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("No threads yet")
     SessionFilter.Current -> nativeString("No current thread")
     SessionFilter.Archived -> nativeString("No archived threads")
+    SessionFilter.Automations -> nativeString("No automation threads")
   }
 
-/** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
     SessionFilter.Current -> nativeString("Open Chat to start or resume the current thread.")
     SessionFilter.Archived -> nativeString("Archived threads will show up here.")
+    SessionFilter.Automations -> nativeString("Automation and system conversations will show up here.")
   }
 
-/** Formats session timestamps for compact mobile metadata. */
 internal fun relativeSessionTime(
   updatedAtMs: Long,
   nowMs: Long = System.currentTimeMillis(),

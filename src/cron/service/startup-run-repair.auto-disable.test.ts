@@ -13,6 +13,7 @@ import {
   drainSystemEvents,
   enqueueSystemEvent as queueSystemEvent,
 } from "../../infra/system-events.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import * as cronSchedule from "../schedule.js";
 import type { CronJob } from "../types.js";
 import { markInterruptedStartupRun, restoreFinalizedStartupRun } from "./startup-run-repair.js";
@@ -22,6 +23,7 @@ import { applyJobResult } from "./timer-outcomes.js";
 
 function createRepairState(storePath: string, nowMs: number) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -80,6 +82,7 @@ describe("startup run repair auto-disable", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/startup-run-repair-mixed-streak.json",
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -269,6 +272,7 @@ describe("startup run repair auto-disable", () => {
     });
     try {
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: "/tmp/startup-run-repair-auto-disable-notification.json",
         cronEnabled: true,
         defaultAgentId: "main",
@@ -341,6 +345,7 @@ describe("startup run repair auto-disable", () => {
   it("disables a job instead of restoring an invalid finalized next run", () => {
     const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/startup-run-repair-invalid-next-run.json",
       cronEnabled: true,
       log: {
@@ -436,6 +441,7 @@ describe("startup run repair auto-disable", () => {
     const runningAtMs = Date.parse("2026-08-01T17:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/startup-run-repair-completion.json",
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -505,6 +511,7 @@ describe("startup run repair auto-disable", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/startup-run-repair-quiet-trigger.json",
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -566,6 +573,7 @@ describe("startup run repair auto-disable", () => {
       const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
       const warn = vi.fn();
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: "/tmp/startup-run-repair-invalid-history.json",
         cronEnabled: true,
         log: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },

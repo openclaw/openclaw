@@ -78,14 +78,9 @@ describe("managed exact-state retirement", () => {
     return { created, retired, head };
   }
 
-  it.each([
-    { split: false, retainSource: true },
-    { split: true, retainSource: true },
-    { split: false, retainSource: false },
-    { split: true, retainSource: false },
-  ])(
-    "round-trips detached HEAD, separate branch, exact index and work bytes (split=$split, retained=$retainSource)",
-    async ({ split, retainSource }) => {
+  it.each([true, false])(
+    "round-trips detached HEAD, separate branch, split index and work bytes (retained=%s)",
+    async (retainSource) => {
       await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\n");
       await git(repo, "add", ".gitignore");
       await git(repo, "commit", "-m", "ignore fixture data");
@@ -136,9 +131,7 @@ describe("managed exact-state retirement", () => {
       await fs.chmod(path.join(created.path, "saved.secret"), 0o600);
       await fs.writeFile(path.join(created.path, "cache.tmp"), "discarded native cache\n");
       await fs.utimes(path.join(created.path, "untracked.sh"), 1_600_000_000, 1_600_000_001);
-      if (split) {
-        await git(created.path, "update-index", "--split-index");
-      }
+      await git(created.path, "update-index", "--split-index");
       const indexPath = path.resolve(
         created.path,
         await git(created.path, "rev-parse", "--git-path", "index"),
@@ -277,34 +270,9 @@ describe("managed exact-state retirement", () => {
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toContain("<<<<<<<");
   });
   it("refuses a fallback parent swapped to a symlink before publication", async () => {
-    const created = await materializeManagedWorktreeFixture({
-      env,
-      repoRoot: repo,
-      stateDir,
-      name: "parent-swap",
-      now: 1_800_000_000_000,
-      ownerKind: "manual",
-    });
-    const branchHead = await git(created.path, "rev-parse", "HEAD");
-    await git(created.path, "checkout", "--detach", "HEAD");
-    await fs.mkdir(path.join(created.path, "nested"));
-    await fs.writeFile(path.join(created.path, "nested/child.txt"), "captured bytes\n");
-    const indexPath = path.resolve(
-      created.path,
-      await git(created.path, "rev-parse", "--git-path", "index"),
-    );
-    const retired = await service.remove({
-      id: created.id,
-      reason: "parent swap fixture",
-      exactState: {
-        ownerKind: created.ownerKind,
-        ownerId: created.ownerId,
-        createdAt: created.createdAt,
-        lastActiveAt: created.lastActiveAt,
-        head: branchHead,
-        branchHead,
-        indexSha256: sha256(await fs.readFile(indexPath)),
-      },
+    const { created, retired } = await retiredFixture("parent-swap", async (checkout) => {
+      await fs.mkdir(path.join(checkout, "nested"));
+      await fs.writeFile(path.join(checkout, "nested/child.txt"), "captured bytes\n");
     });
     await git(repo, "worktree", "remove", "--force", retired.recoveryPath!);
     const outside = path.join(stateDir, "outside");

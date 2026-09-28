@@ -18,22 +18,11 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeSessionIngestionState,
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
   type SessionIngestionFileState,
-  type SessionIngestionState,
 } from "./dreaming-ingestion-state.js";
-import {
-  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-  readMemoryCoreWorkspaceEntries,
-  SESSION_SEEN_HASHES_PER_CHUNK,
-  writeMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
-
-export type { SessionIngestionState } from "./dreaming-ingestion-state.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 export const SESSION_INGESTION_SCORE = 0.58;
@@ -416,67 +405,6 @@ export function trimTrackedSessionScopes(seenMessages: Record<string, string[]>)
     Object.keys(seenMessages).toSorted().slice(-SESSION_INGESTION_MAX_TRACKED_SCOPES),
   );
   return Object.fromEntries(Object.entries(seenMessages).filter(([scope]) => keep.has(scope)));
-}
-
-export async function readSessionIngestionState(
-  workspaceDir: string,
-): Promise<SessionIngestionState> {
-  const [files, seenChunks] = await Promise.all([
-    readMemoryCoreWorkspaceEntries<SessionIngestionFileState>({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-    }),
-    readMemoryCoreWorkspaceEntries<{ scope: string; index: number; hashes: string[] }>({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir,
-    }),
-  ]);
-  const seenMessages: Record<string, string[]> = {};
-  for (const { value } of seenChunks.toSorted((a, b) => a.value.index - b.value.index)) {
-    if (!value.scope.trim()) {
-      continue;
-    }
-    seenMessages[value.scope] = [...(seenMessages[value.scope] ?? []), ...value.hashes];
-  }
-  return normalizeSessionIngestionState({
-    version: 3,
-    files: Object.fromEntries(files.map((entry) => [entry.key, entry.value])),
-    seenMessages,
-  });
-}
-
-export async function writeSessionIngestionState(
-  workspaceDir: string,
-  state: SessionIngestionState,
-): Promise<void> {
-  const seenEntries = Object.entries(state.seenMessages).flatMap(([scope, hashes]) =>
-    Array.from(
-      { length: Math.ceil(hashes.length / SESSION_SEEN_HASHES_PER_CHUNK) },
-      (_, index) => ({
-        key: `${scope}:${index}`,
-        value: {
-          scope,
-          index,
-          hashes: hashes.slice(
-            index * SESSION_SEEN_HASHES_PER_CHUNK,
-            (index + 1) * SESSION_SEEN_HASHES_PER_CHUNK,
-          ),
-        },
-      }),
-    ),
-  );
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-      entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir,
-      entries: seenEntries,
-    }),
-  ]);
 }
 
 export async function appendSessionCorpusLines(params: {

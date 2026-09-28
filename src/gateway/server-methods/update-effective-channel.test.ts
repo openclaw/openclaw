@@ -6,8 +6,13 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import * as stageTiming from "../../shared/stage-timing.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 type TestUpdateAvailable = {
   currentVersion: string;
@@ -30,7 +35,9 @@ const getUpdateEffectiveChannelMock = vi.hoisted(() =>
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
 const refreshGatewayUpdateStatusMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/update-startup.js").refreshGatewayUpdateStatus>(async () => {}),
+  vi.fn<typeof import("../../infra/update-status-schedule.js").refreshGatewayUpdateStatus>(
+    async () => {},
+  ),
 );
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
   vi.fn<() => TestUpdateSentinel>(() => null),
@@ -46,6 +53,10 @@ vi.mock("../../infra/update-status-state.js", () => ({
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: getUpdateEffectiveChannelMock,
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateScheduleMock(),
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -59,12 +70,16 @@ vi.mock("./validation.js", () => ({
 }));
 
 let previousDiagnostics: boolean;
-afterEach(() => {
+let lifecycle: UpdateCheckLifecycle;
+afterEach(async () => {
+  await lifecycle.stop();
+  await lifecycle.scheduler.stop();
   vi.restoreAllMocks();
   setDiagnosticsEnabledForProcess(previousDiagnostics);
 });
 
 beforeEach(() => {
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   previousDiagnostics = areDiagnosticsEnabledForProcess();
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
@@ -319,6 +334,6 @@ it("attributes a failed status history read to its phase and preserves the error
   expect(warn).toHaveBeenCalledExactlyOnceWith("update.status: slow request", {
     operation: "update.status",
     elapsedMs: 40_000,
-    phaseDurationsMs: { sentinel: 0, checkout: 0, identity: 0, reconciliation: 0, history: 40_000 },
+    phaseDurationsMs: { sentinel: 0, checkout: 0, reconciliation: 0, history: 40_000 },
   });
 });

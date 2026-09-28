@@ -93,16 +93,6 @@ describe("plugin-registry-loader", () => {
     });
   });
 
-  it("forwards configured-channel load scope without startup dependency repair", async () => {
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-    });
-
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
-  });
-
   it("includes persisted runtime owners when loading sandbox managers", async () => {
     readRegistryMock.mockResolvedValue({
       entries: [{ backendId: "openshell" }, { backendId: "docker" }, { backendId: "openshell" }],

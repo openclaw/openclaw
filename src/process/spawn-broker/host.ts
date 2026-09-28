@@ -274,6 +274,13 @@ export class SpawnBrokerHost {
       fail(new Error(`exited with code=${code ?? "null"} signal=${signal ?? "none"}`));
     });
     child.once("disconnect", () => fail(new Error("IPC channel disconnected")));
+    const abortTransport = (error: Error) => {
+      fail(error);
+      if (child.connected) {
+        child.disconnect();
+      }
+      child.kill("SIGTERM");
+    };
     child.on("message", (raw: unknown, handle: unknown) => {
       if (ended || this.closing) {
         if (handle instanceof Socket) {
@@ -286,11 +293,7 @@ export class SpawnBrokerHost {
       try {
         decoded = receiver.receive(raw);
       } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-        if (child.connected) {
-          child.disconnect();
-        }
-        child.kill("SIGTERM");
+        abortTransport(error instanceof Error ? error : new Error(String(error)));
         return;
       }
       if (decoded === undefined) {
@@ -339,11 +342,7 @@ export class SpawnBrokerHost {
           if (handle instanceof Socket) {
             handle.destroy();
           }
-          fail(toErrorObject(error, "Spawn broker pipe setup failed"));
-          if (child.connected) {
-            child.disconnect();
-          }
-          child.kill("SIGTERM");
+          abortTransport(toErrorObject(error, "Spawn broker pipe setup failed"));
           return;
         }
         // The receipt follows Node's internal handle ACK on this same IPC channel.

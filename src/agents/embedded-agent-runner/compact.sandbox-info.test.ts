@@ -50,62 +50,84 @@ beforeEach(async () => {
   );
 });
 
-it.each([
-  { name: "disabled", enabled: false, allowed: false, required: false },
-  { name: "enabled but disallowed", enabled: true, allowed: false, required: false },
-  { name: "required and enabled", enabled: true, allowed: true, required: true },
-])("reads compaction elevation policy only when configured ($name)", async (testCase) => {
+async function prepareSandboxReporting(required = false) {
   const reporting = await import("./sandbox-info.js");
   const realReporting =
     await vi.importActual<typeof import("./sandbox-info.js")>("./sandbox-info.js");
-  const approvalStore = await import("../../infra/exec-approvals-store.js");
-  const { patchSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
   const { createSandboxTestContext } = await import("../sandbox/test-fixtures.js");
   const policyRead = vi.mocked(reporting.resolveEmbeddedSandboxInfoExecPolicy);
   const buildInfo = vi.mocked(reporting.buildEmbeddedSandboxInfo);
   const originalPolicy = policyRead.getMockImplementation();
   const originalBuildInfo = buildInfo.getMockImplementation();
-  const approvalRead = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
-  // Only surrounding provider/model/Docker boundaries remain stubbed by this harness.
-  // The reporting owner, session classification and approval worker are real in this case.
   policyRead.mockClear().mockImplementation(realReporting.resolveEmbeddedSandboxInfoExecPolicy);
   buildInfo.mockClear().mockImplementation(realReporting.buildEmbeddedSandboxInfo);
-  try {
-    const storePath = join(TEST_WORKSPACE_DIR, "sessions.json");
-    if (testCase.required) {
-      await patchSessionEntryCore(
-        { agentId: "main", sessionKey: TEST_SESSION_KEY, storePath },
-        () => ({ sandbox: "required" }),
-      );
-    }
-    resolveSandboxContextMock.mockResolvedValue(
-      createSandboxTestContext({
-        overrides: {
-          sessionKey: TEST_SESSION_KEY,
-          workspaceDir: TEST_WORKSPACE_DIR,
-          agentWorkspaceDir: TEST_WORKSPACE_DIR,
-          ...(testCase.required
-            ? ({ required: true } satisfies Pick<SandboxContext, "required">)
-            : {}),
-        },
-      }),
-    );
-    const result = await compactEmbeddedAgentSessionDirect({
-      agentId: "main",
-      sessionId: TEST_SESSION_ID,
-      sessionKey: TEST_SESSION_KEY,
-      sessionTarget: {
-        agentId: "main",
-        sessionId: TEST_SESSION_ID,
+  resolveSandboxContextMock.mockResolvedValue(
+    createSandboxTestContext({
+      overrides: {
         sessionKey: TEST_SESSION_KEY,
-        storePath,
+        workspaceDir: TEST_WORKSPACE_DIR,
+        agentWorkspaceDir: TEST_WORKSPACE_DIR,
+        ...(required ? ({ required: true } satisfies Pick<SandboxContext, "required">) : {}),
       },
-      workspaceDir: TEST_WORKSPACE_DIR,
-      config: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
-        session: { store: storePath },
-        tools: { exec: { host: "gateway", mode: "full" } },
-      },
+    }),
+  );
+  return {
+    policyRead,
+    buildInfo,
+    restore() {
+      if (originalPolicy) {
+        policyRead.mockImplementation(originalPolicy);
+      } else {
+        policyRead.mockReset();
+      }
+      if (originalBuildInfo) {
+        buildInfo.mockImplementation(originalBuildInfo);
+      } else {
+        buildInfo.mockReset();
+      }
+    },
+  };
+}
+
+function compactionParams() {
+  const sessionTarget = {
+    agentId: "main",
+    sessionId: TEST_SESSION_ID,
+    sessionKey: TEST_SESSION_KEY,
+    storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
+  };
+  return {
+    agentId: sessionTarget.agentId,
+    sessionId: sessionTarget.sessionId,
+    sessionKey: sessionTarget.sessionKey,
+    sessionTarget,
+    workspaceDir: TEST_WORKSPACE_DIR,
+    config: {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      session: { store: sessionTarget.storePath },
+      tools: { exec: { host: "gateway", mode: "full" } },
+    },
+  } satisfies Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
+}
+
+it.each([
+  { name: "disabled", enabled: false, allowed: false, required: false },
+  { name: "enabled but disallowed", enabled: true, allowed: false, required: false },
+  { name: "required and enabled", enabled: true, allowed: true, required: true },
+])("reads compaction elevation policy only when configured ($name)", async (testCase) => {
+  const reporting = await prepareSandboxReporting(testCase.required);
+  const { policyRead } = reporting;
+  const approvalStore = await import("../../infra/exec-approvals-store.js");
+  const { patchSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
+  const approvalRead = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
+  try {
+    const params = compactionParams();
+    if (testCase.required) {
+      const { sessionId: _sessionId, ...scope } = params.sessionTarget;
+      await patchSessionEntryCore(scope, () => ({ sandbox: "required" }));
+    }
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...params,
       bashElevated: {
         enabled: testCase.enabled,
         allowed: testCase.allowed,
@@ -132,16 +154,7 @@ it.each([
     }
   } finally {
     approvalRead.mockRestore();
-    if (originalPolicy) {
-      policyRead.mockImplementation(originalPolicy);
-    } else {
-      policyRead.mockReset();
-    }
-    if (originalBuildInfo) {
-      buildInfo.mockImplementation(originalBuildInfo);
-    } else {
-      buildInfo.mockReset();
-    }
+    reporting.restore();
   }
 });
 
@@ -149,19 +162,13 @@ it("refuses sandbox metadata publication after cancellation during machine-name 
   const { createDeferred } = await import("../../../test/helpers/promise.js");
   const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
   const machineNames = await import("../../infra/machine-name.js");
-  const reporting = await import("./sandbox-info.js");
-  const realReporting =
-    await vi.importActual<typeof import("./sandbox-info.js")>("./sandbox-info.js");
-  const { createSandboxTestContext } = await import("../sandbox/test-fixtures.js");
+  const reporting = await prepareSandboxReporting();
   const machineName = vi.mocked(machineNames.getMachineDisplayName);
   const originalMachineName = machineName.getMockImplementation();
   if (!originalMachineName) {
     throw new Error("Expected the existing external machine-name harness boundary");
   }
-  const policyRead = vi.mocked(reporting.resolveEmbeddedSandboxInfoExecPolicy);
-  const buildInfo = vi.mocked(reporting.buildEmbeddedSandboxInfo);
-  const originalPolicy = policyRead.getMockImplementation();
-  const originalBuildInfo = buildInfo.getMockImplementation();
+  const { buildInfo } = reporting;
   const reached = createDeferred();
   const released = createDeferred();
   const controller = new AbortController();
@@ -174,36 +181,10 @@ it("refuses sandbox metadata publication after cancellation during machine-name 
     await released.promise;
     return value;
   });
-  policyRead.mockClear().mockImplementation(realReporting.resolveEmbeddedSandboxInfoExecPolicy);
-  buildInfo.mockClear().mockImplementation(realReporting.buildEmbeddedSandboxInfo);
   try {
-    const storePath = join(TEST_WORKSPACE_DIR, "sessions.json");
-    resolveSandboxContextMock.mockResolvedValue(
-      createSandboxTestContext({
-        overrides: {
-          sessionKey: TEST_SESSION_KEY,
-          workspaceDir: TEST_WORKSPACE_DIR,
-          agentWorkspaceDir: TEST_WORKSPACE_DIR,
-        },
-      }),
-    );
     pending = owner.track(() =>
       compactEmbeddedAgentSessionDirect({
-        agentId: "main",
-        sessionId: TEST_SESSION_ID,
-        sessionKey: TEST_SESSION_KEY,
-        sessionTarget: {
-          agentId: "main",
-          sessionId: TEST_SESSION_ID,
-          sessionKey: TEST_SESSION_KEY,
-          storePath,
-        },
-        workspaceDir: TEST_WORKSPACE_DIR,
-        config: {
-          agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
-          session: { store: storePath },
-          tools: { exec: { host: "gateway", mode: "full" } },
-        },
+        ...compactionParams(),
         bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
         abortSignal: controller.signal,
       }),
@@ -227,15 +208,6 @@ it("refuses sandbox metadata publication after cancellation during machine-name 
     await Promise.allSettled(pending ? [pending] : []);
     await owner.drain();
     machineName.mockReset().mockImplementation(originalMachineName);
-    if (originalPolicy) {
-      policyRead.mockImplementation(originalPolicy);
-    } else {
-      policyRead.mockReset();
-    }
-    if (originalBuildInfo) {
-      buildInfo.mockImplementation(originalBuildInfo);
-    } else {
-      buildInfo.mockReset();
-    }
+    reporting.restore();
   }
 });

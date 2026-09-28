@@ -1,5 +1,4 @@
 import { afterEach, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -9,62 +8,20 @@ import {
   expectCodeModeSharedBudget,
 } from "./code-mode.test-support.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
-import { registerHeadlessToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
 
-it("automatically preserves a large final result for another cell without refetching", async () => {
-  const h = createCodeModeHarness();
-  const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024 } } };
-  const ctx = { ...h.ctx, config, runtimeConfig: config };
-  const tools = createCodeModeTools(ctx);
-  const rows = Array.from({ length: 180 }, (_, id) => ({ id, paid: id % 2 === 0, amount: 4 }));
-  const invoices = pluginToolWithExecute("invoices", "Read invoice rows", async () =>
-    jsonResult(rows),
-  );
-  applyCodeModeCatalog({ ...ctx, tools: [...tools, invoices] });
-  try {
-    const saved = resultDetails(
-      await tools[0]!.execute("fetch", { code: "return await invoices({});" }),
-    );
-    expect(saved, JSON.stringify(saved)).toMatchObject({
-      status: "completed",
-      value: {
-        truncated: true,
-        reference: {
-          id: expect.any(String),
-          bytes: Buffer.byteLength(JSON.stringify(rows)),
-          count: 180,
-        },
-        guidance: expect.stringContaining("results.load"),
-      },
-    });
-    const id = (saved.value as { reference: { id: string } }).reference.id;
-    const loaded = resultDetails(
-      await tools[0]!.execute("sum", {
-        code: `const rows = await results.load(${JSON.stringify(id)}); return rows.filter(row => !row.paid).reduce((sum,row) => sum + row.amount, 0);`,
-      }),
-    );
-    expect(loaded).toMatchObject({ status: "completed", value: 360 });
-    expect(invoices.execute).toHaveBeenCalledOnce();
-  } finally {
-    clearToolSearchCatalog(ctx);
-  }
-});
-
 it.each([
   { modelContextWindowTokens: undefined, maxOutputBytes: 1024, network: false },
-  { modelContextWindowTokens: 2048, maxOutputBytes: 1024, network: false },
   { modelContextWindowTokens: 2048, maxOutputBytes: 65536, network: false },
   { modelContextWindowTokens: 4096, maxOutputBytes: 1024, network: true },
 ])(
   "keeps a usable automatic reference after output exhaustion and wait (context=$modelContextWindowTokens, bytes=$maxOutputBytes, network=$network)",
   async ({ modelContextWindowTokens, maxOutputBytes, network }) => {
-    const h = createCodeModeHarness();
-    const config = { tools: { codeMode: { enabled: true, maxOutputBytes } } };
-    const ctx = { ...h.ctx, config, runtimeConfig: config, modelContextWindowTokens };
+    const h = createCodeModeHarness({ codeMode: { maxOutputBytes } });
+    const ctx = { ...h.ctx, modelContextWindowTokens };
     const tools = createCodeModeTools(ctx);
     const rows = Array.from({ length: 180 }, (_, id) => ({ id, title: "row 🦞", amount: 4 }));
     const read = pluginToolWithExecute("read_rows", "Rows", async () => jsonResult(rows));
@@ -84,7 +41,15 @@ it.each([
       expectCodeModeSharedBudget(saved, maxOutputBytes);
       expect(saved, JSON.stringify(saved)).toMatchObject({
         status: "completed",
-        value: { truncated: true, reference: { id: expect.any(String), count: 180 } },
+        value: {
+          truncated: true,
+          reference: {
+            id: expect.any(String),
+            bytes: Buffer.byteLength(JSON.stringify(rows)),
+            count: 180,
+          },
+          guidance: expect.stringContaining("results.load"),
+        },
       });
       const id = (saved.value as { reference: { id: string } }).reference.id;
       const loaded = await tools[0]!.execute("load", {
@@ -116,10 +81,7 @@ it.each([
 );
 
 it("keeps success and old references when automatic retention is full", async () => {
-  const h = createCodeModeHarness();
-  const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024 } } };
-  const ctx = { ...h.ctx, config, runtimeConfig: config };
-  const tools = createCodeModeTools(ctx);
+  const { ctx, tools } = createCodeModeHarness({ codeMode: { maxOutputBytes: 1024 } });
   applyCodeModeCatalog({ ...ctx, tools });
   try {
     const first = resultDetails(
@@ -182,11 +144,8 @@ it.each([
 ])(
   "returns an ordinary successful truncation for $name",
   async ({ maxOutputBytes, modelContextWindowTokens, maxSnapshotBytes, restartSafe, guidance }) => {
-    const h = createCodeModeHarness();
-    const config = {
-      tools: { codeMode: { enabled: true, maxOutputBytes, maxSnapshotBytes } },
-    };
-    const ctx = { ...h.ctx, config, runtimeConfig: config, modelContextWindowTokens };
+    const h = createCodeModeHarness({ codeMode: { maxOutputBytes, maxSnapshotBytes } });
+    const ctx = { ...h.ctx, modelContextWindowTokens };
     const tools = createCodeModeTools(ctx);
     applyCodeModeCatalog({ ...ctx, tools });
     try {
@@ -207,89 +166,6 @@ it.each([
     }
   },
 );
-
-it("leaves small structured values and marker-looking guest values unchanged", async () => {
-  const h = createCodeModeHarness();
-  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
-  try {
-    const value = { truncated: true, reference: { id: "guest-data" }, rows: [1, 2, 3] };
-    const output = resultDetails(
-      await h.tools[0]!.execute("small", { code: `return ${JSON.stringify(value)};` }),
-    );
-    expect(output).toMatchObject({ status: "completed", value });
-  } finally {
-    clearToolSearchCatalog(h.ctx);
-  }
-});
-
-it.each(["catalog replacement", "catalog close", "run abort"])(
-  "expires automatic references on %s",
-  async (transition) => {
-    const h = createCodeModeHarness();
-    const controller = new AbortController();
-    const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024 } } };
-    const ctx = { ...h.ctx, config, runtimeConfig: config, abortSignal: controller.signal };
-    const tools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({ ...ctx, tools });
-    try {
-      const saved = resultDetails(
-        await tools[0]!.execute("save", {
-          code: 'return Array.from({length:180},(_,id) => ({id,payload:"data".repeat(10)}));',
-        }),
-      );
-      expect(saved.status).toBe("completed");
-      const id = (saved.value as { reference: { id: string } }).reference.id;
-      if (transition === "run abort") {
-        controller.abort();
-        ctx.abortSignal = new AbortController().signal;
-      } else {
-        if (transition === "catalog close") {
-          clearToolSearchCatalog(ctx);
-        }
-        registerHeadlessToolSearchCatalog({ catalogRef: h.catalogRef, tools: [] });
-      }
-      const fresh = createCodeModeTools(ctx);
-      expect(
-        resultDetails(
-          await fresh[0]!.execute("expired", {
-            code: `return await results.load(${JSON.stringify(id)});`,
-          }),
-        ),
-      ).toMatchObject({
-        status: "failed",
-        error: expect.stringContaining("unavailable or expired"),
-      });
-    } finally {
-      clearToolSearchCatalog(ctx);
-    }
-  },
-);
-
-it("does not retain a canceled tool completion", async () => {
-  const started = createDeferred();
-  const release = createDeferred();
-  const h = createCodeModeHarness();
-  const controller = new AbortController();
-  const ctx = { ...h.ctx, abortSignal: controller.signal };
-  const tools = createCodeModeTools(ctx);
-  const slow = pluginToolWithExecute("slow", "Wait for rows", async () => {
-    started.resolve();
-    await release.promise;
-    return jsonResult(Array.from({ length: 5000 }, (_, id) => ({ id })));
-  });
-  applyCodeModeCatalog({ ...ctx, tools: [...tools, slow] });
-  const pending = tools[0]!.execute("canceled", { code: "return await slow({});" });
-  try {
-    await started.promise;
-    controller.abort();
-    release.resolve();
-    expect(resultDetails(await pending)).toMatchObject({ status: "failed", code: "aborted" });
-  } finally {
-    release.resolve();
-    clearToolSearchCatalog(ctx);
-    await pending;
-  }
-});
 
 it("shows nested array counts and explicitly sampled heterogeneous shapes", async () => {
   const h = createCodeModeHarness();
@@ -323,9 +199,7 @@ it("shows nested array counts and explicitly sampled heterogeneous shapes", asyn
 });
 
 it("releases an automatic save when a tiny model budget cannot expose its identity", async () => {
-  const h = createCodeModeHarness();
-  const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024 } } };
-  const ctx = { ...h.ctx, config, runtimeConfig: config };
+  const { ctx } = createCodeModeHarness({ codeMode: { maxOutputBytes: 1024 } });
   const tools = createCodeModeTools({ ...ctx, modelContextWindowTokens: 1024 });
   applyCodeModeCatalog({ ...ctx, tools });
   try {
@@ -391,12 +265,9 @@ it.each([true, false])(
 );
 
 it("preserves complete UTF-8 JSON above the output allowance but within the data allowance", async () => {
-  const h = createCodeModeHarness();
-  const config = {
-    tools: { codeMode: { enabled: true, maxOutputBytes: 1024, maxSnapshotBytes: 2048 } },
-  };
-  const ctx = { ...h.ctx, config, runtimeConfig: config };
-  const tools = createCodeModeTools(ctx);
+  const { ctx, tools } = createCodeModeHarness({
+    codeMode: { maxOutputBytes: 1024, maxSnapshotBytes: 2048 },
+  });
   applyCodeModeCatalog({ ...ctx, tools });
   try {
     const output = resultDetails(

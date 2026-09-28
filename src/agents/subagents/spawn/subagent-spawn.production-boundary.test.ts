@@ -1,11 +1,7 @@
 /** Recursive spawn authority must survive the real Gateway and agent-command admission path. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "../../prepared-model-runtime.test-harness.js";
+import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, resetPreparedModelRuntimeHarness } from "../../prepared-model-runtime.test-harness.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,9 +28,6 @@ import { withTimeout } from "../../../infra/fs-safe.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
@@ -57,6 +50,7 @@ import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
+import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 import {
   activateSwarmRun,
   closeSwarmScheduler,
@@ -172,8 +166,6 @@ beforeEach(async () => {
     routeVariants: [model],
   });
   resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   preparedRuntime.loadAgentRuntimePluginRegistryHandle.mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -190,9 +182,10 @@ beforeEach(async () => {
 
 afterEach(async ({ task }) => {
   await settleSubagentRegistryPersistenceWork();
+  // Retire workspace observers before fixture cleanup removes their roots.
+  const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
+  await closeSkillsWatchers(true);
   resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   vi.mocked(runSubagentAnnounceFlow).mockReset();
   vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();
@@ -281,13 +274,10 @@ function readBoundExecutionState(
     controllerAborted: controller?.controller.signal.aborted,
     executionStarted: controller?.executionStarted,
     executionStatus: label(execution?.status, ["queued", "running", "interrupted", "terminal"]),
-    taskStatus: label(childRunId ? findTaskByRunId(childRunId)?.status : undefined, [
-      "queued",
-      "running",
-      "completed",
-      "failed",
-      "cancelled",
-    ]),
+    runStatus: label(
+      childRunId ? resolveSubagentSessionStatus(subagentRuns.get(childRunId)) : undefined,
+      ["queued", "running", "done", "failed", "killed", "timeout"],
+    ),
     queuedLaunchPresent: collector?.queuedLaunch !== undefined,
     collectorCleanupPending: collector?.collectorLaunchCleanupPending === true,
     collectorKillPending: collector?.killIntent !== undefined,
@@ -662,7 +652,7 @@ describe("recursive spawn production boundary", () => {
             aborted: true,
             runIds: [parentRunId],
           });
-          expect(findTaskByRunId(childRunId)?.status).toBe("cancelled");
+          expect(resolveSubagentSessionStatus(subagentRuns.get(childRunId))).toBe("killed");
         }
         if (parentState === "operator-revoked") {
           const queued = expectDefined(holdQueuedSwarmRun(childRunId), "queued collector");
@@ -801,7 +791,9 @@ describe("recursive spawn production boundary", () => {
       sessionKey: childSessionKey,
     });
     const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
-    let replacementClaim: ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]> | undefined;
+    let replacementClaim:
+      | Awaited<ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]>>
+      | undefined;
     const results: boolean[] = [];
     const errors: unknown[] = [];
     const failures: unknown[] = [];
@@ -887,8 +879,8 @@ describe("recursive spawn production boundary", () => {
       } else if (target === "replaced-gateway") {
         bound.gatewayBinding.current = { ...context };
       } else if (target === "worker-reassigned" && worker) {
-        worker.store.releaseTurn(worker.claim);
-        replacementClaim = worker.store.claimTurn({
+        await worker.store.releaseTurn(worker.claim);
+        replacementClaim = await worker.store.claimTurn({
           ...worker.session,
           owner: worker.claim.owner,
           claimId: "replacement-claim",
@@ -917,8 +909,8 @@ describe("recursive spawn production boundary", () => {
             throw new Error("cleanup ended before the session mutation barrier");
           }),
         ]);
-        worker.store.releaseTurn(worker.claim);
-        replacementClaim = worker.store.claimTurn({
+        await worker.store.releaseTurn(worker.claim);
+        replacementClaim = await worker.store.claimTurn({
           ...worker.session,
           owner: worker.claim.owner,
           claimId: "replacement-claim",
@@ -965,7 +957,7 @@ describe("recursive spawn production boundary", () => {
       }
       try {
         if (worker && worker.store.validateTurnClaim(replacementClaim ?? worker.claim)) {
-          worker.store.releaseTurn(replacementClaim ?? worker.claim);
+          await worker.store.releaseTurn(replacementClaim ?? worker.claim);
         }
       } catch (error) {
         failures.push(error);

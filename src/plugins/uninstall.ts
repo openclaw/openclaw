@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
@@ -586,15 +588,27 @@ export async function applyPluginUninstallDirectoryRemoval(
   }
   assertPersistentApply();
   try {
-    await fs.rm(removal.target, { recursive: true, force: true });
+    const target = path.resolve(removal.target);
+    const directory = await root(path.dirname(target));
+    await directory.remove(`.${path.sep}${path.basename(target)}`, {
+      recursive: true,
+      force: true,
+      // Uninstall must accept the full managed dependency tree.
+      maxEntries: Infinity,
+      maxDepth: Infinity,
+      assertBeforeMutation: assertPersistentApply,
+    });
   } catch (error) {
-    return {
-      directoryRemoved: false,
-      warnings: [
-        ...warnings,
-        `Failed to remove plugin directory ${removal.target}: ${formatErrorMessage(error)}`,
-      ],
-    };
+    rethrowAuthorityFailure?.();
+    if (!isMissingPathError(error)) {
+      return {
+        directoryRemoved: false,
+        warnings: [
+          ...warnings,
+          `Failed to remove plugin directory ${removal.target}: ${formatErrorMessage(error)}`,
+        ],
+      };
+    }
   }
   if (removal.cleanup?.kind === "git") {
     assertPersistentApply();

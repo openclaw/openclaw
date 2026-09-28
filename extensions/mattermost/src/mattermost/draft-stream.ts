@@ -1,4 +1,3 @@
-// Mattermost plugin module implements draft stream behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -199,14 +198,6 @@ export function createMattermostDraftStream(params: {
     }
   };
 
-  const clearMessageId = () => {
-    currentGeneration.postId = undefined;
-  };
-  const isValidMessageId = (value: unknown): value is string =>
-    typeof value === "string" && value.length > 0;
-  const deleteMessage = async (postId: string) => {
-    await deleteMattermostPost(params.client, postId);
-  };
   const {
     loop,
     update: updateLifecycle,
@@ -219,9 +210,12 @@ export function createMattermostDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
-    clearMessageId,
-    isValidMessageId,
-    deleteMessage,
+    clearMessageId: () => {
+      currentGeneration.postId = undefined;
+    },
+    isValidMessageId: (value: unknown): value is string =>
+      typeof value === "string" && value.length > 0,
+    deleteMessage: (postId) => deleteMattermostPost(params.client, postId),
     warn: params.warn,
     warnPrefix: "mattermost stream preview cleanup failed",
   });
@@ -337,18 +331,13 @@ export function createMattermostDraftStream(params: {
     return boundary;
   };
 
-  const flush = async () => {
+  const settleOperation = (operation: () => Promise<void>) => async () => {
     assertNoAcceptedDeliveryFailure();
-    await loop.flush();
+    await operation();
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  const discardPending = async () => {
-    assertNoAcceptedDeliveryFailure();
-    await stopForClear();
-    await currentGeneration.ready;
-    assertNoAcceptedDeliveryFailure();
-  };
+  const discardPending = settleOperation(stopForClear);
   const clear = async () => {
     assertNoAcceptedDeliveryFailure();
     await clearWithStop(discardPending);
@@ -376,18 +365,6 @@ export function createMattermostDraftStream(params: {
     currentGeneration = { lastSentText: "", latestSourceText: "", ready: retirement };
     loop.resetThrottleWindow();
     await retirement;
-    assertNoAcceptedDeliveryFailure();
-  };
-  const seal = async () => {
-    assertNoAcceptedDeliveryFailure();
-    await sealLifecycle();
-    await currentGeneration.ready;
-    assertNoAcceptedDeliveryFailure();
-  };
-  const stop = async () => {
-    assertNoAcceptedDeliveryFailure();
-    await stopLifecycle();
-    await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
   const update = (text: string) => {
@@ -440,13 +417,13 @@ export function createMattermostDraftStream(params: {
   return {
     update,
     updateAssistantText,
-    flush,
+    flush: settleOperation(loop.flush),
     postId: () => currentGeneration.postId,
     clear,
     deleteCurrentMessage,
     discardPending,
-    seal,
-    stop,
+    seal: settleOperation(sealLifecycle),
+    stop: settleOperation(stopLifecycle),
     forceNewMessage,
     settleBoundaries,
     resolveFinalText,

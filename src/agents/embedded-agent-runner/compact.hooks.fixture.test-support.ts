@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterAll, afterEach } from "vitest";
+import { afterAll, afterEach, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -9,7 +9,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { resetCompactHooksHarnessMocks } from "./compact.hooks.harness.js";
+import {
+  acquireAgentRunPreparedModelRuntimeMock,
+  resetCompactHooksHarnessMocks,
+} from "./compact.hooks.harness.js";
 
 export function useCompactHooksSessionFixture(sessionKey: string) {
   let state: OpenClawTestState;
@@ -54,5 +57,23 @@ export function useCompactHooksSessionFixture(sessionKey: string) {
       await closeOpenClawAgentDatabasesAsync(directory);
       await rm(directory, { force: true, recursive: true });
     },
+  };
+}
+
+export async function acquiredPreparedModelRuntime() {
+  const pendingLease = acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value;
+  if (!pendingLease) {
+    throw new Error("expected prepared model runtime acquisition");
+  }
+  return (await pendingLease).snapshot;
+}
+
+export function expectedNativeCompactionOptions(
+  nativeCompactionRequest: "after_context_engine" | "required_preflight",
+) {
+  return {
+    nativeCompactionRequest,
+    preparedModelRuntime: expect.any(Object),
+    sourceAuthority: { assertActive: expect.any(Function), operatorAuthority: undefined },
   };
 }

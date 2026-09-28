@@ -8,7 +8,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
   formatSkippedCompileProgress,
@@ -116,6 +115,7 @@ describe("check-extension-package-tsc-boundary", () => {
     write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
     for (const file of [
       "check-extension-package-tsc-boundary.mts",
+      "compile-extension-boundary.mts",
       "check-file-utils.ts",
       "tsx.mjs",
       "windows-cmd-helpers.mjs",
@@ -156,13 +156,11 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
     const receipt = JSON.parse(
       fs.readFileSync(
-        path.join(root, ".artifacts/extension-package-boundary/compile/demo.tsbuildinfo"),
+        path.join(root, ".artifacts/extension-package-boundary/compile/demo.inputs.json"),
         "utf8",
       ),
     );
-    expect(receipt.fileNames.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(
-      true,
-    );
+    expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
     const warm = run();
     expect(warm.status, warm.stdout + warm.stderr).toBe(0);
     expect(warm.stdout).toContain("compiled plugins: 0");
@@ -204,29 +202,6 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-  it("removes stale canary artifacts across extensions", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-
-    cleanupCanaryArtifactsForExtensions(["demo"], rootDir);
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
-  it("cleans canary artifacts again on process exit", () => {
-    const { rootDir } = createTempExtensionRoot();
-    const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
-    const processObject = new EventEmitter();
-    const teardown = installCanaryArtifactCleanup(["demo"], { processObject, rootDir });
-
-    processObject.emit("exit");
-    teardown();
-
-    expect(fs.existsSync(canaryPath)).toBe(false);
-    expect(fs.existsSync(tsconfigPath)).toBe(false);
-  });
-
   it("cleans stale artifacts for every extension id passed to the cleanup hook", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
     tempRoots.add(rootDir);

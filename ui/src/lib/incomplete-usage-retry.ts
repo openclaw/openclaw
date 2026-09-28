@@ -52,7 +52,10 @@ export class IncompleteUsageRetry {
       // Nothing will converge this payload on its own, so the caller has to
       // report it. Rendering the empty provider list as a loaded answer is the
       // silent-failure this marker exists to avoid.
-      this.reportExhaustion();
+      if (!this.exhaustionReported) {
+        this.exhaustionReported = true;
+        this.options.onExhausted?.();
+      }
       return "exhausted";
     }
     this.attempts += 1;
@@ -116,22 +119,9 @@ export class IncompleteUsageRetry {
     this.pendingIncomplete = false;
     this.retryInFlight = null;
     this.exhaustionReported = false;
-    this.clear();
-  }
-
-  private reportExhaustion(): void {
-    if (this.exhaustionReported) {
-      return;
+    if (this.timer !== null) {
+      window.clearTimeout(this.timer);
+      this.timer = null;
     }
-    this.exhaustionReported = true;
-    this.options.onExhausted?.();
-  }
-
-  private clear(): void {
-    if (this.timer === null) {
-      return;
-    }
-    window.clearTimeout(this.timer);
-    this.timer = null;
   }
 }

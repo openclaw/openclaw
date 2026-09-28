@@ -7,7 +7,13 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { asPositiveSafeInteger, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  normalizeOptionalLowercaseString,
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   buildLmstudioReasoningEffortMap,
@@ -83,27 +89,8 @@ const LMSTUDIO_CONFIGURED_THINKING_FORMATS = [
   NonNullable<ModelDefinitionConfig["compat"]>["thinkingFormat"]
 >[];
 
-function normalizeReasoningOption(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function isReasoningEnabledOption(value: unknown): boolean {
-  const normalized = normalizeReasoningOption(value);
-  if (!normalized) {
-    return false;
-  }
-  return normalized !== "off";
-}
-
 function normalizeReasoningOptions(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return uniqueStrings(value.flatMap((option) => normalizeReasoningOption(option) ?? []));
+  return uniqueStrings(normalizeTrimmedStringList(value).map((option) => option.toLowerCase()));
 }
 
 function isLmstudioBinaryReasoningOptions(allowedOptions: readonly string[]): boolean {
@@ -142,10 +129,6 @@ export function resolveLmstudioReasoningCompat(
   };
 }
 
-/**
- * Resolves LM Studio reasoning support from capabilities payloads.
- * Defaults to false when the server omits reasoning metadata.
- */
 export function resolveLmstudioReasoningCapability(
   entry: Pick<LmstudioModelWire, "capabilities">,
 ): boolean {
@@ -155,9 +138,10 @@ export function resolveLmstudioReasoningCapability(
   }
   const allowedOptions = normalizeReasoningOptions(reasoning.allowed_options);
   if (allowedOptions.length > 0) {
-    return allowedOptions.some((option) => isReasoningEnabledOption(option));
+    return allowedOptions.some((option) => option !== "off");
   }
-  return isReasoningEnabledOption(reasoning.default);
+  const defaultOption = normalizeOptionalLowercaseString(reasoning.default);
+  return defaultOption !== undefined && defaultOption !== "off";
 }
 
 /**
@@ -178,17 +162,6 @@ export function resolveLoadedContextWindow(
     contextWindow = contextWindow === null ? normalized : Math.max(contextWindow, normalized);
   }
   return contextWindow;
-}
-
-function normalizeLmstudioVariantIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return uniqueStrings(
-    value.flatMap((variant) =>
-      typeof variant === "string" && variant.trim().length > 0 ? variant.trim() : [],
-    ),
-  );
 }
 
 /**
@@ -219,7 +192,7 @@ export function resolveLmstudioCanonicalModelKey(params: {
     }
     const selectedVariant =
       typeof entry.selected_variant === "string" ? entry.selected_variant.trim() : "";
-    const variants = normalizeLmstudioVariantIds(entry.variants);
+    const variants = normalizeUniqueTrimmedStringList(entry.variants);
     if (
       selectedVariant.toLowerCase() === normalizedModelKey ||
       variants.some((variant) => variant.toLowerCase() === normalizedModelKey)
@@ -230,14 +203,6 @@ export function resolveLmstudioCanonicalModelKey(params: {
   return modelKey;
 }
 
-/**
- * Normalizes a server path by stripping trailing slash and inference suffixes.
- *
- * LM Studio users often copy their inference URL (e.g. "http://localhost:1234/v1") instead
- * of the server root. This function strips a trailing "/v1" or "/api/v1" so the caller always
- * receives a clean root base URL. The expected input is the server root without any API version
- * path (e.g. "http://localhost:1234").
- */
 function normalizeUrlPath(pathname: string): string {
   const trimmed = pathname.replace(/\/+$/, "");
   if (!trimmed) {
@@ -354,9 +319,8 @@ function toFetchableLmstudioBaseUrl(value: string): string {
 
 /** Resolves LM Studio server base URL (without /v1 or /api/v1). */
 export function resolveLmstudioServerBase(configuredBaseUrl?: string): string {
-  // Use configured value when present; otherwise target local LM Studio default.
   const configured = configuredBaseUrl?.trim();
-  const resolved = configured && configured.length > 0 ? configured : LMSTUDIO_DEFAULT_BASE_URL;
+  const resolved = configured || LMSTUDIO_DEFAULT_BASE_URL;
   const fetchableBaseUrl = toFetchableLmstudioBaseUrl(resolved);
   try {
     const parsed = new URL(fetchableBaseUrl);
@@ -545,7 +509,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
       : reasoningCompat;
   return {
     id,
-    displayName: rawDisplayName && rawDisplayName.length > 0 ? rawDisplayName : id,
+    displayName: rawDisplayName || id,
     format: entry.format ?? null,
     vision: entry.capabilities?.vision === true,
     trainedForToolUse: entry.capabilities?.trained_for_tool_use === true,
@@ -562,13 +526,16 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   };
 }
 
-/**
- * Maps LM Studio wire models to config entries using plain display names.
- * Use this for config persistence where runtime format/state tags are not needed.
- * For runtime discovery with enriched names, use discoverLmstudioModels from models.fetch.ts.
- */
 export function mapLmstudioWireModelsToConfig(
   models: LmstudioModelWire[],
+): ModelDefinitionConfig[] {
+  return mapLmstudioWireModels(models, "config");
+}
+
+/** Config persistence keeps plain names; runtime discovery adds state tags and usage compat. */
+export function mapLmstudioWireModels(
+  models: LmstudioModelWire[],
+  mode: "config" | "runtime",
 ): ModelDefinitionConfig[] {
   return models
     .map((entry): ModelDefinitionConfig | null => {
@@ -578,11 +545,15 @@ export function mapLmstudioWireModelsToConfig(
       }
       return {
         id: base.id,
-        name: base.displayName,
+        name: mode === "runtime" ? buildLmstudioModelName(base) : base.displayName,
         reasoning: base.reasoning,
         input: base.input,
         cost: base.cost,
-        ...(base.compat ? { compat: base.compat } : {}),
+        ...(mode === "runtime"
+          ? { compat: { ...base.compat, supportsUsageInStreaming: true } }
+          : base.compat
+            ? { compat: base.compat }
+            : {}),
         contextWindow: base.contextWindow,
         contextTokens: base.contextTokens,
         maxTokens: base.maxTokens,

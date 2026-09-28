@@ -9,16 +9,23 @@ import type { MusicGenerationOutputFormat } from "../../music-generation/types.j
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
-import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
-import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readToolStringParam,
+  type AnyAgentTool,
+} from "./common.js";
+import {
+  createDefaultMediaGenerateBackgroundScheduler,
+  type MediaGenerationTaskHandle,
+} from "./media-generate-background-shared.js";
 import {
   musicGenerationTaskLifecycle,
   prepareMediaGenerationTask,
   resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
-  type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
-import { acquireMusicGenerationToolProviders } from "./media-generation-tool-providers.js";
+import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
   loadMediaToolReferences,
@@ -35,11 +42,9 @@ import {
   executeMusicGenerationJob,
   normalizeMusicGenerationTimeoutMs,
 } from "./music-generate-tool.execution.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
-const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -93,13 +98,11 @@ const MusicGenerateToolSchema = Type.Object({
 });
 
 function normalizeOutputFormat(raw: string | undefined): MusicGenerationOutputFormat | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw) as
-    | MusicGenerationOutputFormat
-    | undefined;
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }
-  if (SUPPORTED_OUTPUT_FORMATS.has(normalized)) {
+  if (normalized === "mp3" || normalized === "wav") {
     return normalized;
   }
   throw new ToolInputError('format must be one of "mp3" or "wav"');
@@ -156,7 +159,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
         findDuplicate: createMusicGenerateDuplicateGuardResult,
         acquire: async (config) =>
           options?.preparedModelRuntime?.acquireMediaCapabilityProviders
-            ? acquireMusicGenerationToolProviders({
+            ? acquireMediaGenerationToolProviders("musicGenerationProviders", {
                 cfg: config,
                 prepared: options.preparedModelRuntime,
               })
@@ -266,7 +269,6 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
               prompt,
               requestKey,
               providerId: selectedProviderId,
-              config: effectiveCfg,
               scheduleBackgroundWork,
               onAsyncTaskStarted: options?.onAsyncTaskStarted,
               onFailure: (message: string, meta?: Record<string, unknown>) =>
@@ -294,7 +296,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
                     }
                   : {}),
               },
-              run: (taskHandle: MusicGenerationTaskHandle | null) =>
+              run: (taskHandle: MediaGenerationTaskHandle | null) =>
                 executeMusicGenerationJob({
                   effectiveCfg,
                   prompt,

@@ -13,6 +13,7 @@ import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessio
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
+import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
@@ -42,7 +43,6 @@ import {
   prepareQueuedChatPayload,
   publishPendingSendMessage,
   resolveQueuedChatLeaf,
-  setChatError,
   settleQueuedChatSendFailure,
   updateQueuedSendItem,
   waitForQueuedChatHistory,
@@ -668,6 +668,7 @@ export async function deliverChatQueueItem(
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;
       host.chatMentions = options.previousMentions ?? [];
+      host.chatReplyTarget = options.previousReplyTarget ?? null;
     }
     if (options.restoreAttachments && options.previousAttachments?.length) {
       host.chatAttachments = options.previousAttachments;

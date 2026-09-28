@@ -1,4 +1,3 @@
-// File Transfer plugin module implements dir list behavior.
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
@@ -30,6 +29,7 @@ type DirListEntry = {
   size: number;
   mimeType: string;
   isDir: boolean;
+  isFile: boolean;
   mtime: number;
 };
 
@@ -168,6 +168,7 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
       size: isDir ? 0 : entry.size,
       mimeType: isDir ? "inode/directory" : mimeFromExtension(entry.name),
       isDir,
+      isFile: entry.isFile,
       mtime: entry.mtimeMs,
     });
   }

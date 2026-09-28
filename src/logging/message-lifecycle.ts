@@ -1,4 +1,3 @@
-// Message lifecycle logging helpers emit queue and processing diagnostic events.
 import { logMessageProcessed, logMessageQueued, logSessionStateChange } from "./diagnostic.js";
 
 type MessageLifecycleRef = {

@@ -67,13 +67,7 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
 } {
   const resolved = resolvePluginRuntimeStoreOptions(options);
   const defaultSlot =
-    typeof options === "string"
-      ? { runtime: null }
-      : (() => {
-          // Store named slots on globalThis so duplicate SDK module instances
-          // still share one runtime for the same plugin id or explicit key.
-          return getNamedPluginRuntimeStoreSlot(resolved.key);
-        })();
+    typeof options === "string" ? { runtime: null } : getNamedPluginRuntimeStoreSlot(resolved.key);
   const instanceKey = typeof options === "string" ? Symbol(resolved.key) : resolved.key;
   // Bundled module functions can survive a reload. Resolve their slot from the
   // invoking instance so preparing a candidate cannot overwrite the live runtime.

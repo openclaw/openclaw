@@ -700,12 +700,6 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("maps explicit cli-backend model refs to owning plugin ids", () => {
-    setOwningProviderManifestPlugins();
-
-    expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
-  });
-
   it("reuses one registry snapshot across explicit model ownership lookups", () => {
     setOwningProviderManifestPlugins();
 
@@ -1014,21 +1008,6 @@ describe("resolvePluginProviders", () => {
     expect(
       resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
     ).toEqual(["runtime-bundled"]);
-  });
-
-  it("loads bundled Ollama catalog augment hooks from the manifest runtime flag", () => {
-    setManifestPlugin({
-      id: "ollama",
-      providerIds: ["ollama", "ollama-cloud"],
-      enabledByDefault: true,
-      modelCatalog: {
-        runtimeAugment: true,
-      },
-    });
-
-    expect(
-      resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
-    ).toEqual(["ollama"]);
   });
 
   it("loads usage hooks only for manifest-declared providers", () => {

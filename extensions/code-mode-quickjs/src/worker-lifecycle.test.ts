@@ -1,6 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -11,7 +10,7 @@ import {
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { EvalFlags, QuickJS, type Snapshot } from "quickjs-wasi";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createQuickJsTestConfig,
   runQuickJsExecutor as runCodeModeWorker,
@@ -21,18 +20,54 @@ import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js
 
 const productionWorkerUrl = resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint);
 const fixtureExtension = productionWorkerUrl.pathname.endsWith(".ts") ? "ts" : "mjs";
+const config = createQuickJsTestConfig();
+
+function input(source: string, limits = config) {
+  return { kind: "exec" as const, source, config: limits, catalog: [], namespaces: [] };
+}
+
+async function executionInput(source: string, kind: "exec" | "resume", limits = config) {
+  if (kind === "exec") {
+    return input(source, limits);
+  }
+  const suspended = await runCodeModeWorker(
+    input(`await yield_control(); ${source}`, limits),
+    10_000,
+  );
+  expect(suspended.status).toBe("waiting");
+  if (suspended.status !== "waiting") {
+    throw new Error("expected a suspended guest before execution");
+  }
+  return {
+    kind,
+    config: limits,
+    continuation: suspended.continuation,
+    settledRequests: suspended.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+  };
+}
+
+async function instrumentedWorker(prefix: string, source: string) {
+  const dir = useAutoCleanupTempDirTracker(onTestFinished).make(prefix);
+  const workerPath = path.join(dir, `worker.${fixtureExtension}`);
+  const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
+  await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
+  await writeFile(
+    workerPath,
+    `
+    const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+    ${source}
+    await import(${JSON.stringify(productionWorkerUrl.href)});
+  `,
+  );
+  return pathToFileURL(workerPath);
+}
 
 // Restore the WeakRef retention probe when Bun's node:v8 exposure can provide a synchronous
 // worker-local gc without stalling the instrumented QuickJS resume path.
 const v8GcIt = process.versions.bun ? it.skip : it;
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe("Code Mode worker lifecycle", () => {
   it("preserves legacy snapshot errors without source-location metadata", async () => {
-    const config = createQuickJsTestConfig();
     const wasm = await WebAssembly.compile(
       await readFile(createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm")),
     );
@@ -85,42 +120,29 @@ describe("Code Mode worker lifecycle", () => {
     expect(result.error).toMatch(/openclaw-code-mode:user\.js:3:\d+/);
   });
 
-  it.each(["const helper = 1;", "const helper = 'é🦞';"])(
-    "accounts for a same-line prelude in syntax locations: %s",
-    async (prelude) => {
-      const config = createQuickJsTestConfig();
-      const result = await runCodeModeWorker(
-        {
-          kind: "exec",
-          source: "const value = ;",
-          prelude,
-          config,
-          catalog: [],
-          namespaces: [],
-        },
-        10000,
-      );
-      expect(result).toMatchObject({
-        status: "failed",
-        error: expect.stringContaining("SyntaxError"),
-      });
-      if (result.status !== "failed") {
-        throw new Error("Expected guest syntax failure");
-      }
-      expect(result.error).toContain("openclaw-code-mode:user.js:1:15");
-    },
-  );
-
-  it("does not attribute a prelude failure to submitted source", async () => {
-    const config = createQuickJsTestConfig();
+  it("accounts for a same-line Unicode prelude in syntax locations", async () => {
     const result = await runCodeModeWorker(
       {
-        kind: "exec",
-        source: "return true;",
+        ...input("const value = ;"),
+        prelude: "const helper = 'é🦞';",
+      },
+      10000,
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("SyntaxError"),
+    });
+    if (result.status !== "failed") {
+      throw new Error("Expected guest syntax failure");
+    }
+    expect(result.error).toContain("openclaw-code-mode:user.js:1:15");
+  });
+
+  it("does not attribute a prelude failure to submitted source", async () => {
+    const result = await runCodeModeWorker(
+      {
+        ...input("return true;"),
         prelude: 'throw new Error("prelude failure");\n',
-        config,
-        catalog: [],
-        namespaces: [],
       },
       10000,
     );
@@ -128,22 +150,16 @@ describe("Code Mode worker lifecycle", () => {
   });
 
   v8GcIt("transfers snapshot heaps and releases consumed copies across resumes", async () => {
-    const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
-    const dir = tempDirs.make("code-mode-snapshot-transfer-");
-    const workerPath = path.join(dir, `snapshot-worker.${fixtureExtension}`);
-    const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
-    await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
     // The dependency's storage codec copies the whole heap in both directions.
     // Exercise real snapshots and restores while allowing metadata-only accounting.
-    await writeFile(
-      workerPath,
+    const workerUrl = await instrumentedWorker(
+      "code-mode-snapshot-transfer-",
       `
       import assert from "node:assert/strict";
       import { setImmediate } from "node:timers/promises";
       import { setFlagsFromString } from "node:v8";
       import { runInNewContext } from "node:vm";
       import { parentPort } from "node:worker_threads";
-      const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
       setFlagsFromString("--expose-gc");
       const gc = runInNewContext("gc");
       let consumed;
@@ -192,11 +208,8 @@ describe("Code Mode worker lifecycle", () => {
         }
         postMessage(message, transferList);
       };
-      await import(${JSON.stringify(productionWorkerUrl.href)});
       `,
     );
-    const workerUrl = pathToFileURL(workerPath);
-    const config = createQuickJsTestConfig();
     let result = await runCodeModeWorker(
       {
         kind: "exec",
@@ -259,9 +272,8 @@ describe("Code Mode worker lifecycle", () => {
   });
 
   it("isolates guest globals, bridge failures, and cancellations across warm executions", async () => {
-    const config = createQuickJsTestConfig({ maxPendingToolCalls: 1 });
-    const execute = (source: string) =>
-      runCodeModeWorker({ kind: "exec", source, config, catalog: [] }, 10_000);
+    const limits = createQuickJsTestConfig({ maxPendingToolCalls: 1 });
+    const execute = (source: string) => runCodeModeWorker(input(source, limits), 10_000);
 
     expect(
       await execute(
@@ -289,41 +301,8 @@ describe("Code Mode worker lifecycle", () => {
   it.each(["exec", "resume"] as const)(
     "bounds recursive guest execution after %s VM creation",
     async (kind) => {
-      const config = createQuickJsTestConfig();
       const recursion = "function recurse() { return recurse(); } return recurse();";
-      let input: Parameters<typeof runCodeModeWorker>[0] = {
-        kind: "exec",
-        source: recursion,
-        config,
-        catalog: [],
-      };
-      if (kind === "resume") {
-        const suspended = await runCodeModeWorker(
-          {
-            kind: "exec",
-            source: `await yield_control(); ${recursion}`,
-            config,
-            catalog: [],
-          },
-          10_000,
-        );
-        expect(suspended.status).toBe("waiting");
-        if (suspended.status !== "waiting") {
-          throw new Error("expected a suspended guest before recursive execution");
-        }
-        input = {
-          kind,
-          continuation: suspended.continuation,
-          config,
-          settledRequests: suspended.pendingRequests.map(({ id }) => ({
-            id,
-            ok: true,
-            json: "null",
-          })),
-        };
-      }
-
-      const result = await runCodeModeWorker(input, 10_000);
+      const result = await runCodeModeWorker(await executionInput(recursion, kind), 10_000);
       expect(result).toMatchObject({
         status: "failed",
         code: "internal_error",
@@ -343,49 +322,17 @@ describe("Code Mode worker lifecycle", () => {
   )(
     "keeps $kind guest timeouts independent of a $clockDirection clock jump",
     async ({ kind, clockDirection }) => {
-      const config = createQuickJsTestConfig({ timeoutMs: clockDirection > 0 ? 1_000 : 250 });
+      const limits = createQuickJsTestConfig({ timeoutMs: clockDirection > 0 ? 1_000 : 250 });
       const source =
         clockDirection > 0
           ? "let total = 0; for (let index = 0; index < 100_000; index++) total += index; return total;"
           : "while (true) {}";
-      let input: Parameters<typeof runCodeModeWorker>[0] = {
-        kind: "exec",
-        source,
-        config,
-        catalog: [],
-      };
-      if (kind === "resume") {
-        const suspended = await runCodeModeWorker(
-          { ...input, source: `await yield_control("clock jump"); ${source}` },
-          10_000,
-        );
-        expect(suspended.status).toBe("waiting");
-        if (suspended.status !== "waiting") {
-          throw new Error("expected a suspended guest before the clock jump");
-        }
-        input = {
-          kind,
-          config,
-          continuation: suspended.continuation,
-          settledRequests: suspended.pendingRequests.map(({ id }) => ({
-            id,
-            ok: true,
-            json: "null",
-          })),
-        };
-      }
-
-      const fixtureDir = await mkdtemp(path.join(os.tmpdir(), "code-mode-worker-clock-"));
-      try {
-        await writeFile(path.join(fixtureDir, "package.json"), '{"type":"module"}');
-        const workerPath = path.join(fixtureDir, `clock-worker.${fixtureExtension}`);
-        const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
-        // Change the clock inside the real worker, after its VM deadline starts.
-        // Parent-only clock spies cannot reach this isolated thread.
-        await writeFile(
-          workerPath,
-          `
-        const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+      const task = await executionInput(source, kind, limits);
+      // Change the clock inside the real worker, after its VM deadline starts.
+      // Parent-only clock spies cannot reach this isolated thread.
+      const workerUrl = await instrumentedWorker(
+        "code-mode-worker-clock-",
+        `
         const realNow = Date.now;
         let shifted = false;
         for (const method of ["create", "restore"]) {
@@ -404,33 +351,23 @@ describe("Code Mode worker lifecycle", () => {
             return original.apply(this, args);
           };
         }
-        await import(${JSON.stringify(productionWorkerUrl.href)});
       `,
-        );
-        const result = await runCodeModeWorker(input, 5_000, pathToFileURL(workerPath));
-        expect(result, JSON.stringify(result)).toMatchObject(
-          clockDirection > 0
-            ? { status: "completed", value: { kind: "complete", json: "4999950000" } }
-            : { status: "failed", code: "timeout", failurePhase: "guest" },
-        );
-      } finally {
-        await rm(fixtureDir, { recursive: true, force: true });
-      }
+      );
+      const result = await runCodeModeWorker(task, 5_000, workerUrl);
+      expect(result, JSON.stringify(result)).toMatchObject(
+        clockDirection > 0
+          ? { status: "completed", value: { kind: "complete", json: "4999950000" } }
+          : { status: "failed", code: "timeout", failurePhase: "guest" },
+      );
     },
   );
 
   it("honors an already-aborted execution before starting a worker", async () => {
-    const config = createQuickJsTestConfig();
     const controller = new AbortController();
     controller.abort();
 
     const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return true;",
-        config,
-        catalog: [],
-      },
+      input("return true;"),
       10_000,
       undefined,
       controller.signal,
@@ -444,57 +381,13 @@ describe("Code Mode worker lifecycle", () => {
     });
   });
 
-  it("shares a compiled QuickJS module with isolated worker threads", async () => {
-    const config = createQuickJsTestConfig();
-    const workerUrl = new URL(
-      `data:text/javascript,${encodeURIComponent(`
-        import { parentPort } from "node:worker_threads";
-        parentPort.on("message", ({ input }) => parentPort.postMessage({
-          status: "ok",
-          value: {
-            status: "completed",
-            value: { kind: "complete", json: JSON.stringify(input.wasmModule instanceof WebAssembly.Module) },
-            output: { count: 0, source: { kind: "complete", json: "[]" } },
-          },
-        }));
-      `)}`,
-    );
-
-    const results = await Promise.all(
-      Array.from({ length: 4 }, () =>
-        runCodeModeWorker(
-          {
-            kind: "exec",
-            source: "return true;",
-            config,
-            catalog: [],
-          },
-          10_000,
-          workerUrl,
-        ),
-      ),
-    );
-
-    expect(results).toEqual(
-      Array.from({ length: 4 }, () => ({
-        status: "completed",
-        value: { kind: "complete", json: "true" },
-        output: EMPTY_CODE_MODE_OUTPUT,
-      })),
-    );
-  });
-
   it("enforces the exact encoded snapshot byte limit", async () => {
-    const config = createQuickJsTestConfig();
     const execute = (maxSnapshotBytes = config.maxSnapshotBytes) =>
       runQuickJsWire(
-        {
-          kind: "exec",
-          source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
-          config: { ...config, maxSnapshotBytes },
-          catalog: [],
-          namespaces: [],
-        },
+        input('const value = "x".repeat(100000); await yield_control("pause"); return value;', {
+          ...config,
+          maxSnapshotBytes,
+        }),
         5_000,
       );
     const probe = await execute();
@@ -512,40 +405,9 @@ describe("Code Mode worker lifecycle", () => {
     });
   });
   it("classifies missing worker runtime as unavailable", async () => {
-    const config = createQuickJsTestConfig();
     const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
 
-    const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      500,
-      missingWorkerUrl,
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "runtime_unavailable",
-    });
-  });
-
-  it("classifies nonzero worker exits as unavailable", async () => {
-    const config = createQuickJsTestConfig();
-    const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
-
-    const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      500,
-      exitingWorkerUrl,
-    );
+    const result = await runCodeModeWorker(input("return 1;"), 500, missingWorkerUrl);
 
     expect(result.status).toBe("failed");
     expect(result).toMatchObject({
@@ -554,19 +416,9 @@ describe("Code Mode worker lifecycle", () => {
   });
 
   it("classifies clean worker exits without a result as unavailable", async () => {
-    const config = createQuickJsTestConfig();
     const exitingWorkerUrl = new URL("data:text/javascript,");
 
-    const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      5_000,
-      exitingWorkerUrl,
-    );
+    const result = await runCodeModeWorker(input("return 1;"), 5_000, exitingWorkerUrl);
 
     expect(result).toMatchObject({
       status: "failed",

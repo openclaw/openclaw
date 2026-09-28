@@ -18,10 +18,7 @@ import {
 } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./talk/session.ts";
-import {
-  RealtimeTalkVoiceSelection,
-  type RealtimeVoiceSelectionState,
-} from "./talk/voice-selection.ts";
+import { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
 
 export type ChatRealtimeState = {
   client: GatewayBrowserClient | null;
@@ -44,14 +41,12 @@ export type ChatRealtimeState = {
   realtimeTalkCameraError: boolean;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkVoiceController: RealtimeTalkVoiceSelection | null;
-  realtimeTalkVoice: RealtimeVoiceSelectionState;
   realtimeTalkConversationState: RealtimeTalkConversationState;
   requestUpdate: () => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
   toggleRealtimeTalkCamera: () => Promise<void>;
   switchRealtimeTalkCamera: () => Promise<void>;
-  selectRealtimeTalkVoice: (voice: string) => Promise<void>;
 };
 
 export function createInitialChatRealtimeState(): Pick<
@@ -73,7 +68,6 @@ export function createInitialChatRealtimeState(): Pick<
     realtimeTalkCameraError: false,
     realtimeTalkSession: null,
     realtimeTalkVoiceController: null,
-    realtimeTalkVoice: { selection: null, changing: false, error: null },
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
 }
@@ -90,7 +84,6 @@ export function stopChatRealtimeTalk(
   const session = state.realtimeTalkSession;
   state.realtimeTalkVoiceController?.dispose();
   state.realtimeTalkVoiceController = null;
-  state.realtimeTalkVoice = { selection: null, changing: false, error: null };
   // Retire callback ownership before stop() can synchronously report idle.
   // Otherwise a closing session can still mutate the newly selected route.
   state.realtimeTalkSession = null;
@@ -258,10 +251,6 @@ export function attachChatRealtimeActions(
           state.realtimeTalkDetail = message;
           state.requestUpdate();
         },
-        update: (voice) => {
-          state.realtimeTalkVoice = voice;
-          state.requestUpdate();
-        },
       });
       state.realtimeTalkVoiceController = controller;
     }
@@ -282,14 +271,18 @@ export function attachChatRealtimeActions(
     if (!voiceChange) {
       state.resetRealtimeTalkConversation();
     }
-    const session = new RealtimeTalkSession(
+    const forCurrentSession =
+      <Args extends unknown[]>(callback: (...args: Args) => void) =>
+      (...args: Args) => {
+        if (state.realtimeTalkSession === session) {
+          callback(...args);
+        }
+      };
+    const session: RealtimeTalkSession = new RealtimeTalkSession(
       client,
       sessionKey,
       {
-        onStatus: (status, detail) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        onStatus: forCurrentSession((status, detail) => {
           state.realtimeTalkStatus = status;
           state.realtimeTalkDetail =
             status === "error" && detail ? formatUiExternalText(detail) : (detail ?? null);
@@ -315,31 +308,19 @@ export function attachChatRealtimeActions(
             autoEnableCameraAttempted = true;
             void setRealtimeTalkCameraEnabled(true, { disableAutoEnableOnFailure: true });
           }
-        },
-        onInputNotice: (detail) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        }),
+        onInputNotice: forCurrentSession((detail) => {
           state.realtimeTalkInputNotice = formatUiExternalText(detail);
           state.requestUpdate();
-        },
-        onVideoCapability: (capable) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        }),
+        onVideoCapability: forCurrentSession((capable) => {
           state.realtimeTalkVideoCapable = capable;
           state.requestUpdate();
-        },
-        onInputLevel: (level) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        }),
+        onInputLevel: forCurrentSession((level) => {
           state.realtimeTalkInputLevel.set(level);
-        },
-        onTranscript: (entry) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        }),
+        onTranscript: forCurrentSession((entry) => {
           state.realtimeTalkConversationState = updateRealtimeTalkConversation(
             state.realtimeTalkConversationState,
             entry.itemId === undefined
@@ -352,11 +333,8 @@ export function attachChatRealtimeActions(
           );
           state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();
-        },
-        onTranscriptOrder: (orders) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        }),
+        onTranscriptOrder: forCurrentSession((orders) => {
           state.realtimeTalkConversationState = orderRealtimeTalkConversation(
             state.realtimeTalkConversationState,
             orders.map(({ itemId, order }) => ({
@@ -366,11 +344,8 @@ export function attachChatRealtimeActions(
           );
           state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();
-        },
-        onVideoStream: (stream) => {
-          if (state.realtimeTalkSession !== session) {
-            return;
-          }
+        }),
+        onVideoStream: forCurrentSession((stream) => {
           if (stream && state.realtimeTalkStatus === "error") {
             void session.setVideoEnabled(false).catch(() => undefined);
             return;
@@ -383,18 +358,14 @@ export function attachChatRealtimeActions(
             void refreshCameraDevices(session);
           }
           state.requestUpdate();
-        },
-        onVideoError: (error) => {
-          if (state.realtimeTalkSession === session && !talkStatusIsError()) {
+        }),
+        onVideoError: forCurrentSession((error) => {
+          if (!talkStatusIsError()) {
             showCameraError(error);
           }
-        },
-        onTalkEvent: (event) => {
-          if (
-            state.realtimeTalkSession !== session ||
-            state.client !== client ||
-            state.sessionKey !== sessionKey
-          ) {
+        }),
+        onTalkEvent: forCurrentSession((event) => {
+          if (state.client !== client || state.sessionKey !== sessionKey) {
             return;
           }
           if (event.type === "session.ready") {
@@ -402,7 +373,7 @@ export function attachChatRealtimeActions(
           } else if (event.type === "session.closed") {
             voiceController?.failed(session);
           }
-        },
+        }),
       },
       voiceChange
         ? {
@@ -447,9 +418,6 @@ export function attachChatRealtimeActions(
       state.requestUpdate();
     }
     return undefined;
-  };
-  state.selectRealtimeTalkVoice = async (voice) => {
-    await state.realtimeTalkVoiceController?.set(voice);
   };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession || state.realtimeTalkActive) {

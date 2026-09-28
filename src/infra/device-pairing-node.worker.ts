@@ -22,7 +22,7 @@ import type {
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,
-  updatePairedDeviceNodeSurfaceInTransaction,
+  updatePairedDeviceInTransaction,
 } from "./device-pairing-store.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import { resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
@@ -216,7 +216,7 @@ export function executeDevicePairingNodeMutation(
     }
     case "node.recordConnection": {
       const { nodeId, connectedAtMs, expectedPairingGeneration } = command.input;
-      return updatePairedDeviceNodeSurfaceInTransaction<
+      return updatePairedDeviceInTransaction<
         DevicePairingNodeWorkerOperations["node.recordConnection"]["output"]
       >(nodeId, undefined, (device) => {
         if (
@@ -225,7 +225,7 @@ export function executeDevicePairingNodeMutation(
             (expectedPairingGeneration.nodeId !== device.deviceId ||
               resolveNodePairingGeneration(device)?.key !== expectedPairingGeneration.key))
         ) {
-          return { value: { recorded: false }, persist: false };
+          return { value: { recorded: false } };
         }
         requestDevicePairingMutationAdmission({
           kind: "node-surface",
@@ -242,18 +242,19 @@ export function executeDevicePairingNodeMutation(
           connectedAtMs > device.nodeSurface.lastDisconnectedAtMs;
         return {
           value: { recorded: true, firstConnection },
-          persist: true,
-          nodeSurface: {
-            ...device.nodeSurface,
-            lastConnectedAtMs,
-            ...(clearsDisconnect ? { lastDisconnectedAtMs: undefined } : {}),
+          patch: {
+            nodeSurface: {
+              ...device.nodeSurface,
+              lastConnectedAtMs,
+              ...(clearsDisconnect ? { lastDisconnectedAtMs: undefined } : {}),
+            },
           },
         };
       });
     }
     default: {
       const { nodeId, expectedPairingGeneration } = command.input;
-      return updatePairedDeviceNodeSurfaceInTransaction<boolean>(nodeId, undefined, (device) => {
+      return updatePairedDeviceInTransaction(nodeId, undefined, (device) => {
         const surface = device?.nodeSurface;
         if (
           !device ||
@@ -261,14 +262,14 @@ export function executeDevicePairingNodeMutation(
           expectedPairingGeneration.nodeId !== device.deviceId ||
           resolveNodePairingGeneration(device)?.key !== expectedPairingGeneration.key
         ) {
-          return { value: false, persist: false };
+          return { value: false };
         }
         if (
           command.type === "node.recordDisconnection" &&
           (surface.lastConnectedAtMs !== command.input.connectedAtMs ||
             command.input.disconnectedAtMs < command.input.connectedAtMs)
         ) {
-          return { value: false, persist: false };
+          return { value: false };
         }
         requestDevicePairingMutationAdmission({
           kind: "node-surface",
@@ -279,32 +280,30 @@ export function executeDevicePairingNodeMutation(
           case "node.recordDisconnection":
             return {
               value: true,
-              persist: true,
-              nodeSurface: {
-                ...surface,
-                lastDisconnectedAtMs: Math.max(
-                  surface.lastDisconnectedAtMs ?? command.input.disconnectedAtMs,
-                  command.input.disconnectedAtMs,
-                ),
+              patch: {
+                nodeSurface: {
+                  ...surface,
+                  lastDisconnectedAtMs: Math.max(
+                    surface.lastDisconnectedAtMs ?? command.input.disconnectedAtMs,
+                    command.input.disconnectedAtMs,
+                  ),
+                },
               },
             };
           case "node.recordHostStats":
             return {
               value: true,
-              persist: true,
-              nodeSurface: { ...surface, lastHostStats: command.input.hostStats },
+              patch: { nodeSurface: { ...surface, lastHostStats: command.input.hostStats } },
             };
           case "node.updateBins":
             return {
               value: true,
-              persist: true,
-              nodeSurface: { ...surface, bins: command.input.bins },
+              patch: { nodeSurface: { ...surface, bins: command.input.bins } },
             };
           case "node.updateSessionHost":
             return {
               value: true,
-              persist: true,
-              nodeSurface: { ...surface, sessionHost: command.input.sessionHost },
+              patch: { nodeSurface: { ...surface, sessionHost: command.input.sessionHost } },
             };
         }
         throw new Error("Unsupported paired node surface mutation");

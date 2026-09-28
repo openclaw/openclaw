@@ -14,7 +14,7 @@ For [cloud sessions](/gateway/cloud-sessions#desktop-and-computer-control), the 
 
 A conversation can also attach a temporary Crabbox while its agent stays on the Gateway. Select the `environmentId` returned by the environment tool on the first `computer` call; later calls retain that desktop. The agent sees and controls the same desktop shown in the chat sidebar. The environment must belong to the current conversation, and its lease, connection, and admitted agent run must remain current. A missing or stopped attachment never redirects input to the Gateway or another computer. See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for the complete “open in Crabbox and show me” workflow.
 
-Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. Release control to allow new agent input; interrupted actions are not automatically replayed. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions.
+Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. When asked to resume, it can call `computer` with `action: "take_control"` to switch the controlling viewer to view-only and capture a fresh screenshot. This explicit handoff uses the admitted run’s existing computer-control authority; it does not require a separate viewer-issued handoff token. You can take control again at any time, or release control yourself. Ordinary input never takes over automatically, and interrupted actions are not replayed. Takeover invalidates earlier coordinate and window/browser observations; use the returned screenshot or take a fresh targeted observation before input. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions, not ordinary Gateway or paired-node desktops.
 
 The agent emits one uniform command, `computer.act`; it cannot choose how a node fulfills it. On macOS, **Dashboard → Settings → This Mac → Capabilities** selects the node-local provider: Peekaboo is the default and preserves the existing in-process coordinate-action path, while CUA uses a driver daemon embedded in `OpenClaw.app`. The app spawns that daemon directly so it inherits OpenClaw's Accessibility and Screen Recording grants, and the app-owned node worker connects through a private socket. Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly.
 
@@ -60,6 +60,8 @@ node --import ./scripts/tsx.mjs scripts/dev/computer-use-gateway-live-proof.ts \
 ```
 
 Use an empty output directory. The proof starts an isolated Gateway and managed desktop with no paired nodes, captures screenshots, types into Mousepad and reads the text back, then verifies generation fencing and joined process cleanup. It requires no model credentials and leaves screenshots, a redacted log, and `result.json` in the output directory.
+
+Add `--runtime <executable>` to start the built Gateway on another runtime, such as Bun, and run the proof with no `node` on `PATH`. The proof fails if the Gateway or its computer helper runs on another executable or any owned process runs Node, and records each owned process's executable in `result.json`.
 
 ## The `computer` agent tool
 

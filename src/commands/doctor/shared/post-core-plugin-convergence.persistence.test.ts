@@ -9,14 +9,16 @@ import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
-import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
 import * as pluginUpdates from "../../../plugins/update.js";

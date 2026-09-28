@@ -132,7 +132,7 @@ try {
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 `;
 
-function parseGitHubRepositoryPublicationSnapshot(
+export function parseGitHubRepositoryPublicationSnapshot(
   raw: string,
   digest: string,
 ): GitHubRepositoryPublicationSnapshot {

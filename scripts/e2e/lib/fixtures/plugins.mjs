@@ -95,6 +95,28 @@ function writePluginWithVendoredDependency([dir, id, version, method, name]) {
   writeFakeIsNumberPackage(path.join(dir, "node_modules", "is-number"));
 }
 
+export function writeCliPlugin(
+  [dir, id, version, method, name, cliRoot, cliOutput],
+  gatewayReplyVersion = version,
+) {
+  if (!dir || !id || !version || !method || !name || !cliRoot || !cliOutput) {
+    throw new Error(
+      "usage: write-cli-plugin.mjs <dir> <id> <version> <method> <name> <cliRoot> <cliOutput>",
+    );
+  }
+
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  write(
+    path.join(dir, "index.js"),
+    `module.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: true${gatewayReplyVersion === null ? "" : `, version: ${JSON.stringify(gatewayReplyVersion)}`} })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
+  );
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
 function writePluginWithCli(
   [dir, id, version, method, name, cliRoot, cliOutput],
   isNumberDependency = "file:./deps/is-number",
@@ -128,6 +150,44 @@ function writePluginWithCli(
 
 function writePluginWithCliRegistryDependency(args) {
   writePluginWithCli(args, "7.0.0");
+}
+
+function writeBravePlugin() {
+  const root = process.env.FIXTURE_PACKAGE_DIR;
+  const version = process.env.FIXTURE_PACKAGE_VERSION;
+  if (!version) {
+    throw new Error("missing fixture package version");
+  }
+  writeJson(path.join(root, "package.json"), {
+    name: "@openclaw/brave-plugin",
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeJson(path.join(root, "openclaw.plugin.json"), {
+    id: "brave",
+    activation: { onStartup: false },
+    setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+    contracts: { webSearchProviders: ["brave"] },
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        webSearch: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            apiKey: { type: ["string", "object"] },
+            mode: { type: "string", enum: ["web", "llm-context"] },
+            baseUrl: { type: ["string", "object"] },
+          },
+        },
+      },
+    },
+  });
+  write(
+    path.join(root, "index.js"),
+    `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
+  );
 }
 
 function writeClaudeBundle(args) {
@@ -168,6 +228,7 @@ function writePluginMarketplace(args) {
 }
 
 export const pluginCommands = {
+  "brave-plugin": writeBravePlugin,
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
   "plugin-pack": writePluginPack,

@@ -105,29 +105,6 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
             })
     }
 
-    var portable: OpenClawSystemRunApprovalPolicySnapshot {
-        OpenClawSystemRunApprovalPolicySnapshot(
-            security: .init(rawValue: self.security.rawValue)!,
-            ask: .init(rawValue: self.ask.rawValue)!,
-            askFallback: .init(rawValue: self.askFallback.rawValue)!,
-            autoAllowSkills: self.autoAllowSkills,
-            allowlistRules: self.allowlistRules.map { rule in
-                OpenClawSystemRunApprovalPolicySnapshot.Rule(
-                    pattern: Self.portableString(rule.match.pattern),
-                    argPattern: rule.match.argPattern.isEmpty
-                        ? nil
-                        : Self.portableString(rule.match.argPattern),
-                    source: rule.source == "allow-always" ? .allowAlways : nil)
-            })
-    }
-
-    private static func portableString(_ data: Data) -> String {
-        guard let value = String(data: data, encoding: .utf8) else {
-            preconditionFailure("exec approval match keys must contain UTF-8 strings")
-        }
-        return value
-    }
-
     func isCurrent(_ current: Self) -> Bool {
         self.security == current.security &&
             self.ask == current.ask &&
@@ -335,12 +312,5 @@ enum ExecApprovalEvaluator {
             }
             return trustedBinsByName[executableName]?.contains(resolvedPath) == true
         }
-    }
-
-    static func _testIsSkillAutoAllowed(
-        _ resolutions: [ExecCommandResolution],
-        trustedBinsByName: [String: Set<String>]) -> Bool
-    {
-        self.isSkillAutoAllowed(resolutions, trustedBinsByName: trustedBinsByName)
     }
 }

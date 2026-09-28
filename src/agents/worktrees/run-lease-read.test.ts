@@ -4,13 +4,10 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { readWorktreeCleanupState } from "./registry-read.js";
-import {
-  admitWorktreeRunLeaseRow,
-  hasLiveWorktreeRunLeaseRow,
-  insertRegistryWorktree,
-} from "./registry.js";
+import { hasLiveWorktreeRunLeaseRow, insertRegistryWorktree } from "./registry.js";
 import { readWorktreeRunLeaseStateInDatabase, worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
+import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -43,7 +40,16 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
       createdAt: 1,
       lastActiveAt: 1,
     });
-    admitWorktreeRunLeaseRow(env, { ...entry, worktreeId: entry.id, token: entry.id, now: 1 });
+    stateDatabase.runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        admitWorktreeRunLeaseInDatabase(db, {
+          ...entry,
+          worktreeId: entry.id,
+          token: entry.id,
+          now: 1,
+        }),
+      { env },
+    );
   }
   const { db } = stateDatabase.openOpenClawStateDatabase({ env });
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");

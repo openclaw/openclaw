@@ -109,14 +109,12 @@ export async function spawnNodeTerminalPty(
     finish();
   });
   stdout.on("error", fail);
-  stdout.once("close", () => {
+  const finishOutput = () => {
     outputEnded = true;
     finish();
-  });
-  stdout.once("end", () => {
-    outputEnded = true;
-    finish();
-  });
+  };
+  stdout.once("close", finishOutput);
+  stdout.once("end", finishOutput);
   child.once("disconnect", () => {
     ipcClosed = true;
     finish();

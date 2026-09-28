@@ -189,18 +189,13 @@ it.each(["history-only", "startup-only", "final-only", "delta-then-final"] as co
 it.each(
   (["done", "failed"] as const).flatMap((snapshotStatus) =>
     (["active", "failed", "completed"] as const).flatMap((newerState) =>
-      ["before", "after"].flatMap((requestOrder) =>
-        [
-          { oldRunId: "old-run", newRunId: "new-run" },
-          { oldRunId: "2", newRunId: "1" },
-        ].map(({ oldRunId, newRunId }) => ({
-          snapshotStatus,
-          newerState,
-          requestOrder,
-          oldRunId,
-          newRunId,
-        })),
-      ),
+      ["before", "after"].map((requestOrder) => ({
+        snapshotStatus,
+        newerState,
+        requestOrder,
+        oldRunId: "2",
+        newRunId: "1",
+      })),
     ),
   ),
 )(

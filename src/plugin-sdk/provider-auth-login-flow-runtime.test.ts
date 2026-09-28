@@ -76,6 +76,27 @@ describe("provider channel login runtime", () => {
     cancelProviderLoginFlow({ flows, flowKey: "other" });
   });
 
+  it.each(["before", "after"] as const)(
+    "allows another login when the caller cancels %s reservation",
+    (timing) => {
+      const flows = createProviderLoginFlowRegistry();
+      const controller = new AbortController();
+      const params = { flows, flowKey: "chat", providerLabel: "Acme" };
+      if (timing === "before") {
+        controller.abort();
+      }
+      reserveProviderLoginFlow({ ...params, signal: controller.signal });
+      controller.abort();
+
+      const replacement = reserveProviderLoginFlow(params);
+      try {
+        expect(replacement.status).toBe("reserved");
+      } finally {
+        cancelProviderLoginFlow(params);
+      }
+    },
+  );
+
   it("uses the host config replaced before flow entry", async () => {
     const config: OpenClawConfig = { plugins: { entries: { acme: { enabled: true } } } };
     let currentConfig = config;

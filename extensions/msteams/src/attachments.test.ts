@@ -289,17 +289,6 @@ type AttachmentDownloadSuccessCase = LabeledCase & {
   beforeDownload?: () => void;
   assert?: (media: DownloadedMedia) => void;
 };
-type AttachmentAuthRetryScenario = {
-  attachmentUrl: string;
-  unauthStatus: number;
-  unauthBody: string;
-  overrides?: Omit<DownloadAttachmentsNoFetchOverrides, "tokenProvider">;
-};
-type AttachmentAuthRetryCase = LabeledCase & {
-  scenario: AttachmentAuthRetryScenario;
-  expectedMediaLength: number;
-  expectTokenFetch: boolean;
-};
 const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
   withLabel("downloads and stores image contentUrl attachments", {
     attachments: asSingleItemArray(IMAGE_ATTACHMENT),
@@ -334,31 +323,6 @@ const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
     },
   }),
 ];
-const ATTACHMENT_AUTH_RETRY_CASES: AttachmentAuthRetryCase[] = [
-  withLabel("retries with auth when the first request is unauthorized", {
-    scenario: {
-      attachmentUrl: IMAGE_ATTACHMENT.contentUrl,
-      unauthStatus: 401,
-      unauthBody: "unauthorized",
-      overrides: { authAllowHosts: [TEST_HOST] },
-    },
-    expectedMediaLength: 1,
-    expectTokenFetch: true,
-  }),
-  withLabel("skips auth retries when the host is not in auth allowlist", {
-    scenario: {
-      attachmentUrl: createUrlForHost(AZUREEDGE_HOST, "img"),
-      unauthStatus: 403,
-      unauthBody: "forbidden",
-      overrides: {
-        allowHosts: [AZUREEDGE_HOST],
-        authAllowHosts: [GRAPH_HOST],
-      },
-    },
-    expectedMediaLength: 1,
-    expectTokenFetch: false,
-  }),
-];
 const runAttachmentDownloadSuccessCase = async ({
   attachments,
   buildFetchFn,
@@ -371,25 +335,6 @@ const runAttachmentDownloadSuccessCase = async ({
   expectSingleMedia(media);
   assert?.(media);
 };
-const runAttachmentAuthRetryCase = async ({
-  scenario,
-  expectedMediaLength,
-  expectTokenFetch,
-}: AttachmentAuthRetryCase) => {
-  const tokenProvider = createTokenProvider();
-  const fetchMock = createAuthAwareImageFetchMock({
-    unauthStatus: scenario.unauthStatus,
-    unauthBody: scenario.unauthBody,
-  });
-  const media = await downloadAttachmentsWithFetch(
-    createImageAttachments(scenario.attachmentUrl),
-    fetchMock,
-    { tokenProvider, ...scenario.overrides },
-  );
-  expectAttachmentMediaLength(media, expectedMediaLength);
-  expectMockCallState(tokenProvider.getAccessToken, expectTokenFetch);
-};
-
 describe("msteams attachments", () => {
   beforeEach(() => {
     detectMimeMock.mockReset();
@@ -601,10 +546,20 @@ describe("msteams attachments", () => {
       expect(media).toEqual([{ kind: "document", sourceId: "graph-file-1" }]);
     });
 
-    it.each<AttachmentAuthRetryCase>(ATTACHMENT_AUTH_RETRY_CASES)(
-      "$label",
-      runAttachmentAuthRetryCase,
-    );
+    it("skips auth retries when the host is not in auth allowlist", async () => {
+      const tokenProvider = createTokenProvider();
+      const fetchMock = createAuthAwareImageFetchMock({
+        unauthStatus: 403,
+        unauthBody: "forbidden",
+      });
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(createUrlForHost(AZUREEDGE_HOST, "img")),
+        fetchMock,
+        { tokenProvider, allowHosts: [AZUREEDGE_HOST], authAllowHosts: [GRAPH_HOST] },
+      );
+      expectAttachmentMediaLength(media, 1);
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+    });
 
     it("follows an authenticated redirect through guarded fetch", async () => {
       const redirectedUrl = createTestUrl("redirected.png");

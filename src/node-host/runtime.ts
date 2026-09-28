@@ -425,17 +425,10 @@ export async function prepareNodeHostRuntime(params?: {
               await pluginDisconnectCleanup;
             } catch {
               if (!closing && generation === connectionGeneration) {
-                await client
-                  .request("node.invoke.result", {
-                    id: frame.id,
-                    nodeId: frame.nodeId,
-                    ok: false,
-                    error: {
-                      code: "UNAVAILABLE",
-                      message: "Node plugin cleanup failed. Reconnect the node to retry cleanup.",
-                    },
-                  })
-                  .catch(() => {});
+                await createNodeInvokeResponder(client, frame).error(
+                  "UNAVAILABLE",
+                  "Node plugin cleanup failed. Reconnect the node to retry cleanup.",
+                );
               }
               return;
             }

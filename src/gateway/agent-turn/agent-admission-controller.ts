@@ -89,7 +89,7 @@ export function createAgentAdmissionController(params: {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({
             dedupe: params.context.dedupe,
-            keys: params.agentDedupeKeys,
+            keys: params.dedupeLifecycle.ownedReservationKeys(),
             agentId: admissionAgentId(),
             sessionKey: resolvedSessionKey,
             runId: params.runId,
@@ -104,7 +104,7 @@ export function createAgentAdmissionController(params: {
         }
         return;
       }
-      if (latest.payload.reservationId !== params.dedupeLifecycle.reservationId) {
+      if (!params.dedupeLifecycle.ownsReservation()) {
         if (commitOutcome) {
           postAdmissionSuperseded = true;
         }
@@ -115,7 +115,7 @@ export function createAgentAdmissionController(params: {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({
             dedupe: params.context.dedupe,
-            keys: params.agentDedupeKeys,
+            keys: params.dedupeLifecycle.ownedReservationKeys(),
             agentId: admissionAgentId(),
             sessionKey: resolvedSessionKey,
             runId: params.runId,
@@ -193,18 +193,11 @@ export function createAgentAdmissionController(params: {
       );
       return ownsRun ? { runId: params.runId } : undefined;
     }
-    const reservedEntry = readGatewayDedupeEntry({
-      dedupe: params.context.dedupe,
-      keys: params.agentDedupeKeys,
-    });
-    if (
-      reservedEntry?.ok &&
-      isAcceptedAgentDedupePayload(reservedEntry.payload) &&
-      reservedEntry.payload.reservationId === params.dedupeLifecycle.reservationId
-    ) {
+    const keys = params.dedupeLifecycle.ownedReservationKeys();
+    if (keys.length) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
+        keys,
         agentId: admissionAgentId(),
         sessionKey: params.getResolvedSessionKey(),
         runId: params.runId,

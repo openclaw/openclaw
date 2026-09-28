@@ -264,14 +264,16 @@ export function createMxcSandboxBackendHandle(params: {
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
       const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
-      const commandBridge = createWindowsCommandBridge({
-        args: cmdParams.args,
-        script: cmdParams.script,
-        tempDir: sandboxTempDir,
-      });
-      const execInput = cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
+      let commandBridge: ReturnType<typeof createWindowsCommandBridge> | undefined;
 
       try {
+        commandBridge = createWindowsCommandBridge({
+          args: cmdParams.args,
+          script: cmdParams.script,
+          tempDir: sandboxTempDir,
+        });
+        const execInput =
+          cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
         const payload = buildMxcContainerConfig({
           config: restrictiveConfig,
           baseline,
@@ -327,7 +329,7 @@ export function createMxcSandboxBackendHandle(params: {
           cleanupLauncherPayloadFile(payloadFile);
         }
       } finally {
-        commandBridge.cleanup();
+        commandBridge?.cleanup();
         rmSync(sandboxTempDir, { force: true, recursive: true });
       }
     },

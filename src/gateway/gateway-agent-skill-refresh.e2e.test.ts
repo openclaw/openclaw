@@ -2,10 +2,10 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -13,11 +13,41 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { registerSkillsChangeListener } from "../skills/runtime/refresh.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
+const schedulerClock = vi.hoisted((): { clock?: GatewaySchedulerClock } => ({}));
+const watcherMocks = await vi.hoisted(async () => {
+  const { createSkillsWatcherMock } =
+    await import("../skills/runtime/refresh.watcher.test-support.js");
+  return createSkillsWatcherMock();
+});
+
+vi.mock("../infra/gateway-scheduler.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-scheduler.js")>();
+  return {
+    ...actual,
+    GatewayScheduler: class extends actual.GatewayScheduler {
+      constructor(options: ConstructorParameters<typeof actual.GatewayScheduler>[0] = {}) {
+        super({ ...options, clock: schedulerClock.clock ?? options.clock });
+      }
+    },
+  };
+});
+vi.mock("chokidar", () => ({ default: { watch: watcherMocks.watchMock } }));
+vi.mock("../skills/runtime/refresh-ancestor-native.js", () => ({
+  createNativeSkillsAncestorWatcher: watcherMocks.nativeWatchMock,
+}));
+vi.mock("../skills/runtime/refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: watcherMocks.nativeContentWatchMock,
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 const ENV_KEYS = [
   "HOME",
@@ -43,15 +73,21 @@ function resetGatewayState(): void {
   resetAgentEventsForTest({ preserveListeners: true });
 }
 
-afterEach(resetGatewayState);
+afterEach(() => {
+  vi.useRealTimers();
+  delete schedulerClock.clock;
+  resetGatewayState();
+});
 
 describe("Gateway agent skill refresh", () => {
   it(
-    "refreshes managed-worktree skills once per edit and closes watchers with the Gateway",
+    "refreshes canonical skills once per edit for managed worktrees and closes Gateway watchers",
     { timeout: 90_000 },
     async () => {
       const env = captureEnv([...ENV_KEYS]);
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skill-refresh-"));
+      const time = createGatewaySchedulerClock(Date.now());
+      schedulerClock.clock = time.clock;
+      const home = tempDirs.make("openclaw-agent-skill-refresh-");
       const stateDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "workspace");
       const seedSkillFile = path.join(workspace, "skills", "seed-proof", "SKILL.md");
@@ -139,6 +175,7 @@ describe("Gateway agent skill refresh", () => {
         );
         const token = `skill-refresh-${process.pid}`;
         const gatewayEvents: string[] = [];
+        let skillsChanged = createDeferredCore();
         const cfg = {
           agents: {
             defaults: {
@@ -163,6 +200,9 @@ describe("Gateway agent skill refresh", () => {
           onEvent: (event) => {
             if (event.event) {
               gatewayEvents.push(event.event);
+              if (event.event === "skills.changed") {
+                skillsChanged.resolve();
+              }
             }
           },
         });
@@ -178,43 +218,57 @@ describe("Gateway agent skill refresh", () => {
           "seed-proof",
           "SKILL.md",
         );
+        await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-only-description");
         await runAgentTurn(gateway.client, sessionKey, "first");
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
         const first = loadSessionEntry({ agentId: "main", sessionKey, storePath });
         expect(first?.skillsSnapshot?.prompt).toContain("seed-skill-description");
+        expect(first?.skillsSnapshot?.prompt).not.toContain("worktree-only-description");
+        expect(requests.at(-1)).toContain("seed-skill-description");
+        expect(requests.at(-1)).not.toContain("worktree-only-description");
 
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1_000);
-        });
+        await settleSkillsWatchers();
+        await time.advanceBy(30_000);
+        await skillsChanged.promise;
+        skillsChanged = createDeferredCore();
         const firstLifecycleCount = lifecycleEvents.length;
         const firstEventCount = countSkillsChanged(gatewayEvents);
-        await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-root-description");
-        await waitForLifecycleChange(lifecycleEvents, firstLifecycleCount + 1);
+        await editWatchedSkill(seedSkillFile, "seed-proof", "updated-seed-description");
+        expect(lifecycleEvents).toHaveLength(firstLifecycleCount + 1);
         await runAgentTurn(gateway.client, sessionKey, "second");
         const second = loadSessionEntry({ agentId: "main", sessionKey, storePath });
         expect(second?.skillsSnapshot?.version).toBeGreaterThan(
           first?.skillsSnapshot?.version ?? 0,
         );
-        expect(second?.skillsSnapshot?.prompt).toContain("worktree-root-description");
-        expect(requests.at(-1)).toContain("worktree-root-description");
-        await waitForSkillsChanged(gatewayEvents, firstEventCount + 1);
+        expect(second?.skillsSnapshot?.prompt).toContain("updated-seed-description");
+        expect(requests.at(-1)).toContain("updated-seed-description");
+        await time.advanceBy(30_000);
+        await skillsChanged.promise;
+        expect(countSkillsChanged(gatewayEvents)).toBe(firstEventCount + 1);
 
         await runAgentTurn(gateway.client, sessionKey, "third without edit");
+        const third = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+        expect(third?.skillsSnapshot?.version).toBe(second?.skillsSnapshot?.version);
+        expect(lifecycleEvents).toHaveLength(firstLifecycleCount + 1);
         const repeatedTurnEventCount = lifecycleEvents.length;
-        await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-root-description-v2");
-        await waitForLifecycleChange(lifecycleEvents, repeatedTurnEventCount + 1);
-        await expectNoAdditionalLifecycleChanges(lifecycleEvents, repeatedTurnEventCount + 1);
+        await editWatchedSkill(seedSkillFile, "seed-proof", "updated-seed-description-v2");
+        expect(lifecycleEvents).toHaveLength(repeatedTurnEventCount + 1);
         await runAgentTurn(gateway.client, sessionKey, "fourth");
         const fourth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
         expect(fourth?.skillsSnapshot?.version).toBeGreaterThan(
           second?.skillsSnapshot?.version ?? 0,
         );
-        expect(fourth?.skillsSnapshot?.prompt).toContain("worktree-root-description-v2");
+        expect(fourth?.skillsSnapshot?.prompt).toContain("updated-seed-description-v2");
 
         await fs.mkdir(path.dirname(canonicalSkillFile), { recursive: true });
         const canonicalEventCount = lifecycleEvents.length;
-        await writeSkill(canonicalSkillFile, "canonical-proof", "canonical-root-description");
-        await waitForLifecycleChange(lifecycleEvents, canonicalEventCount + 1);
+        await editWatchedSkill(
+          canonicalSkillFile,
+          "canonical-proof",
+          "canonical-root-description",
+          "add",
+        );
+        expect(lifecycleEvents).toHaveLength(canonicalEventCount + 1);
         await runAgentTurn(gateway.client, sessionKey, "fifth");
         const fifth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
         expect(fifth?.skillsSnapshot?.version).toBeGreaterThan(
@@ -245,12 +299,17 @@ describe("Gateway agent skill refresh", () => {
 
         await disconnectGatewayClient(gateway.client);
         const lifecycleCountBeforeClose = lifecycleEvents.length;
+        const canonicalWatcher = watcherMocks.watchForSkillRoot(
+          path.join(workspace, "skills"),
+        ).watcher;
         await gateway.server.close({ reason: "skill refresh lifecycle proof complete" });
         gatewayClosed = true;
         await writeSkill(canonicalSkillFile, "canonical-proof", "after-gateway-close");
-        await new Promise((resolve) => {
-          setTimeout(resolve, 750);
-        });
+        expect(canonicalWatcher.closed).toBe(true);
+        expect(watcherMocks.createdWatchers.every((watcher) => watcher.closed)).toBe(true);
+        canonicalWatcher.emit("all", "change", canonicalSkillFile);
+        await settleSkillsWatchers();
+        await time.advanceBy(30_000);
         expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
       } finally {
         unregisterLifecycle();
@@ -262,7 +321,6 @@ describe("Gateway agent skill refresh", () => {
         await new Promise<void>((resolve) => {
           providerServer.close(() => resolve());
         });
-        await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
         env.restore();
       }
     },
@@ -294,24 +352,43 @@ function countSkillsChanged(events: readonly string[]): number {
   return events.filter((event) => event === "skills.changed").length;
 }
 
-async function waitForSkillsChanged(events: readonly string[], expected: number): Promise<void> {
-  await expect
-    .poll(() => countSkillsChanged(events), { interval: 25, timeout: 35_000 })
-    .toBe(expected);
+// Only transport events and clocks are controlled; discovery, invalidation,
+// Gateway broadcasts, session snapshots, and provider requests stay real.
+async function settleSkillsWatchers(): Promise<void> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    await watcherMocks.readyAll();
+    await vi.advanceTimersByTimeAsync(250);
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
-async function waitForLifecycleChange(events: readonly string[], expected: number): Promise<void> {
-  await expect.poll(() => events.length, { interval: 25, timeout: 5_000 }).toBe(expected);
-}
-
-async function expectNoAdditionalLifecycleChanges(
-  events: readonly string[],
-  expected: number,
+async function editWatchedSkill(
+  file: string,
+  name: string,
+  description: string,
+  event: "change" | "add" = "change",
 ): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 750);
-  });
-  expect(events).toHaveLength(expected);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    await writeSkill(file, name, description);
+    const { watcher } = watcherMocks.watchForSkillRoot(path.dirname(path.dirname(file)));
+    if (event === "add") {
+      watcher.emit("all", "addDir", path.dirname(file));
+    }
+    watcher.emit("all", event, file);
+    await watcherMocks.readyAll();
+    await vi.advanceTimersByTimeAsync(250);
+    // Discovery may replace the observing generation; duplicate bytes on its
+    // current successor must still leave the snapshot version unchanged.
+    watcherMocks
+      .watchForSkillRoot(path.dirname(path.dirname(file)))
+      .watcher.emit("all", event, file);
+    await vi.advanceTimersByTimeAsync(750);
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 async function initializeGitWorkspace(workspace: string): Promise<void> {

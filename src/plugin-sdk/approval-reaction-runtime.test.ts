@@ -15,7 +15,6 @@ import {
   buildApprovalReactionDeliveredBindingMarker,
   buildApprovalReactionPendingContentForRequest,
   buildApprovalReactionPromptPayloadForRequest,
-  buildApprovalReactionHint,
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
@@ -336,6 +335,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
     expect(payload.text).toContain("**Scope:** Pay 49.99 EUR to Stripe");
     expect(content.manualFallbackPayload.text).toContain("Scope: Pay 49.99 EUR to Stripe");
+    expect(content.manualFallbackPayload.text).not.toContain("React with:");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -466,81 +466,10 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("Deny: /approve plugin:agentkit deny");
     expect(payload.text).toContain("/approve plugin:agentkit deny");
-    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).toContain("React with:\n\n👎 Deny");
     expect(payload.text).not.toContain("👍 Allow Once");
     expect(payload.allowedDecisions).toEqual(["deny"]);
     expect(payload.reactionBindings).toEqual([{ decision: "deny", emoji: "👎", label: "Deny" }]);
-  });
-
-  it("renders the same request-only and view-taking prompt payloads", () => {
-    const fromRequest = buildApprovalReactionPromptPayloadForRequest({
-      request: execRequest,
-      nowMs: 1_000,
-    });
-    const content = buildApprovalReactionPendingContentForRequest({
-      request: execRequest,
-      nowMs: 1_000,
-    });
-    const fromView = buildApprovalPendingPromptPayload({
-      request: execRequest,
-      view: {
-        approvalKind: "exec",
-        phase: "pending",
-        approvalId: "exec-approval-123",
-        title: "Exec Approval Required",
-        description: "A command needs your approval.",
-        metadata: [],
-        ask: "on-request",
-        agentId: "main",
-        commandText: "touch /tmp/foo",
-        cwd: "/Users/test/project",
-        host: "gateway",
-        sessionKey: "main:signal:+15555550123",
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            style: "success",
-            action: {
-              type: "approval",
-              approvalId: "exec-approval-123",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve exec-approval-123 allow-once",
-          },
-          {
-            decision: "allow-always",
-            label: "Allow Always",
-            style: "primary",
-            action: {
-              type: "approval",
-              approvalId: "exec-approval-123",
-              approvalKind: "exec",
-              decision: "allow-always",
-            },
-            command: "/approve exec-approval-123 allow-always",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            style: "danger",
-            action: {
-              type: "approval",
-              approvalId: "exec-approval-123",
-              approvalKind: "exec",
-              decision: "deny",
-            },
-            command: "/approve exec-approval-123 deny",
-          },
-        ],
-        expiresAtMs: 61_000,
-      },
-      nowMs: 1_000,
-    });
-    expect(content.reactionPayload.text).toBe(fromRequest.text);
-    expect(fromView.text).toBe(fromRequest.text);
-    expect(content.manualFallbackPayload.text).not.toContain("React with:");
   });
 
   it("publishes memory immediately and joins persistent registration and deletion", async () => {
@@ -669,11 +598,5 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         isTransportEnabled: () => true,
       }),
     ).toBe(false);
-  });
-
-  it("builds only the hardcoded reaction hint", () => {
-    expect(buildApprovalReactionHint({ allowedDecisions: ["deny"] })).toBe(
-      "React with:\n\n👎 Deny",
-    );
   });
 });

@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
@@ -7,19 +6,11 @@ import {
 import type { InternalRealtimeVoiceProviderCapabilities } from "./provider-internal.js";
 import type {
   RealtimeVoiceBridge,
-  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridgeCallbacks,
+  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceAudioClearReason,
-  RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
-  RealtimeVoiceCloseOptions,
-  RealtimeVoiceCloseReason,
-  RealtimeVoiceBridgeEvent,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceResponseOutcome,
-  RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
-  RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 
@@ -42,49 +33,30 @@ export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignor
 /**
  * Stable session facade handed to gateway code and provider tool callbacks.
  */
-export type RealtimeVoiceBridgeSession = {
+export type RealtimeVoiceBridgeSession = Pick<
+  RealtimeVoiceBridge,
+  "acknowledgeMark" | "close" | "connect" | "sendAudio" | "setMediaTimestamp" | "submitToolResult"
+> & {
   bridge: RealtimeVoiceBridge;
   readonly capabilities?: InternalRealtimeVoiceProviderCapabilities;
-  acknowledgeMark(markName?: string): void;
-  close(options?: RealtimeVoiceCloseOptions): void | Promise<void>;
-  connect(): Promise<void>;
-  sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
-  setMediaTimestamp(ts: number): void;
-  submitToolResult(
-    callId: string,
-    result: unknown,
-    options?: RealtimeVoiceToolResultOptions,
-  ): void | Promise<void>;
   triggerGreeting(instructions?: string): void;
 };
 
 /**
  * Provider bridge inputs plus transport callbacks for one realtime voice session.
  */
-export type RealtimeVoiceBridgeSessionParams = {
+export type RealtimeVoiceBridgeSessionParams = Omit<
+  RealtimeVoiceBridgeCreateRequest,
+  "onAudio" | "onClearAudio" | "onMark" | "getPlaybackState" | "onToolCall" | "onReady"
+> & {
   provider: RealtimeVoiceProviderPlugin;
   capabilities?: InternalRealtimeVoiceProviderCapabilities;
-  cfg?: OpenClawConfig;
-  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
-  agentId?: string;
-  providerConfig: RealtimeVoiceProviderConfig;
-  audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
-  instructions?: string;
-  language?: string;
   initialGreetingInstructions?: string;
-  autoRespondToAudio?: boolean;
-  interruptResponseOnInputAudio?: boolean;
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
-  tools?: RealtimeVoiceTool[];
-  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
-  onTranscript?: RealtimeVoiceBridgeCallbacks["onTranscript"];
-  handleDelegationInput?: RealtimeVoiceBridgeCallbacks["handleDelegationInput"];
-  onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
-  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   /** Admit a host-requested response before the provider can complete it synchronously. */
   onResponseRequest?: () => void;
   onToolCall?: (
@@ -92,8 +64,6 @@ export type RealtimeVoiceBridgeSessionParams = {
     session: RealtimeVoiceBridgeSession,
   ) => void | Promise<void>;
   onReady?: (session: RealtimeVoiceBridgeSession) => void;
-  onError?: (error: Error) => void;
-  onClose?: (reason: RealtimeVoiceCloseReason) => void;
 };
 
 type RealtimeVoiceSessionPhase = "admitting" | "provider-terminal" | "closing" | "disposed";

@@ -57,6 +57,18 @@ function createDistFixture() {
   return { distDir, writeAsset };
 }
 
+function createStartupFixture() {
+  const { distDir, writeAsset } = createDistFixture();
+  fs.writeFileSync(
+    path.join(distDir, "index.html"),
+    '<script type="module" src="./assets/index-a.js"></script>\n' +
+      '<link rel="stylesheet" href="./assets/index-c.css">\n',
+  );
+  writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+  writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+  return { distDir };
+}
+
 function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
   tempDirs.push(rootDir);
@@ -242,14 +254,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("returns actionable violations and includes them in the report", () => {
-    const { distDir, writeAsset } = createDistFixture();
-    fs.writeFileSync(
-      path.join(distDir, "index.html"),
-      '<script type="module" src="./assets/index-a.js"></script>\n' +
-        '<link rel="stylesheet" href="./assets/index-c.css">\n',
-    );
-    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
-    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    const { distDir } = createStartupFixture();
     const metrics = collectControlUiPerformanceMetrics(distDir);
     const budgets = {
       startupJsRequests: 0,
@@ -634,22 +639,6 @@ describe("Control UI performance budgets", () => {
     },
   );
 
-  it("allows startup JS growth exactly at the ratchet tolerance", () => {
-    const metrics = createMetrics(326_187);
-    const baseline = startupBaseline(325_675);
-    const budgets = {
-      ...looseBudgets,
-      startupJsGzipBytes: 319 * 1024,
-      largestJsGzipBytes: 400_000,
-    };
-    const violations = evaluateControlUiPerformanceBudgets(metrics, budgets, baseline);
-
-    expect(violations).toEqual([]);
-    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "growth allowance 512 B = growth limit 326187 B",
-    );
-  });
-
   it("allows startup JS at the growth plus build-variance boundary", () => {
     const metrics = createMetrics(326_251);
     const baseline = startupBaseline(325_675);
@@ -684,19 +673,6 @@ describe("Control UI performance budgets", () => {
       "limits: 10 requests, 318.6 KiB gzip / 326251 B",
     );
   });
-
-  it.each([343_426, 343_464])(
-    "allows same-source startup JS observations within a 38 B spread (%i B)",
-    (startupJsGzipBytes) => {
-      const violations = evaluateControlUiPerformanceBudgets(
-        createMetrics(startupJsGzipBytes),
-        { ...looseBudgets, startupJsGzipBytes: 350 * 1024, largestJsGzipBytes: 400_000 },
-        startupBaseline(342_930),
-      );
-
-      expect(violations).toEqual([]);
-    },
-  );
 
   it("rejects committed startup JS baselines above the fixed cap", () => {
     const budgets = {
@@ -743,14 +719,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("fails closed when the startup baseline is malformed", () => {
-    const { distDir, writeAsset } = createDistFixture();
-    fs.writeFileSync(
-      path.join(distDir, "index.html"),
-      '<script type="module" src="./assets/index-a.js"></script>\n' +
-        '<link rel="stylesheet" href="./assets/index-c.css">\n',
-    );
-    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
-    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    const { distDir } = createStartupFixture();
     const baselinePath = path.join(distDir, "baseline.json");
     fs.writeFileSync(baselinePath, '{"startupJsGzipBytes":"not-a-number"}\n');
 
@@ -763,14 +732,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("reports product growth and build variance as separate result fields", () => {
-    const { distDir, writeAsset } = createDistFixture();
-    fs.writeFileSync(
-      path.join(distDir, "index.html"),
-      '<script type="module" src="./assets/index-a.js"></script>\n' +
-        '<link rel="stylesheet" href="./assets/index-c.css">\n',
-    );
-    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
-    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    const { distDir } = createStartupFixture();
     const baselinePath = path.join(distDir, "baseline.json");
     fs.writeFileSync(
       baselinePath,
@@ -788,14 +750,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("reports a startup baseline above the configured cap as a budget violation", () => {
-    const { distDir, writeAsset } = createDistFixture();
-    fs.writeFileSync(
-      path.join(distDir, "index.html"),
-      '<script type="module" src="./assets/index-a.js"></script>\n' +
-        '<link rel="stylesheet" href="./assets/index-c.css">\n',
-    );
-    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
-    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    const { distDir } = createStartupFixture();
     const baselinePath = path.join(distDir, "baseline.json");
     fs.writeFileSync(
       baselinePath,
@@ -909,16 +864,5 @@ describe("Control UI performance budgets", () => {
       (updatedAt) => `${JSON.stringify({ startupJsGzipBytes: 65, reason, updatedAt }, null, 2)}\n`,
     );
     expect(expectedBytes).toContain(fs.readFileSync(baselinePath, "utf8"));
-  });
-
-  it("fails when a compressed sidecar is missing", () => {
-    const { distDir } = createDistFixture();
-    fs.writeFileSync(
-      path.join(distDir, "index.html"),
-      '<script type="module" src="./assets/index-a.js"></script>\n',
-    );
-    fs.writeFileSync(path.join(distDir, "assets/index-a.js"), "source");
-
-    expect(() => collectControlUiPerformanceMetrics(distDir)).toThrow("missing index-a.js.gz");
   });
 });

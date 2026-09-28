@@ -6,7 +6,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { saveCronStore, loadCronStore, removeStaleCronJobFamilyRows } from "../store.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -48,11 +48,7 @@ it.each(["activation", "cleanup", "family", "worker control"] as const)(
       });
       const context = captureOpenClawStateWorkerContext();
       expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
-      const holder = holdStateDatabaseCoordinator(
-        context.admission.databasePath,
-        context.coordinatorRuntime,
-        300,
-      );
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 300);
       let pending: Promise<unknown> | undefined;
       try {
         await holder.ready;

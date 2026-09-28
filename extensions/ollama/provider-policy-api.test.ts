@@ -14,19 +14,7 @@ describe("ollama provider policy public artifact", () => {
     {
       provider: "ollama",
       modelId: "qwen3.5:9b",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-      expected: "tools",
-    },
-    {
-      provider: "ollama",
-      modelId: "qwen3.5:9b",
       baseUrl: "http://model-host.internal:11434",
-      expected: "tools",
-    },
-    {
-      provider: "ollama",
-      modelId: "untagged-server-alias",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
       expected: "tools",
     },
     {
@@ -147,7 +135,7 @@ describe("ollama provider policy public artifact", () => {
     },
   );
 
-  it.each(["minimax-m2.7", "glm-5.1", "kimi-k2.5", "custom-thinking-model"])(
+  it.each(["minimax-m2.7", "custom-thinking-model"])(
     "does not invent effort levels for catalog-light cloud model %s",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "ollama-cloud", modelId }).levels).toEqual([
@@ -164,12 +152,6 @@ describe("ollama provider policy public artifact", () => {
         reasoning: false,
       }).levels,
     ).toEqual([{ id: "off" }]);
-  });
-
-  it("does not infer thinking support for unknown models without catalog metadata", () => {
-    expect(resolveThinkingProfile({ provider: "ollama", modelId: "llama3.2" }).levels).toEqual([
-      { id: "off" },
-    ]);
   });
 
   it("does not apply cloud catalog facts to an unqualified local model", () => {

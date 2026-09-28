@@ -101,6 +101,12 @@ export type CronRunStatus = "ok" | "error" | "skipped";
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
+/** Transport evidence for a primary webhook, including an unacknowledged request. */
+export type CronWebhookDeliveryOutcome = {
+  status: "delivered" | "not-delivered" | "unknown";
+  error?: string;
+};
+
 /** Delivery target snapshot recorded for audit/debug output. */
 export type CronDeliveryTraceTarget = NonNullable<CronDeliveryTrace["intended"]>;
 

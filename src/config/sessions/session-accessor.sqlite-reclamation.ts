@@ -256,8 +256,10 @@ export function* prepareHistoricalGenerationDeletions(params: {
   }
 }
 
-function expectedEntryMismatchResult(): DeleteSessionEntryLifecycleResult {
-  return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true };
+export function expectedEntryMismatchResult(
+  archivedTranscripts: DeleteSessionEntryLifecycleResult["archivedTranscripts"] = [],
+): DeleteSessionEntryLifecycleResult {
+  return { archivedTranscripts, deleted: false, expectedEntryMismatch: true };
 }
 
 export function reclaimSqliteSessionInTransaction(
@@ -340,78 +342,87 @@ function reclaimSqliteRowsInTransaction(
         };
       },
       plan.databaseOptions,
+      { operationLabel: "session.reclaim.entry" },
     );
     return { kind: plan.kind, value };
   }
 
   if (plan.kind === "lifecycle-artifacts") {
-    const value = runSqliteSessionDeletionTransaction((transactionDb) => {
-      callbacks.beforeMutation?.();
-      assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, plan.entries);
-      const archivedTranscripts = deleteMaterializedSessionStatePlans(
-        transactionDb,
-        plan.materializedPlans,
-        undefined,
-        new Set(plan.entries.map((entry) => entry.sessionKey)),
-      );
-      const removedEntries = deletePlannedLifecycleArtifactEntries(transactionDb, plan.entries);
-      callbacks.onCommit?.(transactionDb);
-      return { archivedTranscripts, removedEntries };
-    }, plan.databaseOptions);
+    const value = runSqliteSessionDeletionTransaction(
+      (transactionDb) => {
+        callbacks.beforeMutation?.();
+        assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, plan.entries);
+        const archivedTranscripts = deleteMaterializedSessionStatePlans(
+          transactionDb,
+          plan.materializedPlans,
+          undefined,
+          new Set(plan.entries.map((entry) => entry.sessionKey)),
+        );
+        const removedEntries = deletePlannedLifecycleArtifactEntries(transactionDb, plan.entries);
+        callbacks.onCommit?.(transactionDb);
+        return { archivedTranscripts, removedEntries };
+      },
+      plan.databaseOptions,
+      { operationLabel: "session.reclaim.lifecycle-artifacts" },
+    );
     return { kind: plan.kind, value };
   }
 
-  const value = runOpenClawAgentWriteTransaction((transactionDb) => {
-    callbacks.beforeMutation?.();
-    const protectedSessionIds = new Set(plan.protectedSessionIds);
-    const diskBudget = plan.kind === "history-eviction" ? plan.diskBudget : undefined;
-    let excludedSessionKeys: ReadonlySet<string> | undefined;
-    if (plan.kind === "historical-generation") {
-      const current = readValidatedSessionDeletionTarget(transactionDb, {
-        ...plan,
-        scope: { kind: "historical-generation", phase: "commit", sessionId: plan.sessionId },
-      });
-      if (!current) {
-        return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
+  const value = runOpenClawAgentWriteTransaction(
+    (transactionDb) => {
+      callbacks.beforeMutation?.();
+      const protectedSessionIds = new Set(plan.protectedSessionIds);
+      const diskBudget = plan.kind === "history-eviction" ? plan.diskBudget : undefined;
+      let excludedSessionKeys: ReadonlySet<string> | undefined;
+      if (plan.kind === "historical-generation") {
+        const current = readValidatedSessionDeletionTarget(transactionDb, {
+          ...plan,
+          scope: { kind: "historical-generation", phase: "commit", sessionId: plan.sessionId },
+        });
+        if (!current) {
+          return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
+        }
+        // Explicit deletion excludes its validated owner; automatic pressure does not.
+        excludedSessionKeys = new Set([
+          plan.deleteParams.target.canonicalKey,
+          ...plan.deleteParams.target.storeKeys,
+          ...current.snapshot.map((row) => row.sessionKey),
+        ]);
+      } else if (
+        // Node activity can change after the parent dispatches the Worker.
+        isRecentHistoricalSessionId({
+          database: transactionDb,
+          ...plan.diskBudget,
+          sessionId: plan.sessionId,
+        })
+      ) {
+        protectedSessionIds.add(plan.sessionId);
       }
-      // Explicit deletion excludes its validated owner; automatic pressure does not.
-      excludedSessionKeys = new Set([
-        plan.deleteParams.target.canonicalKey,
-        ...plan.deleteParams.target.storeKeys,
-        ...current.snapshot.map((row) => row.sessionKey),
-      ]);
-    } else if (
-      // Node activity can change after the parent dispatches the Worker.
-      isRecentHistoricalSessionId({
-        database: transactionDb,
-        ...plan.diskBudget,
-        sessionId: plan.sessionId,
-      })
-    ) {
-      protectedSessionIds.add(plan.sessionId);
-    }
-    const archivedTranscripts = deleteMaterializedSessionStatePlans(
-      transactionDb,
-      plan.materializedPlans,
-      protectedSessionIds,
-      excludedSessionKeys,
-      undefined,
-      diskBudget,
-    );
-    const db = getSessionKysely(transactionDb.db);
-    const deleted =
-      executeSqliteQuerySync(
-        transactionDb.db,
-        db
-          .selectFrom("session_windows")
-          .select("session_id")
-          .where("session_id", "=", plan.sessionId),
-      ).rows.length === 0;
-    if (deleted) {
-      callbacks.onCommit?.(transactionDb);
-    }
-    return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
-  }, plan.databaseOptions);
+      const archivedTranscripts = deleteMaterializedSessionStatePlans(
+        transactionDb,
+        plan.materializedPlans,
+        protectedSessionIds,
+        excludedSessionKeys,
+        undefined,
+        diskBudget,
+      );
+      const db = getSessionKysely(transactionDb.db);
+      const deleted =
+        executeSqliteQuerySync(
+          transactionDb.db,
+          db
+            .selectFrom("session_windows")
+            .select("session_id")
+            .where("session_id", "=", plan.sessionId),
+        ).rows.length === 0;
+      if (deleted) {
+        callbacks.onCommit?.(transactionDb);
+      }
+      return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
+    },
+    plan.databaseOptions,
+    { operationLabel: `session.reclaim.${plan.kind}` },
+  );
   return { kind: plan.kind, value };
 }
 
@@ -429,7 +440,10 @@ export async function runSqliteSessionReclamation(params: {
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
-  onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
+  onWorkerResult?: (
+    result: SqliteSessionReclamationResult,
+    databaseIdentity: string | symbol,
+  ) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
@@ -453,7 +467,11 @@ export async function runSqliteSessionReclamation(params: {
             return reclaimSqliteSessionInTransaction(params.plan, {
               beforeMutation: params.assertCommitAllowed,
               onCommit: (database, result) => {
-                const publish = prepareReclamationPublication(params.plan, result);
+                const publish = prepareReclamationPublication(
+                  params.plan,
+                  readOpenClawAgentDatabaseIdentity(database).identity,
+                  result,
+                );
                 if (publish) {
                   deferOpenClawAgentPostCommitPublication(database, publish);
                 }

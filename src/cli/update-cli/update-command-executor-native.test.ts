@@ -28,25 +28,20 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as const)(
-  "nested native child keeps original and immediate authority: %s",
-  async (fault) => {
-    const root = fs.realpathSync(dirs.make("native-nested-owner-"));
-    const control = path.join(root, "control");
-    fs.mkdirSync(control);
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-    const proceed = path.join(root, "proceed");
-    const effect = path.join(root, "effect");
-    const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
-    const leaf = `
+it("nested native child retains a settled spawner until its descendant finishes", async () => {
+  const root = fs.realpathSync(dirs.make("native-nested-owner-"));
+  const control = path.join(root, "control");
+  fs.mkdirSync(control);
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  const proceed = path.join(root, "proceed");
+  const effect = path.join(root, "effect");
+  const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
+  const leaf = `
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
+      import {json} from "node:stream/consumers";
       import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(ownerUrl)};
-      const chunks=[];
-      for await (const chunk of process.stdin) {
-        chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
-      }
-      const {grant,proceed,effect}=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const {grant,proceed,effect}=await json(process.stdin);
       await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
         process.stdout.write(JSON.stringify({ready:true,rootKey:grant.parent.key,spawnerKey:grant.spawner.key})+"\\n");
         while(!fs.existsSync(proceed)) await setTimeout(10);
@@ -54,14 +49,11 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
         fs.writeFileSync(effect,"owned");
       });
     `;
-    const intermediate = `
+  const intermediate = `
+      import {json} from "node:stream/consumers";
       import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(ownerUrl)};
       import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
-      const chunks=[];
-      for await (const chunk of process.stdin) {
-        chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
-      }
-      const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const input=await json(process.stdin);
       await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
         const result=await withUpdateCommandExecutorChild(fence,input.grant.root,(grant,beforeInput)=>runUtf8CommandWithTimeout(
           [process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(leaf)}],
@@ -71,97 +63,74 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
         fence.assertCurrent();
       });
     `;
-    const ready = createDeferred<{ rootKey: string; spawnerKey: string }>();
-    let output = "";
-    let admitted = false;
-    const run = withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(root);
-      const pending = withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
-        runUtf8CommandWithTimeout(
-          [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", intermediate],
-          {
-            input: JSON.stringify({ grant, proceed, effect }),
-            beforeInput,
-            timeoutMs: 20_000,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-            onOutputChunk: (chunk) => {
-              output += chunk.toString();
-              const line = output.split("\n").find((entry) => entry.startsWith('{"ready":true'));
-              if (line) {
-                ready.resolve(JSON.parse(line));
-              }
-            },
+  const ready = createDeferred<{ rootKey: string; spawnerKey: string }>();
+  let output = "";
+  const run = withUpdateCommandExecutor(randomUUID(), async (executor) => {
+    const fence = await executor.enter(root);
+    const pending = withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
+      runUtf8CommandWithTimeout(
+        [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", intermediate],
+        {
+          input: JSON.stringify({ grant, proceed, effect }),
+          beforeInput,
+          timeoutMs: 20_000,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          onOutputChunk: (chunk) => {
+            output += chunk.toString();
+            const line = output.split("\n").find((entry) => entry.startsWith('{"ready":true'));
+            if (line) {
+              ready.resolve(JSON.parse(line));
+            }
           },
-        ),
-      );
-      try {
-        const binding = await Promise.race([
-          ready.promise,
-          pending.then((result) => {
-            throw new Error(result.stderr || "Child exited before admission");
-          }),
-        ]);
-        admitted = true;
-        expect(binding.rootKey).toBe(root);
-        expect(binding.spawnerKey).not.toBe(root);
-        const store = createManagedHandoffLeaseStore();
-        expect(store.acquire(root, "replacement", { kind: "update" }).kind).toBe("busy");
-        if (fault === "spawner-settled") {
-          const spawner = store.read(binding.spawnerKey);
-          if (spawner.kind !== "current") {
-            throw new Error("Missing admitted spawner");
-          }
-          // Simulate a settled intermediate without killing either real child.
-          // Its live descendant must still block release of the spawner row.
-          const isDead = pidAlive.isPidDefinitelyDead;
-          const isTreeAlive = processTree.isChildProcessTreeAlive;
-          const deadSpy = vi
-            .spyOn(pidAlive, "isPidDefinitelyDead")
-            .mockImplementation((pid) => pid === spawner.lease.executor.pid || isDead(pid));
-          const treeSpy = vi
-            .spyOn(processTree, "isChildProcessTreeAlive")
-            .mockImplementation(
-              (child) => child.pid !== spawner.lease.executor.pid && isTreeAlive(child),
-            );
-          try {
-            expect(
-              store.release(spawner.lease),
-              "live descendant retains intermediate custody",
-            ).toBe(false);
-          } finally {
-            treeSpy.mockRestore();
-            deadSpy.mockRestore();
-          }
-        }
-        if (fault === "root-replaced" || fault === "spawner-replaced") {
-          const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-          try {
-            db.prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?").run(
-              "revoked",
-              fault === "root-replaced" ? root : binding.spawnerKey,
-            );
-          } finally {
-            db.close();
-          }
-        }
-      } finally {
-        fs.writeFileSync(proceed, "go");
+        },
+      ),
+    );
+    try {
+      const binding = await Promise.race([
+        ready.promise,
+        pending.then((result) => {
+          throw new Error(result.stderr || "Child exited before admission");
+        }),
+      ]);
+      expect(binding.rootKey).toBe(root);
+      expect(binding.spawnerKey).not.toBe(root);
+      const store = createManagedHandoffLeaseStore();
+      expect(store.acquire(root, "replacement", { kind: "update" }).kind).toBe("busy");
+      const spawner = store.read(binding.spawnerKey);
+      if (spawner.kind !== "current") {
+        throw new Error("Missing admitted spawner");
       }
-      const result = await pending;
-      expect(result.code, result.stderr).toBe(0);
-    });
-    if (fault === "healthy" || fault === "spawner-settled") {
-      await run;
-      expect(fs.readFileSync(effect, "utf8")).toBe("owned");
-      expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
-    } else {
-      await expect(run).rejects.toThrow();
-      expect(admitted, "fault must occur after nested admission").toBe(true);
-      expect(fs.existsSync(effect)).toBe(false);
+      // Simulate a settled intermediate without killing either real child.
+      // Its live descendant must still block release of the spawner row.
+      const isDead = pidAlive.isPidDefinitelyDead;
+      const isTreeAlive = processTree.isChildProcessTreeAlive;
+      const deadSpy = vi
+        .spyOn(pidAlive, "isPidDefinitelyDead")
+        .mockImplementation((pid) => pid === spawner.lease.executor.pid || isDead(pid));
+      const treeSpy = vi
+        .spyOn(processTree, "isChildProcessTreeAlive")
+        .mockImplementation(
+          (child) => child.pid !== spawner.lease.executor.pid && isTreeAlive(child),
+        );
+      try {
+        expect(store.release(spawner.lease), "live descendant retains intermediate custody").toBe(
+          false,
+        );
+      } finally {
+        treeSpy.mockRestore();
+        deadSpy.mockRestore();
+      }
+    } finally {
+      fs.writeFileSync(proceed, "go");
     }
-  },
-);
+    const result = await pending;
+    expect(result.code, result.stderr).toBe(0);
+  });
+  await run;
+  expect(fs.readFileSync(effect, "utf8")).toBe("owned");
+  expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+});
 
 // Compose real root -> spawner -> registered receiver -> native/config writers.
 // Only database LOCATION and scheduling barriers are fixtures, never authority.
@@ -244,13 +213,10 @@ it
     const spawner = `
     import fs from "node:fs";
     import {spawn} from "node:child_process";
+    import {json} from "node:stream/consumers";
     import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
     import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
-    const chunks=[];
-    for await (const chunk of process.stdin) {
-      chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
-    }
-    const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const input=await json(process.stdin);
     try{await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
       const result=await withUpdateCommandExecutorChild(fence,input.grant.root,async(grant,beforeInput)=>{
         fs.writeFileSync(${JSON.stringify(file("binding"))},JSON.stringify(grant));

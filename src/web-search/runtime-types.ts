@@ -1,14 +1,9 @@
-// Web search runtime types describe search provider factories and dependencies.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 
 // Shared web_search runtime contracts. Keep these in a types-only module so
 // provider registries and callers can import them without loading runtime code.
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
+type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
 
 /** Provider/tool resolution inputs for web_search. */
 export type ResolveWebSearchDefinitionParams = {

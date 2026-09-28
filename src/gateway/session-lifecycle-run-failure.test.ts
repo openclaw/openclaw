@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
@@ -27,6 +27,7 @@ import {
   clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -479,7 +480,9 @@ async function createCliHistoryFixture() {
       timestamp: 1_000,
     });
   });
-  const owner = createSessionLifecyclePersistenceOwner();
+  const scheduler = createTestGatewayScheduler();
+  onTestFinished(() => scheduler.stop());
+  const owner = createSessionLifecyclePersistenceOwner(scheduler);
   const captured = captureAgentRunTerminalWriteContext(cliRunId);
   if (!captured) {
     throw new Error("Expected the admitted runtime's terminal write context");

@@ -13,20 +13,28 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
+  afterEach(async () => {
+    try {
+      // Reclamation workers retain the original shared database until lease cleanup settles.
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
+      cleanup();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   }),
 );
-afterEach(() => vi.unstubAllEnvs());
 
 async function fixture() {
   const root = temps.make("openclaw-async-skills-");

@@ -59,6 +59,7 @@ export function createMessageActionRuntimeAuthority(
   > & {
     request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
+    assertClientUploadAllowed?: () => void;
   },
 ) {
   const assertScheduledSourceCurrent =
@@ -78,6 +79,23 @@ export function createMessageActionRuntimeAuthority(
     assertReadCurrent || assertScheduledWriteCurrent
       ? params.authorization?.scheduled?.policy
       : undefined;
+  const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
+    params.client,
+    params.context,
+    params.respond,
+    assertActionCurrent
+      ? () => {
+          params.sessionMutationCommitGuard?.();
+          assertActionCurrent();
+        }
+      : params.sessionMutationCommitGuard,
+  );
+  const assertDirectAdapterHandoff = params.assertClientUploadAllowed
+    ? () => {
+        agentRuntimeAuthority.commitGuard?.();
+        params.assertClientUploadAllowed?.();
+      }
+    : agentRuntimeAuthority.commitGuard;
   return {
     assertReadCurrent,
     assertScheduledWriteCurrent,
@@ -85,17 +103,8 @@ export function createMessageActionRuntimeAuthority(
       normalizeOptionalString(params.request.accountId) ??
       normalizeOptionalString(params.request.params.accountId) ??
       (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
-    agentRuntimeAuthority: createAgentRuntimeAuthorityGuard(
-      params.client,
-      params.context,
-      params.respond,
-      assertActionCurrent
-        ? () => {
-            params.sessionMutationCommitGuard?.();
-            assertActionCurrent();
-          }
-        : params.sessionMutationCommitGuard,
-    ),
+    agentRuntimeAuthority,
+    assertDirectAdapterHandoff,
   };
 }
 

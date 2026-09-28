@@ -96,18 +96,7 @@ export type StatusScanOverviewResult = {
   tailscaleHttpsUrl: string | null;
   advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
-  gatewaySnapshot: Pick<
-    GatewayProbeSnapshot,
-    | "gatewayConnection"
-    | "remoteUrlMissing"
-    | "gatewayMode"
-    | "gatewayProbeAuth"
-    | "gatewayProbeAuthWarning"
-    | "gatewayProbe"
-    | "gatewayReachable"
-    | "gatewaySelf"
-    | "gatewayCallOverrides"
-  >;
+  gatewaySnapshot: GatewayProbeSnapshot;
   runtimeDegradation:
     | (Pick<
         StatusSummary,
@@ -115,6 +104,7 @@ export type StatusScanOverviewResult = {
         | "degradedPlugins"
         | "startupMigrationWarning"
         | "installationReplacementWarning"
+        | "childRuntime"
         | "secretEgressProxy"
         | "sqliteWal"
       > &
@@ -131,7 +121,7 @@ export type StatusScanOverviewResult = {
 export async function collectStatusScanOverview(params: {
   env?: NodeJS.ProcessEnv;
   commandName: string;
-  opts: StatusGatewayProbeBudget & { all?: boolean };
+  opts: StatusGatewayProbeBudget & { all?: boolean; deep?: boolean };
   showSecrets: boolean;
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
@@ -315,6 +305,7 @@ export async function collectStatusScanOverview(params: {
           degradedPlugins: status.degradedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
           installationReplacementWarning: status.installationReplacementWarning,
+          ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           sqliteWal: status.sqliteWal,
           // The Gateway owns route readiness; CLI channel runtimes stay unloaded.

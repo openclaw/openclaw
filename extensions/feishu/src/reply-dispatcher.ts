@@ -25,7 +25,11 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
-import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
+import {
+  chunkFeishuPostMarkdown,
+  materializeFeishuPostMarkdownSoftBreaks,
+  shouldUseFeishuCard,
+} from "./markdown.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -59,11 +63,6 @@ import {
 } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
-
-/** Detect if text contains markdown elements that benefit from card rendering */
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
 
 function mergeStreamingFinalText(
   previousText: string,
@@ -102,10 +101,9 @@ function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean
   return true;
 }
 
-function rememberStreamingStartFailure(accountId: string, now = Date.now()): number {
+function rememberStreamingStartFailure(accountId: string, now = Date.now()): void {
   const backoffUntil = now + STREAMING_START_FAILURE_BACKOFF_MS;
   streamingStartBackoffUntilByAccount.set(accountId, backoffUntil);
-  return backoffUntil;
 }
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {
@@ -205,6 +203,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId !== undefined &&
     sendReplyToMessageId !== undefined &&
     sendReplyToMessageId !== rootId;
+  const replyTarget = {
+    cfg,
+    to: sendTarget,
+    replyToMessageId: sendReplyToMessageId,
+    replyInThread: effectiveReplyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  };
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   let typingState: TypingIndicatorState | null = null;
   // Reply text and card attribution share the same selected-model context.
@@ -786,13 +792,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ];
       try {
         const sendParams = {
-          cfg,
-          to: sendTarget,
+          ...replyTarget,
           text: chunk,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          allowTopLevelReplyFallback,
-          accountId,
           ...(mentions.length > 0 ? { mentions } : {}),
         };
         const result = paramsLocal.useCard
@@ -856,13 +857,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         caption: "",
         send: async ({ mediaUrl }) => {
           const result = await sendMediaFeishu({
-            cfg,
-            to: sendTarget,
+            ...replyTarget,
             mediaUrl,
-            replyToMessageId: sendReplyToMessageId,
-            replyInThread: effectiveReplyInThread,
-            allowTopLevelReplyFallback,
-            accountId,
             ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
           results.push(
@@ -926,13 +922,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return false;
     }
     await sendMessageFeishu({
-      cfg,
-      to: sendTarget,
+      ...replyTarget,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
-      replyToMessageId: sendReplyToMessageId,
-      replyInThread: effectiveReplyInThread,
-      allowTopLevelReplyFallback,
-      accountId,
       ...(requiredMentionTargets?.length ? { mentions: requiredMentionTargets } : {}),
     });
     markVisibleReplySent();
@@ -1365,7 +1356,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       const cardRenderingRequested =
         renderMode === "card" ||
         (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-        (renderMode === "auto" && shouldUseCard(text));
+        (renderMode === "auto" && shouldUseFeishuCard(text));
       const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&
@@ -1436,13 +1427,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         await collectDelivery(
           sendCardFeishu({
-            cfg,
-            to: sendTarget,
+            ...replyTarget,
             card: presentationCard,
-            replyToMessageId: sendReplyToMessageId,
-            replyInThread: effectiveReplyInThread,
-            allowTopLevelReplyFallback,
-            accountId,
           }).then((result) =>
             createFeishuReplyDeliveryResult({
               results: [result],

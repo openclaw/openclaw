@@ -95,14 +95,6 @@ export function normalizeApnsToken(value: string): string {
   return normalizeLowercaseStringOrEmpty(value.trim().replace(/[<>\s]/g, ""));
 }
 
-function normalizeRelayHandle(value: string): string {
-  return value.trim();
-}
-
-function normalizeInstallationId(value: string): string {
-  return value.trim();
-}
-
 function validateRelayIdentifier(
   value: string,
   fieldName: string,
@@ -217,12 +209,18 @@ const directApnsRegistrationSchema = z.object({
 const relayApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("relay")),
-  relayHandle: z.string().transform(normalizeRelayHandle).refine(isValidRelayIdentifier),
+  relayHandle: z
+    .string()
+    .transform((value) => value.trim())
+    .refine(isValidRelayIdentifier),
   sendGrant: z
     .string()
     .transform((value) => value.trim())
     .refine((value) => isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH)),
-  installationId: z.string().transform(normalizeInstallationId).refine(isValidRelayIdentifier),
+  installationId: z
+    .string()
+    .transform((value) => value.trim())
+    .refine(isValidRelayIdentifier),
   topic: apnsTopicSchema,
   environment: apnsEnvironmentSchema,
   distribution: z.unknown().transform(normalizeDistribution).pipe(z.literal("official")),
@@ -346,19 +344,13 @@ export async function registerApnsRegistration(
 
   let candidate: ApnsRegistration;
   if (params.transport === "relay") {
-    const relayHandle = validateRelayIdentifier(
-      normalizeRelayHandle(params.relayHandle),
-      "relayHandle",
-    );
+    const relayHandle = validateRelayIdentifier(params.relayHandle.trim(), "relayHandle");
     const sendGrant = validateRelayIdentifier(
       params.sendGrant.trim(),
       "sendGrant",
       MAX_SEND_GRANT_LENGTH,
     );
-    const installationId = validateRelayIdentifier(
-      normalizeInstallationId(params.installationId),
-      "installationId",
-    );
+    const installationId = validateRelayIdentifier(params.installationId.trim(), "installationId");
     const environment = normalizeApnsEnvironment(params.environment);
     const distribution = normalizeDistribution(params.distribution);
     const relayOrigin = normalizeRelayOrigin(params.relayOrigin);

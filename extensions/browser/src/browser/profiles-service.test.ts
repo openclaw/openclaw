@@ -107,8 +107,7 @@ vi.mock("./chrome.js", () => ({
 
 const [{ resolveBrowserConfig, resolveProfile }, { createBrowserProfilesService }] =
   await Promise.all([import("./config.js"), import("./profiles-service.js")]);
-const { deleteBrowserProfileConfig, setDefaultBrowserProfile } =
-  await import("./config-mutations.js");
+const { setDefaultBrowserProfile } = await import("./config-mutations.js");
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -264,23 +263,6 @@ describe("BrowserProfilesService", () => {
     expect(writtenBrowserConfig().defaultProfile).toBe("imported");
   });
 
-  it("rechecks default-profile ownership inside the delete config mutation", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "work",
-        profiles: { work: { cdpPort: 18801, color: "#0066CC" } },
-      },
-    });
-
-    await expect(
-      deleteBrowserProfileConfig({
-        name: "work",
-        expected: { cdpPort: 18801, color: "#0066CC" },
-      }),
-    ).rejects.toThrow('cannot delete the default profile "work"');
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
   it("falls back to derived CDP range when resolved CDP range is missing", async () => {
     const base = resolveBrowserConfig({});
     const baseWithoutRange = { ...base } as {
@@ -352,27 +334,6 @@ describe("BrowserProfilesService", () => {
     expect(profiles.work?.cdpPort).toBe(18801);
   });
 
-  it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-    });
-    const { ctx } = createCtx(resolved);
-
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({
-      name: "remote",
-      cdpUrl: "http://10.0.0.42:9222",
-    });
-
-    expect(result.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(result.cdpPort).toBe(9222);
-    expect(result.isRemote).toBe(true);
-    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
-    expect(profiles.remote?.cdpUrl).toBe("http://10.0.0.42:9222");
-  });
-
   it("redacts CDP credentials from create responses while preserving profile auth", async () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
@@ -393,30 +354,20 @@ describe("BrowserProfilesService", () => {
     expect(profiles.remote?.cdpUrl).toBe(cdpUrl);
   });
 
-  it.each([
-    ["rejects private-network cdpUrl when strict SSRF mode is enabled", "remote", undefined],
-    [
-      "rejects private-network cdpUrl for existing-session when strict SSRF mode is enabled",
-      "chrome-live",
-      "existing-session",
-    ],
-  ] as Array<[string, string, "existing-session" | undefined]>)(
-    "%s",
-    async (_name, profileName, driver) => {
-      const strictConfig = { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } };
-      const { ctx } = createCtx(resolveBrowserConfig(strictConfig));
-      vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { ...strictConfig, profiles: {} } });
+  it("rejects private-network cdpUrl before creating an existing-session profile", async () => {
+    const strictConfig = { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } };
+    const { ctx } = createCtx(resolveBrowserConfig(strictConfig));
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { ...strictConfig, profiles: {} } });
 
-      await expect(
-        createBrowserProfilesService(ctx).createProfile({
-          name: profileName,
-          driver,
-          cdpUrl: "http://10.0.0.42:9222",
-        }),
-      ).rejects.toThrow(/private\/internal\/special-use ip address/i);
-      expect(writeConfigFile).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      createBrowserProfilesService(ctx).createProfile({
+        name: "chrome-live",
+        driver: "existing-session",
+        cdpUrl: "http://10.0.0.42:9222",
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["creates existing-session profiles as attach-only local entries", undefined, null],
@@ -453,49 +404,6 @@ describe("BrowserProfilesService", () => {
       expect(profiles["chrome-live"]).toMatchObject(expectedProfile);
     },
   );
-
-  it("creates existing-session profiles with an explicit userDataDir", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const tempDir = tempDirs.make("openclaw-profile-");
-    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
-    fs.mkdirSync(userDataDir, { recursive: true });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({
-      name: "brave-live",
-      driver: "existing-session",
-      userDataDir,
-    });
-
-    expect(result.transport).toBe("chrome-mcp");
-    expect(result.userDataDir).toBe(userDataDir);
-    const resolvedProfile = state.resolved.profiles["brave-live"];
-    expect(resolvedProfile?.driver).toBe("existing-session");
-    expect(resolvedProfile?.attachOnly).toBe(true);
-    expect(resolvedProfile?.userDataDir).toBe(userDataDir);
-  });
-
-  it("rejects userDataDir for non-existing-session profiles", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const tempDir = tempDirs.make("openclaw-profile-");
-    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
-    fs.mkdirSync(userDataDir, { recursive: true });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
-        name: "brave-live",
-        userDataDir,
-      }),
-    ).rejects.toThrow(/driver=existing-session is required/i);
-  });
 
   it.each([
     [

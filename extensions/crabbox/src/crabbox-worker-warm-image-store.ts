@@ -485,7 +485,7 @@ export function withoutCrabboxWarmImageOperation(record: WarmProfileRecord): War
   return profile;
 }
 
-export function crabboxWarmImageCaptureStatus(_key: string, record: WarmProfileRecord) {
+export function crabboxWarmImageCaptureStatus(record: WarmProfileRecord) {
   const capture = record.operation?.type === "capture" ? record.operation : undefined;
   if (!capture) {
     return undefined;
@@ -498,12 +498,6 @@ export function crabboxWarmImageCaptureStatus(_key: string, record: WarmProfileR
     phase: capture.phase,
     stale: Date.now() - capture.startedAtMs >= CAPTURE_WARNING_AGE_MS,
   };
-}
-
-export function isCrabboxWarmImageCaptureUncertain(
-  capture: NonNullable<ReturnType<typeof crabboxWarmImageCaptureStatus>>,
-): boolean {
-  return capture.phase === "uncertain";
 }
 
 export const CRABBOX_WARM_IMAGE_WAIT_HINT =
@@ -551,7 +545,7 @@ export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
         }
       : undefined,
     allocations: value.allocations,
-    capture: crabboxWarmImageCaptureStatus(key, value),
+    capture: crabboxWarmImageCaptureStatus(value),
     retirement:
       value.operation?.type === "retire"
         ? { checkpointId: value.operation.checkpointId }
@@ -617,7 +611,7 @@ export async function recoverCrabboxWarmImageCapture(
   }
   const store = openCrabboxWarmImageStore(state);
   const entry = (await store.entries()).find(
-    ({ key, value }) => crabboxWarmImageCaptureStatus(key, value)?.selector === selector,
+    ({ value }) => crabboxWarmImageCaptureStatus(value)?.selector === selector,
   );
   if (!entry || !(await clearCrabboxWarmImageCapture(store, entry.key, selector))) {
     throw new Error(

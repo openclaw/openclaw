@@ -1,4 +1,4 @@
-name: Android Release
+name: Android APK Artifact Publish
 
 on:
   workflow_dispatch:

@@ -6,7 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  awaitClawHubParentAuthorization,
+  awaitParentAuthorization,
   createReleaseApprovalReceipt,
   downloadReleaseApprovalReceipt,
   releaseApprovalArtifactName,
@@ -105,6 +105,19 @@ function fixture() {
     approvals: [approved()],
   };
 }
+
+it.each([
+  { releaseTag: "v2026.9.24-alpha.1" },
+  { npmDistTag: "alpha" },
+  {
+    toolingRef: "tideclaw/alpha/2026-09-24-1200Z",
+    toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-24-1200Z",
+  },
+])("rejects retired alpha approval %j", (override) => {
+  expect(() => validateReleaseApprovalReceipt({ ...fixture().receipt, ...override })).toThrow(
+    "Alpha releases are retired;",
+  );
+});
 
 describe("release approval receipt", () => {
   it("creates the exact receipt using the last approved npm-release reviewer", () => {
@@ -381,8 +394,10 @@ describe("release approval artifact download", () => {
   );
 });
 
-describe("ClawHub parent authorization wait", () => {
-  const name = "openclaw-clawhub-parent-authorization-v2-10-2-30-1";
+describe.each([
+  ["ClawHub", "openclaw-clawhub-parent-authorization-v2-10-2-30-1", false],
+  ["npm", "openclaw-release-approval-v1-10-2", true],
+])("%s parent authorization wait", (_target, name, requireInProgress) => {
   const listing = `actions/runs/10/artifacts?name=${name}&per_page=100`;
   const authorization = {
     name,
@@ -392,8 +407,8 @@ describe("ClawHub parent authorization wait", () => {
   const params = {
     parentRunId: "10",
     parentRunAttempt: "2",
-    childRunId: "30",
-    childRunAttempt: "1",
+    expectedArtifactName: name,
+    requireInProgress,
     toolingSha: "a".repeat(40),
     sleep: async () => {},
   };
@@ -415,25 +430,38 @@ describe("ClawHub parent authorization wait", () => {
     };
   }
 
-  it("blocks until the child-bound authorization appears, then proceeds", async () => {
+  it("blocks until the expected authorization appears, then proceeds", async () => {
     const runGhJson = api([[], [], [authorization]]);
-    await expect(awaitClawHubParentAuthorization({ ...params, runGhJson })).resolves.toEqual(
+    await expect(awaitParentAuthorization({ ...params, runGhJson })).resolves.toEqual(
       authorization,
     );
   });
 
+  it.each(["success", "cancelled", "failure"])(
+    "requires a live npm parent even when its artifact exists (%s)",
+    async (conclusion) => {
+      const runGhJson = api([[authorization]], { status: "completed", conclusion });
+      const result = awaitParentAuthorization({ ...params, runGhJson });
+      if (requireInProgress) {
+        await expect(result).rejects.toThrow(/completed\//u);
+      } else {
+        await expect(result).resolves.toEqual(authorization);
+      }
+    },
+  );
+
   it("fails when the parent leaves in_progress without authorizing", async () => {
     const runGhJson = api([[]], { status: "completed", conclusion: "failure" });
-    await expect(awaitClawHubParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
+    await expect(awaitParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
       /completed\/failure without authorizing/u,
     );
   });
 
   it("fails at the deadline while the parent is still running", async () => {
     const runGhJson = api([[]]);
-    await expect(
-      awaitClawHubParentAuthorization({ ...params, runGhJson, deadlineMs: 0 }),
-    ).rejects.toThrow(/did not appear before the deadline/u);
+    await expect(awaitParentAuthorization({ ...params, runGhJson, deadlineMs: 0 })).rejects.toThrow(
+      /did not appear before the deadline/u,
+    );
   });
 
   it.each([
@@ -442,15 +470,72 @@ describe("ClawHub parent authorization wait", () => {
     ["expired", { ...authorization, expired: true }],
   ])("rejects an authorization from %s", async (_label, artifact) => {
     const runGhJson = api([[artifact]]);
-    await expect(awaitClawHubParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
+    await expect(awaitParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
       /does not belong to the parent/u,
     );
   });
 
   it("rejects an ambiguous authorization listing", async () => {
     const runGhJson = api([[authorization, authorization]]);
-    await expect(awaitClawHubParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
-      /ambiguous/u,
-    );
+    await expect(awaitParentAuthorization({ ...params, runGhJson })).rejects.toThrow(/ambiguous/u);
   });
+});
+
+describe("parent authorization CLI", () => {
+  it.each([
+    ["wait-npm-authorization", "in_progress", null, 0, "openclaw-release-approval-v1-10-2"],
+    ["wait-npm-authorization", "completed", "success", 1, "openclaw-release-approval-v1-10-2"],
+    ["wait-npm-authorization", "completed", "cancelled", 1, "openclaw-release-approval-v1-10-2"],
+    [
+      "wait-clawhub-authorization",
+      "completed",
+      "success",
+      0,
+      "openclaw-clawhub-parent-authorization-v2-10-2-30-1",
+    ],
+  ] as const)(
+    "%s checks its exact artifact with parent %s/%s",
+    (command, status, conclusion, exitCode, name) => {
+      const directory = tempDirs.make("parent-authorization-cli-");
+      const artifact = { ...fixture().artifact, name };
+      const responses = {
+        [`repos/openclaw/openclaw/actions/runs/10/artifacts?name=${name}&per_page=100`]: {
+          total_count: 1,
+          artifacts: [artifact],
+        },
+        "repos/openclaw/openclaw/actions/runs/10/attempts/2": { status, conclusion },
+      };
+      writeFileSync(
+        join(directory, "gh"),
+        `#!${process.execPath}
+const responses = ${JSON.stringify(responses)};
+const response = responses[process.argv[3]];
+if (!response) process.exit(2);
+console.log(JSON.stringify(response));
+`,
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [resolve("scripts/release-approval-receipt.mjs"), command],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: `${directory}:${process.env.PATH}`,
+            RELEASE_PUBLISH_RUN_ID: "10",
+            RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+            EXPECTED_WORKFLOW_SHA: sha,
+            GITHUB_RUN_ID: "30",
+            GITHUB_RUN_ATTEMPT: "1",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(exitCode);
+      if (exitCode === 0) {
+        expect(result.stdout).toContain(name);
+      } else {
+        expect(result.stderr).toContain(`completed/${conclusion} without authorizing`);
+      }
+    },
+  );
 });

@@ -57,21 +57,7 @@ function resolveTranscriptCaller(options: {
 export function resolveTranscriptsTool(
   config: OpenClawConfig | undefined,
   agentId: string,
-  options:
-    | {
-        agentChannel?: string;
-        agentAccountId?: string;
-        gatewayCallerAccountId?: string;
-        gatewayCallerChannel?: string | null;
-        gatewayCallerLocal?: boolean;
-        gatewayCallerScheduled?: boolean;
-        requesterSenderId?: string | null;
-        runId?: string;
-        agentGroupId?: string | null;
-        agentGroupSpace?: string | null;
-        agentMemberRoleIds?: string[];
-      }
-    | undefined,
+  options: Parameters<typeof resolveTranscriptCaller>[0] | undefined,
 ): AnyAgentTool | undefined {
   if (config?.transcripts?.enabled === false) {
     return undefined;

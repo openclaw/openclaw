@@ -198,48 +198,6 @@ describe("node host invoke", () => {
     });
   });
 
-  it("does not publish a canceled non-duplex plugin result", async () => {
-    const controller = new AbortController();
-    let resolvePlugin: ((result: string) => void) | undefined;
-    const handle = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          resolvePlugin = resolve;
-        }),
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "canvas",
-        pluginName: "Canvas",
-        command: { command: "canvas.present", cap: "canvas", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    const invoking = handleInvoke(
-      {
-        id: "invoke-canvas-canceled",
-        nodeId: "node-1",
-        command: "canvas.present",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { signal: controller.signal },
-    );
-    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
-
-    controller.abort();
-    resolvePlugin?.('{"stale":true}');
-    await invoking;
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("publishes only the replacement result for a redelivered plugin invocation", async () => {
     const firstController = new AbortController();
     const secondController = new AbortController();

@@ -1,12 +1,22 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-state-context.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as stateOwner from "../infra/gateway-state-owner.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import * as restartSentinel from "../infra/restart-sentinel.js";
 import { readRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
+import {
+  readLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "../infra/state-migrations.receipts.js";
+import { importLegacyUpdateRestartSentinel } from "../infra/state-migrations.restart-sentinel-runtime.js";
+import * as legacySource from "../infra/state-migrations.source-snapshot.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import {
   createUpdateRun,
@@ -18,6 +28,10 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  type OpenClawDatabaseMaintenanceScope,
+} from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createDirectOutboundTestAdapter,
@@ -25,8 +39,14 @@ import {
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 
 const mocks = vi.hoisted(() => ({
+  portableStateDir: "",
   loadSessionEntry: vi.fn<typeof import("./session-utils.js").loadSessionEntry>(),
   sendDurableMessageBatchCore: vi.fn(async () => ({
     status: "sent" as const,
@@ -47,6 +67,25 @@ const mocks = vi.hoisted(() => ({
     runMessageSending: vi.fn(async () => undefined),
   },
 }));
+
+vi.mock("@openclaw/fs-safe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe")>();
+  const { FsSafeError } = await import("@openclaw/fs-safe/errors");
+  return {
+    ...actual,
+    root: async (...args: Parameters<typeof actual.root>) => {
+      const stateRoot = await actual.root(...args);
+      if (args[0] === mocks.portableStateDir) {
+        vi.spyOn(stateRoot, "move").mockRejectedValue(
+          new FsSafeError("helper-unavailable", "unsupported rename", {
+            cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
+          }),
+        );
+      }
+      return stateRoot;
+    },
+  };
+});
 
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
@@ -84,12 +123,17 @@ const { startGatewaySidecars } = await import("./server-startup-post-attach.js")
 const { loadSessionEntry: realLoadSessionEntry } =
   await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
 const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
+const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
 const { scheduleRestartSentinelWake, refreshLatestUpdateRestartSentinel } =
   await import("./server-restart-sentinel.js");
 let envSnapshot: ReturnType<typeof captureEnv>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
+    for (const lock of gatewayLocks.splice(0)) {
+      await lock.release();
+    }
     vi.useRealTimers();
     closeOpenClawAgentDatabasesForTest();
     resetConfigRuntimeState();
@@ -104,6 +148,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 beforeEach(() => {
+  scheduler = createTestGatewayScheduler();
+  sidecars.push(scheduler);
   envSnapshot = captureEnv([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_SUPERVISOR_MODE",
@@ -114,6 +160,7 @@ beforeEach(() => {
   ]);
   setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
   vi.clearAllMocks();
+  mocks.portableStateDir = "";
   mocks.loadSessionEntry.mockReturnValue({
     cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
     agentId: "main",
@@ -136,6 +183,290 @@ beforeEach(() => {
       },
     ]),
   );
+});
+
+it.each(["queued", "running", "admission"] as const)(
+  "stops pending update recovery and joins its retry (%s)",
+  async (phase) => {
+    const stateDir = tempDirs.make("openclaw-restart-retry-stop-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const pending = await writeRestartSentinel(
+      {
+        kind: "update",
+        status: "skipped",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        stats: { handoffId: "pending-handoff", reason: "managed-service-handoff-started" },
+      },
+      env,
+    );
+    const readSnapshot = restartSentinel.readRestartSentinel;
+    const read = vi.spyOn(restartSentinel, "readRestartSentinel");
+    const clear = vi.spyOn(restartSentinel, "clearRestartSentinelIfRevision");
+    const clock = createGatewaySchedulerClock();
+    const retryScheduler = createTestGatewayScheduler(clock.clock);
+    const sidecar = scheduleRestartSentinelWakeAfterReady({
+      scheduler: retryScheduler,
+      deps: {},
+      log: { warn: vi.fn() },
+    });
+    sidecars.push(retryScheduler, sidecar);
+    await clock.advanceBy(750);
+    expect(retryScheduler.nextWakeAtMs).toBe(2_750);
+    const readsBeforeRetry = read.mock.calls.length;
+    const readStarted = createDeferred();
+    const releaseRead = createDeferred<typeof pending>();
+    if (phase === "running") {
+      read.mockImplementationOnce(() => {
+        readStarted.resolve();
+        return releaseRead.promise;
+      });
+    }
+    const suspension =
+      phase === "admission" ? gatewayWorkAdmission.tryBeginGatewaySuspendAdmission(() => {}) : null;
+    if (phase === "admission") {
+      expect(suspension?.commit()).toBe(true);
+    }
+    const retry = phase === "queued" ? undefined : clock.advanceBy(2_000);
+    let stopped = false;
+    let stopping: Promise<void> | undefined;
+    try {
+      if (phase === "running") {
+        await readStarted.promise;
+      }
+      stopping = Promise.resolve(sidecar.stop()).then(() => {
+        stopped = true;
+      });
+      if (phase === "running") {
+        // The initial startup timer has settled; only this retry can hold stop open.
+        for (let turn = 0; turn < 5; turn += 1) {
+          await Promise.resolve();
+        }
+        expect(stopped).toBe(false);
+      }
+    } finally {
+      releaseRead.resolve(pending);
+      await stopping;
+      await retry;
+      suspension?.release();
+      await sidecar.stop();
+    }
+    await clock.advanceBy(2_000);
+    expect(retryScheduler.nextWakeAtMs).toBeNull();
+    expect(read).toHaveBeenCalledTimes(readsBeforeRetry + (phase === "running" ? 1 : 0));
+    expect(clear).not.toHaveBeenCalled();
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+    expect(await readSnapshot(env)).toEqual(pending);
+  },
+);
+
+it.each(["absent", "maintenance"] as const)(
+  "refuses legacy notice import with an %s Gateway owner",
+  async (ownerKind) => {
+    const stateDir = tempDirs.make("openclaw-restart-import-gateway-owner-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const retained = await writeRestartSentinel(
+      { kind: "restart", status: "ok", ts: 123, message: "Retained canonical notice" },
+      env,
+    );
+    const context = captureDeliveryQueueStateContext();
+    const sourcePath = path.join(stateDir, "restart-sentinel.json");
+    const source = JSON.stringify({
+      version: 1,
+      payload: { kind: "update", status: "ok", ts: 124, stats: { mode: "npm" } },
+    });
+    await fs.writeFile(sourcePath, source);
+    const owner =
+      ownerKind === "maintenance"
+        ? stateOwner.acquireGatewayStateOwner({
+            databasePath: context.workerContext.admission.databasePath,
+          })
+        : undefined;
+    try {
+      await expect(
+        importLegacyUpdateRestartSentinel({
+          context: context.workerContext,
+          shouldRun: () => true,
+        }),
+      ).rejects.toThrow("no longer owns this Gateway generation");
+    } finally {
+      owner?.release();
+    }
+    expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
+    expect(await readRestartSentinel(env)).toEqual(retained);
+    expect(
+      readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey("restart-sentinel-json", sourcePath),
+        env,
+      ),
+    ).toBeNull();
+  },
+);
+
+it("joins a paused import without publishing after canonical database close revokes admission", async () => {
+  const stateDir = tempDirs.make("openclaw-restart-import-close-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  const lock = await acquireGatewayLock({ env, allowInTests: true });
+  if (!lock) {
+    throw new Error("Expected Gateway lifecycle ownership");
+  }
+  gatewayLocks.push(lock);
+  const retained = await writeRestartSentinel(
+    { kind: "restart", status: "ok", ts: 123, message: "Retained canonical notice" },
+    env,
+  );
+  const context = captureDeliveryQueueStateContext();
+  const sourcePath = path.join(stateDir, "restart-sentinel.json");
+  const source = JSON.stringify({
+    version: 1,
+    payload: { kind: "update", status: "ok", ts: 124, stats: { mode: "npm" } },
+  });
+  await fs.writeFile(sourcePath, source);
+  const readStarted = createDeferred();
+  const releaseRead = createDeferred();
+  const readSource = legacySource.readLegacyMigrationSourceSnapshot;
+  vi.spyOn(legacySource, "readLegacyMigrationSourceSnapshot").mockImplementationOnce(
+    async (options) => {
+      const snapshot = await readSource(options);
+      readStarted.resolve();
+      await releaseRead.promise;
+      return snapshot;
+    },
+  );
+  let custody: ReturnType<typeof stateOwner.tryBorrowGatewayStateOwner> | undefined;
+  const acquire = stateOwner.tryBorrowGatewayStateOwner;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((options) => {
+    custody = acquire(options);
+    return custody;
+  });
+  const importing = importLegacyUpdateRestartSentinel({
+    context: context.workerContext,
+    shouldRun: () => true,
+  });
+  const importSettled = importing.then(
+    () => "settled" as const,
+    () => "settled" as const,
+  );
+  let closing: Promise<void> | undefined;
+  let closeSettled = false;
+  try {
+    expect(
+      await Promise.race([readStarted.promise.then(() => "held" as const), importSettled]),
+    ).toBe("held");
+    context.workerContext.admission.assertCurrent();
+    expect(custody?.assertCurrent).not.toThrow();
+    closing = closeOpenClawStateDatabaseAsync();
+    void closing.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    expect(context.workerContext.admission.assertCurrent).toThrow(/read admission is closed/);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(closeSettled).toBe(false);
+    expect(custody?.assertCurrent).not.toThrow();
+    releaseRead.resolve();
+    const result = await importing;
+    await closing;
+    expect(result.changes).toEqual([]);
+    expect(result.importedRevision).toBeUndefined();
+    expect(result.warnings).toEqual([expect.stringContaining("read admission is closed")]);
+    expect(custody?.assertCurrent).toThrow(/ownership is no longer current/);
+    expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
+    await expect(fs.stat(`${sourcePath}.doctor-importing`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await readRestartSentinel(env)).toEqual(retained);
+    expect(
+      readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey("restart-sentinel-json", sourcePath),
+        env,
+      ),
+    ).toBeNull();
+  } finally {
+    releaseRead.resolve();
+    await Promise.allSettled([importing, ...(closing ? [closing] : [])]);
+  }
+});
+
+it("retains failed import cleanup until canonical database close retries its owner", async () => {
+  const stateDir = tempDirs.make("openclaw-restart-import-cleanup-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  const lock = await acquireGatewayLock({ env, allowInTests: true });
+  if (!lock) {
+    throw new Error("Expected Gateway lifecycle ownership");
+  }
+  gatewayLocks.push(lock);
+  const context = captureDeliveryQueueStateContext();
+  await fs.writeFile(
+    path.join(stateDir, "restart-sentinel.json"),
+    JSON.stringify({
+      version: 1,
+      payload: { kind: "update", status: "ok", ts: 124, stats: { mode: "npm" } },
+    }),
+  );
+  const failure = new Error("import resource cleanup failed once");
+  const closeResource = vi
+    .fn<() => Promise<void>>()
+    .mockRejectedValueOnce(failure)
+    .mockResolvedValue(undefined);
+  let scope: OpenClawDatabaseMaintenanceScope | undefined;
+  let custody: ReturnType<typeof stateOwner.tryBorrowGatewayStateOwner> | undefined;
+  const acquire = stateOwner.tryBorrowGatewayStateOwner;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((params) => {
+    custody = acquire(params);
+    return custody;
+  });
+  const readSource = legacySource.readLegacyMigrationSourceSnapshot;
+  vi.spyOn(legacySource, "readLegacyMigrationSourceSnapshot").mockImplementationOnce(
+    async (params) => {
+      const snapshot = await readSource(params);
+      scope = getOpenClawDatabaseMaintenanceScope();
+      if (!scope) {
+        throw new Error("Expected importer maintenance scope");
+      }
+      scope.own({}, "shared-resources", closeResource);
+      return snapshot;
+    },
+  );
+  try {
+    await expect(
+      importLegacyUpdateRestartSentinel({ context: context.workerContext, shouldRun: () => true }),
+    ).rejects.toBe(failure);
+    expect(closeResource).toHaveBeenCalledOnce();
+    expect(custody?.assertCurrent).not.toThrow();
+    await lock.release();
+    expect(
+      stateOwner.tryAcquireGatewayStateOwner(context.workerContext.admission.databasePath),
+    ).toBeNull();
+    expect(custody?.assertCurrent).not.toThrow();
+    await closeOpenClawStateDatabaseAsync();
+    expect(closeResource).toHaveBeenCalledTimes(2);
+    expect(custody?.assertCurrent).toThrow(/ownership is no longer current/);
+    const successor = stateOwner.tryAcquireGatewayStateOwner(
+      context.workerContext.admission.databasePath,
+    );
+    if (!successor) {
+      throw new Error("Expected settled import custody to admit a successor");
+    }
+    try {
+      expect(custody?.assertCurrent).toThrow(/ownership is no longer current/);
+    } finally {
+      successor.release();
+    }
+  } finally {
+    await scope?.close();
+    custody?.release();
+  }
 });
 
 it.each([false, true])(
@@ -174,7 +505,7 @@ it.each([false, true])(
       return undefined;
     });
 
-    await scheduleRestartSentinelWake({ deps: {} });
+    await scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {} });
 
     expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
@@ -268,7 +599,13 @@ it.each([
       });
     }
 
-    await scheduleRestartSentinelWake({ deps: {}, context, shouldRun: () => shouldRun });
+    await scheduleRestartSentinelWake({
+      scheduler,
+      signal: scheduler.signal,
+      deps: {},
+      context,
+      shouldRun: () => shouldRun,
+    });
 
     if (replacement === "stopped") {
       expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
@@ -297,7 +634,7 @@ it.each([
           }),
         }),
       );
-      await scheduleRestartSentinelWake({ deps: {}, context });
+      await scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {}, context });
       expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledOnce();
     }
   },
@@ -319,6 +656,182 @@ it("does not rewrite pending update sentinels during status refresh", async () =
 
   expect(await readRestartSentinel(originalEnv)).toEqual(sentinel);
 });
+
+it.each([
+  "final",
+  "portable-claim",
+  "late-final",
+  "newer-native",
+  "consumed-native",
+  "stopped",
+  "stop-during-import",
+] as const)(
+  "recovers published legacy update notices through the registered sidecar (%s)",
+  async (phase) => {
+    const stateDir = tempDirs.make("openclaw-legacy-restart-sidecar-");
+    const startsWithFinal =
+      phase === "final" || phase === "portable-claim" || phase === "stop-during-import";
+    if (phase === "portable-claim") {
+      mocks.portableStateDir = stateDir;
+    }
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const lock = await acquireGatewayLock({ env, allowInTests: true });
+    if (!lock) {
+      throw new Error("Expected Gateway lifecycle ownership");
+    }
+    gatewayLocks.push(lock);
+    const context = captureDeliveryQueueStateContext();
+    const sourcePath = path.join(stateDir, "restart-sentinel.json");
+    const final = {
+      kind: "update" as const,
+      status: "ok" as const,
+      ts: 124,
+      sessionKey: "agent:main:main",
+      deliveryContext: { channel: "matrix", to: "!operator:example" },
+      threadId: "synthetic-thread",
+      continuation: { kind: "agentTurn" as const, message: "Continue after the legacy update." },
+      stats: { mode: "npm", root: "/synthetic/install", handoffId: "legacy-handoff" },
+    };
+    const pending = {
+      ...final,
+      status: "skipped" as const,
+      ts: 123,
+      continuation: undefined,
+      stats: { ...final.stats, reason: "restart-health-pending" },
+    };
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({ version: 1, payload: startsWithFinal ? final : pending }),
+    );
+    const readStarted = createDeferred();
+    const releaseRead = createDeferred();
+    if (phase === "stop-during-import") {
+      const readSource = legacySource.readLegacyMigrationSourceSnapshot;
+      vi.spyOn(legacySource, "readLegacyMigrationSourceSnapshot").mockImplementationOnce(
+        async (options) => {
+          const snapshot = await readSource(options);
+          readStarted.resolve();
+          await releaseRead.promise;
+          return snapshot;
+        },
+      );
+    }
+    const startupCompleted = createDeferred();
+    const wakeTasks: Promise<unknown>[] = [];
+    const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
+      (callback, origin, signal) => {
+        const work = runWithAdmission(callback, origin, signal);
+        if (origin === "startup:sidecars.restart-sentinel") {
+          void work.then(() => startupCompleted.resolve(), startupCompleted.reject);
+        }
+        if (origin === "restart-sentinel:wake") {
+          wakeTasks.push(work);
+        }
+        return work;
+      },
+    );
+    const testMode = captureEnv(["VITEST", "NODE_ENV"]);
+    const clock = createGatewaySchedulerClock();
+    const startupScheduler = createTestGatewayScheduler(clock.clock);
+    sidecars.push(startupScheduler);
+    setTestEnvValue("VITEST", "");
+    setTestEnvValue("NODE_ENV", "production");
+    const warn = vi.fn();
+    await startGatewaySidecars({
+      scheduler: startupScheduler,
+      cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
+      defaultWorkspaceDir: stateDir,
+      deps: {},
+      pluginRegistry: createTestRegistry([]),
+      startChannels: async () => {},
+      shouldStartPluginServices: () => false,
+      log: { warn },
+      logHooks: { info: vi.fn(), warn, error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      onPostReadySidecars: (...registered) => sidecars.push(...registered),
+    });
+    await startupCompleted.promise;
+    testMode.restore();
+    const advancing = clock.advanceBy(750);
+    if (phase === "stop-during-import") {
+      await readStarted.promise;
+      let joined = false;
+      const stopping = Promise.all(
+        sidecars.splice(0).map(async (sidecar) => await sidecar.stop()),
+      ).then(() => {
+        joined = true;
+      });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(joined).toBe(false);
+      } finally {
+        releaseRead.resolve();
+        await advancing;
+        await Promise.all(wakeTasks);
+        await stopping;
+      }
+      expect(await readRestartSentinel(env)).toMatchObject({ payload: final });
+      expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+      expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
+      await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      return;
+    }
+    await advancing;
+    await Promise.all(wakeTasks);
+
+    let retained: Awaited<ReturnType<typeof readRestartSentinel>> = null;
+    if (!startsWithFinal) {
+      expect(await readRestartSentinel(env)).toMatchObject({ payload: { status: "skipped" } });
+      expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+      if (phase === "newer-native" || phase === "consumed-native") {
+        retained = await writeRestartSentinel({ ...pending, message: "New native owner" }, env);
+        if (phase === "consumed-native") {
+          await restartSentinel.clearRestartSentinelIfRevision(retained.revision, env);
+          retained = null;
+        }
+      } else if (phase === "stopped") {
+        retained = await readRestartSentinel(env);
+        await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
+      }
+      await fs.writeFile(sourcePath, JSON.stringify({ version: 1, payload: final }));
+      await clock.advanceBy(2_000);
+      await Promise.all(wakeTasks);
+    }
+    if (startsWithFinal || phase === "late-final") {
+      expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
+      expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ctxPayload: expect.objectContaining({ Body: final.continuation.message }),
+        }),
+      );
+      expect(await readRestartSentinel(env)).toBeNull();
+      await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await fs.writeFile(sourcePath, JSON.stringify({ version: 1, payload: final }));
+      await scheduleRestartSentinelWake({
+        scheduler: startupScheduler,
+        signal: startupScheduler.signal,
+        deps: {},
+        context,
+        shouldRun: () => true,
+      });
+      expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
+      expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledOnce();
+    } else {
+      expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+      expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
+      expect(await readRestartSentinel(env)).toEqual(retained);
+      expect(JSON.parse(await fs.readFile(sourcePath, "utf8"))).toEqual({
+        version: 1,
+        payload: final,
+      });
+    }
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   "requested",
@@ -388,12 +901,15 @@ it.each([
         return work;
       });
     const testMode = captureEnv(["VITEST", "NODE_ENV"]);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = createGatewaySchedulerClock();
+    const recoveryScheduler = createTestGatewayScheduler(clock.clock);
+    sidecars.push(recoveryScheduler);
     setTestEnvValue("VITEST", "");
     setTestEnvValue("NODE_ENV", "production");
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "");
     await startGatewaySidecars({
+      scheduler: recoveryScheduler,
       cfg,
       defaultWorkspaceDir: originalRoot,
       deps: {},
@@ -411,18 +927,17 @@ it.each([
     });
     setTestEnvValue("OPENCLAW_STATE_DIR", unrelatedRoot);
     await startupCompleted.promise;
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    expect(recoveryScheduler.nextWakeAtMs).toBe(750);
     testMode.restore();
-    await vi.advanceTimersByTimeAsync(750);
-    await admittedWork.mock.results.at(-1)?.value;
+    await clock.advanceBy(750);
     expect(getUpdateRun(run.runId, { env: originalEnv })?.verification.booted).toBe(true);
     expect(await readRestartSentinel(originalEnv)).not.toBeNull();
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    expect(recoveryScheduler.nextWakeAtMs).toBe(2_750);
     finishUpdateRun(run.runId, { status: "succeeded" }, { env: originalEnv });
     if (phase === "stopped") {
       await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
       expect(await readRestartSentinel(originalEnv)).not.toBeNull();
       expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
@@ -439,7 +954,7 @@ it.each([
             },
         originalEnv,
       );
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       await admittedWork.mock.results.at(-1)?.value;
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
       expect(await readRestartSentinel(originalEnv)).toEqual(replacement);
@@ -447,7 +962,7 @@ it.each([
       return;
     }
     if (phase === "terminal-before-marker") {
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       await admittedWork.mock.results.at(-1)?.value;
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
       expect(await readRestartSentinel(originalEnv)).not.toBeNull();
@@ -456,7 +971,7 @@ it.each([
       { ...payload, status: "ok", stats: { runId: run.runId } },
       originalEnv,
     );
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advanceBy(2_000);
     await admittedWork.mock.results.at(-1)?.value;
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount + 1);
     expect(getUpdateRun(run.runId, { env: originalEnv })?.verification.noticeDelivered).toBe(true);

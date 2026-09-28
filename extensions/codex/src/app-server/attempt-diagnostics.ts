@@ -1,7 +1,3 @@
-/**
- * Diagnostic helpers for Codex app-server model calls and plugin-thread config
- * eligibility.
- */
 import { createHash } from "node:crypto";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
@@ -11,23 +7,6 @@ import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
-/** Builds compact diagnostic tool definitions for trusted private telemetry. */
-function buildCodexDiagnosticToolDefinitions(
-  tools: readonly {
-    name: string;
-    description: string;
-    inputSchema?: unknown;
-    parameters?: unknown;
-  }[],
-) {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.inputSchema ?? tool.parameters,
-  }));
-}
-
-/** Returns the serialized UTF-8 byte length for a JSON-compatible value. */
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -36,7 +15,6 @@ export function utf8JsonByteLength(value: unknown): number | undefined {
   }
 }
 
-/** Builds a short namespaced fingerprint for sensitive log values. */
 function fingerprintCodexLogValue(namespace: string, value: string): string {
   const hash = createHash("sha256");
   hash.update(namespace);
@@ -45,10 +23,6 @@ function fingerprintCodexLogValue(namespace: string, value: string): string {
   return `sha256:${hash.digest("hex").slice(0, 16)}`;
 }
 
-/**
- * Builds redacted diagnostics explaining whether plugin thread config was
- * eligible for a Codex app-server attempt.
- */
 export function buildCodexPluginThreadConfigEligibilityLogData(params: {
   sessionId: string;
   sessionKey: string;
@@ -96,10 +70,6 @@ type CodexModelCallDiagnosticTool = {
   parameters?: unknown;
 };
 
-/**
- * Creates lifecycle emitters for trusted model-call diagnostics with optional
- * private payload capture.
- */
 export function createCodexModelCallDiagnosticEmitter(params: {
   baseFields: Record<string, unknown>;
   capture: CodexModelCallDiagnosticCapture;
@@ -111,7 +81,11 @@ export function createCodexModelCallDiagnosticEmitter(params: {
 }) {
   const now = params.now ?? (() => Date.now());
   const toolDefinitions = params.capture.toolDefinitions
-    ? buildCodexDiagnosticToolDefinitions(params.tools)
+    ? params.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema ?? tool.parameters,
+      }))
     : undefined;
   let startedAt = now();
   let started = false;
@@ -120,16 +94,35 @@ export function createCodexModelCallDiagnosticEmitter(params: {
 
   const privateData = (modelContent: DiagnosticModelCallContent | undefined) =>
     modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
-  const buildContent = (): DiagnosticModelCallContent | undefined => {
-    const modelContent = {
-      ...(params.capture.inputMessages ? { inputMessages: params.buildInputMessages() } : {}),
-      ...(params.capture.systemPrompt ? { systemPrompt: params.buildSystemPrompt() } : {}),
-      ...(toolDefinitions ? { toolDefinitions } : {}),
-    };
-    return Object.keys(modelContent).length > 0 ? modelContent : undefined;
+  const buildContent = (): DiagnosticModelCallContent => ({
+    ...(params.capture.inputMessages ? { inputMessages: params.buildInputMessages() } : {}),
+    ...(params.capture.systemPrompt ? { systemPrompt: params.buildSystemPrompt() } : {}),
+    ...(toolDefinitions ? { toolDefinitions } : {}),
+  });
+  const emitTerminal = (
+    type: "model.call.completed" | "model.call.error",
+    outputMessages: unknown,
+    fields: { errorCategory?: string; failureKind?: CodexModelCallFailureKind } = {},
+  ): boolean => {
+    if (!started || terminalEmitted) {
+      return false;
+    }
+    terminalEmitted = true;
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type,
+        ...params.baseFields,
+        durationMs: Math.max(0, now() - startedAt),
+        ...fields,
+        ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
+      } as TrustedDiagnosticEventInput,
+      privateData({
+        ...buildContent(),
+        ...(params.capture.outputMessages ? { outputMessages } : {}),
+      }),
+    );
+    return true;
   };
-  const requestPayloadBytesField = () =>
-    requestPayloadBytes !== undefined ? { requestPayloadBytes } : {};
 
   return {
     setRequestPayloadBytes(bytes: number | undefined): void {
@@ -147,54 +140,24 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       );
     },
     emitCompleted(result: { assistantTexts?: unknown; lastAssistant?: unknown }): void {
-      if (!started || terminalEmitted) {
-        return;
-      }
-      terminalEmitted = true;
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "model.call.completed",
-          ...params.baseFields,
-          durationMs: Math.max(0, now() - startedAt),
-          ...requestPayloadBytesField(),
-        } as TrustedDiagnosticEventInput,
-        privateData({
-          ...buildContent(),
-          ...(params.capture.outputMessages
-            ? {
-                outputMessages: result.lastAssistant
-                  ? [result.lastAssistant]
-                  : result.assistantTexts,
-              }
-            : {}),
-        }),
+      emitTerminal(
+        "model.call.completed",
+        result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
       );
     },
     emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
-      if (!started || terminalEmitted) {
-        return;
-      }
-      terminalEmitted = true;
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "model.call.error",
-          ...params.baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+      if (
+        emitTerminal("model.call.error", [], {
           errorCategory: fields.failureKind ?? "error",
           ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
-          ...requestPayloadBytesField(),
-        } as TrustedDiagnosticEventInput,
-        privateData({
-          ...buildContent(),
-          ...(params.capture.outputMessages ? { outputMessages: [] } : {}),
-        }),
-      );
-      params.onErrorDiagnostic?.(error);
+        })
+      ) {
+        params.onErrorDiagnostic?.(error);
+      }
     },
   };
 }
 
-/** Classifies model-call failures into timeout/abort buckets for diagnostics. */
 export function classifyCodexModelCallFailureKind(params: {
   error: unknown;
   timedOut: boolean;
