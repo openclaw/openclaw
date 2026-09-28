@@ -134,6 +134,15 @@ export type SessionModelContextWorkerInput = {
   limits?: SessionModelContextLimits;
 };
 
+export type SessionTranscriptAdmissionWorkerInput = {
+  kind: "transcript-admission";
+  database: { agentId: string; path: string };
+  target: SessionTranscriptRuntimeTarget;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  includeEntries: boolean;
+  turn?: import("./transcript-entry-anchor.js").TranscriptTurnBoundary;
+};
+
 export type SessionSqliteTargetWorkerInput = {
   kind: "sqlite-target";
   storePath: string;
@@ -458,6 +467,7 @@ export type SessionHistoryWorkerInput =
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
   | SessionColdMetadataWorkerInput
+  | SessionTranscriptAdmissionWorkerInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
@@ -547,6 +557,10 @@ export type SessionTranscriptWorkerValues = {
   "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
+  "transcript-admission": {
+    kind: "transcript-admission";
+    result: import("./session-transcript-admission.types.js").SessionTranscriptAdmissionRead;
+  };
   "session-reset-recall": {
     cutoff: import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js").SessionResetRecallCutoff;
   };
@@ -574,6 +588,9 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
     };
 
 export type SessionHistoryWorkerDatabase = {
+  readAdmission: (
+    input: Omit<SessionTranscriptAdmissionWorkerInput, "kind" | "database">,
+  ) => Promise<import("./session-transcript-admission.types.js").SessionTranscriptAdmissionRead>;
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
   readArchivePresence: (
     input: Omit<SessionArchivePresenceWorkerInput, "kind" | "database">,

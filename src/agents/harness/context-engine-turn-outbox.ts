@@ -19,6 +19,7 @@ import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js"
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db.generated.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 
 type ContextEngineTurnOutboxDatabase = Pick<
   OpenClawAgentDatabaseSchema,
@@ -78,6 +79,9 @@ type BlockedContextEngineTurnOutboxPayload = Readonly<{
   failure: Exclude<ContextEngineTurnReadFailureKind, "projection-unavailable">;
   isHeartbeat: boolean;
   state: "blocked";
+  /** Preserve materialized turn evidence when final commit admission becomes stale. */
+  messages?: AgentMessage[];
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 }>;
 
 type ContextEngineTurnOutboxPayload =
@@ -405,6 +409,7 @@ export type ContextEngineTurnOutboxStore = Readonly<{
     filter: ContextEngineTurnOutboxFilter & { sessionId: string },
   ): Promise<PendingContextEngineTurn | undefined>;
   complete(advancementKey: string): Promise<void>;
+  blockStale(row: PendingContextEngineTurn): Promise<void>;
   recordFailure(advancementKey: string, message: string, attemptedAt: number): Promise<void>;
   hasPending(filter: ContextEngineTurnOutboxFilter & { sessionId?: string }): Promise<boolean>;
 }>;
@@ -589,17 +594,44 @@ async function commitPendingContextEngineTurn(params: {
       isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
     };
-    const result = await params.engine.commitTurn?.(commonParams);
-    if (!result) {
-      throw new Error("context engine does not implement commitTurn");
-    }
-    if (result.status !== "committed" && result.status !== "duplicate") {
-      throw new Error(`invalid commitTurn result status: ${String(result.status)}`);
+    const commit = async (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => {
+      const result = await params.engine.commitTurn?.(turn);
+      if (!result) {
+        throw new Error("context engine does not implement commitTurn");
+      }
+      if (result.status !== "committed" && result.status !== "duplicate") {
+        throw new Error(`invalid commitTurn result status: ${String(result.status)}`);
+      }
+      return turn;
+    };
+    let committedParams: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0];
+    if (
+      isIncognitoOpenClawAgentSqlitePath(payload.boundary.admission.storePath, {
+        agentId: payload.boundary.admission.agentId,
+      })
+    ) {
+      // Incognito retains its process-held transcript owner and existing commit
+      // contract; the durable admission reader cannot open its in-memory store.
+      committedParams = await commit(commonParams);
+    } else {
+      const { acceptSessionTranscriptTurn } =
+        await import("../../config/sessions/session-transcript-admission.js");
+      const accepted = await acceptSessionTranscriptTurn(payload.boundary, (resetBoundary) =>
+        commit({ ...commonParams, resetBoundary }),
+      );
+      if (accepted.kind === "stale") {
+        await params.store.blockStale(row);
+        params.warn(
+          `[context-engine] blocked unrecoverable turn advancement: ${row.advancement_key}: transcript range is stale`,
+        );
+        return true;
+      }
+      committedParams = accepted.value;
     }
     await params.store.complete(row.advancement_key);
     // Notification is best effort after acknowledgment; its failure must never requeue a commit.
     try {
-      params.onCommitted?.(commonParams);
+      params.onCommitted?.(committedParams);
     } catch (error) {
       params.warn(
         `[context-engine] committed turn notification failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -634,6 +666,7 @@ export type ContextEngineTurnOutboxWorkerOperations = {
     output: PendingContextEngineTurn | undefined;
   };
   complete: { input: { advancementKey: string }; output: undefined };
+  blockStale: { input: PendingContextEngineTurn; output: undefined };
   recordFailure: {
     input: { advancementKey: string; message: string; attemptedAt: number };
     output: undefined;
@@ -690,6 +723,22 @@ export function executeContextEngineTurnOutboxCommand(
     case "complete":
       completeContextEngineTurn(database, command.input.advancementKey);
       return undefined;
+    case "blockStale": {
+      const row = command.input;
+      const payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
+      if (payload.state === "ready") {
+        const blocked = { ...payload, state: "blocked", failure: "stale" } as const;
+        executeSqliteQuerySync(
+          db,
+          outboxDb(database)
+            .updateTable("context_engine_turn_outbox")
+            .set({ payload_json: JSON.stringify(blocked) })
+            .where("advancement_key", "=", row.advancement_key)
+            .where("payload_json", "=", row.payload_json),
+        );
+      }
+      return undefined;
+    }
     case "recordFailure":
       recordContextEngineTurnFailure(
         database,

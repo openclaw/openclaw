@@ -24,11 +24,41 @@ To participate in durable admitted turns, context engines must declare
 `turnAdvancementIdempotency: "atomic-idempotent-v1"` under
 `info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
 idempotent write keyed by `advancementKey`. OpenClaw supplies only the inclusive
-accepted turn, from its admitted user entry through its terminal entry; use the
-`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
-rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+accepted turn, from its admitted user entry through its terminal entry. Use the
+reset-aware transcript admission API below to bootstrap or rebuild context;
+visible-history cursors are for archive/search/export, not reset eligibility. Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
+
+## Reset-aware transcript admission
+
+Use `api.runtime.agent.session.readTranscriptAdmission` and `api.runtime.agent.session.acceptTranscriptAdmission`. These are typed, lazy host capabilities on the existing Plugin SDK runtime; no private SDK subpath is needed. Supply the exact `agentId`, `sessionKey`, `sessionId`, and the host-provided `storePath` when present. This contract supports durable SQLite sessions, not incognito sessions.
+
+A `snapshot` combines canonical message entry IDs, normalized branch parent IDs, raw sequence metadata, persisted payloads, the transcript `generation`, an explicit nullable reset `boundary`, and a one-use opaque `token`. Clear resets select only subsequent messages. Preserve-tail resets select the host-retained tail, including paired tool results, and subsequent messages. Selection uses the host's active branch and reset rules. It does not apply host compaction, introduce summaries, or change raw/visible history APIs. Within an admitted turn, bootstrap excludes that turn's user entry and later entries. A reset retiring that admission returns `stale`, not historical context.
+
+Prepare expensive work from the snapshot, then persist it **inside** acceptance:
+
+```ts
+const { readTranscriptAdmission, acceptTranscriptAdmission } = api.runtime.agent.session;
+const snapshot = await readTranscriptAdmission(sessionTarget);
+if (snapshot.kind !== "snapshot") return;
+const prepared = await prepareImport(snapshot.entries);
+const accepted = await acceptTranscriptAdmission(snapshot.token, async (boundary) => {
+  // One plugin-owned atomic transaction reconciles its conversation and entry IDs.
+  await commitImport({ generation: snapshot.generation, boundary, prepared });
+});
+if (accepted.kind === "stale") {
+  // Discard prepared work; get a new snapshot on the next reconciliation.
+}
+```
+
+Acceptance rechecks the captured physical store, session lifecycle, transcript version, and reset boundary inside the canonical host writer queue. The queue remains owned until the plugin callback settles, so host reset, branch, and rewrite operations cannot overtake plugin persistence. Keep the callback short: commit already-prepared work only to the plugin's own store, and await all of it. Do not call host session mutations or recursively accept another snapshot from this callback; those operations need the same queue. This is host lifecycle serialization, **not** a distributed transaction across plugin and host databases. It does not coordinate unsupported independent writers to a running host's SQLite files. Plugin crash recovery and idempotence remain plugin-owned.
+
+Tokens are process-local and consumed once, including when a callback fails. Reset, branch/rewrite, session replacement, and even ordinary append invalidate detached work. Persist the generation/boundary association, never the token. `missing` and `stale` are distinct from a valid empty snapshot; storage, integrity, or worker failures reject the read and must not initialize an empty conversation. A plugin callback failure propagates without automatic replay.
+
+Treat reset lifecycle notifications as **reconciliation hints**, not instructions to archive whichever conversation happens to be current. On every hint and on bootstrap/restart, read and accept a current snapshot. Atomically associate its `generation` and nullable boundary with the plugin-owned conversation. Repeated hints for that association are no-ops; a delayed older hint therefore cannot archive a newly bootstrapped context. Boundary `rawSeq` orders reset events only within its `generation`; timestamps and lexical ID order grant no admission. Keep archived plugin rows and summary DAG ownership in the plugin.
+
+Durable `commitTurn` delivery is fenced by the same host owner and has the same short, plugin-store-only callback restrictions. Its optional `resetBoundary` field records the admitted boundary (`null` means none). Turns retired by reset or detached by branch/rewrite never enter the fresh context; their pending payload stays as blocked outbox evidence. Existing raw transcript history is not deleted. Older hosts omit this field; consumers must pin and test a host version implementing the complete contract before claiming reset-aware support.
 
 ## Memory embedding adapters
 

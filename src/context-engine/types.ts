@@ -444,6 +444,14 @@ export interface ContextEngine {
     advancementKey: string;
     admission: import("../config/sessions/transcript-entry-anchor.js").TranscriptTurnAdmission;
     terminal: import("../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
+    /**
+     * Canonical reset identity held through durable commit admission. `null`
+     * means no reset; omission means the host did not supply this contract.
+     * Commit only plugin-owned state here, not host session mutations.
+     */
+    resetBoundary?:
+      | import("../config/sessions/session-transcript-admission.types.js").SessionTranscriptResetBoundary
+      | null;
     messages: AgentMessage[];
     sessionId: string;
     sessionKey?: string;

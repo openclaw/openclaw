@@ -194,64 +194,69 @@ describe("context-engine host parameter projection", () => {
     ]);
   });
 
-  it("projects declared host parameters for commitTurn", async () => {
-    const commitTurnCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({
-      acceptedHostParams: ["runtimeSettings"],
-      assembleCalls: [],
-      compactCalls: [],
-      commitTurnCalls,
-    });
-    const resolution = await resolveLogicalTurnContextEngines({
-      plugins: { slots: { contextEngine: engineId } },
-    });
-    const admission = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      storePath: "/tmp/openclaw-agent.sqlite",
-      generation: "generation-1",
-      entryId: "user-1",
-      rawSeq: 1,
-      effectiveParentId: null,
-      activeMessagePosition: 0,
-      logicalTurnId: "turn-1",
-      role: "user" as const,
-    };
-
-    await resolution.configured.engine.commitTurn?.({
-      advancementKey: "turn-1",
-      admission,
-      terminal: {
-        ...admission,
-        entryId: "assistant-1",
-        rawSeq: 2,
-        effectiveParentId: "user-1",
-        activeMessagePosition: 1,
-      },
-      messages: [message],
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionTarget: { agentId: "main", sessionId: "session-1" },
-      runtimeSettings,
-      runtimeContext: { tokenBudget: 1000 },
-    });
-
-    expect(commitTurnCalls).toEqual([
-      expect.objectContaining({
-        advancementKey: "turn-1",
+  it.each([null, { entryId: "reset-1", rawSeq: 3, generation: "generation-1" }])(
+    "preserves reset identity while projecting commitTurn host parameters (%j)",
+    async (resetBoundary) => {
+      const commitTurnCalls: Array<Record<string, unknown>> = [];
+      const engineId = registerProbeEngine({
+        acceptedHostParams: ["runtimeSettings"],
+        assembleCalls: [],
+        compactCalls: [],
+        commitTurnCalls,
+      });
+      const resolution = await resolveLogicalTurnContextEngines({
+        plugins: { slots: { contextEngine: engineId } },
+      });
+      const admission = {
+        agentId: "main",
         sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        storePath: "/tmp/openclaw-agent.sqlite",
+        generation: "generation-1",
+        entryId: "user-1",
+        rawSeq: 1,
+        effectiveParentId: null,
+        activeMessagePosition: 0,
+        logicalTurnId: "turn-1",
+        role: "user" as const,
+      };
+
+      await resolution.configured.engine.commitTurn?.({
+        advancementKey: "turn-1",
+        resetBoundary,
+        admission,
+        terminal: {
+          ...admission,
+          entryId: "assistant-1",
+          rawSeq: 2,
+          effectiveParentId: "user-1",
+          activeMessagePosition: 1,
+        },
+        messages: [message],
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionTarget: { agentId: "main", sessionId: "session-1" },
         runtimeSettings,
-      }),
-    ]);
-    expect(commitTurnCalls[0]).not.toHaveProperty("sessionKey");
-    expect(commitTurnCalls[0]).not.toHaveProperty("sessionTarget");
-    expect(commitTurnCalls[0]).not.toHaveProperty("runtimeContext");
-    await Promise.allSettled([
-      resolution.configured.engine.dispose?.(),
-      resolution.fallback.engine.dispose?.(),
-    ]);
-  });
+        runtimeContext: { tokenBudget: 1000 },
+      });
+
+      expect(commitTurnCalls).toEqual([
+        expect.objectContaining({
+          advancementKey: "turn-1",
+          resetBoundary,
+          sessionId: "session-1",
+          runtimeSettings,
+        }),
+      ]);
+      expect(commitTurnCalls[0]).not.toHaveProperty("sessionKey");
+      expect(commitTurnCalls[0]).not.toHaveProperty("sessionTarget");
+      expect(commitTurnCalls[0]).not.toHaveProperty("runtimeContext");
+      await Promise.allSettled([
+        resolution.configured.engine.dispose?.(),
+        resolution.fallback.engine.dispose?.(),
+      ]);
+    },
+  );
 
   it("passes every host parameter to fresh undeclared engines", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];

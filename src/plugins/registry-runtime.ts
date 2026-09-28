@@ -404,7 +404,26 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           }
           const agent: PluginRuntime["agent"] = getRuntimeProperty();
           const session = agent.session;
+          const transcriptTokens = new WeakSet<object>();
           const scopedSession = {
+            readTranscriptAdmission: (params) =>
+              runWithPluginScope(async () => {
+                const result = await session.readTranscriptAdmission(params);
+                assertRuntimeCurrent();
+                if (result.kind === "snapshot") {
+                  transcriptTokens.add(result.token);
+                }
+                return result;
+              }),
+            acceptTranscriptAdmission: (token, commit) =>
+              runWithPluginScope(() => {
+                if (!transcriptTokens.delete(token)) {
+                  return Promise.resolve({ kind: "stale" as const });
+                }
+                return session.acceptTranscriptAdmission(token, (boundary) =>
+                  runWithPluginScope(() => commit(boundary)),
+                );
+              }),
             resolveStorePath: session.resolveStorePath,
             getSessionEntry: session.getSessionEntry,
             listSessionEntries: session.listSessionEntries,

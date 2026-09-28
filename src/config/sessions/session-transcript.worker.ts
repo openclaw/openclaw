@@ -566,12 +566,21 @@ serveOwnedWorkerTasks(
               },
             );
           }
-          if (request.kind === "model-context") {
-            const { readSessionTranscriptModelContext } =
-              await import("./session-accessor.sqlite-model-context.js");
+          if (request.kind === "transcript-admission" || request.kind === "model-context") {
+            const context = await import("./session-accessor.sqlite-model-context.js");
+            if (request.kind === "transcript-admission") {
+              return await withHistoryDatabase(request.database, request.kind, () => ({
+                kind: "transcript-admission" as const,
+                result: context.readSessionTranscriptAdmissionSnapshot(
+                  request.target,
+                  request.includeEntries,
+                  request.turn,
+                ),
+              }));
+            }
             return {
               ok: true,
-              value: readSessionTranscriptModelContext(
+              value: context.readSessionTranscriptModelContext(
                 request.target,
                 request.through,
                 request.limits,

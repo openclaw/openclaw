@@ -391,6 +391,10 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
+      /** Canonical reset-eligible entries and a one-use host admission capability. */
+      readTranscriptAdmission: typeof import("../../config/sessions/session-transcript-admission.js").readSessionTranscriptAdmission;
+      /** Hold host reset/branch admission until plugin-owned persistence settles. */
+      acceptTranscriptAdmission: typeof import("../../config/sessions/session-transcript-admission.js").acceptSessionTranscriptAdmission;
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,

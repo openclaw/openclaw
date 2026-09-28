@@ -136,6 +136,9 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
     complete: async (advancementKey) => {
       await run({ type: "complete", input: { advancementKey } });
     },
+    blockStale: async (row) => {
+      await run({ type: "blockStale", input: row });
+    },
     recordFailure: async (advancementKey, message, attemptedAt) => {
       await run({ type: "recordFailure", input: { advancementKey, message, attemptedAt } });
     },

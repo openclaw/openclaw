@@ -14,7 +14,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  withOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+} from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type {
@@ -22,6 +26,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -29,14 +34,18 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
+import type { SessionTranscriptAdmissionRead } from "./session-transcript-admission.types.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 import {
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
@@ -64,6 +73,8 @@ type TranscriptContextSnapshot = {
   header: TranscriptEvent;
   entries: ContextEntry[];
   version: SessionTranscriptContextVersion;
+  database: OpenClawAgentReadOnlyDatabase;
+  beforeRawSeq?: number;
   readEntry: (entry: ContextEntry) => SessionTreeEntry;
   readModelEntrySizes: (requests: readonly ModelContextRequest[]) => Map<ContextEntry, number>;
   readModelEntries: (
@@ -436,11 +447,105 @@ export function readSessionTranscriptContextMessages<T>(
   return result.found ? result.value : read([], undefined);
 }
 
+/** Reset eligibility shares canonical branch and tool pairing selection, not host compaction. */
+export function readSessionTranscriptAdmissionSnapshot(
+  scope: SessionTranscriptReadScope & { sessionKey: string },
+  includeEntries = true,
+  turn?: TranscriptTurnBoundary,
+): SessionTranscriptAdmissionRead {
+  const result = withTranscriptContextSnapshot<SessionTranscriptAdmissionRead>(
+    scope,
+    ({ database, entries, version, readEntry, beforeRawSeq }) => {
+      assertSessionTranscriptHot(database.db, scope.sessionId);
+      const current = readExactSessionEntryRow(database, scope.sessionKey)?.entry;
+      if (!current) {
+        return { kind: "missing" };
+      }
+      if (current.sessionId !== scope.sessionId) {
+        return { kind: "stale" };
+      }
+      const boundary = entries.findLast((entry) => entry.type === "reset");
+      if (turn && boundary && turn.admission.rawSeq <= boundary.seq) {
+        return { kind: "stale" };
+      }
+      if (turn) {
+        if (
+          [turn.admission, turn.terminal].some(
+            (anchor) =>
+              anchor.generation !== version.generation ||
+              !entries.some((entry) => entry.id === anchor.entryId && entry.seq === anchor.rawSeq),
+          )
+        ) {
+          return { kind: "stale" };
+        }
+        // A rebuilding anchor projection is unavailable, not evidence of a retired turn.
+        if (sessionTranscriptIndexNeedsReconcile(database.db, scope.sessionId)) {
+          throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
+        }
+        const resolved = resolveSqliteTranscriptReadScope(scope);
+        assertContextAnchor(database, resolved, turn.admission);
+        assertContextAnchor(database, resolved, turn.terminal);
+      }
+      // A current-turn fence may not hide a reset that retired that turn.
+      if (boundary && beforeRawSeq !== undefined && boundary.seq >= beforeRawSeq) {
+        return { kind: "stale" };
+      }
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof identity.identity !== "string") {
+        throw new Error("Reset-aware transcript admission requires a durable session");
+      }
+      const selected = includeEntries
+        ? Array.from(iterateSessionContextEntries(entries, "reset")).flatMap(({ entry }) => {
+            if (
+              entry.type !== "message" ||
+              (beforeRawSeq !== undefined && entry.seq >= beforeRawSeq)
+            ) {
+              return [];
+            }
+            const hydrated = readEntry(entry);
+            if (hydrated.type !== "message") {
+              throw new Error("Transcript message changed inside its read snapshot");
+            }
+            return [
+              {
+                entryId: entry.id,
+                parentId: entry.parentId,
+                seq: entry.seq,
+                message: hydrated.message,
+                createdAt: entry.timestamp,
+              },
+            ];
+          })
+        : [];
+      return {
+        kind: "snapshot",
+        entries: selected,
+        boundary: boundary
+          ? { entryId: boundary.id, rawSeq: boundary.seq, generation: version.generation ?? null }
+          : null,
+        version,
+        lifecycleRevision: current.lifecycleRevision ?? null,
+        databaseIdentity: identity.identity,
+        databaseBirthtime: identity.birthtime,
+      };
+    },
+    undefined,
+    true,
+  );
+  if (!result.found && result.reason !== "database-missing") {
+    throw new Error(
+      `Transcript admission is unavailable: ${result.reason ?? "unknown storage state"}`,
+    );
+  }
+  return result.found ? result.value : { kind: "missing" };
+}
+
 function withTranscriptContextSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (snapshot: TranscriptContextSnapshot) => T,
   through?: TranscriptEntryAnchor,
-): { found: true; value: T } | { found: false } {
+  wholeTranscript = false,
+): { found: true; value: T } | { found: false; reason?: string } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -456,7 +561,9 @@ function withTranscriptContextSnapshot<T>(
           const base = db
             .selectFrom("transcript_events")
             .where("session_id", "=", resolved.sessionId)
-            .$if(fence !== undefined, (query) => query.where("seq", "<", fence!.beforeRawSeq))
+            .$if(fence !== undefined && !wholeTranscript, (query) =>
+              query.where("seq", "<", fence!.beforeRawSeq),
+            )
             .$if(through !== undefined, (query) => query.where("seq", "<=", through!.rawSeq));
           const header = executeSqliteQueryTakeFirstSync(
             database.db,
@@ -510,6 +617,8 @@ function withTranscriptContextSnapshot<T>(
               ),
           );
           return read({
+            database,
+            beforeRawSeq: fence?.beforeRawSeq,
             header: header ? JSON.parse(header.event_json) : undefined,
             entries,
             version,

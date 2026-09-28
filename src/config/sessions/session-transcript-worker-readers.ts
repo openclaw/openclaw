@@ -52,6 +52,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readAdmission: reader(
+      "transcript-admission",
+      "transcript admission",
+      (input) => ({ kind: "transcript-admission", ...input }),
+      (value) => value.result,
+    ),
     prewarm: reader(
       "prewarm",
       "prewarm acknowledgement",

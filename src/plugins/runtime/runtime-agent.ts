@@ -58,6 +58,10 @@ type RuntimeSessionStoreEntryUpdateParams = Parameters<
 >[0];
 type RuntimeUpsertSessionEntryParams = Parameters<RuntimeSession["upsertSessionEntry"]>[0];
 
+const loadTranscriptAdmission = createLazyRuntimeModule(
+  () => import("../../config/sessions/session-transcript-admission.js"),
+);
+
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
@@ -696,6 +700,14 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
   );
   defineCachedValue(agentRuntime, "session", () => ({
+    readTranscriptAdmission: createLazyRuntimeMethod(
+      loadTranscriptAdmission,
+      (runtime) => runtime.readSessionTranscriptAdmission,
+    ),
+    acceptTranscriptAdmission: createLazyRuntimeMethod(
+      loadTranscriptAdmission,
+      (runtime) => runtime.acceptSessionTranscriptAdmission,
+    ),
     resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,

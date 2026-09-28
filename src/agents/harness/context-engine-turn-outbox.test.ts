@@ -30,6 +30,7 @@ import {
   isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
 } from "./context-engine-turn-outbox.js";
+import { createPersistedContextEngineTurn as createPayload } from "./context-engine-turn-outbox.test-helpers.js";
 import { bindSqliteWorkerBackend } from "./context-engine-turn-outbox.worker.js";
 
 const tempDirs: string[] = [];
@@ -44,7 +45,7 @@ afterEach(async () => {
   }
 });
 
-function createPayload(params: {
+function createSyntheticPayload(params: {
   advancementKey: string;
   databasePath: string;
   sequence: number;
@@ -96,7 +97,7 @@ describe("context-engine turn outbox", () => {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const payload = createPayload({
+    const payload = await createPayload({
       advancementKey: "session-a:invalid-result",
       databasePath: database.path,
       sequence: 1,
@@ -162,7 +163,7 @@ describe("context-engine turn outbox", () => {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const payload = createPayload({
+    const payload = createSyntheticPayload({
       advancementKey: "session-a:missing-state",
       databasePath: database.path,
       sequence: 1,
@@ -461,7 +462,7 @@ describe("context-engine turn outbox", () => {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const payload = createPayload({
+    const payload = createSyntheticPayload({
       advancementKey: "session-a:unrecoverable",
       databasePath: database.path,
       sequence: 1,
@@ -502,7 +503,7 @@ describe("context-engine turn outbox", () => {
     enqueueContextEngineTurnCommit({
       database,
       engineId: "test",
-      payload: createPayload({
+      payload: await createPayload({
         advancementKey: "session-a:later-ready",
         databasePath: database.path,
         sequence: 3,
@@ -584,22 +585,26 @@ describe("context-engine turn outbox", () => {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const enqueue = (advancementKey: string, sessionId: string, sequence: number) =>
+    const enqueue = async (advancementKey: string, sessionId: string, sequence: number) =>
       enqueueContextEngineTurnCommit({
         database,
         engineId: "test",
-        payload: createPayload({
+        payload: await createPayload({
           advancementKey,
           databasePath: database.path,
           sequence,
           sessionId,
         }),
       });
-    enqueue("session-a:z-first", "session-a", 1);
+    await enqueue("session-a:z-first", "session-a", 1);
     for (let turn = 2; turn <= 17; turn += 1) {
-      enqueue(turn === 2 ? "session-a:a-second" : `session-a:${turn}`, "session-a", turn * 2 - 1);
+      await enqueue(
+        turn === 2 ? "session-a:a-second" : `session-a:${turn}`,
+        "session-a",
+        turn * 2 - 1,
+      );
     }
-    enqueue("session-b:1", "session-b", 1);
+    await enqueue("session-b:1", "session-b", 1);
     database.db.exec(`
       UPDATE context_engine_turn_outbox SET created_at = CASE
         WHEN session_id = 'session-a' THEN 1
@@ -674,7 +679,7 @@ describe("context-engine turn outbox", () => {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const payload = createPayload({
+    const payload = await createPayload({
       advancementKey: "session-a:retry",
       databasePath: database.path,
       sequence: 1,
@@ -750,7 +755,7 @@ describe("context-engine turn outbox", () => {
     enqueueContextEngineTurnCommit({
       database,
       engineId: "test",
-      payload: createPayload({
+      payload: await createPayload({
         advancementKey: "session-a:blocked",
         databasePath: database.path,
         sequence: 3,
