@@ -25,7 +25,7 @@ import { createDeferred } from "./helpers/promise.js";
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "restored-settle/restored-settle";
 const PROBE_MARKER = "restored wake ordering probe";
-const RESTORED_WAKE_MARKER = "Every subagent spawned from this session has now settled";
+const RESTORED_WAKE_MARKER = "Every subagent in this batch has now settled";
 
 type HeldModelServer = {
   active: () => number;

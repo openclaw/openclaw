@@ -2390,21 +2390,13 @@ export const en: TranslationMap & {
     idle: "Idle",
     offline: "Offline",
     sessions: {
-      all: "All",
-      open: "Open",
-      running: "Running",
-      runningOnly: "Only people with running sessions",
-      sortOpen: "Sort people by open sessions",
-      sortRunning: "Sort people by running sessions",
+      openCount: "{count}\u00a0open",
+      runningCount: "{count}\u00a0running",
       openHint:
         "Owned, unarchived conversations you can access across agents. Excludes hidden subagents, automation, and system sessions.",
       runningHint: "Open sessions actively executing an agent turn. Queued work is not running.",
       counts: "{open} open sessions, {running} running",
       unavailable: "Session counts unavailable",
-      noneRunning: "No sessions running.",
-      total: "Total",
-      scope:
-        "Totals for the people shown, across agents. Only sessions you can access are counted.",
       retry: "Counts may be out of date. Retry",
     },
     card: {

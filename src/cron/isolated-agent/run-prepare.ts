@@ -1,5 +1,4 @@
 /** Session identity and context preparation for isolated cron runs. */
-import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
@@ -9,7 +8,6 @@ import {
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
@@ -21,10 +19,7 @@ import {
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import {
-  beginSessionWorkAdmission,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
+import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -59,12 +54,11 @@ import {
 } from "./run-prepare-runtime.js";
 import {
   CronSessionLifecycleClaimError,
+  beginCronSessionWorkAdmission,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   markCronSessionPreRun,
   persistCronSkillsSnapshotIfChanged,
-  projectCronOwnershipFields,
-  resolveCronLifecycleRevisionIdentity,
   type CronLiveSelection,
   type CronRunContinuationSession,
   type CronSessionRowWriter,
@@ -72,8 +66,8 @@ import {
   type PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
+import { prepareCronSessionWorkspace, type CronWorkspaceLease } from "./run-workspace.js";
 import {
-  ensureAgentWorkspace,
   isExternalHookSession,
   logWarn,
   mapHookExternalContentSource,
@@ -90,7 +84,7 @@ import {
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
+import { prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
@@ -106,6 +100,8 @@ export type PreparedCronRunContext = {
   runSessionKey: string;
   usesDetachedRunSession: boolean;
   workspaceDir: string;
+  cwd?: string;
+  workspaceLease?: CronWorkspaceLease;
   executionRoot?: RunCronAgentTurnParams["executionRoot"];
   commandBody: string;
   inputProvenance?: InputProvenance;
@@ -219,17 +215,6 @@ export async function prepareCronRunContext(params: {
   const hookExternalContentSource =
     payloadHookExternalContentSource ?? resolveHookExternalContentSource(baseSessionKey);
 
-  const workspace = await ensureAgentWorkspace({
-    dir: modelOwner.workspaceDir,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !params.isFastTestEnv,
-    skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-    provisioning: await (
-      await import("../../agents/acp-workspace-provisioning.js")
-    ).resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: runtimeCfg, agentId }),
-  });
-  const workspaceDir = workspace.dir;
-  const executionWorkspaceDir = input.executionRoot ?? workspaceDir;
-
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
@@ -264,36 +249,12 @@ export async function prepareCronRunContext(params: {
   const runSessionKey = usesExactRunSession
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
-  const initialSessionEntry = cronSession.initialSessionEntry;
-  // Claim before async model prep so maintenance cannot delete this session generation.
-  const sessionWorkAdmission = await beginSessionWorkAdmission({
-    scope: cronSession.storePath,
-    identities: [
-      agentSessionKey,
-      initialSessionEntry?.sessionId,
-      cronSession.sessionEntry.sessionId,
-      resolveCronLifecycleRevisionIdentity(cronSession.lifecycleRevision),
-      runSessionKey,
-    ],
+  const sessionWorkAdmission = await beginCronSessionWorkAdmission({
+    cronSession,
+    agentSessionKey,
+    runSessionKey,
     signal: input.abortSignal ?? input.signal,
     onInterrupt: params.onLifecycleInterrupt,
-    assertAllowed: () => {
-      const currentEntry = loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
-      const changed = initialSessionEntry
-        ? !currentEntry ||
-          !isDeepStrictEqual(
-            projectCronOwnershipFields(currentEntry),
-            projectCronOwnershipFields(initialSessionEntry),
-          )
-        : Boolean(currentEntry);
-      if (changed) {
-        throw new CronSessionLifecycleClaimError(agentSessionKey);
-      }
-      const archivedSessionError = resolveSessionWorkStartError(agentSessionKey, currentEntry);
-      if (archivedSessionError) {
-        throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
-      }
-    },
   });
 
   clearBootstrapSnapshotOnSessionRollover({
@@ -302,7 +263,23 @@ export async function prepareCronRunContext(params: {
   });
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
+  let workspaceLease: CronWorkspaceLease | undefined;
+  let workspaceLeaseTransferred = false;
   try {
+    const selectedWorkspace = await prepareCronSessionWorkspace({
+      cfg: runtimeCfg,
+      agentId,
+      input,
+      agentCfg,
+      sessionKey: agentSessionKey,
+      cronSession,
+      defaultWorkspaceDir: modelOwner.workspaceDir,
+      sessionWorkAdmission,
+      isFastTestEnv: params.isFastTestEnv,
+    });
+    workspaceLease = selectedWorkspace.lease;
+    const workspaceDir = selectedWorkspace.workspaceDir;
+    const executionWorkspaceDir = input.executionRoot ?? workspaceDir;
     const persistCronSessionRow: CronSessionRowWriter = async ({
       storePath,
       sessionKey,
@@ -665,6 +642,7 @@ export async function prepareCronRunContext(params: {
       : undefined;
     await runContinuationSession?.initialize();
 
+    workspaceLeaseTransferred = true;
     return {
       ok: true,
       context: {
@@ -681,6 +659,8 @@ export async function prepareCronRunContext(params: {
         runSessionKey,
         usesDetachedRunSession,
         workspaceDir,
+        cwd: selectedWorkspace.cwd,
+        workspaceLease,
         executionRoot: input.executionRoot,
         commandBody,
         inputProvenance:
@@ -725,6 +705,10 @@ export async function prepareCronRunContext(params: {
       throw error;
     } finally {
       sessionWorkAdmission.release();
+    }
+  } finally {
+    if (!workspaceLeaseTransferred) {
+      await workspaceLease?.release();
     }
   }
 }
