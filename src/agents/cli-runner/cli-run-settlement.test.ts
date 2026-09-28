@@ -17,6 +17,7 @@ import { isCliBindingFlushed, runCliAgent } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
 import * as cliTranscript from "../command/attempt-execution.helpers.js";
+import { resolveDiagnosticModelResponse } from "../diagnostic-model-response.js";
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
@@ -281,6 +282,21 @@ it.each(["progress", "ambiguous", "final"] as const)(
     }
   },
 );
+
+it("never captures host-synthesized optional silence as model output", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "optional";
+  const result = buildCliRunResult({
+    context,
+    output: { text: "" },
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+});
 
 it("preserves completed result boundaries for independent final delivery", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });

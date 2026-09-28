@@ -510,6 +510,7 @@ async function runEmbeddedAgentForSession(
                     },
                     finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
                     finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                    providerStarted: false,
                   },
                 };
               }
