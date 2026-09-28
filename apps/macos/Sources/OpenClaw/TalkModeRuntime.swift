@@ -716,7 +716,10 @@ extension TalkModeRuntime {
                 return nil
             }
             defer { group.cancelAll() }
-            return await group.next() ?? nil
+            guard let result = await group.next() else {
+                return nil
+            }
+            return result
         }
     }
 
