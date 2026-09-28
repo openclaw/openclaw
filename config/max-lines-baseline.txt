@@ -35,7 +35,6 @@ extensions/codex/src/app-server/elicitation-bridge.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
-extensions/codex/src/app-server/run-attempt.context-engine.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
 extensions/codex/src/app-server/run-attempt.turn-watches.test.ts
 extensions/codex/src/app-server/runtime-artifact.ts
