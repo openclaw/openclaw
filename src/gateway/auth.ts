@@ -49,7 +49,7 @@ export type GatewayAuthResult = {
     | "trusted-proxy";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
-  tailscaleIdentity?: VerifiedTailscaleIdentity;
+  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
@@ -96,8 +96,6 @@ type AuthorizeGatewayConnectParams = {
     allowHostHeaderOriginFallback?: boolean;
   };
 };
-
-type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
 
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
@@ -306,21 +304,7 @@ function authorizeHttpBrowserOrigin(params: {
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
   });
-  if (originCheck.ok) {
-    return null;
-  }
-  return { ok: false, reason: params.reason };
-}
-
-function authorizeTrustedProxyBrowserOrigin(params: {
-  authSurface: GatewayAuthSurface;
-  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
-}): { ok: false; reason: string } | null {
-  return authorizeHttpBrowserOrigin({
-    ...params,
-    isLocalClient: false,
-    reason: "trusted_proxy_origin_not_allowed",
-  });
+  return originCheck.ok ? null : { ok: false, reason: params.reason };
 }
 
 async function authorizeSharedSecretAuth(params: {
@@ -483,9 +467,11 @@ async function authorizeGatewayConnectCore(
       if (ingressAttribution?.kind !== "trusted-proxy") {
         return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
       }
-      const originResult = authorizeTrustedProxyBrowserOrigin({
+      const originResult = authorizeHttpBrowserOrigin({
         authSurface,
         browserOriginPolicy: params.browserOriginPolicy,
+        isLocalClient: false,
+        reason: "trusted_proxy_origin_not_allowed",
       });
       if (originResult) {
         return originResult;

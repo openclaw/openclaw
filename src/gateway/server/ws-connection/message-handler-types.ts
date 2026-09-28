@@ -16,7 +16,6 @@ import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.js";
-import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import type { GatewayClientRegistry } from "../client-registry.js";
@@ -25,6 +24,7 @@ import type {
   PrepareGatewayAuthenticatedReceive,
 } from "../connection-transport.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import type { admitGatewayConnect } from "./connect-admission.js";
 import type { ControlUiPairingKind } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
 import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
@@ -53,7 +53,6 @@ export type GatewayWsMessageHandlerParams = {
   localPort?: number;
   endpoint?: string;
   forwardedFor?: string;
-  realIp?: string;
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
@@ -130,20 +129,12 @@ export type GatewayConnectPhaseContext = {
   releasePendingNodePairingCleanup: () => Promise<void>;
 };
 
-export type AuthenticatedGatewayConnect = {
+export type AuthenticatedGatewayConnect = NonNullable<
+  Awaited<ReturnType<typeof admitGatewayConnect>>
+> & {
   authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
-  minProtocol: number;
-  maxProtocol: number;
-  usesLegacyNodeProtocol: boolean;
-  role: GatewayRole;
-  scopes: string[];
   hasRequestedScopes: boolean;
-  isControlUi: boolean;
-  isBrowserOperatorUi: boolean;
-  isWebchat: boolean;
-  isNativeAppUi: boolean;
-  startupPending: boolean;
   device: ConnectParams["device"] | null | undefined;
   devicePublicKey: string | null;
   deviceAuthPayloadVersion: "v2" | "v3" | null;
@@ -152,10 +143,8 @@ export type AuthenticatedGatewayConnect = {
   bootstrapTokenCandidate?: string;
   deviceTokenSharedGatewaySessionGeneration?: string;
   authResult: GatewayAuthResult;
-  authOk: boolean;
   authMethod: GatewayAuthResult["method"];
   pairingLocality: PairingLocalityKind;
-  usesSharedGatewayAuth: boolean;
   sessionUsesSharedGatewayAuth: boolean;
   sessionSharedGatewaySessionGeneration?: string;
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
