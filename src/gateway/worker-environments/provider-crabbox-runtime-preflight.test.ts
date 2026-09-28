@@ -11,10 +11,6 @@ import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-sto
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
-const { CRABBOX_MIN_VERSION } = await importFreshModule<{ CRABBOX_MIN_VERSION: string }>(
-  import.meta.url,
-  "../../../extensions/crabbox/api.ts",
-);
 const SETUP_ENV = "OPENCLAW_TEST_REPLAY_SETUP";
 const CLASSLESS_PROFILE = {
   binary: "/mock/crabbox",
@@ -97,7 +93,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: CRABBOX_MIN_VERSION });
+            return commandResult({ stdout: "999.0.0" });
           }
           if (argv[1] === "providers") {
             expect(argv.slice(1)).toEqual(["providers", "--json"]);
@@ -251,7 +247,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
       if (argv[1] === "--version") {
         expect(argv.slice(1)).toEqual(["--version"]);
-        return commandResult({ stdout: CRABBOX_MIN_VERSION });
+        return commandResult({ stdout: "999.0.0" });
       }
       calls.push(argv);
       if (argv[1] === "providers") {
@@ -392,7 +388,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: CRABBOX_MIN_VERSION });
+            return commandResult({ stdout: "999.0.0" });
           }
           expect(argv.slice(1)).toEqual(["providers", "--json"]);
           return commandResult({ stdout: "[]" });
