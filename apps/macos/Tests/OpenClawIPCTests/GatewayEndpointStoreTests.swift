@@ -228,7 +228,7 @@ struct GatewayEndpointStoreTests {
     {
         GatewayEndpointStore.SourceSnapshot(
             routingGeneration: routingGeneration,
-            mode: .init(mode),
+            mode: mode,
             token: token,
             password: password,
             deviceAuthGatewayID: deviceAuthGatewayID,
@@ -236,7 +236,7 @@ struct GatewayEndpointStoreTests {
             localHost: localHost,
             scheme: scheme,
             bindMode: bindMode,
-            remoteTransport: .init(transport),
+            remoteTransport: transport,
             directRemoteURL: directURL,
             remoteTLSFingerprint: tlsFingerprint,
             sshRouteIdentity: mode == .remote && transport == .ssh
