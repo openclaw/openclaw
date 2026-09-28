@@ -4,6 +4,7 @@ import {
   createInitialLeaseStore,
   inspectCanonicalPool,
   leaseStoreCrc,
+  manifestCrc,
   PHASE_E_POOL,
   parsePhaseEEvidence,
   redactPhaseEEvidence,
@@ -30,16 +31,23 @@ describe("Phase E maintainer policy", () => {
   it("rejects duplicate SIDs and only rolls back its own manifest", () => {
     const accounts = PHASE_E_POOL.map((name) => ({ name, sid: "S-1" }));
     expect(() => inspectCanonicalPool(accounts)).toThrow("AMBIGUOUS");
+    const createdAccounts = PHASE_E_POOL.map((name, index) => ({ name, sid: `S-1-5-21-${index}` }));
     const manifest = {
       version: 1 as const,
       generation: 1,
       owner: "srt-phase-e-maintainer" as const,
       invocationId: "run-1",
-      createdAccounts: [{ name: "srt-w0-01", sid: "S-1-2" }],
-      crc32: "x",
+      createdAccounts,
+      crc32: manifestCrc(1, createdAccounts),
     };
-    expect(rollbackCandidates(manifest, "run-1")).toEqual(["srt-w0-01"]);
+    expect(rollbackCandidates(manifest, "run-1")).toEqual(PHASE_E_POOL);
     expect(() => rollbackCandidates(manifest, "other")).toThrow("OWNERSHIP");
+    expect(() => rollbackCandidates({ ...manifest, crc32: "00000000" }, "run-1")).toThrow(
+      "MANIFEST_INVALID",
+    );
+    expect(() =>
+      rollbackCandidates({ ...manifest, createdAccounts: createdAccounts.slice(0, 7) }, "run-1"),
+    ).toThrow("MANIFEST_INVALID");
   });
   it("has stable CRC, rejects free-form evidence, and fails closed off Windows", () => {
     expect(leaseStoreCrc(1, PHASE_E_POOL)).toBe(leaseStoreCrc(1, PHASE_E_POOL));

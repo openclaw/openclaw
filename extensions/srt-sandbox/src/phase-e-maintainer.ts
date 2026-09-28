@@ -68,17 +68,34 @@ export function rollbackCandidates(manifest: PhaseEManifest, invocationId: strin
     manifest.version !== 1 ||
     !Number.isSafeInteger(manifest.generation) ||
     manifest.generation < 1 ||
+    typeof manifest.crc32 !== "string" ||
     !Array.isArray(manifest.createdAccounts) ||
+    manifest.createdAccounts.length !== PHASE_E_POOL.length ||
     manifest.createdAccounts.some(
       (account) =>
         !PHASE_E_POOL.includes(account.name) || typeof account.sid !== "string" || !account.sid,
     ) ||
-    new Set(manifest.createdAccounts.map((account) => account.name)).size !==
-      manifest.createdAccounts.length
+    new Set(manifest.createdAccounts.map((account) => account.name)).size !== PHASE_E_POOL.length ||
+    new Set(manifest.createdAccounts.map((account) => account.sid)).size !== PHASE_E_POOL.length ||
+    manifest.createdAccounts.some((account) => !/^S-1-[0-9-]+$/.test(account.sid)) ||
+    manifest.crc32 !== manifestCrc(manifest.generation, manifest.createdAccounts)
   ) {
     throw new PhaseEMaintainerError("PHASE_E_MANIFEST_INVALID");
   }
   return manifest.createdAccounts.map((account) => account.name);
+}
+
+/** Stable checksum over the non-secret ownership facts persisted by the maintainer. */
+export function manifestCrc(
+  generation: number,
+  accounts: readonly { name: string; sid: string }[],
+): string {
+  return leaseStoreCrc(
+    generation,
+    [...accounts]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((account) => `${account.name}:${account.sid}`),
+  );
 }
 
 /** A small deterministic checksum for the versioned initial lease-store header. */
