@@ -92,16 +92,15 @@ export async function runHostedChannelSetup(
   prompter: WizardPrompter,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
+  assertPersistentEffectCurrent?: () => void,
 ): Promise<HostedSetupCompletion> {
-  const { createChannelSetupHooks, setupChannels } =
-    await import("../commands/onboard-channels.js");
-  let channelSetup: ReturnType<typeof createChannelSetupHooks>;
+  const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
-      channelSetup = createChannelSetupHooks({
+      const channelSetup = createChannelSetupHooks({
         runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
       });
@@ -116,11 +115,10 @@ export async function runHostedChannelSetup(
           skipDmPolicyPrompt: true,
           skipConfirm: true,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-          onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+          ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
+          onPostWriteHook: channelSetup.onPostWriteHook,
         }),
-        afterWrite: async (configPath) => {
-          await channelSetup.runPostWriteHooks(configPath);
-        },
+        afterWrite: async (configPath) => await channelSetup.runPostWriteHooks(configPath),
       };
     },
   });

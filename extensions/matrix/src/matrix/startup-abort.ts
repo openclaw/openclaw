@@ -1,4 +1,3 @@
-// Matrix plugin module implements startup abort behavior.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 
 export function createMatrixStartupAbortError(): Error {

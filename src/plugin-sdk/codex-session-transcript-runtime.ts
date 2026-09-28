@@ -3,10 +3,8 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
-import {
-  readSessionTranscriptContextMessages,
-  type SessionTranscriptContextVersion,
-} from "../config/sessions/session-accessor.sqlite-model-context.js";
+import type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { readSessionTranscriptContextMessages } from "../config/sessions/session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   runWithSessionTranscriptReadFence,
@@ -27,7 +25,7 @@ import type { SessionTranscriptTargetParams } from "./session-transcript-runtime
 export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
 export { validateSessionTranscriptContextAdmission as validateCodexSessionTranscriptReadAdmission } from "../config/sessions/session-accessor.sqlite-model-context.js";
 export { validateSessionTranscriptContextVersion as validateCodexSessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
-export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
+export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 export { SessionTranscriptReadFenceError };
 
 /** The native evidence consumer remains lazy inside one readonly transcript snapshot. */

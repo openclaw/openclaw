@@ -6,13 +6,14 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   recordSessionHumanDirectMessage,
-  recordSessionStateEvent,
+  recordSessionStateEventAsync,
 } from "./session-state-events.js";
 import {
   deleteSessionUpstreamLink,
@@ -40,7 +41,7 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   }) => Promise<string[]>;
 };
 
-type SessionUpstreamMonitor = { stop: () => void };
+type SessionUpstreamMonitor = { stop: () => Promise<void> };
 
 type SessionUpstreamMissingCounter = {
   count: number;
@@ -309,7 +310,12 @@ async function runSessionUpstreamMonitorTick(
             continue;
           }
           const sourceKey = upstreamSourceKey(probe);
-          const recorded = recordSessionStateEvent(
+          const assertCurrent = () => {
+            if (!loadIdleProbeSession(probe, options, expectedSessionId)) {
+              throw new Error("Upstream observation lost its idle session owner");
+            }
+          };
+          const recorded = await recordSessionStateEventAsync(
             {
               sessionKey: probe.sessionKey,
               agentId: probe.agentId,
@@ -319,13 +325,24 @@ async function runSessionUpstreamMonitorTick(
               summary: `upstream missing via ${catalogId}`,
               payload: { channel: catalogId },
             },
-            { ...dbOptions, now: (options.now ?? Date.now)() },
+            {
+              ...dbOptions,
+              now: (options.now ?? Date.now)(),
+              assertCurrent,
+              expectedUpstream: currentLink,
+            },
           );
           if (!recorded) {
             missingCounts.set(missingCountKey, {
               count: SESSION_UPSTREAM_MISSING_THRESHOLD - 1,
               linkUpdatedAt: expectedUpdatedAt,
             });
+            continue;
+          }
+          if (
+            !loadIdleProbeSession(probe, options, expectedSessionId) ||
+            !readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)
+          ) {
             continue;
           }
           deleteSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
@@ -355,15 +372,13 @@ async function runSessionUpstreamMonitorTick(
           );
           continue;
         }
-        // CAS guard AFTER the last await: a Continue can refresh this link (new
-        // host/thread/source) while the scan or provenance check was in flight.
-        // From here to the record the path is synchronous, so a stale scan can
-        // neither record from the old source nor clobber the refreshed marker.
+        // Capture the source after provider I/O; its worker repeats this comparison under BEGIN.
         const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
         // Compare source identity too: a same-millisecond Continue can refresh the
         // row without changing updated_at, so the timestamp alone is not a reliable
         // optimistic lock.
-        if (!readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)) {
+        const currentLink = readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions);
+        if (!currentLink) {
           continue;
         }
         if (activity.humanTurns === 0) {
@@ -377,7 +392,8 @@ async function runSessionUpstreamMonitorTick(
         if (!Number.isFinite(activity.occurredAt) || !activity.dedupeId) {
           continue;
         }
-        const recorded = recordSessionHumanDirectMessage(
+        const expectedSessionId = sessionIdBySessionKey.get(probe.sessionKey);
+        const recorded = await recordSessionHumanDirectMessage(
           {
             sessionKey: probe.sessionKey,
             agentId: probe.agentId,
@@ -389,9 +405,22 @@ async function runSessionUpstreamMonitorTick(
           },
           // Local clock for bookkeeping: upstream occurredAt is event history only
           // and is clamped inside the recorder against this same clock.
-          { ...dbOptions, now: (options.now ?? Date.now)() },
+          {
+            ...dbOptions,
+            now: (options.now ?? Date.now)(),
+            expectedUpstream: currentLink,
+            assertCurrent: () => {
+              if (!loadIdleProbeSession(probe, options, expectedSessionId)) {
+                throw new Error("Upstream observation lost its idle session owner");
+              }
+            },
+          },
         );
-        if (!recorded) {
+        if (
+          !recorded ||
+          !loadIdleProbeSession(probe, options, expectedSessionId) ||
+          !readMatchingProbeLink(probe, expectedUpdatedAt, dbOptions)
+        ) {
           continue;
         }
         // Commit the scan marker only after the durable event insert/dedupe succeeds.
@@ -408,40 +437,48 @@ async function runSessionUpstreamMonitorTick(
 }
 
 export function startSessionUpstreamMonitor(
-  options: SessionUpstreamMonitorOptions = {},
+  options: SessionUpstreamMonitorOptions & { scheduler: GatewayScheduler },
 ): SessionUpstreamMonitor {
+  const { scheduler } = options;
   let stopped = false;
-  let running = false;
+  let running: Promise<void> | undefined;
   const lifecycle = new AbortController();
-  const tickOptions = { ...options, signal: lifecycle.signal };
+  const tickOptions = {
+    ...options,
+    now: options.now ?? (() => scheduler.now()),
+    signal: AbortSignal.any([lifecycle.signal, scheduler.signal]),
+  };
   const missingCounts = new Map<string, SessionUpstreamMissingCounter>();
   const run = () => {
     if (stopped || running) {
-      return;
+      return undefined;
     }
-    running = true;
-    void runSessionUpstreamMonitorTick(tickOptions, missingCounts)
+    running = runSessionUpstreamMonitorTick(tickOptions, missingCounts)
       .catch((error: unknown) => {
         log.warn(`upstream monitor tick failed: ${String(error)}`);
       })
       .finally(() => {
-        running = false;
+        running = undefined;
       });
+    return running;
   };
   // Session catalogs own this bounded freshness exception; plugin metadata remains restart-stable.
-  const initialTimer = setTimeout(run, SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS);
-  initialTimer.unref?.();
-  const interval = setInterval(run, SESSION_UPSTREAM_MONITOR_INTERVAL_MS);
-  interval.unref?.();
+  const initial = scheduler.schedule({
+    id: "sessions:upstream-initial-probe",
+    delayMs: SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS,
+    run,
+  });
+  const recurring = scheduler.schedule({
+    id: "sessions:upstream-monitor",
+    delayMs: SESSION_UPSTREAM_MONITOR_INTERVAL_MS,
+    everyMs: SESSION_UPSTREAM_MONITOR_INTERVAL_MS,
+    run,
+  });
   return {
-    stop: () => {
-      if (stopped) {
-        return;
-      }
+    stop: async () => {
       stopped = true;
       lifecycle.abort();
-      clearTimeout(initialTimer);
-      clearInterval(interval);
+      await Promise.all([initial.stop(), recurring.stop()]);
     },
   };
 }

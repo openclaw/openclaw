@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, resetPreparedModelRuntimeHarness } from "../agents/prepared-model-runtime.test-harness.js";
 import fs from "node:fs/promises";
+import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -118,6 +119,7 @@ describe("setup activation reload ownership", () => {
       await refreshPreparedModelRuntimeSnapshots(previous);
       const initial = await readConfigFileSnapshot();
       const reloadError = vi.fn();
+      const watch = vi.spyOn(chokidar, "watch");
       const watcherReady = createDeferred();
       const captureEntered = createDeferred();
       const releaseCapture = createDeferred();
@@ -194,11 +196,23 @@ describe("setup activation reload ownership", () => {
         },
         log: { info: vi.fn(), warn: vi.fn(), error: reloadError },
       });
+      let echoObserved = false;
       const completion = createDeferred<() => Promise<boolean>>();
       const applied = createDeferred<ReturnType<typeof createRuntimeConfigWriteApplication>>();
       try {
+        await reloader.ready;
+        if (scenario === "superseded") {
+          const [watched] = watch.mock.results;
+          if (watched?.type !== "return") {
+            throw new Error("config watcher was not created");
+          }
+          // Deliver the writer's filesystem echo during model preparation.
+          getPreparedModelRuntimeMocks().discoverModels.mockImplementationOnce(() => {
+            watched.value.emit("change", state.configPath);
+            echoObserved = true;
+          });
+        }
         if (controlledEcho) {
-          await reloader.ready;
           await watcherReady.promise;
           getPreparedModelRuntimeMocks().resolveAmbientCredentials.mockImplementationOnce(
             async () => {
@@ -331,8 +345,11 @@ describe("setup activation reload ownership", () => {
           );
           return;
         }
-        const activationResult = await (await applied.promise).result;
-        expect(activationResult, JSON.stringify(reloadError.mock.calls)).toBe("applied");
+        const applicationStatus = await (await applied.promise).result;
+        expect(applicationStatus, JSON.stringify(reloadError.mock.calls)).toBe("applied");
+        if (scenario === "superseded") {
+          expect(echoObserved).toBe(true);
+        }
         const newerApplication = createRuntimeConfigWriteApplication();
         await transformConfigFileWithRetry({
           base: "source",

@@ -19,7 +19,10 @@ enum OpenClawProcessMain {
 }
 
 enum OpenClawProcessEntrypoint {
-    static func run(arguments: [String], launchApplication: () -> Void) -> Int32? {
+    static func run(arguments: [String], bundle: Bundle = .main, launchApplication: () -> Void) -> Int32? {
+        if let status = CloudWorkerHost.runIfRequested(arguments: arguments, bundle: bundle) {
+            return status
+        }
         if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
             return status
         }
@@ -111,8 +114,14 @@ struct OpenClawApp: App {
                 }
             }
             SidebarCommands()
-            if !self.state.nativeExperienceEnabled {
-                CommandMenu("Navigate") {
+            CommandMenu("Navigate") {
+                if self.state.nativeExperienceEnabled {
+                    Button("Command Palette…") {
+                        WebChatManager.shared.showCommandPalette()
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(!WebChatManager.shared.canShowCommandPalette)
+                } else {
                     Button("Back") {
                         DashboardManager.shared.navigateBack()
                     }
@@ -290,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
+        ChromeExtensionSetup.shared.start(plan: launchPlan)
         GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
@@ -333,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewayBrowserSignInCoordinator.shared.start()
             GatewaysMainMenu.shared.install()
             BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()
@@ -379,6 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        ChromeExtensionSetup.shared.stop()
         BackgroundSessionNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()

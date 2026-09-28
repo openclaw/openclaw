@@ -16,6 +16,10 @@ const acceptedSessionSpawns = [
   { runId: "child", childSessionKey: "agent:main:subagent:child", expectsCompletionMessage: true },
 ];
 
+function makeResult(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgentRunResult {
+  return { acceptedSessionSpawns, meta: { durationMs: 1, ...meta } };
+}
+
 describe("logical requester settlement", () => {
   beforeEach(() => {
     assertCurrent.mockReset();
@@ -27,10 +31,7 @@ describe("logical requester settlement", () => {
     "acknowledges only a committed explicit yield (settled: %s)",
     (settled) => {
       registry.settle.mockReturnValue(settled);
-      const result: EmbeddedAgentRunResult = {
-        acceptedSessionSpawns,
-        meta: { durationMs: 1, yielded: true },
-      };
+      const result = makeResult({ yielded: true });
       if (settled) {
         settleRequesterRun(requester, result, assertCurrent);
         expect(result.requesterContinuationSettled).toBe(true);
@@ -44,38 +45,54 @@ describe("logical requester settlement", () => {
   );
 
   it("leaves implicit continuation gated on outbox status delivery", () => {
-    const result: EmbeddedAgentRunResult = {
-      acceptedSessionSpawns,
-      meta: { durationMs: 1, continuationPending: true },
-    };
+    const result = makeResult({ continuationPending: true });
     settleRequesterRun(requester, result, assertCurrent);
     expect(registry.markYielded).toHaveBeenCalledOnce();
     expect(registry.settle).not.toHaveBeenCalled();
     expect(result.requesterContinuationSettled).toBeUndefined();
   });
 
+  it("transfers producer-owned completion after a partial harness receipt", async () => {
+    const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "yield-test");
+    try {
+      await admission.admit("embedded");
+      mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, acceptedSessionSpawns);
+      const result: EmbeddedAgentRunResult = {
+        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+        meta: { durationMs: 1, yielded: true },
+      };
+
+      settleRequesterRun({ ...requester, preparedRunAdmission: admission }, result, assertCurrent);
+
+      expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
+        requesterSessionKey: requester.sessionKey,
+        requesterAgentId: requester.agentId,
+        requesterTurnRunId: requester.runId,
+        requesterYielded: true,
+        acceptedSessionSpawns,
+      });
+      expect(result.requesterContinuationSettled).toBe(true);
+    } finally {
+      admission.close();
+    }
+  });
+
   it("surfaces failed persistence without acknowledging a successor", () => {
     registry.settle.mockImplementation(() => {
       throw new Error("storage unavailable");
     });
-    const result: EmbeddedAgentRunResult = {
-      acceptedSessionSpawns,
-      meta: { durationMs: 1, yielded: true },
-    };
+    const result = makeResult({ yielded: true });
     expect(() => settleRequesterRun(requester, result, assertCurrent)).toThrow(
       "storage unavailable",
     );
     expect(result.requesterContinuationSettled).toBeUndefined();
   });
 
-  it.each([false, true])("fences a revoked requester before handoff (implicit: %s)", (implicit) => {
+  it("fences a revoked requester before handoff", () => {
     assertCurrent.mockImplementation(() => {
       throw new Error("requester replaced");
     });
-    const result: EmbeddedAgentRunResult = {
-      acceptedSessionSpawns,
-      meta: { durationMs: 1, ...(implicit ? { continuationPending: true } : { yielded: true }) },
-    };
+    const result = makeResult({ yielded: true });
     expect(() => settleRequesterRun(requester, result, assertCurrent)).toThrow(
       "requester replaced",
     );
@@ -85,14 +102,7 @@ describe("logical requester settlement", () => {
   });
 
   it.each(["cancelled", "aborted"] as const)("does not transfer %s ownership", (kind) => {
-    const result: EmbeddedAgentRunResult = {
-      acceptedSessionSpawns,
-      meta: {
-        durationMs: 1,
-        yielded: true,
-        ...(kind === "aborted" ? { aborted: true } : {}),
-      },
-    };
+    const result = makeResult({ yielded: true, ...(kind === "aborted" ? { aborted: true } : {}) });
     settleRequesterRun(
       {
         ...requester,
@@ -195,7 +205,7 @@ describe("logical requester settlement", () => {
       expect(() =>
         settleRequesterRun(
           { ...requester, preparedRunAdmission: admission },
-          { acceptedSessionSpawns, meta: { durationMs: 1, yielded: true } },
+          makeResult({ yielded: true }),
           () => admission.close(),
         ),
       ).toThrow("settlement is closed");

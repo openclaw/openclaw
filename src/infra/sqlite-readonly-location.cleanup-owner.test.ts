@@ -4,10 +4,120 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   adoptPreparedLocation,
+  registerAsyncSnapshotTempDirectory,
+  retainSnapshotTempDirectory,
   type CleanupFailureReport,
 } from "./sqlite-readonly-location-cleanup.js";
+import type { SqliteReadOnlyWorkerOptions } from "./sqlite-readonly-worker-protocol.js";
+import * as worker from "./sqlite-readonly-worker.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationAsync,
+} from "./sqlite-snapshot-source.js";
+import * as staging from "./sqlite-snapshot-staging.js";
+
+function mockSnapshotCopy(copy: (options: SqliteReadOnlyWorkerOptions) => Promise<string>) {
+  function run(
+    pathname: string,
+    options: { mode: "reclaim"; signal?: AbortSignal },
+  ): Promise<string[]>;
+  function run(pathname: string, options: SqliteReadOnlyWorkerOptions): Promise<string>;
+  function run(
+    _pathname: string,
+    options: SqliteReadOnlyWorkerOptions,
+  ): Promise<string | string[]> {
+    if (options.mode !== "sync" && options.mode !== "async") {
+      throw new Error(`Unexpected snapshot fixture mode: ${options.mode}`);
+    }
+    return copy(options);
+  }
+  return vi.spyOn(worker, "runSqliteReadOnlyWorker").mockImplementation(run);
+}
+
+it("preserves failed cleanup over cancellation in the public preparation contract", async () => {
+  const directory = path.join(root, "cancelled-preparation");
+  await fs.promises.mkdir(directory);
+  const prepared = adoptPreparedLocation(path.join(directory, "database.sqlite"), directory);
+  const controller = new AbortController();
+  vi.spyOn(staging, "createSqliteSnapshotStagingDirectory").mockImplementation(async () => {
+    controller.abort(new Error("caller cancelled"));
+    return directory;
+  });
+  const remove = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(new Error("snapshot busy"));
+  try {
+    await expect(
+      prepareSqliteReadOnlyLocation(path.join(root, "unused.sqlite"), {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("snapshot cleanup failed");
+    expect(fs.existsSync(directory)).toBe(true);
+  } finally {
+    remove.mockRestore();
+    expect(await prepared.cleanupAsync()).toBe(true);
+  }
+});
+
+it("retains async token custody through failed retirement before retrying removal", async () => {
+  const directory = path.join(root, "async-retirement");
+  await fs.promises.mkdir(directory);
+  const location = path.join(directory, "database.sqlite");
+  await fs.promises.writeFile(location, "retained snapshot");
+  let attempts = 0;
+  registerAsyncSnapshotTempDirectory(directory, async () => {
+    attempts++;
+    if (attempts === 1) {
+      throw new Error("retirement was not acknowledged");
+    }
+  });
+  const prepared = adoptPreparedLocation(location, directory);
+  expect(await prepared.cleanupAsync()).toBe(false);
+  expect(fs.readFileSync(location, "utf8")).toBe("retained snapshot");
+  expect(() => retainSnapshotTempDirectory(directory)).toThrow("retirement has started");
+  expect(await prepared.cleanupAsync()).toBe(true);
+  expect(attempts).toBe(2);
+  expect(fs.existsSync(directory)).toBe(false);
+});
+
+it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
+  const started = createDeferredCore();
+  const proceed = createDeferredCore();
+  const allocations: boolean[] = [];
+  vi.spyOn(staging, "createSqliteSnapshotStagingDirectory").mockImplementation(
+    async (_directory, _legacy, _signal, asynchronousCleanup = false) => {
+      allocations.push(asynchronousCleanup);
+      const directory = path.join(root, asynchronousCleanup ? "async-token" : "sync-token");
+      await fs.promises.mkdir(directory);
+      return directory;
+    },
+  );
+  mockSnapshotCopy(async (options) => {
+    if (!options.stagingRoot) {
+      throw new Error("Expected an owned snapshot root");
+    }
+    started.resolve();
+    await proceed.promise;
+    return path.join(options.stagingRoot, "database.sqlite");
+  });
+  const source = path.join(root, "mixed-source.sqlite");
+  const synchronous = prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true });
+  await started.promise;
+  const asynchronous = prepareSqliteReadOnlyLocationAsync(source, {
+    preserveSourceArtifacts: true,
+  });
+  proceed.resolve();
+  const [syncSnapshot, asyncSnapshot] = await Promise.all([synchronous, asynchronous]);
+  try {
+    expect(syncSnapshot.cleanupRoot).toBe(path.join(root, "sync-token"));
+    expect(asyncSnapshot.cleanupRoot).toBe(path.join(root, "async-token"));
+    expect(allocations).toEqual([false, true]);
+  } finally {
+    await syncSnapshot.cleanupAsync();
+    await asyncSnapshot.cleanupAsync();
+  }
+});
 
 // chmod-based denial only works on POSIX where the process is not root
 // (root bypasses mode bits, and Windows chmod does not revoke deletion ACLs).

@@ -187,7 +187,14 @@ describe("offerPostInstallMigrations", () => {
     const result = await offerPostInstallMigrations(buildBaseArgs({ prompter }));
 
     expect(confirm).toHaveBeenCalledOnce();
-    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Review migration from Codex at /home/user/.codex?",
+      initialValue: false,
+    });
+    expect(prompter.note).toHaveBeenCalledWith(
+      "You will review import options and confirm before applying.",
+      "Codex migration",
+    );
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
     expect(migrateDefaultCommand).toHaveBeenCalledWith(
       expect.anything(),
@@ -199,6 +206,31 @@ describe("offerPostInstallMigrations", () => {
       provider,
     );
     expect(result.config).toEqual({});
+  });
+
+  it("shows provider-owned import scope before asking whether to continue", async () => {
+    const description = "Import Example skills. Example conversations are not imported.";
+    const provider = buildProvider({ id: "example", label: "Example", description });
+    setProviders([provider]);
+    setOwnership("example", ["example-plugin"]);
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => false) as WizardPrompter["confirm"],
+    });
+
+    await offerPostInstallMigrations(
+      buildBaseArgs({ prompter, installedPluginIds: ["example-plugin"] }),
+    );
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      `${description}\n\nYou will review import options and confirm before applying.`,
+      "Example migration",
+    );
+    expect(prompter.note).toHaveBeenCalledBefore(vi.mocked(prompter.confirm));
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Review migration from Example at /home/user/.codex?",
+      initialValue: false,
+    });
+    expect(migrateDefaultCommand).not.toHaveBeenCalled();
   });
 
   it("returns config patched from migrated config items without mutating the input config", async () => {
@@ -314,6 +346,7 @@ describe("offerPostInstallMigrations", () => {
 
     await offerPostInstallMigrations(buildBaseArgs({ prompter, nonInteractive: true }));
 
+    expect(prompter.note).not.toHaveBeenCalled();
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(migrateDefaultCommand).not.toHaveBeenCalled();
   });

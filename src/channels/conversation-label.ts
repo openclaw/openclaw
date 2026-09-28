@@ -22,13 +22,7 @@ function extractConversationId(from?: string): string | undefined {
 // Numeric ids and address-like ids are useful disambiguators. Human labels, hashtags,
 // and handles are already readable enough and should not get redundant "id:" suffixes.
 function shouldAppendId(id: string): boolean {
-  if (/^[0-9]+$/.test(id)) {
-    return true;
-  }
-  if (/^[^\s:@]+@[^\s:@]+$/.test(id)) {
-    return true;
-  }
-  return false;
+  return /^[0-9]+$/.test(id) || /^[^\s:@]+@[^\s:@]+$/.test(id);
 }
 
 /**
@@ -65,9 +59,6 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
     return base;
   }
   if (!shouldAppendId(id)) {
-    return base;
-  }
-  if (base === id) {
     return base;
   }
   if (base.includes(id)) {

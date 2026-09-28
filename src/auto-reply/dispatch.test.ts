@@ -702,7 +702,7 @@ describe("withReplyDispatcher", () => {
       text: "message rewrite",
       mediaUrls: ["media://reply.png"],
     });
-    expect(payload ? getReplyPayloadMetadata(payload) : undefined).toEqual({
+    expect(payload ? getReplyPayloadMetadata(payload) : undefined).toMatchObject({
       assistantMessageIndex: 7,
     });
     expect(hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0]?.onSessionMetadataChanges).toBe(

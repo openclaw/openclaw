@@ -399,7 +399,9 @@ suite.define(() => {
       await page.locator("#agents-tab-overview").click();
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      const identitySave = page.locator(".agent-identity-editor__actions button");
+      const identitySave = page
+        .locator(".agent-identity-editor__actions")
+        .getByRole("button", { name: "Save", exact: true });
       await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
       await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });

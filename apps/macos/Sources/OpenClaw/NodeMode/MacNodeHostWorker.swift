@@ -75,7 +75,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private static let maxPendingInvokeControlIDs = 32
     private static let maxPendingInvokeControlsPerID = 64
 
-    private enum PendingInvokeControl {
+    private enum PendingInvokeControl: Sendable {
         case input(seq: Int, payloadJSON: String)
         case cancel
     }
@@ -272,26 +272,21 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func handleInput(invokeId: String, seq: Int, payloadJSON: String) async {
-        await withCheckedContinuation { continuation in
-            self.queue.async {
-                let control = PendingInvokeControl.input(seq: seq, payloadJSON: payloadJSON)
-                if self.pendingInvokes[invokeId] != nil {
-                    try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
-                } else if self.process?.isRunning == true, self.manifest != nil {
-                    self.bufferInvokeControlLocked(control, invokeId: invokeId)
-                }
-                continuation.resume()
-            }
-        }
+        await self.handleInvokeControl(.input(seq: seq, payloadJSON: payloadJSON), invokeId: invokeId)
     }
 
     func cancel(invokeId: String) async {
+        await self.handleInvokeControl(.cancel, invokeId: invokeId)
+    }
+
+    private func handleInvokeControl(_ control: PendingInvokeControl, invokeId: String) async {
         await withCheckedContinuation { continuation in
             self.queue.async {
-                let control = PendingInvokeControl.cancel
                 if self.pendingInvokes[invokeId] != nil {
                     try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
-                    self.finishCancelledInvokeLocked(invokeId: invokeId)
+                    if case .cancel = control {
+                        self.finishCancelledInvokeLocked(invokeId: invokeId)
+                    }
                 } else if self.process?.isRunning == true, self.manifest != nil {
                     self.bufferInvokeControlLocked(control, invokeId: invokeId)
                 }
@@ -333,22 +328,16 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     private func enqueueInvokeControlLocked(_ control: PendingInvokeControl, invokeId: String) throws {
+        var frame: [String: Any] = ["generation": self.gatewayGeneration, "invokeId": invokeId]
         switch control {
         case let .input(seq, payloadJSON):
-            try self.enqueueWriteLocked([
-                "type": "invoke-input",
-                "generation": self.gatewayGeneration,
-                "invokeId": invokeId,
-                "seq": seq,
-                "payloadJSON": payloadJSON,
-            ])
+            frame["type"] = "invoke-input"
+            frame["seq"] = seq
+            frame["payloadJSON"] = payloadJSON
         case .cancel:
-            try self.enqueueWriteLocked([
-                "type": "invoke-cancel",
-                "generation": self.gatewayGeneration,
-                "invokeId": invokeId,
-            ])
+            frame["type"] = "invoke-cancel"
         }
+        try self.enqueueWriteLocked(frame)
     }
 
     private func finishCancelledInvokeLocked(invokeId: String) {

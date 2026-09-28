@@ -26,9 +26,9 @@ describe("image resize utility", () => {
   });
 
   it("keeps images that exactly fit the inline limits", async () => {
-    const input = "a".repeat(4.5 * 1024 * 1024);
+    const input = Buffer.alloc(((4.5 * 1024 * 1024) / 4) * 3);
     mocks.probe.mockResolvedValue({
-      bytes: Buffer.byteLength(input, "base64"),
+      bytes: input.byteLength,
       format: "png",
       hasAlpha: false,
       height: 20,
@@ -37,13 +37,13 @@ describe("image resize utility", () => {
     });
 
     const result = await processImage(
-      { type: "image", data: input, mimeType: "image/png" },
+      { data: input, mimeType: "image/png" },
       { autoResizeImages: true },
     );
 
     expect(result).toStrictEqual({
       ok: true,
-      image: { type: "image", data: input, mimeType: "image/png" },
+      image: { type: "image", data: input.toString("base64"), mimeType: "image/png" },
       hints: [],
     });
     expect(mocks.encode).not.toHaveBeenCalled();
@@ -77,7 +77,7 @@ describe("image resize utility", () => {
     });
 
     const result = await processImage(
-      { type: "image", data: inputBuffer.toString("base64"), mimeType: "image/jpeg" },
+      { data: inputBuffer, mimeType: "image/jpeg" },
       { autoResizeImages: true },
     );
 
@@ -133,10 +133,7 @@ describe("image resize utility", () => {
     });
 
     await expect(
-      processImage(
-        { type: "image", data: inputBuffer.toString("base64"), mimeType: "image/png" },
-        { autoResizeImages: true },
-      ),
+      processImage({ data: inputBuffer, mimeType: "image/png" }, { autoResizeImages: true }),
     ).resolves.toStrictEqual({
       ok: false,
       message: "[Image omitted: could not be resized below the inline image size limit.]",
@@ -144,10 +141,10 @@ describe("image resize utility", () => {
   });
 
   it("does not add coordinate hints when Rastermill only re-encodes the image", async () => {
-    const input = "a".repeat(4.5 * 1024 * 1024 + 1);
+    const input = Buffer.alloc(((4.5 * 1024 * 1024) / 4) * 3 + 1);
     const outputBuffer = Buffer.from("re-encoded");
     mocks.probe.mockResolvedValue({
-      bytes: Buffer.byteLength(input, "base64"),
+      bytes: input.byteLength,
       format: "png",
       hasAlpha: false,
       height: 20,
@@ -169,10 +166,7 @@ describe("image resize utility", () => {
     });
 
     await expect(
-      processImage(
-        { type: "image", data: input, mimeType: "image/png" },
-        { autoResizeImages: true },
-      ),
+      processImage({ data: input, mimeType: "image/png" }, { autoResizeImages: true }),
     ).resolves.toStrictEqual({
       ok: true,
       image: {

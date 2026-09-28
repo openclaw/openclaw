@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";

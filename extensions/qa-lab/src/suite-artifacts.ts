@@ -12,13 +12,12 @@ import {
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
+import { renderQaMarkdownReport } from "./report.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { splitModelRef } from "./suite-planning.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
-import { createQaSuiteReportNotes } from "./suite-support.js";
 import {
   rejectRemovedQaChannelDriverSelection,
   type QaSuiteScenarioResult,
@@ -72,12 +71,6 @@ export type QaSuiteSummaryJsonParams = {
   runtimePair?: [RuntimeId, RuntimeId];
 };
 
-/**
- * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.6 Luna parity gate
- * (agentic-parity-report.ts, #64441) and any future parity wrapper can
- * import this type instead of re-declaring the shape, so changes to the
- * summary schema propagate through to every consumer at type-check time.
- */
 export type QaSuiteGatewayRssSample = NonNullable<
   NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayProcessRssSamples"]
 >[number];
@@ -87,13 +80,6 @@ export type QaSuiteGatewayHeapSnapshot = NonNullable<
 >[number];
 
 /**
- * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.6 Luna
- * parity gate (agentic-parity-report.ts, #64441) and any future parity
- * runner can assert-and-trust the provider/model that produced a given
- * summary instead of blindly accepting the caller's candidateLabel /
- * baselineLabel. Without the `run` block, a maintainer who swaps candidate
- * and baseline summary paths could silently produce a mislabeled verdict.
- *
  * `scenarioIds` is only recorded when the caller passed a non-empty array
  * (an explicit scenario selection). A missing or empty array means "no
  * filter, full lane-selected catalog", which the summary encodes as `null`
@@ -139,35 +125,22 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
   };
 }
 
-export async function writeQaSuiteArtifacts(params: {
-  status?: QaSuiteSummaryJson["run"]["status"];
-  repoRoot?: string;
-  outputDir: string;
-  startedAt: Date;
-  finishedAt: Date;
-  scenarios: QaSuiteScenarioResult[];
-  scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
-  evidenceMode?: QaScorecardEvidenceMode;
-  recordedEvidence?: QaEvidenceSummaryJson;
-  metrics?: QaSuiteSummaryJson["metrics"];
-  transport: QaTransportAdapter;
-  // Reuse the canonical QaProviderMode union instead of re-declaring it
-  // inline. Loop 6 already unified `QaSuiteSummaryJsonParams.providerMode`
-  // on this type; keeping the writer in sync prevents drift when model-
-  // selection.ts adds a new provider mode.
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  concurrency: number;
-  channel?: string | null;
-  channelDriver?: QaTransportDriver | null;
-  transportArtifacts?: QaRunnerTransportArtifacts;
-  isolatedWorkers?: boolean;
-  scenarioIds?: readonly string[];
-  runtimePair?: [RuntimeId, RuntimeId];
-  writeEvidenceFile?: boolean;
-}) {
+export async function writeQaSuiteArtifacts(
+  params: Omit<
+    QaSuiteSummaryJsonParams,
+    "evidence" | "channelCapabilityMatrixPath" | "channelDriverSmokePath"
+  > & {
+    repoRoot?: string;
+    outputDir: string;
+    scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
+    evidenceMode?: QaScorecardEvidenceMode;
+    recordedEvidence?: QaEvidenceSummaryJson;
+    transport: QaTransportAdapter;
+    transportArtifacts?: QaRunnerTransportArtifacts;
+    isolatedWorkers?: boolean;
+    writeEvidenceFile?: boolean;
+  },
+) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
@@ -183,17 +156,11 @@ export async function writeQaSuiteArtifacts(params: {
     inProgress: params.status === "running",
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
-    checks: [],
-    scenarios: params.scenarios.map((scenario) => ({
-      name: scenario.name,
-      status: scenario.status,
-      details: scenario.details,
-      steps: scenario.steps,
-    })) satisfies QaReportScenario[],
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
+    scenarios: params.scenarios,
+    notes: [
+      ...params.transport.createReportNotes(params),
+      ...(params.transportArtifacts?.reportNotes ?? []),
+    ],
   });
   const artifactPaths = [
     { kind: "summary", path: path.basename(summaryPath) },

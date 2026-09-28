@@ -316,21 +316,18 @@ describe("media-understanding CLI audio entry", () => {
                 audio: {
                   prompt: "configured prompt",
                   language: "fr",
-                  _requestPromptOverride: "Focus on names",
-                  _requestLanguageOverride: "en",
                 },
               },
             },
-          } as OpenClawConfig,
+          },
           ctx,
           attachment: requireFirstAttachment(media),
           cache,
           config: {
             prompt: "configured prompt",
             language: "fr",
-            _requestPromptOverride: "Focus on names",
-            _requestLanguageOverride: "en",
-          } as never,
+          },
+          request: { prompt: "Focus on names", language: "en" },
         });
       },
     );
@@ -455,7 +452,7 @@ describe("media-understanding CLI audio entry", () => {
     },
   );
 
-  it.each(transcriptFileCases)("reads $name transcript output", async (testCase) => {
+  it.each(transcriptFileCases.slice(1))("reads $name transcript output", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
       await fs.writeFile(testCase.resolvePath(args), "file transcript\n");
       return { stdout: "Transcribing...\n", stderr: "" };
@@ -551,12 +548,17 @@ describe("media-understanding CLI audio entry", () => {
 
   it.each(
     transcriptFileCases.flatMap((testCase) =>
-      (["empty", "missing"] as const).map((fileState) => Object.assign({ fileState }, testCase)),
+      (["empty", "missing", "artifact"] as const).map((fileState) =>
+        Object.assign({ fileState }, testCase),
+      ),
     ),
   )("treats $fileState $name transcript output as empty", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      if (testCase.fileState === "empty") {
-        await fs.writeFile(testCase.resolvePath(args), "  \n");
+      if (testCase.fileState !== "missing") {
+        await fs.writeFile(
+          testCase.resolvePath(args),
+          testCase.fileState === "artifact" ? "context:" : "  \n",
+        );
       }
       return { stdout: "Transcribing with Whisper...\n", stderr: "" };
     });

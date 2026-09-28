@@ -2,7 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ModelDefinitionConfig } from "../../config/types.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -59,8 +59,8 @@ const mocks = vi.hoisted(() => {
       defaultAgentId: "main",
       sessionAgentId: agentId ?? "main",
     })),
-    resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
-    resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
+    resolveAgentNativeModelPrimary: vi.fn(),
+    resolveNativeModelPrimary: vi.fn(),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
     resolveAgentConfig: vi.fn().mockReturnValue(undefined),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
@@ -187,18 +187,32 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentDir: mocks.resolveAgentDir,
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-  resolveSessionAgentIds: mocks.resolveSessionAgentIds,
-  resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
-  resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
-  resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
-  resolveAgentConfig: mocks.resolveAgentConfig,
-  listAgentIds: mocks.listAgentIds,
-  listAgentEntries: mocks.listAgentEntries,
-}));
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await import("../../agents/agent-scope-config.js");
+  const { resolveAgentModelPrimaryValue } = await import("../../config/model-input.js");
+  return {
+    resolveAgentDir: mocks.resolveAgentDir,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+    resolveSessionAgentIds: mocks.resolveSessionAgentIds,
+    resolveAgentNativeModelPrimary: mocks.resolveAgentNativeModelPrimary.mockImplementation(
+      actual.resolveAgentNativeModelPrimary,
+    ),
+    resolveNativeModelPrimary: mocks.resolveNativeModelPrimary.mockImplementation(
+      actual.resolveNativeModelPrimary,
+    ),
+    // Raw getters let caller reversions expose the original model-selection leak.
+    resolveAgentExplicitModelPrimary: (cfg: OpenClawConfig, agentId: string) =>
+      resolveAgentModelPrimaryValue(actual.resolveAgentConfig(cfg, agentId)?.model),
+    resolveAgentEffectiveModelPrimary: (cfg: OpenClawConfig, agentId: string) =>
+      resolveAgentModelPrimaryValue(actual.resolveAgentConfig(cfg, agentId)?.model) ??
+      resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
+    resolveAgentConfig: mocks.resolveAgentConfig,
+    listAgentIds: mocks.listAgentIds,
+    listAgentEntries: mocks.listAgentEntries,
+  };
+});
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
 }));
@@ -386,13 +400,13 @@ async function withAgentScopeOverrides<T>(
   },
   run: () => Promise<T>,
 ) {
-  const originalPrimary = mocks.resolveAgentExplicitModelPrimary.getMockImplementation();
-  const originalEffectivePrimary = mocks.resolveAgentEffectiveModelPrimary.getMockImplementation();
+  const originalPrimary = mocks.resolveAgentNativeModelPrimary.getMockImplementation();
+  const originalEffectivePrimary = mocks.resolveNativeModelPrimary.getMockImplementation();
   const originalFallbacks = mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
   const originalAgentDir = mocks.resolveAgentDir.getMockImplementation();
 
-  mocks.resolveAgentExplicitModelPrimary.mockReturnValue(overrides.primary);
-  mocks.resolveAgentEffectiveModelPrimary.mockReturnValue(overrides.primary);
+  mocks.resolveAgentNativeModelPrimary.mockReturnValue(overrides.primary);
+  mocks.resolveNativeModelPrimary.mockReturnValue(overrides.primary);
   mocks.resolveAgentModelFallbacksOverride.mockReturnValue(overrides.fallbacks);
   if (overrides.agentDir) {
     mocks.resolveAgentDir.mockReturnValue(overrides.agentDir);
@@ -402,14 +416,14 @@ async function withAgentScopeOverrides<T>(
     return await run();
   } finally {
     if (originalPrimary) {
-      mocks.resolveAgentExplicitModelPrimary.mockImplementation(originalPrimary);
+      mocks.resolveAgentNativeModelPrimary.mockImplementation(originalPrimary);
     } else {
-      mocks.resolveAgentExplicitModelPrimary.mockReturnValue(undefined);
+      mocks.resolveAgentNativeModelPrimary.mockReturnValue(undefined);
     }
     if (originalEffectivePrimary) {
-      mocks.resolveAgentEffectiveModelPrimary.mockImplementation(originalEffectivePrimary);
+      mocks.resolveNativeModelPrimary.mockImplementation(originalEffectivePrimary);
     } else {
-      mocks.resolveAgentEffectiveModelPrimary.mockReturnValue(undefined);
+      mocks.resolveNativeModelPrimary.mockReturnValue(undefined);
     }
     if (originalFallbacks) {
       mocks.resolveAgentModelFallbacksOverride.mockImplementation(originalFallbacks);
@@ -1028,138 +1042,89 @@ describe("modelsStatusCommand auth overview", () => {
     }
   }
 
-  it("resolves a selected agent's bare alias from that agent's model scope", async () => {
-    const localRuntime = createTestRuntime();
-    await withConfig(
-      {
-        agents: {
-          defaults: { model: { primary: "openai/gpt-default", fallbacks: [] } },
-          entries: {
-            jeremiah: {
-              model: { primary: "jeremiah-choice" },
-              models: { "anthropic/claude-sonnet-4-6": { alias: "jeremiah-choice" } },
-            },
-          },
-        },
-      },
-      async () => {
-        await withAgentScopeOverrides({ primary: "jeremiah-choice" }, async () => {
-          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime);
-          const payload = parseFirstJsonLog(localRuntime);
-          expect(payload.defaultModel).toBe("jeremiah-choice");
-          // Resolving the bare alias against global defaults reported
-          // openai/jeremiah-choice while the runtime selected Anthropic, so status,
-          // --check and --probe all inspected the wrong provider route.
-          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
-          expect(payload.aliases).toMatchObject({
-            "jeremiah-choice": "anthropic/claude-sonnet-4-6",
-          });
-        });
-      },
-    );
-  });
-
-  it("prefers a per-agent alias row over the same alias in defaults", async () => {
-    const localRuntime = createTestRuntime();
-    await withConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-default", fallbacks: [] },
-            models: { "openai/gpt-shared": { alias: "shared" } },
-          },
-          entries: {
-            jeremiah: {
-              model: { primary: "shared" },
-              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
-            },
-          },
-        },
-      },
-      async () => {
-        await withAgentScopeOverrides({ primary: "shared" }, async () => {
-          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime);
-          const payload = parseFirstJsonLog(localRuntime);
-          // Per-agent rows are applied after defaults, so the agent's row owns
-          // the alias and the displayed target must follow the same precedence.
-          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
-          expect(payload.aliases).toMatchObject({ shared: "anthropic/claude-sonnet-4-6" });
-        });
-      },
-    );
-  });
-
-  it("keeps unscoped status on global defaults when no agent is selected", async () => {
-    const localRuntime = createTestRuntime();
-    await withConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "shared", fallbacks: [] },
-            models: { "openai/gpt-shared": { alias: "shared" } },
-          },
-          entries: {
-            jeremiah: {
-              model: { primary: "shared" },
-              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
-            },
-          },
-        },
-      },
-      async () => {
-        await modelsStatusCommand({ json: true }, localRuntime);
-        const payload = parseFirstJsonLog(localRuntime);
-        // No --agent still reports unscoped defaults; another agent's rows must
-        // not leak into the global view.
-        expect(payload.resolvedDefault).toBe("openai/gpt-shared");
-        expect(payload.aliases).toMatchObject({ shared: "openai/gpt-shared" });
-      },
-    );
-  });
-
-  it("uses system-agent storage without changing unscoped model output", async () => {
-    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
-    mocks.loadConfig.mockReturnValue({
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
-          systemAgent: { agentId: "jeremiah" },
-        },
-        entries: { main: {}, jeremiah: {} },
-      },
-      models: { providers: {} },
-    });
-    mocks.resolveAgentExplicitModelPrimary.mockClear();
-    mocks.resolveAgentModelFallbacksOverride.mockClear();
-    mocks.loadModelCatalog.mockClear();
-
-    try {
-      await withAgentScopeOverrides(
+  it.each([
+    {
+      scenario: "agent-only alias",
+      alias: "jeremiah-choice",
+      agent: "jeremiah",
+      expectedModel: "anthropic/claude-sonnet-4-6",
+    },
+    {
+      scenario: "agent alias overrides defaults",
+      alias: "shared",
+      agent: "jeremiah",
+      expectedModel: "anthropic/claude-sonnet-4-6",
+    },
+    {
+      scenario: "unscoped status retains defaults",
+      alias: "shared",
+      agent: undefined,
+      expectedModel: "openai/gpt-shared",
+    },
+  ])(
+    "resolves model aliases in the selected scope ($scenario)",
+    async ({ alias, agent, expectedModel }) => {
+      const localRuntime = createTestRuntime();
+      await withConfig(
         {
-          primary: "openai/gpt-5.6-luna",
-          fallbacks: ["openai/gpt-5.6-sol"],
+          agents: {
+            defaults: {
+              model: { primary: agent ? "openai/gpt-default" : alias, fallbacks: [] },
+              models: { "openai/gpt-shared": { alias: "shared" } },
+            },
+            entries: {
+              jeremiah: {
+                model: { primary: alias },
+                models: { "anthropic/claude-sonnet-4-6": { alias } },
+              },
+            },
+          },
         },
         async () => {
-          const localRuntime = createTestRuntime();
-          await modelsStatusCommand({ json: true }, localRuntime);
-
-          expectResolveAgentDirCalledFor("jeremiah");
-          expect(mocks.resolveAgentExplicitModelPrimary).not.toHaveBeenCalled();
-          expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
-            expect.objectContaining({ agentId: "jeremiah", readOnly: true }),
-          );
-          expect(parseFirstJsonLog(localRuntime)).toMatchObject({
-            defaultModel: "anthropic/claude-opus-4-6",
-            fallbacks: [],
-          });
+          await modelsStatusCommand({ json: true, agent }, localRuntime);
+          const payload = parseFirstJsonLog(localRuntime);
+          expect(payload.defaultModel).toBe(alias);
+          expect(payload.resolvedDefault).toBe(expectedModel);
+          expect(payload.aliases).toMatchObject({ [alias]: expectedModel });
         },
       );
-    } finally {
-      if (originalLoadConfig) {
-        mocks.loadConfig.mockImplementation(originalLoadConfig);
-      }
-    }
+    },
+  );
+
+  it("uses system-agent storage without changing unscoped model output", async () => {
+    mocks.resolveAgentNativeModelPrimary.mockClear();
+    mocks.resolveAgentModelFallbacksOverride.mockClear();
+    mocks.loadModelCatalog.mockClear();
+    await withConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+            systemAgent: { agentId: "jeremiah" },
+          },
+          entries: { main: {}, jeremiah: {} },
+        },
+        models: { providers: {} },
+      },
+      () =>
+        withAgentScopeOverrides(
+          { primary: "openai/gpt-5.6-luna", fallbacks: ["openai/gpt-5.6-sol"] },
+          async () => {
+            const localRuntime = createTestRuntime();
+            await modelsStatusCommand({ json: true }, localRuntime);
+            expectResolveAgentDirCalledFor("jeremiah");
+            expect(mocks.resolveAgentNativeModelPrimary).not.toHaveBeenCalled();
+            expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+              expect.objectContaining({ agentId: "jeremiah", readOnly: true }),
+            );
+            expect(parseFirstJsonLog(localRuntime)).toMatchObject({
+              defaultModel: "anthropic/claude-opus-4-6",
+              fallbacks: [],
+            });
+          },
+        ),
+    );
   });
 
   it("rejects API-key auth for subscription-only Codex Spark", async () => {
@@ -1999,31 +1964,50 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("reports defaults source when --agent has no overrides", async () => {
-    await withAgentScopeOverrides(
-      {
-        primary: undefined,
-        fallbacks: undefined,
-      },
-      async () => {
-        const textRuntime = createTestRuntime();
-        await modelsStatusCommand({ agent: "main" }, textRuntime);
-        const output = textRuntime.log.mock.calls
-          .map((call: unknown[]) => String(call[0]))
-          .join("\n");
-        expect(output).toContain("Default (defaults)");
-        expect(output).toContain("Fallbacks (0) (defaults)");
+  it.each([undefined, "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", "openai/gpt-5.4"])(
+    "reports and probes native defaults with harness model %s",
+    async (harnessModel) => {
+      const primary = "anthropic/claude-opus-4-6";
+      const fallbacks = harnessModel ? ["anthropic/claude-sonnet-4-6"] : [];
+      await withConfig(
+        {
+          agents: {
+            defaults: { model: { primary, fallbacks }, utilityModel: "" },
+            entries: {
+              main: {
+                model: harnessModel,
+                runtime: harnessModel ? { type: "acp", acp: { agent: "cursor" } } : undefined,
+              },
+            },
+          },
+        },
+        async () => {
+          const textRuntime = createTestRuntime();
+          await modelsStatusCommand({ agent: "main" }, textRuntime);
+          const output = textRuntime.log.mock.calls
+            .map((call: unknown[]) => String(call[0]))
+            .join("\n");
 
-        const jsonRuntime = createTestRuntime();
-        await modelsStatusCommand({ json: true, agent: "main" }, jsonRuntime);
-        const payload = parseFirstJsonLog(jsonRuntime);
-        expect(payload.modelConfig).toEqual({
-          defaultSource: "defaults",
-          fallbacksSource: "defaults",
-        });
-      },
-    );
-  });
+          const jsonRuntime = createTestRuntime();
+          await modelsStatusCommand({ json: true, probe: true, agent: "main" }, jsonRuntime);
+          const payload = parseFirstJsonLog(jsonRuntime);
+          expect(mocks.runAuthProbes).toHaveBeenLastCalledWith(
+            expect.objectContaining({ modelCandidates: [primary, ...fallbacks] }),
+          );
+          expect(payload.defaultModel).toBe(primary);
+          expect(payload.resolvedDefault).toBe(primary);
+          expect(payload.fallbacks).toEqual(fallbacks);
+          expect(payload.modelConfig).toEqual({
+            defaultSource: "defaults",
+            fallbacksSource: "defaults",
+          });
+          expect(output).toContain("Default (defaults)");
+          expect(output).toContain(`Fallbacks (${fallbacks.length}) (defaults)`);
+          expect(mocks.ensureAuthProfileStore).toHaveBeenLastCalledWith("/tmp/openclaw-agent");
+        },
+      );
+    },
+  );
 
   it("throws when agent id is unknown", async () => {
     const localRuntime = createTestRuntime();

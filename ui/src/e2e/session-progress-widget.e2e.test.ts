@@ -1,6 +1,10 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
-import { openSlot } from "../pages/chat/sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  openSlot,
+  toggleSidebarPanelExpanded,
+} from "../pages/chat/sidebar-layout.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -81,6 +85,7 @@ suite.define(() => {
     { height: 900, name: "desktop", width: 1440, routeKey: sessionKey },
     { height: 844, name: "mobile", width: 390, routeKey: sessionKey },
     { height: 900, name: "bare-route", width: 1440, routeKey: "progress-dashboard" },
+    { height: 900, name: "expanded-side", width: 1440, routeKey: sessionKey },
     { height: 900, name: "inactive", width: 1440, routeKey: sessionKey },
   ])("keeps unowned progress paused on $name", async (viewport) => {
     await suite.withPage({ locale: "en-US", viewport }, async ({ page }) => {
@@ -128,12 +133,12 @@ suite.define(() => {
       });
       const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
       await page.addInitScript(
-        ({ key, rawKey, storage, dashboardLayout }) => {
+        ({ key, rawKey, storage, dashboardLayout, expandedSide }) => {
           localStorage.setItem(
             storage,
             JSON.stringify({
               boardSessionViews: { [key]: { activeTabId: "main" } },
-              ...(rawKey === key
+              ...(rawKey === key && !expandedSide
                 ? {}
                 : {
                     // Each split pane owns its presentation independently of the current route.
@@ -154,13 +159,22 @@ suite.define(() => {
           key: sessionKey,
           rawKey: viewport.routeKey,
           storage: storageKey,
-          dashboardLayout: openSlot({ columns: [] }, "dashboard"),
+          expandedSide: viewport.name === "expanded-side",
+          dashboardLayout:
+            viewport.name === "expanded-side"
+              ? toggleSidebarPanelExpanded(
+                  openSlot(ensureSidebarConversation({ columns: [] }), "dashboard"),
+                  "dashboard",
+                )
+              : openSlot({ columns: [] }, "dashboard"),
         },
       );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const surface =
-        viewport.routeKey === sessionKey ? page : page.locator(".chat-split-view__column").nth(1);
+        viewport.routeKey === sessionKey && viewport.name !== "expanded-side"
+          ? page
+          : page.locator(".chat-split-view__column").nth(1);
       const card = surface.locator('[data-progress-card-placement="board"]');
       if (viewport.routeKey !== sessionKey) {
         await expect
@@ -249,6 +263,16 @@ suite.define(() => {
       await error.getByRole("button", { name: "Retry", exact: true }).click();
       await expect.poll(() => card.textContent()).toContain("Refreshed task");
       await expect.poll(() => error.count()).toBe(0);
+      await page.waitForURL((url) => url.pathname.startsWith("/dashboard/"));
+      await surface.locator("openclaw-board-view").waitFor({ state: "visible" });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      if (viewport.name === "expanded-side") {
+        const mainChat = surface.locator('.sidebar-region__primary[data-region="main"]');
+        await mainChat.waitFor({ state: "hidden" });
+        await surface.getByRole("button", { name: "Restore split", exact: true }).click();
+        await mainChat.waitFor({ state: "visible" });
+        await surface.locator('[data-panel-slot="dashboard"]').waitFor({ state: "visible" });
+      }
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
@@ -280,9 +304,16 @@ suite.define(() => {
   it("keeps target liveness when the selected agent scope changes", async () => {
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const mainSessions = sessionListResponse(sessionKey, "Main progress dashboard", {
+        hasActiveRun: true,
+        startedAt: now - 30_000,
+        updatedAt: now,
+      });
       const gateway = await installMockGateway(page, {
         sessionKey,
-        sessions: [{ key: sessionKey }],
+        heldMethods: ["sessions.describe"],
+        // Describe and startup publish full snapshots of the same running session.
+        sessions: mainSessions.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -302,11 +333,7 @@ suite.define(() => {
             cases: [
               {
                 match: { agentId: "main" },
-                response: sessionListResponse(sessionKey, "Main progress dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
+                response: mainSessions,
               },
               {
                 match: { agentId: "writer" },
@@ -352,6 +379,9 @@ suite.define(() => {
         };
         app.runtime?.context?.agentSelection?.setScope?.("writer");
       });
+      await gateway.waitForRequest("sessions.describe");
+      // Reconcile the descriptor after the running roster and scope transition.
+      await gateway.resolveDeferred("sessions.describe");
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some((request) => {
@@ -386,8 +416,8 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
+      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await page.screenshot({
         animations: "disabled",
         fullPage: true,

@@ -17,6 +17,7 @@ export function bindHarnessContextMedia(params: {
   const contextMedia = Object.freeze({
     config,
     workspaceDir: attempt.sandbox?.enabled ? attempt.sandbox.workspaceDir : attempt.workspaceDir,
+    agentWorkspaceDir: attempt.workspaceDir,
     modelInput,
     agentId: attempt.agentId,
     channelId: attempt.messageChannel ?? attempt.messageProvider,

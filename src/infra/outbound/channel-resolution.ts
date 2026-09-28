@@ -56,9 +56,10 @@ function* normalizeOutboundChannelForResolution(params: OutboundChannelResolutio
     return { channel: deliverable, didBootstrap: false };
   }
 
-  const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
+  const activeRuntimePlugin = resolveOutboundPluginFromRuntimeRegistry(
     normalized,
     getOutboundRuntimeRegistry() ?? undefined,
+    true,
   );
   if (activeRuntimePlugin) {
     return {
@@ -77,9 +78,10 @@ function* normalizeOutboundChannelForResolution(params: OutboundChannelResolutio
     cfg: params.cfg,
     agentId: params.agentId,
   };
-  const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
+  const bootstrappedRuntimePlugin = resolveOutboundPluginFromRuntimeRegistry(
     normalized,
     bootstrapRegistry,
+    true,
   );
   return {
     channel: bootstrappedRuntimePlugin?.id ?? normalized,
@@ -105,14 +107,6 @@ function channelPluginHasActivatedOutboundSurface(plugin: ChannelPlugin | undefi
     plugin?.outbound?.deliveryMode === "gateway" ||
     resolveSendCapableMessageAdapter(plugin),
   );
-}
-
-function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
-  return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
-}
-
-function resolveActivatedOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
-  return channelPluginHasActivatedOutboundSurface(plugin) ? plugin : undefined;
 }
 
 function resolveRuntimeOutboundPluginCandidate(params: {
@@ -141,34 +135,16 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   return undefined;
 }
 
-function resolveValueFromRuntimeRegistry<TValue>(
+function resolveOutboundPluginFromRuntimeRegistry(
   channel: string,
-  resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
   registry: PluginRegistry | null | undefined = getOutboundRuntimeRegistry(),
-): TValue | undefined {
+  requireActivatedRuntime = false,
+): ChannelPlugin | undefined {
   const plugin = findChannelPluginInRegistry(registry, channel);
-  return plugin ? resolveValue(plugin) : undefined;
-}
-
-function resolveDirectFromRuntimeRegistry(
-  channel: string,
-  registry?: PluginRegistry,
-): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, (plugin) => plugin, registry);
-}
-
-function resolveRuntimeOutboundPluginFromRuntimeRegistry(
-  channel: string,
-  registry?: PluginRegistry,
-): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, resolveRuntimeOutboundPlugin, registry);
-}
-
-function resolveActivatedOutboundPluginFromRuntimeRegistry(
-  channel: string,
-  registry?: PluginRegistry,
-): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, resolveActivatedOutboundPlugin, registry);
+  const hasSurface = requireActivatedRuntime
+    ? channelPluginHasActivatedOutboundSurface
+    : channelPluginHasRuntimeOutboundSurface;
+  return hasSurface(plugin) ? plugin : undefined;
 }
 
 function* resolveOutboundChannelPluginSteps(
@@ -196,9 +172,10 @@ function* resolveOutboundChannelPluginSteps(
     if (didBootstrap) {
       return undefined;
     }
-    return resolveActivatedOutboundPluginFromRuntimeRegistry(
+    return resolveOutboundPluginFromRuntimeRegistry(
       normalized,
       yield { ...params, channel: normalized },
+      true,
     );
   }
 
@@ -206,10 +183,15 @@ function* resolveOutboundChannelPluginSteps(
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
   const requireActivatedRuntime = params.allowBootstrap === true;
-  const runtimeCurrent = requireActivatedRuntime
-    ? resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry)
-    : resolveRuntimeOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry);
-  const setupFallback = resolveDirectFromRuntimeRegistry(normalized, bootstrapRegistry);
+  const runtimeCurrent = resolveOutboundPluginFromRuntimeRegistry(
+    normalized,
+    bootstrapRegistry,
+    requireActivatedRuntime,
+  );
+  const setupFallback = findChannelPluginInRegistry(
+    bootstrapRegistry ?? getOutboundRuntimeRegistry(),
+    normalized,
+  );
   const bundledCurrent = resolve();
   const candidate = resolveRuntimeOutboundPluginCandidate({
     loaded: current,
@@ -234,8 +216,11 @@ function* resolveOutboundChannelPluginSteps(
   };
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
-    runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, registry),
-    setupFallback: resolveDirectFromRuntimeRegistry(normalized, registry),
+    runtime: resolveOutboundPluginFromRuntimeRegistry(normalized, registry, true),
+    setupFallback: findChannelPluginInRegistry(
+      registry ?? getOutboundRuntimeRegistry(),
+      normalized,
+    ),
     bundled: resolve(),
     requireActivatedRuntime: true,
   });

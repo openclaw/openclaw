@@ -48,7 +48,7 @@ describe("config cli integration", () => {
       async ({ configPath, tempDir }) => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempDir, "state") }, async () => {
           try {
-            recordDeferredPluginMigrations({
+            await recordDeferredPluginMigrations({
               pending: [
                 {
                   pluginId: "sample",
@@ -70,7 +70,7 @@ describe("config cli integration", () => {
                 code: 1,
               });
               expect(registeredRuntimeErrors.at(-1)).toContain(
-                'Plugin "sample" state migration is pending',
+                'Plugin "sample" data/settings upgrade is unfinished',
               );
               expect(registeredRuntimeErrors.at(-1)).toContain(
                 "openclaw plugins install @example/sample",
@@ -488,6 +488,10 @@ describe("config cli integration", () => {
             code: 1,
           });
           const diagnostic = registeredRuntimeErrors.join("\n");
+          if (args[1] === "validate") {
+            expect(diagnostic).toContain("Config needs correction:");
+            expect(diagnostic).toContain("openclaw config schema");
+          }
           expect(diagnostic).toContain(`openclaw.json:9 — ${displayPath}:`);
           expect(diagnostic).toContain("expected string");
           expect(diagnostic).not.toContain(`${issuePath}:`);
@@ -923,6 +927,12 @@ describe("config cli integration", () => {
         expect(output.errors.join("\n")).toContain(
           "conditional config set expectation did not match the authored config",
         );
+        expect(output.errors.join("\n")).toContain("No settings were saved");
+        expect(output.errors.join("\n")).toContain(
+          "Review the current config and any conditional expectations before retrying",
+        );
+        expect(output.errors.join("\n")).not.toContain("changed while this command was writing");
+        expect(output.errors.join("\n")).not.toContain("Re-run the same command");
         expect(output.errors.join("\n")).not.toContain("18789");
         expect(output.errors.join("\n")).not.toContain("19002");
       },

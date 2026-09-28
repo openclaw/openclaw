@@ -6,6 +6,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -18,8 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -50,7 +49,7 @@ internal fun DreamingSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Dreaming"),
     subtitle = nativeString("Memory consolidation and dream diary."),
-    icon = Icons.Default.Storage,
+    icon = SettingsRoute.Dreaming.icon,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshDreaming)
@@ -117,13 +116,8 @@ private fun DreamDiaryPanel(summary: GatewayDreamingSummary) {
       return
     }
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      Column {
-        summary.diaryEntries.forEachIndexed { index, entry ->
-          DreamDiaryRow(entry = entry)
-          if (index != summary.diaryEntries.lastIndex) {
-            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-          }
-        }
+      ClawSeparatedColumn(items = summary.diaryEntries, dividerColor = ClawTheme.colors.border) { entry ->
+        DreamDiaryRow(entry = entry)
       }
     }
   }

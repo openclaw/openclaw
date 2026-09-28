@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assistantVisibleTextFilters,
+  minimaxToolCallTextFilter,
   sanitizeAssistantVisibleTextWithProfile,
-  stripMinimaxToolCallXml,
 } from "./assistant-visible-text.js";
 import { createTextProjection } from "./text-projection.js";
 
@@ -84,7 +84,7 @@ describe("encoded MiniMax tool envelopes", () => {
     let output: string;
     let closeSearches: number;
     try {
-      output = stripMinimaxToolCallXml(input);
+      output = minimaxToolCallTextFilter.transform(input);
       closeSearches = exec.mock.contexts.filter(
         (context) => context instanceof RegExp && context.source === closeSource,
       ).length;

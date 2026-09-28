@@ -18,9 +18,41 @@ let readerSequence = 0;
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
 
+export type PackageLauncherFingerprint = {
+  type: "symlink" | "file";
+  mode: string;
+  uid: string;
+  gid: string;
+  contents: string;
+};
+
+export function packageLauncherDifferences(
+  expected: PackageLauncherFingerprint,
+  actual: PackageLauncherFingerprint,
+  ownershipPreserved = true,
+): string[] {
+  const symlink = expected.type === "symlink" && actual.type === "symlink";
+  return (["type", "mode", "uid", "gid", "contents"] as const)
+    .filter(
+      (field) =>
+        !(
+          symlink &&
+          (field === "mode" || (!ownershipPreserved && (field === "uid" || field === "gid")))
+        ) && expected[field] !== actual[field],
+    )
+    .map((field) => (field === "contents" && symlink ? "target" : field));
+}
+
 export class PackageIntegrityTimeoutError extends Error {
   constructor(readonly budgetMs: number) {
     super("Package rollback verification timed out");
+  }
+}
+
+/** Resource exhaustion is distinct from a filesystem-integrity failure. */
+export class PackageIntegrityLimitError extends Error {
+  constructor(readonly resource: "entry" | "byte") {
+    super(`Package rollback verification ${resource} limit exceeded`);
   }
 }
 
@@ -151,7 +183,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           break;
         }
         if (children.length >= limit) {
-          throw new Error("Package rollback verification entry limit exceeded");
+          throw new PackageIntegrityLimitError("entry");
         }
         children.push(child.name);
       }
@@ -162,8 +194,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
   }
 
   async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
-    if (!stat.isFile() || stat.size > BigInt(remainingBytes)) {
+    if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
+    }
+    if (stat.size > BigInt(remainingBytes)) {
+      throw new PackageIntegrityLimitError("byte");
     }
     const handle = await read(
       () => fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),
@@ -325,7 +360,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return { identity: identity(stat), version };
   }
 
-  async function launcher(file: string): Promise<string> {
+  async function launcher(file: string): Promise<PackageLauncherFingerprint> {
     const stat = await read(() => fs.lstat(file, { bigint: true }));
     const contents = stat.isSymbolicLink()
       ? await read(() => fs.readlink(file))
@@ -333,15 +368,13 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     if (!unchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
       throw new Error("Package rollback launcher changed during verification");
     }
-    // Launchers are copied, unlike the package tree. Their copy is compared
-    // with the captured contents/target and permissions, not the new inode.
-    return JSON.stringify([
-      stat.isSymbolicLink() ? "symlink" : "file",
-      stat.mode.toString(),
-      stat.uid.toString(),
-      stat.gid.toString(),
+    return {
+      type: stat.isSymbolicLink() ? "symlink" : "file",
+      mode: stat.mode.toString(),
+      uid: stat.uid.toString(),
+      gid: stat.gid.toString(),
       contents,
-    ]);
+    };
   }
 
   async function exists(file: string): Promise<boolean> {

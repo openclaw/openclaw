@@ -1,21 +1,43 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.isAndroidRealtimeRelayModelSupported
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.normalizeMainKey
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import java.util.Locale
+
+internal enum class TalkModeRoute {
+  RealtimeRelay,
+  NativeConfigured,
+  NativeAndroidFallback,
+  NativeGatewayFallback,
+  ;
+
+  val description: NativeText?
+    get() =
+      when (this) {
+        RealtimeRelay -> null
+        NativeConfigured -> nativeText("Native Talk: using device speech recognition and configured Talk voice.")
+        NativeAndroidFallback -> nativeText("Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.")
+        NativeGatewayFallback -> nativeText("Native Talk: Gateway relay is unavailable for this configuration; using device speech recognition and configured Talk voice.")
+      }
+}
 
 internal data class TalkModeGatewayConfigState(
   val mainSessionKey: String,
   val speechLocale: String?,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
-  val realtimeRelayModelSupported: Boolean,
-)
+  val route: TalkModeRoute,
+) {
+  val realtimeRelayModelSupported: Boolean get() = route == TalkModeRoute.RealtimeRelay
+}
 
 internal object TalkModeGatewayConfigParser {
   /** Reads gateway talk/session config into the runtime state TalkMode needs. */
@@ -24,7 +46,7 @@ internal object TalkModeGatewayConfigParser {
     // talk.config carries the top-level model (plus voice-model default) in
     // realtime.model, but a provider-level providers.<id>.model is NOT promoted
     // into it — fall back to the selected provider's entry so a gpt-live model
-    // configured only at provider level still routes Android to native Talk.
+    // without a Gateway relay hint still takes the legacy native Talk route.
     val realtime = talk?.get("realtime").asObjectOrNull()
     val realtimeProvider = realtime?.get("provider").asStringOrNull()
     val realtimeClientHints =
@@ -52,12 +74,14 @@ internal object TalkModeGatewayConfigParser {
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
       // gateway-relay carries only realtime sessions; stt-tts runs as native Talk
       // (device STT, chat.send, talk.speak) so the configured Talk voice is used.
-      realtimeRelayModelSupported =
-        realtime?.get("mode").asStringOrNull() != "stt-tts" &&
-          (
-            realtimeClientHints?.get("gatewayRelaySupported").asBooleanOrNull()
-              ?: isAndroidRealtimeRelayModelSupported(realtimeModel)
-          ),
+      route =
+        when {
+          realtime?.get("mode").asStringOrNull() == "stt-tts" -> TalkModeRoute.NativeConfigured
+          realtimeClientHints?.get("gatewayRelaySupported").asBooleanOrNull() == true -> TalkModeRoute.RealtimeRelay
+          realtimeClientHints?.get("gatewayRelaySupported").asBooleanOrNull() == false -> TalkModeRoute.NativeGatewayFallback
+          !isAndroidRealtimeRelayModelSupported(realtimeModel) -> TalkModeRoute.NativeAndroidFallback
+          else -> TalkModeRoute.RealtimeRelay
+        },
     )
   }
 
@@ -74,18 +98,10 @@ internal object TalkModeGatewayConfigParser {
   }
 }
 
-private fun JsonElement?.asStringOrNull(): String? =
-  this
-    ?.let { element ->
-      element as? JsonPrimitive
-    }?.contentOrNull
-
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
   return primitive.booleanOrNull
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 internal fun normalizeSpeechLocaleTag(value: String?): String? {
   val candidate =

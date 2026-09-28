@@ -11,6 +11,74 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("reconciles a fallback notice around one streamed terminal answer", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "fallback-terminal-run";
+      const answer = "The workspace check is complete.";
+      const notice =
+        "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
+      const terminalAnswer = [
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        answer,
+      ].join("\n");
+      const user = {
+        role: "user",
+        content: [{ type: "text", text: "Check the workspace." }],
+        __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
+      };
+      const streamedAnswer = {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+        openclawStreamFallback: {
+          itemId: "fallback-answer-item",
+          replacementText: answer,
+          runId,
+          source: "segment",
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [user, streamedAnswer],
+        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        sessionInfo: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: "agent:main:main",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: notice, openclawStatusNotice: true },
+            { type: "text", text: terminalAnswer },
+          ],
+        },
+      });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(suite.artifactDir, "fallback-terminal-answer.png"),
+        });
+      }
+
+      const answerOccurrences = async () =>
+        (await page.locator(".chat-group.assistant .chat-text").allTextContents()).filter((text) =>
+          text.includes(answer),
+        ).length;
+      await expect.poll(answerOccurrences).toBe(1);
+    });
+  });
+
   it.each([
     { order: "before hydration", tool: false, steer: false },
     { order: "after hydration", tool: false, steer: false },
@@ -184,22 +252,23 @@ suite.define(() => {
   it("reconciles distinct commentary items once across reconnect", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "commentary-reconciliation-run";
+      const startedAt = Date.now() - 30_000;
       const items = [
         { itemId: "commentary-item-one", text: "Inspecting the workspace." },
         { itemId: "commentary-item-two", text: "Checking the result." },
-      ];
+      ] as const;
       const events = items.map(({ itemId, text }, index) => ({
         data: { kind: "preamble", itemId, phase: "end", progressText: text },
         runId,
         seq: index + 1,
         sessionKey: "agent:main:main",
         stream: "item",
-        ts: 2_000 + index,
+        ts: startedAt + 2_000 + index,
       }));
       const historyMessages = items.map(({ itemId, text }, index) => ({
         role: "assistant",
         content: [{ type: "text", text }],
-        timestamp: 1_000 + index,
+        timestamp: startedAt + 1_000 + index,
         __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
         openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
       }));
@@ -210,7 +279,7 @@ suite.define(() => {
       };
       const gateway = await installMockGateway(page, {
         historyMessages: [],
-        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        inFlightRun: { runId, startedAt, text: "" },
         sessionInfo,
       });
       const transcript = page.locator(".chat-thread-inner");
@@ -225,11 +294,18 @@ suite.define(() => {
         await gateway.emitGatewayEvent("agent", event);
       }
       await expect.poll(itemOccurrences).toEqual([1, 1]);
+      await expect
+        .poll(async () =>
+          (
+            await transcript.locator(".chat-text").filter({ hasText: items[1].text }).textContent()
+          )?.trim(),
+        )
+        .toBe(items[1].text);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setMethodResponse("chat.startup", {
         messages: historyMessages,
-        inFlightRun: { runId, startedAt: 1_000, text: "", events },
+        inFlightRun: { runId, startedAt, text: "", events },
         sessionInfo,
         thinkingLevel: null,
       });

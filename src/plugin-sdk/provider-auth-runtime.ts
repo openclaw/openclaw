@@ -9,7 +9,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
-import { escapeHtml } from "../shared/html-escape.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
@@ -212,7 +212,6 @@ export async function waitForLocalOAuthCallback(params: {
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const escapedSuccessTitle = escapeHtml(params.successTitle);
   const callbackUrl = new URL(params.redirectUri);
   callbackUrl.port = String(params.port);
   callbackUrl.pathname = params.callbackPath;
@@ -233,10 +232,11 @@ export async function waitForLocalOAuthCallback(params: {
           return value && isHttpOrigin(value) ? value : undefined;
         },
     renderSuccess: () => ({
-      body:
-        "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-        `<body><h2>${escapedSuccessTitle}</h2>` +
-        "<p>You can close this window and return to OpenClaw.</p></body></html>",
+      body: renderOAuthPage({
+        title: params.successTitle,
+        heading: params.successTitle,
+        message: "You can close this window and return to OpenClaw.",
+      }),
       contentType: "text/html; charset=utf-8",
     }),
   });
@@ -298,7 +298,9 @@ export async function resolveApiKeyForProvider(
   /** Provider auth lookup params forwarded to the runtime auth module. */
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
+  params.signal?.throwIfAborted();
   const runtimeAuth = await loadRuntimeModelAuthModule();
+  params.signal?.throwIfAborted();
   const resolveApiKeyForProviderLocal =
     typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
       ? runtimeAuth.resolveProviderRuntimeApiKey

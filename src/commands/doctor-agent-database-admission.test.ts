@@ -6,13 +6,13 @@ import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

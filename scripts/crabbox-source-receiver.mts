@@ -8,6 +8,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { isUtf8 } = require("node:buffer");
 const { spawnSync } = require("node:child_process");
+const { getSystemErrorMap } = require("node:util");
 const expected = JSON.parse(process.argv[1]);
 const syncRoot = process.cwd();
 const cwd = process.argv[2] ?? syncRoot;
@@ -37,6 +38,33 @@ function hashFile(file, algorithm, blob = false) {
     return hash.digest("hex");
   } finally { fs.closeSync(fd); }
 }
+const gitFailureCause = Object.freeze({
+  noSpace: "no-space", permissionDenied: "permission-denied",
+  commandUnavailable: "command-unavailable", outputLimit: "output-limit",
+  terminated: "terminated", remoteRefMissing: "remote-ref-missing",
+  invalidObjectData: "invalid-object-data", dns: "dns", connection: "connection",
+  auth: "auth", unknown: "unknown",
+});
+function gitFailure(phase, result) {
+  const errors = getSystemErrorMap();
+  const rawCode = result.error?.code;
+  const code = [...errors.values()].some(([name]) => name === rawCode) ? rawCode : null;
+  const text = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8").trim() : "";
+  const cause = code === "ENOSPC" ? gitFailureCause.noSpace
+    : code === "EACCES" || code === "EPERM" ? gitFailureCause.permissionDenied
+    : code === "ENOENT" ? gitFailureCause.commandUnavailable
+    : code === "ENOBUFS" ? gitFailureCause.outputLimit
+    : result.signal !== null ? gitFailureCause.terminated
+    : /^fatal: couldn't find remote ref [^\r\n]+$/u.test(text) ? gitFailureCause.remoteRefMissing
+    : /^fatal: (?:pack has bad object(?: at offset \d+)?|bad object [a-f0-9]+|index-pack failed|fetch-pack: invalid index-pack output)$/u.test(text) ? gitFailureCause.invalidObjectData
+    : /^fatal: unable to access '[^'\r\n]+': Could not resolve (?:host|proxy): [^\r\n]+$/u.test(text) ? gitFailureCause.dns
+    : /^fatal: unable to access '[^'\r\n]+': (?:Failed to connect to [^\r\n]+|Recv failure: Connection reset by peer)$/u.test(text) ? gitFailureCause.connection
+    : /^fatal: (?:Authentication failed for '[^'\r\n]+'|could not read Username for '[^'\r\n]+': [^\r\n]+)$/u.test(text) ? gitFailureCause.auth
+    : gitFailureCause.unknown;
+  return { phase, baseSha: /^[a-f0-9]{40}$/u.test(expected.baseSha) ? expected.baseSha : null,
+    status: result.status, signal: result.signal, spawnError: Boolean(result.error),
+    code, errno: errors.has(result.error?.errno) ? result.error.errno : null, cause };
+}
 try {
   if (process.argv[2] && (cwd === syncRoot || cwd.startsWith(syncRoot + path.sep) || syncRoot.startsWith(cwd + path.sep)))
     fail("Testbox execution and sync workspaces overlap; stop this lease and warm a fresh one");
@@ -58,10 +86,10 @@ try {
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
   delete env.GIT_SHALLOW_FILE;
   function git(args, options = {}) {
-    const { encoding, ...spawnOptions } = options;
+    const { encoding, phase = args[0], ...spawnOptions } = options;
     const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args],
       { cwd, env, maxBuffer: 64 * 1024 * 1024, ...spawnOptions });
-    if (result.status !== 0) fail("source Git operation failed: " + args[0]);
+    if (result.status !== 0) fail("source Git operation failed: " + JSON.stringify(gitFailure(phase, result)));
     if (encoding === "buffer") return result.stdout;
     if (result.stdout === null) return "";
     if (!isUtf8(result.stdout)) fail("unsupported non-UTF-8 Git metadata");
@@ -69,10 +97,12 @@ try {
   }
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"]);
+  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"],
+    { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
-  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"]);
+  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
+    { phase: "capsule-fetch" });
   for (const [ref, value] of [
     ["refs/heads/openclaw-source", expected.carrier],
     ["refs/heads/openclaw-source^{tree}", expected.tree],

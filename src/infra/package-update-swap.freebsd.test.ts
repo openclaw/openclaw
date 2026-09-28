@@ -66,7 +66,7 @@ describe("FreeBSD package replacement ownership", () => {
           runStep,
         });
         expect(result.failedStep).toMatchObject({
-          name: "global install stage",
+          name: "package-stage",
           stderrTail: expect.stringContaining("cannot prepare the update"),
         });
       });

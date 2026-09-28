@@ -1,4 +1,3 @@
-// Diagnostic phase helpers measure named phases and emit timing diagnostics.
 import { performance } from "node:perf_hooks";
 import {
   areDiagnosticsEnabledForProcess,
@@ -7,7 +6,6 @@ import {
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
 
-// Tracks nested diagnostic phases for recent-phase snapshots and optional event emission.
 const RECENT_PHASE_CAPACITY = 40;
 
 type ActiveDiagnosticPhase = {

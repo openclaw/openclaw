@@ -1,5 +1,5 @@
 // System-agent legacy config migration tests.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type {
@@ -10,12 +10,19 @@ import type {
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
 import {
   findLegacySystemAgentOwnerIssue,
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT,
 } from "./legacy-config-migrations.runtime.system-agent.js";
 
 const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT[0];
+let restoreMigrationRuntime: (() => void) | undefined;
+
+beforeAll(async () => {
+  restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
+});
+afterAll(() => restoreMigrationRuntime?.());
 
 describe("system-agent config migration", () => {
   it("removes the retired config block", () => {

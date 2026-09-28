@@ -37,7 +37,6 @@ vi.mock("../state/user-profiles.js", async (importOriginal) => ({
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
   linkEmail: vi.fn(),
-  listProfiles: vi.fn(),
   resolveUserProfileId,
   setAvatar: vi.fn(),
   setDisplayName,

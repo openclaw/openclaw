@@ -54,22 +54,16 @@ export function resolveTypedHookTimeoutMs(params: {
   );
 }
 
-function createRegistration<T extends object>(record: PluginRecord, contribution: T) {
+function createRegistration<T extends object>(
+  record: PluginRecord,
+  contribution: T,
+  ownership: "wrap" | "adopt" = "wrap",
+) {
   return {
     pluginId: record.id,
     pluginName: record.name,
     // Normalizers and host gates create new callables after API argument wrapping.
-    ...(getPluginInstance(record)?.wrap(contribution) ?? contribution),
-    source: record.source,
-    rootDir: record.rootDir,
-  };
-}
-
-function createIdentityRegistration<T extends object>(record: PluginRecord, contribution: T) {
-  return {
-    pluginId: record.id,
-    pluginName: record.name,
-    ...(getPluginInstance(record)?.adopt(contribution) ?? contribution),
+    ...(getPluginInstance(record)?.[ownership](contribution) ?? contribution),
     source: record.source,
     rootDir: record.rootDir,
   };
@@ -100,8 +94,8 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   for (const name of Object.keys(registryParams.coreGatewayHandlers ?? {})) {
     coreGatewayMethods.add(name);
   }
-  // oxlint-disable-next-line unicorn/no-array-sort -- This array is separate from the membership index.
-  registry.coreGatewayMethodNames = Array.from(coreGatewayMethods).sort();
+  registry.coreGatewayMethodNames = Array.from(coreGatewayMethods);
+  registry.coreGatewayMethodNames.sort();
 
   const pushDiagnostic = (diagnostic: PluginDiagnostic) => {
     registry.diagnostics.push(diagnostic);
@@ -126,7 +120,8 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     createRegistration,
-    createIdentityRegistration,
+    createIdentityRegistration: <T extends object>(record: PluginRecord, contribution: T) =>
+      createRegistration(record, contribution, "adopt"),
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,

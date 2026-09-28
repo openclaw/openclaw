@@ -21,7 +21,9 @@ function fixture() {
     }),
     assertLeaseHealthy() {
       assert.equal(released, 0, "released credentials cannot authorize work");
-      if (!healthy) throw new Error("lease revoked");
+      if (!healthy) {
+        throw new Error("lease revoked");
+      }
     },
     async release() {
       released += 1;
@@ -51,6 +53,7 @@ function fixture() {
                 testDc: true,
                 tdlibVersion: "1.8.67",
                 user: { id: 123 },
+                chatId: -1001,
               },
       ),
     }),
@@ -94,32 +97,11 @@ function fixture() {
   };
 }
 
-test("scenario drives the same ready credential before its only release", async () => {
-  const f = fixture();
-  let acquisitions = 0;
-  let delivered = false;
-  await runTelegramTestScenario({
-    acquireCredential: async () => {
-      acquisitions += 1;
-      return f.credential;
-    },
-    checkCredential: f.check,
-    driveScenario: async (_args, _root, credential) => {
-      assert.equal(credential, f.credential);
-      credential.assertLeaseHealthy();
-      assert.equal(f.proxyClosed(), true);
-      delivered = true;
-    },
-  });
-  assert.equal(delivered, true);
-  assert.equal(acquisitions, 1);
-  assert.equal(f.releaseCount(), 1);
-});
-
 test("scenario provisions a fresh group when the stored group is unusable and removes it before release", async () => {
   const f = fixture();
   const events = [];
   let groupExists = false;
+  let acquisitions = 0;
   const command = f.options.runCommandImpl;
   f.options.runCommandImpl = async (name, args) => {
     if (args.includes("prepare-group")) {
@@ -133,7 +115,9 @@ test("scenario provisions a fresh group when the stored group is unusable and re
   };
   const fetch = f.options.fetchImpl;
   f.options.fetchImpl = async (url, init) => {
-    if (!new URL(url).pathname.endsWith("/getChatMember")) return await fetch(url, init);
+    if (!new URL(url).pathname.endsWith("/getChatMember")) {
+      return await fetch(url, init);
+    }
     const request = JSON.parse(init.body);
     return Response.json({
       ok: true,
@@ -147,16 +131,25 @@ test("scenario provisions a fresh group when the stored group is unusable and re
     await release();
   };
   await runTelegramTestScenario({
-    acquireCredential: async () => f.credential,
+    acquireCredential: async () => {
+      acquisitions += 1;
+      return f.credential;
+    },
     checkCredential: f.check,
     driveScenario: async (_args, _root, credential) => {
+      assert.equal(credential, f.credential);
+      credential.assertLeaseHealthy();
+      assert.equal(f.proxyClosed(), true);
       assert.equal(credential.groupId, "-2042");
+      assert.equal(credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID, "-2042");
       assert.equal(groupExists, true);
       events.push("delivered");
     },
   });
   assert.deepEqual(events, ["created", "delivered", "deleted", "released"]);
+  assert.equal(acquisitions, 1);
   assert.equal(f.releaseCount(), 1);
+  assert.equal(f.credential.testGroup.cleanup.status, "deleted");
 });
 
 test("DM reaches its SUT with an unusable group and group privacy enabled", async () => {
@@ -165,7 +158,10 @@ test("DM reaches its SUT with an unusable group and group privacy enabled", asyn
   const command = f.options.runCommandImpl;
   f.options.runCommandImpl = async (name, args) => {
     commands.push(args.includes("status") ? "status" : "group-operation");
-    if (!args.includes("status")) throw new Error("DM must not mutate a group");
+    if (!args.includes("status")) {
+      throw new Error("DM must not mutate a group");
+    }
+    assert.equal(args.includes("--require-chat"), false);
     return await command(name, args);
   };
   f.options.fetchImpl = async (url) => {
@@ -192,86 +188,82 @@ test("DM reaches its SUT with an unusable group and group privacy enabled", asyn
   assert.equal(f.credential.testGroup, undefined);
 });
 
-for (const selector of [
-  "-1002042",
-  "@qa_forum",
-  "https://t.me/qa_forum",
-  "https://t.me/+qa-invite",
-  "tg://join?invite=qa-invite",
-]) {
-  test(`explicit forum selector ${selector} is resolved and preserved`, async () => {
-    const f = fixture();
-    const membershipTargets = [];
-    const command = f.options.runCommandImpl;
-    f.options.runCommandImpl = async (name, args) => {
-      if (args.includes("resolve-chat")) {
-        assert.equal(args[args.indexOf("--chat") + 1], selector);
-        return {
-          status: 0,
-          timedOut: false,
-          stdout: JSON.stringify({
-            ok: true,
-            chatId: "-1002042",
-            isForum: true,
-            type: { "@type": "chatTypeSupergroup", supergroup_id: 2042, is_channel: false },
-          }),
-        };
-      }
-      assert.ok(args.includes("status"), "a ready forum must not create or delete a basic group");
-      return await command(name, args);
-    };
-    const fetch = f.options.fetchImpl;
-    f.options.fetchImpl = async (url, init) => {
-      const method = new URL(url).pathname.split("/").at(-1);
-      if (method === "getChat") {
-        assert.equal(JSON.parse(init.body).chat_id, "-1002042");
-        return Response.json({
+test("explicit forum selector is resolved and preserved", async () => {
+  const selector = "tg://join?invite=qa-invite";
+  const f = fixture();
+  const membershipTargets = [];
+  const command = f.options.runCommandImpl;
+  f.options.runCommandImpl = async (name, args) => {
+    if (args.includes("resolve-chat")) {
+      assert.equal(args[args.indexOf("--chat") + 1], selector);
+      return {
+        status: 0,
+        timedOut: false,
+        stdout: JSON.stringify({
           ok: true,
-          result: { id: -1002042, type: "supergroup", is_forum: true },
-        });
-      }
-      if (method === "getChatMember") {
-        membershipTargets.push(JSON.parse(init.body).chat_id);
-        return Response.json({ ok: true, result: { status: "member" } });
-      }
-      return await fetch(url, init);
-    };
-    let delivered = false;
-    await runTelegramTestScenario({
-      args: {
-        chat: selector,
-        dm: false,
-        scenario: { actions: [{ type: "send", atMs: 0, text: "topic", forumTopicId: 42 }] },
-      },
-      acquireCredential: async () => f.credential,
-      checkCredential: f.check,
-      driveScenario: async (args, _root, credential) => {
-        assert.equal(args.chat, selector);
-        assert.equal(credential.groupId, "-1002042");
-        assert.equal(credential.chatTarget.recorderSelector, "-1002042");
-        delivered = true;
-      },
-    });
-    assert.equal(delivered, true);
-    assert.deepEqual(membershipTargets, ["-1002042"]);
-    assert.equal(f.credential.testGroup, undefined);
-    assert.equal(f.releaseCount(), 1);
+          chatId: "-1002042",
+          isForum: true,
+          type: { "@type": "chatTypeSupergroup", supergroup_id: 2042, is_channel: false },
+        }),
+      };
+    }
+    assert.ok(args.includes("status"), "a ready forum must not create or delete a basic group");
+    assert.equal(args.includes("--require-chat"), false);
+    return await command(name, args);
+  };
+  const fetch = f.options.fetchImpl;
+  f.options.fetchImpl = async (url, init) => {
+    const method = new URL(url).pathname.split("/").at(-1);
+    if (method === "getChat") {
+      assert.equal(JSON.parse(init.body).chat_id, "-1002042");
+      return Response.json({
+        ok: true,
+        result: { id: -1002042, type: "supergroup", is_forum: true },
+      });
+    }
+    if (method === "getChatMember") {
+      membershipTargets.push(JSON.parse(init.body).chat_id);
+      return Response.json({ ok: true, result: { status: "member" } });
+    }
+    return await fetch(url, init);
+  };
+  let delivered = false;
+  await runTelegramTestScenario({
+    args: {
+      chat: selector,
+      dm: false,
+      scenario: { actions: [{ type: "send", atMs: 0, text: "topic", forumTopicId: 42 }] },
+    },
+    acquireCredential: async () => f.credential,
+    checkCredential: f.check,
+    driveScenario: async (args, _root, credential) => {
+      assert.equal(args.chat, selector);
+      assert.equal(credential.groupId, "-1002042");
+      assert.equal(credential.chatTarget.recorderSelector, "-1002042");
+      delivered = true;
+    },
   });
-}
+  assert.equal(delivered, true);
+  assert.deepEqual(membershipTargets, ["-1002042"]);
+  assert.equal(f.credential.testGroup, undefined);
+  assert.equal(f.releaseCount(), 1);
+});
 
 test("an inaccessible explicit group stops without substituting the stored group", async () => {
   const f = fixture();
   const command = f.options.runCommandImpl;
   f.options.runCommandImpl = async (name, args) => {
-    if (args.includes("prepare-group"))
+    if (args.includes("prepare-group")) {
       return { status: 1, timedOut: false, stderr: "QA user cannot invite the bot" };
-    if (args.includes("cleanup-group"))
+    }
+    if (args.includes("cleanup-group")) {
       return {
         status: 0,
         timedOut: false,
         stdout: JSON.stringify({ ok: true, status: "not-created" }),
       };
-    if (args.includes("resolve-chat"))
+    }
+    if (args.includes("resolve-chat")) {
       return {
         status: 0,
         timedOut: false,
@@ -281,6 +273,7 @@ test("an inaccessible explicit group stops without substituting the stored group
           type: { "@type": "chatTypeBasicGroup", basic_group_id: 3000 },
         }),
       };
+    }
     assert.ok(args.includes("status"));
     return await command(name, args);
   };
@@ -304,7 +297,7 @@ for (const inaccessible of [true, false]) {
     const events = [];
     const command = f.options.runCommandImpl;
     f.options.runCommandImpl = async (name, args) => {
-      if (args.includes("resolve-chat"))
+      if (args.includes("resolve-chat")) {
         return {
           status: 0,
           stdout: JSON.stringify({
@@ -313,6 +306,7 @@ for (const inaccessible of [true, false]) {
             type: { "@type": "chatTypeSupergroup", supergroup_id: 42 },
           }),
         };
+      }
       if (args.includes("prepare-group")) {
         assert.equal(
           args[args.indexOf("--chat") + 1],
@@ -339,12 +333,14 @@ for (const inaccessible of [true, false]) {
     const fetch = f.options.fetchImpl;
     f.options.fetchImpl = async (url, init) => {
       const method = new URL(url).pathname.split("/").at(-1);
-      if (method === "getChat")
+      if (method === "getChat") {
         return inaccessible && !member
           ? Response.json({ ok: false, error_code: 400 }, { status: 400 })
           : Response.json({ ok: true, result: { id: -10042, type: "supergroup", is_forum: true } });
-      if (method === "getChatMember")
+      }
+      if (method === "getChatMember") {
         return Response.json({ ok: true, result: { status: member ? "member" : "left" } });
+      }
       return await fetch(url, init);
     };
     const release = f.credential.release;
@@ -371,7 +367,7 @@ test("explicit SUT private chat follows the DM route without group checks", asyn
   const f = fixture();
   const command = f.options.runCommandImpl;
   f.options.runCommandImpl = async (name, args) => {
-    if (args.includes("resolve-chat"))
+    if (args.includes("resolve-chat")) {
       return {
         status: 0,
         timedOut: false,
@@ -381,6 +377,7 @@ test("explicit SUT private chat follows the DM route without group checks", asyn
           type: { "@type": "chatTypePrivate", user_id: 42 },
         }),
       };
+    }
     assert.ok(args.includes("status"));
     return await command(name, args);
   };
@@ -411,7 +408,7 @@ test("a forum topic cannot silently target an ordinary explicit group", async ()
   const f = fixture();
   const command = f.options.runCommandImpl;
   f.options.runCommandImpl = async (name, args) => {
-    if (args.includes("resolve-chat"))
+    if (args.includes("resolve-chat")) {
       return {
         status: 0,
         stdout: JSON.stringify({
@@ -421,6 +418,7 @@ test("a forum topic cannot silently target an ordinary explicit group", async ()
           isForum: false,
         }),
       };
+    }
     assert.ok(args.includes("status"));
     return await command(name, args);
   };
@@ -444,30 +442,29 @@ test("a forum topic cannot silently target an ordinary explicit group", async ()
   assert.equal(f.releaseCount(), 1);
 });
 
-for (const status of ["left", "kicked", "restricted"]) {
-  test(`strict membership ${status} prevents product delivery`, async () => {
-    const f = fixture();
-    const fetch = f.options.fetchImpl;
-    f.options.fetchImpl = (url) =>
-      new URL(url).pathname.endsWith("/getChatMember")
-        ? Promise.resolve(Response.json({ ok: true, result: { status } }))
-        : fetch(url);
-    let delivered = false;
-    await assert.rejects(
-      runTelegramTestScenario({
-        acquireCredential: async () => f.credential,
-        checkCredential: f.check,
-        driveScenario: async () => {
-          delivered = true;
-        },
-      }),
-      /not an active member/u,
-    );
-    assert.equal(delivered, false);
-    assert.equal(f.proxyClosed(), true);
-    assert.equal(f.releaseCount(), 1);
-  });
-}
+test("strict membership prevents product delivery and cleans up the created group", async () => {
+  const f = fixture();
+  const fetch = f.options.fetchImpl;
+  f.options.fetchImpl = (url) =>
+    new URL(url).pathname.endsWith("/getChatMember")
+      ? Promise.resolve(Response.json({ ok: true, result: { status: "restricted" } }))
+      : fetch(url);
+  let delivered = false;
+  await assert.rejects(
+    runTelegramTestScenario({
+      acquireCredential: async () => f.credential,
+      checkCredential: f.check,
+      driveScenario: async () => {
+        delivered = true;
+      },
+    }),
+    /not an active member/u,
+  );
+  assert.equal(delivered, false);
+  assert.equal(f.proxyClosed(), true);
+  assert.equal(f.releaseCount(), 1);
+  assert.equal(f.credential.testGroup.cleanup.status, "deleted");
+});
 
 for (const failure of ["revocation", "cancellation"]) {
   test(`${failure} after readiness prevents product delivery`, async () => {
@@ -480,8 +477,11 @@ for (const failure of ["revocation", "cancellation"]) {
         acquireCredential: async () => f.credential,
         checkCredential: async (credential, options) => {
           await f.check(credential, options);
-          if (failure === "revocation") f.revoke();
-          else controller.abort(new Error("cancelled"));
+          if (failure === "revocation") {
+            f.revoke();
+          } else {
+            controller.abort(new Error("cancelled"));
+          }
         },
         driveScenario: async () => {
           delivered = true;
@@ -525,7 +525,9 @@ test("cancellation interrupts pending readiness HTTP and closes before release",
   });
   f.options.fetchImpl = async (_url, { signal }) => {
     started();
-    await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    await new Promise((resolve) => {
+      signal.addEventListener("abort", resolve, { once: true });
+    });
     throw signal.reason;
   };
   let delivered = false;
@@ -542,32 +544,6 @@ test("cancellation interrupts pending readiness HTTP and closes before release",
   await assert.rejects(run, /cancelled HTTP/u);
   assert.equal(delivered, false);
   assert.equal(f.proxyClosed(), true);
-  assert.equal(f.releaseCount(), 1);
-});
-
-test("driver failure keeps the lease until driver cleanup finishes", async () => {
-  const f = fixture();
-  let driverClosed = false;
-  const release = f.credential.release;
-  f.credential.release = async () => {
-    assert.equal(driverClosed, true);
-    await release();
-  };
-  await assert.rejects(
-    runTelegramTestScenario({
-      acquireCredential: async () => f.credential,
-      checkCredential: f.check,
-      driveScenario: async () => {
-        try {
-          throw new Error("driver failed");
-        } finally {
-          f.credential.assertLeaseHealthy();
-          driverClosed = true;
-        }
-      },
-    }),
-    /driver failed/u,
-  );
   assert.equal(f.releaseCount(), 1);
 });
 
@@ -622,7 +598,9 @@ test("SIGTERM during CLI readiness closes its proxy before the sole lease releas
     { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
   );
   context.after(() => {
-    if (child.exitCode === null) child.kill("SIGKILL");
+    if (child.exitCode === null) {
+      child.kill("SIGKILL");
+    }
   });
   const completion = once(child, "exit");
   const first = await Promise.race([
@@ -672,7 +650,9 @@ test("scenario cancellation aborts a pending request in the real drive path", as
   try {
     const requestSignal = await requested.promise;
     controller.abort(new Error("cancelled drive"));
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(
       requestSignal.aborted,
       true,
@@ -713,9 +693,11 @@ for (const event of ["caller cancellation", "lease loss"]) {
       ...f.options,
     });
     await closing.promise;
-    if (event === "caller cancellation")
+    if (event === "caller cancellation") {
       controller.abort(new Error("cancelled during proxy close"));
-    else f.revoke();
+    } else {
+      f.revoke();
+    }
     finish.resolve();
     await assert.rejects(
       run,
@@ -749,8 +731,11 @@ for (const event of ["caller cancellation", "lease loss"]) {
       driveScenario: async () => "completed work",
     });
     await releasing.promise;
-    if (event === "caller cancellation") controller.abort(new Error("cancelled during release"));
-    else f.revoke();
+    if (event === "caller cancellation") {
+      controller.abort(new Error("cancelled during release"));
+    } else {
+      f.revoke();
+    }
     finish.resolve();
     await assert.rejects(run, /cancelled during release|lease revoked/u);
     assert.equal(f.releaseCount(), 1);

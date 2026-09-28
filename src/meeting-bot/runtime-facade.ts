@@ -129,6 +129,7 @@ export function createMeetingRuntimeFacade<
         speakViaTransport: async () => undefined,
         durableTranscripts: {
           config: params.fullConfig.transcripts,
+          openclawConfig: params.fullConfig,
           ...options.messages.durableTranscripts,
         },
       });
@@ -140,6 +141,10 @@ export function createMeetingRuntimeFacade<
 
     async startTranscriptSource(request: TranscriptStartRequest) {
       return await this.#sessions.startTranscriptSource(request);
+    }
+
+    reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
+      return this.#sessions.reconcileTranscriptPolicy(enabled);
     }
 
     async stopTranscriptSource(request: TranscriptStopRequest) {

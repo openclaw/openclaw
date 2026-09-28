@@ -21,6 +21,7 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
 import {
   readPersistedInstalledPluginIndexSync,
   type InstalledPluginIndexStoreOptions,
@@ -28,10 +29,8 @@ import {
 import {
   diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
-  getInstalledPluginRecord,
   hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
-  isInstalledPluginEnabled,
   loadInstalledPluginIndexWithDiscovery,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -80,10 +79,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     allowCurrent?: boolean;
   };
 
-type GetPluginRecordParams = LoadPluginRegistryParams & {
-  pluginId: string;
-};
-
 // Shared with plugin-registry-refresh.ts.
 export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
   params: T,
@@ -107,8 +102,9 @@ export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginI
   };
 }
 
-function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
+export function canReusePluginRegistrySnapshot(params: LoadPluginRegistryParams): boolean {
   return (
+    params.index === undefined &&
     params.allowCurrent !== false &&
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
@@ -122,17 +118,21 @@ function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams)
   );
 }
 
-function loadCurrentPluginRegistrySnapshotResult(
-  params: LoadPluginRegistryParams,
-): PluginRegistrySnapshotResult | undefined {
-  if (!canReuseCurrentPluginMetadataSnapshot(params)) {
+export function getCurrentPluginMetadataSnapshotForRegistry(params: LoadPluginRegistryParams) {
+  if (!canReusePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const current = getCurrentPluginMetadataSnapshot({
+  return getCurrentPluginMetadataSnapshot({
     config: params.config,
     env: params.env ?? process.env,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+}
+
+function loadCurrentPluginRegistrySnapshotResult(
+  params: LoadPluginRegistryParams,
+): PluginRegistrySnapshotResult | undefined {
+  const current = getCurrentPluginMetadataSnapshotForRegistry(params);
   if (!current) {
     return undefined;
   }
@@ -581,6 +581,7 @@ function loadPluginRegistrySnapshotWithPreparedValidation(
     });
   }
 
+  preservePluginSourceAdmissions(persistedIndex, derived.index);
   return {
     snapshot: derived.index,
     source: "derived",
@@ -594,18 +595,6 @@ export function loadPluginRegistrySnapshot(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshot {
   return loadPluginRegistrySnapshotWithMetadata(params).snapshot;
-}
-
-export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRecord | undefined {
-  return getInstalledPluginRecord(loadPluginRegistrySnapshot(params), params.pluginId);
-}
-
-export function isPluginEnabled(params: GetPluginRecordParams): boolean {
-  return isInstalledPluginEnabled(
-    loadPluginRegistrySnapshot(params),
-    params.pluginId,
-    params.config,
-  );
 }
 
 export async function inspectPluginRegistry(

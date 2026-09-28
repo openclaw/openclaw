@@ -34,6 +34,7 @@ export function buildChatApiAttachments(attachments?: readonly ChatAttachment[])
           type: parsed.mimeType.startsWith("image/") ? "image" : "file",
           mimeType: parsed.mimeType,
           fileName: attachment.fileName,
+          ...(attachment.origin ? { origin: attachment.origin } : {}),
           content: parsed.content,
         };
       })

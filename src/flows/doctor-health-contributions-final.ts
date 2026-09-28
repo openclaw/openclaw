@@ -21,7 +21,6 @@ import {
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
-  collectMemorySearchHealthFindings,
   collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
@@ -202,6 +201,13 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
     }),
     createDoctorHealthContribution({
+      id: "doctor:acp-agent-model",
+      label: "ACP agent model",
+      updateWork: { kind: "inspection", scope: "agent" },
+      healthCheckIds: ["core/doctor/acp-agent-model"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/acp-agent-model"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
       updateWork: { kind: "inspection", scope: "run" },
@@ -297,7 +303,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
@@ -415,11 +421,15 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Memory search provider and backend readiness are captured as findings.",
         defaultEnabled: false,
-        detect: collectMemorySearchHealthFindings,
+        async detect(ctx) {
+          const { collectMemorySearchHealthFindings } =
+            await import("../commands/doctor-memory-search.js");
+          return collectMemorySearchHealthFindings(ctx);
+        },
       },
       run: runMemorySearchHealthContribution,
     }),
@@ -456,7 +466,9 @@ export function resolveFinalDoctorHealthContributions(params: {
         defaultEnabled: false,
         detect: collectWriteConfigHealthFindings,
       },
-      run: runWriteConfigHealth,
+      async run(ctx) {
+        await runWriteConfigHealth(ctx);
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",

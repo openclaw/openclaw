@@ -11,6 +11,150 @@ import {
 } from "./session-capability.test-support.ts";
 
 describe("cached session list freshness", () => {
+  it("keeps a background run visible when a later request replays a pre-event page", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:background",
+      sessionId: "background-session",
+      kind: "direct",
+      updatedAt: 10,
+      snapshotAt: 100,
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+    };
+    let page = sessionsResult([row], 100);
+    const harness = createGatewayHarness(
+      createTestGatewayClient(async () => structuredClone(page)),
+    );
+    const sessions = createTestSessionCapability(harness.gateway);
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      harness.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          agentId: "main",
+          reason: "run-capacity",
+          session: {
+            ...row,
+            snapshotAt: 200,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["background-run"],
+          },
+          ancestorSessions: [],
+          ts: 200,
+        },
+      });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+      });
+
+      // Runtime projection changed without a persisted-row write. Request order
+      // does not make this completed Gateway cache entry a fresh observation.
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["background-run"],
+        snapshotAt: 200,
+      });
+
+      page = sessionsResult([{ ...row, snapshotAt: 300 }], 300);
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        status: "done",
+        hasActiveRun: false,
+        activeRunIds: [],
+        snapshotAt: 300,
+      });
+    } finally {
+      sessions.dispose();
+    }
+  });
+
+  it("does not revive a finished run when its older sampled event arrives after a list", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:background",
+      sessionId: "background-session",
+      kind: "direct",
+      updatedAt: 10,
+      snapshotAt: 300,
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+    };
+    const harness = createGatewayHarness(
+      createTestGatewayClient(async () => sessionsResult([structuredClone(row)], 300)),
+    );
+    const sessions = createTestSessionCapability(harness.gateway);
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      harness.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          agentId: "main",
+          reason: "run-capacity",
+          session: {
+            ...row,
+            snapshotAt: 200,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["background-run"],
+          },
+          ancestorSessions: [],
+          ts: 200,
+        },
+      });
+      expect(sessions.state.result?.sessions[0]).toMatchObject(row);
+    } finally {
+      sessions.dispose();
+    }
+  });
+
+  it("settles a runtime-only run from a newer sampled event without a persisted write", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:background",
+      sessionId: "background-session",
+      kind: "direct",
+      updatedAt: 10,
+      snapshotAt: 100,
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["background-run"],
+    };
+    const harness = createGatewayHarness(
+      createTestGatewayClient(async () => sessionsResult([structuredClone(row)], 100)),
+    );
+    const sessions = createTestSessionCapability(harness.gateway);
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      const settled = {
+        ...row,
+        snapshotAt: 200,
+        status: "done",
+        hasActiveRun: false,
+        activeRunIds: [],
+      };
+      harness.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          agentId: "main",
+          reason: "run-capacity",
+          session: settled,
+          ancestorSessions: [],
+          ts: 200,
+        },
+      });
+      expect(sessions.state.result?.sessions[0]).toMatchObject(settled);
+    } finally {
+      sessions.dispose();
+    }
+  });
+
   it("keeps fresh child facts when a later root request returns an older cached page", async () => {
     const parentKey = "agent:main:parent";
     const childKey = "agent:main:subagent:child";

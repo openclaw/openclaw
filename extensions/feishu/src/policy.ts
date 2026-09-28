@@ -1,10 +1,8 @@
-// Feishu plugin module implements policy behavior.
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import {
-  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
@@ -13,6 +11,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelGroupContext } from "../runtime-api.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { detectIdType } from "./targets.js";
 import type { FeishuConfig } from "./types.js";
 
@@ -115,7 +114,7 @@ function createFeishuIngressResolver(params: {
   accountId?: string | null;
   readAllowFromStore?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
 }) {
-  return createChannelIngressResolver({
+  return getFeishuRuntime().channel.inbound.ingress.createResolver({
     channelId: "feishu",
     accountId: normalizeAccountId(params.accountId) ?? "default",
     identity: feishuIngressIdentity,
@@ -137,11 +136,7 @@ export async function resolveFeishuDmIngressAccess(params: {
   command?: { hasControlCommand: boolean };
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await createFeishuIngressResolver({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    readAllowFromStore: params.readAllowFromStore,
-  }).message({
+  return await createFeishuIngressResolver(params).message({
     subject: createFeishuIngressSubject({
       primaryId: params.senderOpenId,
       alternateIds: [params.senderUserId],
@@ -176,10 +171,7 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
     groupPolicy === "allowlist" && params.groupExplicitlyConfigured
       ? [...(params.groupAllowFrom ?? []), params.chatId]
       : (params.groupAllowFrom ?? []);
-  return await createFeishuIngressResolver({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).message({
+  return await createFeishuIngressResolver(params).message({
     subject: createFeishuIngressSubject({
       primaryId: params.chatId,
     }),
@@ -209,10 +201,7 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   threadId?: string;
 }) {
   const groupAllowFrom = params.allowFrom ?? [];
-  return await createFeishuIngressResolver({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).message({
+  return await createFeishuIngressResolver(params).message({
     subject: createFeishuIngressSubject({
       primaryId: params.senderOpenId,
       alternateIds: [params.senderUserId],

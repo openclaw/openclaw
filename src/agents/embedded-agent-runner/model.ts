@@ -15,13 +15,13 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { AuthStorage } from "../sessions/auth-storage.js";
+import { ModelRegistry } from "../sessions/model-registry.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
-  type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import {
   normalizeResolvedModel,
@@ -57,6 +57,7 @@ type CommonModelResolutionOptions = {
 };
 
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
+  abortSignal?: AbortSignal;
   /** Selected executable IDs must not pass through input aliases again. */
   modelIdSource?: "input" | "selected";
   allowBundledStaticCatalogFallback?: boolean;
@@ -179,7 +180,7 @@ export async function resolveModelAsync(
     }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
-    let staticCatalogModel: StaticCatalogFallbackModel | undefined;
+    let staticCatalogModel: ProviderRuntimeModel | undefined;
     const getManifestStaticCatalogModel = () => {
       if (!staticCatalogResolved) {
         staticCatalogResolved = true;
@@ -221,6 +222,7 @@ export async function resolveModelAsync(
       const suppressedRuntimeModel =
         explicitModel.kind === "suppressed"
           ? await resolveRuntimePreferredSuppressedModel({
+              abortSignal: options?.abortSignal,
               assertCurrent: options?.assertCurrent,
               provider: normalizedRef.provider,
               modelId: normalizedRef.model,
@@ -308,6 +310,7 @@ export async function resolveModelAsync(
     };
     const resolveDynamicAttempt = async () => {
       const authProfile = await resolveDynamicModelAuthProfile({
+        abortSignal: options?.abortSignal,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         cfg,
@@ -337,6 +340,7 @@ export async function resolveModelAsync(
           });
       options?.assertCurrent?.();
       return resolveModelWithPreparedRegistry({
+        abortSignal: options?.abortSignal,
         assertCurrent: options?.assertCurrent,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,

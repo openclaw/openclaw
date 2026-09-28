@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -35,7 +34,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 import {
   isSidebarSlotVisible,
   openSlot,
@@ -77,9 +75,7 @@ describe("chat pane retained presentation lifecycle", () => {
       pane.presented = false;
       pane.presented = true;
       const retainedControl = new WeakRef({ unowned: true });
-      await collectGarbageForTest(() => {
-        queryObjects(ReplyPreviewMessage);
-      });
+      await collectGarbageForTest();
       expect(retainedControl.deref()).toBeUndefined();
       expect(preview!.deref()).toBeDefined();
       pane.requestReplyMessage("source-message");
@@ -91,9 +87,7 @@ describe("chat pane retained presentation lifecycle", () => {
         pane.disconnectedCallback();
       }
       const retiredControl = new WeakRef({ unowned: true });
-      await collectGarbageForTest(() => {
-        queryObjects(ReplyPreviewMessage);
-      });
+      await collectGarbageForTest();
       expect(retiredControl.deref()).toBeUndefined();
       expect(preview!.deref()).toBeUndefined();
       expect(pane.readReplyMessage("source-message")).toBeUndefined();
@@ -105,7 +99,10 @@ describe("chat pane retained presentation lifecycle", () => {
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -142,11 +139,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {
@@ -473,13 +470,8 @@ describe("chat pane retained presentation lifecycle", () => {
     const release = vi.fn();
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "task", taskId: "task-live" };
+    state.sidebarContent = { kind: "markdown", content: "Review selection" };
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
-    const detailHost = state as unknown as TaskDetailHost;
-    readTaskTranscript(detailHost, {
-      taskId: "task-live",
-    });
-    expect(detailHost.taskDetailState).toBeDefined();
     pane.presentationId = "p1:visible";
     const announcement = document.createElement("span");
     announcement.className = "chat-transcript-announcement";
@@ -490,9 +482,6 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
-    // The wiped detail slot can no longer reset the loader itself; retirement
-    // must stop its timer/fetch loop so hidden panes stop reading history.
-    expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 

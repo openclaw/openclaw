@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPausedRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
@@ -21,6 +22,7 @@ import {
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -68,6 +70,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isDisabled()).toBe(false);
+      // Pending history permits editing before the authenticated recovery scope is ready.
+      await waitForGatewayRecoveryScope(page);
       const owner = await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime: { context: ApplicationContext };
@@ -272,7 +276,8 @@ suite.define(() => {
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
-      await page.locator('[data-chat-model-select="true"]').click();
+      await expectPastedPngImage(page.getByRole("img", { name: "pixel.png" }));
+      await openChatModelPicker(page);
       const picker = page.locator("[data-chat-account-selection]");
       await picker.locator("[data-chat-account-group-toggle]").click();
       await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();

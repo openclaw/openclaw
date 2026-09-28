@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

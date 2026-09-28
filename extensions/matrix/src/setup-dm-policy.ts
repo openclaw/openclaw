@@ -1,4 +1,3 @@
-// Matrix plugin module implements setup dm policy behavior.
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import {

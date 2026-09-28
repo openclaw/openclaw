@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -102,6 +103,7 @@ suite.define(() => {
         .poll(() => localOption.locator(".chat-controls__model-option-meta").textContent())
         .toBe("32.8k");
       await expect.poll(() => localOption.getAttribute("aria-label")).toContain("cannot use tools");
+      await revealChatModelOption(localOption);
       const infoIcon = localOption.locator(".chat-controls__model-chat-only-info");
       await expect.poll(() => infoIcon.locator("svg").count()).toBe(1);
       await expect.poll(async () => (await infoIcon.boundingBox())?.width).toBe(16);
@@ -117,7 +119,7 @@ suite.define(() => {
         });
       }
 
-      await openAiOption.click();
+      await selectChatModelOption(openAiOption);
       const patch = await gateway.waitForRequest("sessions.patch");
       expect(patch.params).toMatchObject({ key: sessionKey, model: "openai/gpt-5.5" });
       await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("available");
@@ -127,7 +129,7 @@ suite.define(() => {
       if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
         await picker.click();
       }
-      await localOption.click();
+      await selectChatModelOption(localOption);
       await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("unavailable");
       if (await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open)) {
         await picker.click();

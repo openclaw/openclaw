@@ -247,32 +247,6 @@ describe("channels controller WhatsApp wait", () => {
 });
 
 describe("channels controller WhatsApp provider selection", () => {
-  it("selects WhatsApp for QR login start and wait requests", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "channels.status") {
-        return createChannelsSnapshot("refreshed");
-      }
-      return { connected: true, message: "connected" };
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-
-    await channels.startWhatsApp(false);
-    await channels.waitWhatsApp();
-
-    expect(request).toHaveBeenCalledWith(
-      "web.login.start",
-      expect.objectContaining({ channel: "whatsapp" }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "web.login.wait",
-      expect.objectContaining({ channel: "whatsapp" }),
-    );
-    channels.dispose();
-  });
-
   it("carries the provider session key from login start into wait", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "web.login.start") {
@@ -291,6 +265,10 @@ describe("channels controller WhatsApp provider selection", () => {
     await channels.startWhatsApp(false);
     await channels.waitWhatsApp();
 
+    expect(request).toHaveBeenCalledWith(
+      "web.login.start",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
     expect(request).toHaveBeenCalledWith(
       "web.login.wait",
       expect.objectContaining({ channel: "whatsapp", sessionKey: "opaque-session" }),
@@ -474,51 +452,52 @@ describe("channels controller DM pairing", () => {
     ],
   };
 
-  it("loads pending requests and refreshes after approval", async () => {
-    let listCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "channels.pairing.list") {
-        listCount += 1;
-        return listCount === 1 ? pendingPairing : emptyPairing;
+  it.each(["approve", "dismiss"] as const)(
+    "loads pending requests and refreshes after %s",
+    async (action) => {
+      let listCount = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "channels.pairing.list") {
+          listCount += 1;
+          return listCount === 1 ? pendingPairing : emptyPairing;
+        }
+        if (method === "channels.pairing.approve") {
+          return {
+            requestId: "request-1",
+            senderId: "+1555",
+            notification: "sent",
+            commandOwnerBootstrap: "not-requested",
+          };
+        }
+        return {};
+      });
+      const channels = createChannelCapability({
+        snapshot: { client: { request }, phase: "connected" },
+        subscribe: () => () => undefined,
+      } as never);
+
+      await channels.refreshPairing();
+      expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
+
+      const params = {
+        channel: "whatsapp",
+        accountId: "personal",
+        requestId: "request-1",
+      };
+      if (action === "approve") {
+        const approval = { ...params, notify: true, bootstrapCommandOwner: false };
+        const result = await channels.approvePairing(approval);
+        expect(result?.notification).toBe("sent");
+        expect(request).toHaveBeenCalledWith("channels.pairing.approve", approval);
+      } else {
+        await expect(channels.dismissPairing(params)).resolves.toBe(true);
+        expect(request).toHaveBeenCalledWith("channels.pairing.dismiss", params);
       }
-      if (method === "channels.pairing.approve") {
-        return {
-          requestId: "request-1",
-          senderId: "+1555",
-          notification: "sent",
-          commandOwnerBootstrap: "not-requested",
-        };
-      }
-      return {};
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-
-    await channels.refreshPairing();
-    expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
-
-    const result = await channels.approvePairing({
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: true,
-      bootstrapCommandOwner: false,
-    });
-
-    expect(result?.notification).toBe("sent");
-    expect(request).toHaveBeenCalledWith("channels.pairing.approve", {
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: true,
-      bootstrapCommandOwner: false,
-    });
-    expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingBusyRequestId).toBeNull();
-    channels.dispose();
-  });
+      expect(channels.state.pairingSnapshot?.requests).toEqual([]);
+      expect(channels.state.pairingBusyRequestId).toBeNull();
+      channels.dispose();
+    },
+  );
 
   it("keeps the row resolved when refresh fails and blocks polling during mutation", async () => {
     const approvalResult = createDeferred<{

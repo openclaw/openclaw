@@ -1,4 +1,3 @@
-// Voice Call plugin module implements webhook behavior.
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -263,9 +262,6 @@ export class VoiceCallWebhookServer {
     });
   }
 
-  /**
-   * Get the media stream handler (for wiring to provider).
-   */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
   }
@@ -614,9 +610,6 @@ export class VoiceCallWebhookServer {
     return this.startPromise;
   }
 
-  /**
-   * Stop the webhook server.
-   */
   stop(): Promise<void> {
     if (this.stopPromise) {
       return this.stopPromise;
@@ -691,9 +684,6 @@ export class VoiceCallWebhookServer {
     return normalizeWebhookPath(requestPath) === normalizeWebhookPath(configuredPath);
   }
 
-  /**
-   * Handle incoming HTTP request.
-   */
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -757,7 +747,12 @@ export class VoiceCallWebhookServer {
     try {
       let body = "";
       try {
-        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
+        // Defer destruction so a limit rejection can be answered before the close.
+        body = await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_WEBHOOK_BODY_BYTES,
+          timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+          destroyOnLimit: false,
+        });
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
           await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
@@ -1080,18 +1075,6 @@ export class VoiceCallWebhookServer {
       }
     }
     res.end(payload.body);
-  }
-
-  /**
-   * Read request body as string with timeout protection.
-   */
-  private readBody(
-    req: http.IncomingMessage,
-    maxBytes: number,
-    timeoutMs: number,
-  ): Promise<string> {
-    // Defer destruction so a limit rejection can be answered before the close.
-    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs, destroyOnLimit: false });
   }
 
   /**

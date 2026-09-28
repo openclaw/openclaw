@@ -1,6 +1,7 @@
 import { request, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as advertisedLanHost from "../../infra/advertised-lan-host.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import * as httpListen from "../server/http-listen.js";
@@ -46,6 +47,70 @@ function reportTargetPortCollision(server: Server, targetPort: number): void {
 }
 
 describe("portal open authority fence", () => {
+  it("disconnects an already-streaming response when its scoped resource owner retires", async () => {
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write("data: live\n\n");
+      },
+      async (targetUrl) => {
+        const { service } = makeService(["127.0.0.1"]);
+        const owner = new AbortController();
+        const portal = await service.open({
+          targetPort: Number(new URL(targetUrl).port),
+          ownerSignal: owner.signal,
+        });
+        const response = await fetch(portal.url);
+        const reader = response.body!.getReader();
+        expect((await reader.read()).done).toBe(false);
+        owner.abort();
+        await expect(reader.read()).rejects.toThrow();
+        expect(service.list()).toEqual([]);
+      },
+    );
+  });
+
+  it("keeps published resources independent of completed requests and retires them with their resource owner", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const owner = new AbortController();
+    let requestCurrent = true;
+    const release = vi.fn();
+    const portal = await service.open({
+      targetPort: 3000,
+      ownerSignal: owner.signal,
+      assertCurrent: () => {
+        if (!requestCurrent) {
+          throw new Error("request completed");
+        }
+      },
+      onClose: release,
+    });
+    requestCurrent = false;
+    expect(service.list()).toEqual([portal]);
+    expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
+    owner.abort();
+    expect(service.list()).toEqual([]);
+    await service.closeAll();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("does not publish a listener whose resource owner retires during startup", async () => {
+    const owner = new AbortController();
+    const actualListen = httpListen.listenGatewayHttpServer;
+    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
+      await actualListen(params);
+      owner.abort(new Error("session reset"));
+    });
+    const { service, httpServers } = makeService(["127.0.0.1"]);
+    const release = vi.fn();
+    await expect(
+      service.open({ targetPort: 3000, ownerSignal: owner.signal, onClose: release }),
+    ).rejects.toThrow("session reset");
+    expect(service.list()).toEqual([]);
+    expect(httpServers).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("refuses to mutate a reused portal when the caller's authority lapsed", async () => {
     const { service } = makeService(["127.0.0.1"]);
     const first = await service.open({ targetPort: 41234, title: "Live" });
@@ -97,6 +162,42 @@ describe("portal open authority fence", () => {
 });
 
 describe("gateway portal service", () => {
+  it("keeps explicit loopback listeners local even when a LAN address is available", async () => {
+    const resolveHost = vi
+      .spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore")
+      .mockResolvedValue("192.168.1.20");
+    const { service } = makeService(["127.0.0.1"]);
+    const portal = await service.open({ targetPort: 3000 });
+
+    expect(portal.publicUrl).toBe(`http://127.0.0.1:${portal.listenPort}/`);
+    expect(resolveHost).not.toHaveBeenCalled();
+  });
+
+  it("revalidates authority after LAN discovery and releases unpublished listeners", async () => {
+    let current = true;
+    vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockImplementation(async () => {
+      current = false;
+      return "192.168.1.20";
+    });
+    const { service, httpServers } = makeService(["0.0.0.0"]);
+    const releaseTarget = vi.fn();
+
+    await expect(
+      service.open({
+        targetPort: 3000,
+        onClose: releaseTarget,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("authority revoked during LAN discovery");
+          }
+        },
+      }),
+    ).rejects.toThrow("authority revoked during LAN discovery");
+    expect(service.list()).toEqual([]);
+    expect(httpServers).toEqual([]);
+    expect(releaseTarget).toHaveBeenCalledOnce();
+  });
+
   it("allocates one port across every frozen bind host", async () => {
     const { service, httpServers } = makeService(["127.0.0.1", "::1"]);
     const portal = await service.open({ targetPort: 3000, title: "App" });
@@ -412,10 +513,32 @@ describe("gateway portal service", () => {
     expect(httpServers).toEqual([]);
   });
 
+  it.each(["0.0.0.0", "::"])(
+    "publishes the advertised LAN address for wildcard listener %s",
+    async (bindHost) => {
+      const resolveHost = vi
+        .spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore")
+        .mockResolvedValue("192.168.1.20");
+      const { service, httpServers } = makeService([bindHost]);
+      const portal = await service.open({ targetPort: 3000, path: "/app?view=one" });
+
+      expect(portal.publicUrl).toBe(`http://192.168.1.20:${portal.listenPort}/app?view=one`);
+      expect(portal.url).toBe(`${portal.publicUrl}&${portal.tokenQuery}`);
+      expect(httpServers[0]?.address()).toMatchObject({ address: bindHost });
+      expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
+      // Publication belongs to this listener lifetime, not each listing or caller's hostname.
+      resolveHost.mockResolvedValue("192.168.1.21");
+      expect(service.list()).toEqual([portal]);
+      expect(await service.open({ targetPort: 3000 })).toEqual(portal);
+      expect(resolveHost).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     ["0.0.0.0", "127.0.0.1"],
     ["::", "[::1]"],
-  ])("maps wildcard bind host %s to openable host %s", async (bindHost, openableHost) => {
+  ])("keeps wildcard %s local when no LAN address is available", async (bindHost, openableHost) => {
+    vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue(null);
     const { service } = makeService([bindHost]);
     const portal = await service.open({ targetPort: 3000 });
 

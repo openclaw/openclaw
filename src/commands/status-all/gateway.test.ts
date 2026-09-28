@@ -14,6 +14,14 @@ afterEach(() => {
 });
 
 describe("summarizeLogTail", () => {
+  const jsonConsoleLine = JSON.stringify({
+    time: "2026-09-18T10:00:00.000Z",
+    level: "error",
+    subsystem: "gateway",
+    message: 'Connection failed with {details} and "quotes"',
+    detail: { attempt: 2, reasons: ["unreachable"] },
+  });
+
   it.each([
     {
       name: "ordinary whitespace and adjacent duplicates",
@@ -21,8 +29,21 @@ describe("summarizeLogTail", () => {
       expected: ["  first", "second", "  first"],
     },
     {
+      name: "complete JSON console records with their metadata and indentation",
+      input: [jsonConsoleLine, `  ${jsonConsoleLine}  `],
+      expected: [jsonConsoleLine, `  ${jsonConsoleLine}`],
+    },
+    {
       name: "orphan JSON fragments without dropping bracketed or comment lines",
-      input: ['  "field": "value",', "  } trailing", " {", "[gateway] {kept}", "# {kept}"],
+      input: [
+        '  "field": "value",',
+        "  } trailing",
+        " {",
+        '{"message":"incomplete"',
+        '{"message":"complete"} trailing',
+        "[gateway] {kept}",
+        "# {kept}",
+      ],
       expected: ["[gateway] {kept}", "# {kept}"],
     },
     {

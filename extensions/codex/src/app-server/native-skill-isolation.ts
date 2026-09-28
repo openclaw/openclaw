@@ -144,46 +144,34 @@ async function collectPersonalSkillRealPaths(
           continue;
         }
         const entryPath = path.join(current.dir, entry.name);
-        if (entry.name === "SKILL.md" && entry.isFile()) {
-          await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
-          continue;
-        }
+        let isFile = entry.isFile();
+        let isDirectory = entry.isDirectory();
         if (entry.isSymbolicLink()) {
           try {
             const stat = await fs.stat(entryPath);
-            if (entry.name === "SKILL.md" && stat.isFile()) {
-              await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
-            } else if (stat.isDirectory()) {
-              if (current.depth < MAX_PERSONAL_SKILL_DEPTH) {
-                queue.push({
-                  dir: entryPath,
-                  depth: current.depth + 1,
-                  onlyEscapedStateTargets: current.onlyEscapedStateTargets,
-                });
-              } else {
-                complete = false;
-              }
-            }
+            isFile = stat.isFile();
+            isDirectory = stat.isDirectory();
           } catch (error) {
             if (!isMissingPathError(error)) {
               complete = false;
             }
+            continue;
           }
+        }
+        if (entry.name === "SKILL.md" && isFile) {
+          await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
           continue;
         }
-        if (current.depth >= MAX_PERSONAL_SKILL_DEPTH) {
-          if (entry.isDirectory()) {
+        if (isDirectory) {
+          if (current.depth >= MAX_PERSONAL_SKILL_DEPTH) {
             complete = false;
+          } else {
+            queue.push({
+              dir: entryPath,
+              depth: current.depth + 1,
+              onlyEscapedStateTargets: current.onlyEscapedStateTargets,
+            });
           }
-          continue;
-        }
-        if (entry.isDirectory()) {
-          queue.push({
-            dir: entryPath,
-            depth: current.depth + 1,
-            onlyEscapedStateTargets: current.onlyEscapedStateTargets,
-          });
-          continue;
         }
       }
     } catch (error) {

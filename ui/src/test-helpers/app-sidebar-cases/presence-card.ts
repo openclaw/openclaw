@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { focusSidebarPersonWithKeyboard } from "../app-sidebar-setup.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
@@ -78,7 +79,7 @@ describe("AppSidebar person activity card", () => {
       })),
     });
     await sidebar.updateComplete;
-    sidebar.querySelector<HTMLElement>(".sidebar-online__person")!.focus();
+    focusSidebarPersonWithKeyboard(sidebar.querySelector<HTMLElement>(".sidebar-online__person")!);
     // Focus loads its interaction owner before the card can render.
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
@@ -99,7 +100,7 @@ describe("AppSidebar person activity card", () => {
       "iPad · Web",
     ]);
     expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
-    expect(facts[1]?.textContent?.trim()).toBe("Not observed yet");
+    expect(facts[1]?.textContent?.trim()).toBe("Activity unavailable");
     const sections = card.querySelectorAll("section");
     expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
     expect(sections[0]?.textContent).toContain("Visible 0");

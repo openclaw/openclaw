@@ -1,5 +1,8 @@
 use crate::gateway_ws::{CanvasSurfaceState, GatewayClient, GatewayGeneration};
-use crate::quickchat::{position_quickchat, require_quickchat_webview, QuickChatState};
+use crate::quickchat::{
+    position_quickchat, require_quickchat_webview, QuickChatState, QUICKCHAT_COMPACT_WINDOW_HEIGHT,
+    QUICKCHAT_TEXT_WINDOW_HEIGHT, QUICKCHAT_WIDGET_WINDOW_HEIGHT, QUICKCHAT_WIDTH,
+};
 #[cfg(target_os = "linux")]
 use gtk::prelude::*;
 use serde::Deserialize;
@@ -14,10 +17,6 @@ use tauri::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
-const QUICKCHAT_WIDTH: f64 = 640.0;
-const QUICKCHAT_COMPACT_WINDOW_HEIGHT: f64 = 92.0;
-const QUICKCHAT_TEXT_WINDOW_HEIGHT: f64 = 360.0;
-const QUICKCHAT_WIDGET_WINDOW_HEIGHT: f64 = 440.0;
 const QUICKCHAT_WIDGET_HEIGHT: f64 = 160.0;
 const QUICKCHAT_WIDGET_LABEL_PREFIX: &str = "quickchat-widget-";
 const QUICKCHAT_WIDGET_MAX_COUNT: usize = 32;
@@ -101,12 +100,12 @@ struct WidgetState {
 }
 
 fn quickchat_window_height(has_widgets: bool, expanded: bool) -> f64 {
-    if has_widgets {
-        QUICKCHAT_WIDGET_WINDOW_HEIGHT
-    } else if expanded {
-        QUICKCHAT_TEXT_WINDOW_HEIGHT
-    } else {
+    if !expanded {
         QUICKCHAT_COMPACT_WINDOW_HEIGHT
+    } else if has_widgets {
+        QUICKCHAT_WIDGET_WINDOW_HEIGHT
+    } else {
+        QUICKCHAT_TEXT_WINDOW_HEIGHT
     }
 }
 
@@ -847,7 +846,7 @@ mod tests {
         );
         assert_eq!(
             quickchat_window_height(true, false),
-            QUICKCHAT_WIDGET_WINDOW_HEIGHT
+            QUICKCHAT_COMPACT_WINDOW_HEIGHT
         );
         assert_eq!(
             quickchat_window_height(true, true),

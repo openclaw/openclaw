@@ -8,12 +8,12 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import "../../components/tooltip.ts";
+import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
@@ -55,25 +55,20 @@ function renderStartControl(options: NewSessionComposerOptions) {
     ? t("newSession.starting")
     : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
+  const busy = options.submitting || options.pendingAttachmentReads > 0;
   return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
     <button
       type="button"
       class="chat-send-btn new-session-page__start-submit ${
         reasonedBlock ? "new-session-page__start-submit--blocked" : ""
-      }"
+      } ${busy ? "new-session-page__start-submit--busy" : ""}"
       ?disabled=${!options.canSubmit && !reasonedBlock}
       aria-disabled=${String(!options.canSubmit)}
-      aria-busy=${String(options.submitting || options.pendingAttachmentReads > 0)}
+      aria-busy=${String(busy)}
       aria-label=${startLabel}
       @click=${() => submitNewSession(options)}
     >
-      ${
-        options.submitting || options.pendingAttachmentReads > 0
-          ? icons.loader
-          : options.nativeTerminal
-            ? icons.squareTerminal
-            : icons.arrowUp
-      }
+      ${busy ? icons.loader : options.nativeTerminal ? icons.squareTerminal : icons.arrowUp}
     </button>
   </openclaw-tooltip>`;
 }
@@ -85,37 +80,33 @@ function handleComposerKeydown(
   slashMenuHost: SlashMenuHost,
   mentionMenuHost: HumanMentionMenuHost,
 ) {
-  if (options.dictationActive || options.submitting || options.messageLocked) {
-    return;
-  }
-  if (options.textareaController.composing || event.isComposing || event.keyCode === 229) {
-    return;
-  }
   if (
-    options.textareaController.emojiMenu.handleKeydown(event, "new-session", options.requestUpdate)
+    options.dictationActive ||
+    options.submitting ||
+    options.messageLocked ||
+    options.textareaController.composing ||
+    event.isComposing ||
+    event.keyCode === 229
   ) {
     return;
   }
   if (
+    options.textareaController.emojiMenu.handleKeydown(
+      event,
+      "new-session",
+      options.requestUpdate,
+    ) ||
     options.textareaController.mentionMenu.handleKeydown(
       event,
       mentionMenuHost,
       options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
+    ) ||
     handleSkillMenuKeydown(
       event,
       options.textareaController.skillMenuState,
       skillMenuHost,
       options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
+    ) ||
     handleSlashMenuKeydown(
       event,
       options.textareaController.slashMenuState,
@@ -183,14 +174,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     refreshCommands: options.refreshCommands,
   };
   const slashMenuHost: SlashMenuHost = {
-    paneId: skillMenuHost.paneId,
-    getDraft: skillMenuHost.getDraft,
-    commitDraft: skillMenuHost.commitDraft,
-    getTextarea: skillMenuHost.getTextarea,
+    ...skillMenuHost,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
     canRun: (inline) => !inline,
-    refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
   const mentionMenuHost: HumanMentionMenuHost = {
@@ -225,18 +212,17 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       skillMenuHost,
       options.requestUpdate,
     );
-    if (
-      event?.inputType === "insertFromPaste" ||
-      event?.inputType === "insertFromDrop" ||
-      event?.isComposing
-    ) {
+    if (event?.inputType === "insertFromPaste" || event?.inputType === "insertFromDrop") {
       mentionMenu.close();
     } else {
       mentionMenu.update(
-        target.value,
-        target.selectionStart,
+        target,
         options.requestUpdate,
-        event?.inputType === "insertText" && event.data?.includes("@") === true,
+        !event
+          ? "selection"
+          : event.inputType === "insertText" && event.data?.includes("@") === true
+            ? "trigger"
+            : "input",
       );
     }
     updateEmojiMenu(target);
@@ -245,6 +231,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
       if (event.type === "keyup") {
+        mentionMenu.update(target, options.requestUpdate);
         updateEmojiMenu(target);
       } else {
         updateMenus(target);
@@ -257,8 +244,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
     attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
+    uploadConfig: options.uploadConfig,
     attachments: options.attachments,
-    disabled: composerLocked,
+    get disabled() {
+      return (
+        options.submitting || options.messageLocked === true || options.dictationActive === true
+      );
+    },
     getAttachments: options.getAttachments,
     draft: options.message,
     getDraft: () => options.message,
@@ -266,6 +258,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onDraftChange: options.onInput,
     onPendingReadsChange: options.onPendingReadsChange,
     onOpenImage: options.onOpenImage,
+    onOpenSidebar: options.onOpenSidebar,
     readSignal: options.readSignal,
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
@@ -343,8 +336,11 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         ${mentionMenu.render(mentionMenuHost, options.requestUpdate)}
         ${emojiMenu.render("new-session", options.textareaController.getTextarea(), options.requestUpdate)}
         ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
-        ${renderSelectedHumanMentions(options.message, options.mentions, () =>
-          options.onInput(options.message, []),
+        ${renderSelectedHumanMentions(
+          options.message,
+          options.mentions,
+          () => options.onInput(options.message, []),
+          mentionMenu.selectedAvatarUrls,
         )}
         ${renderAttachmentPreview(attachmentProps)}
         ${renderAttachmentReadStatus(options.pendingAttachmentReads)}
@@ -379,7 +375,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               .value=${guard([visibleMessage], () => live(visibleMessage))}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+              aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
               @input=${(event: InputEvent) => {
@@ -467,6 +463,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
             ></textarea>
+            <span class="agent-chat__composer-placeholder" aria-hidden="true"
+              >${animatedPlaceholder}</span
+            >
             <span
               id=${menuAnnouncementId}
               class="sr-only"
@@ -507,7 +506,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       ${
         options.blockedSubmitNotice
           ? html`<div
-              class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+              class="new-session-page__blocked-submit agent-chat__composer-status"
               data-tone="info"
               role="status"
             >

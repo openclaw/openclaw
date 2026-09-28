@@ -4,6 +4,13 @@ import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types
 
 export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Promise<void> {
   ctx.authProfileHealthReady = false;
+  // Auth repair depends on the shared-store owner; its receipt records the held-store guidance.
+  const sharedAuth = ctx.configResult.stateMigrationStepReceipts?.find(
+    (receipt) => receipt.id === "shared-auth-store",
+  );
+  if (sharedAuth?.outcome === "skipped" && sharedAuth.warnings.length > 0) {
+    return;
+  }
   const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");

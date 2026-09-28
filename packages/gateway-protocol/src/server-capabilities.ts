@@ -2,10 +2,12 @@
 export const GATEWAY_SERVER_CAPS = {
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
+  NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",
   NODE_WORKER_ENVIRONMENT_SESSION: "node-worker-environment-session-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",

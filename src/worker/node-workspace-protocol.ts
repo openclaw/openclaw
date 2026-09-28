@@ -3,15 +3,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { SpawnResult } from "../process/exec.js";
 import { NodeWorkerWorkspaceTransferInputSchema } from "./node-workspace-transfer-protocol.js";
-import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
+import {
+  WorkerGatewayNamespace,
+  workerProtocolIdentifier as identifier,
+  workerProtocolObject,
+} from "./protocol-record.js";
 import {
   isWorkspaceInspectionCommand,
   WORKSPACE_INSPECTION_COMMAND,
   WORKSPACE_INSPECTION_MAX_BYTES,
 } from "./workspace-inspection-protocol.js";
 
-const IDENTIFIER_MAX_CHARS = 256;
-const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REQUEST_MAX_BYTES = 256 * 1024;
 export const NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES = 128 * 1024;
 const OUTPUT_MAX_BYTES = 64 * 1024;
@@ -24,6 +26,16 @@ const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
 
 const SeedKey = z.string().regex(/^[a-f0-9]{64}$/u);
+const WorkspaceProcessId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
+const WorkspaceProcess = workerProtocolObject({
+  action: z.enum(["start", "status", "stop"]),
+  processId: WorkspaceProcessId,
+});
+export type NodeWorkerWorkspaceProcessInput = z.infer<typeof WorkspaceProcess>;
+type NodeWorkerWorkspaceProcessResult = {
+  processId: string;
+  state: "running" | "exited";
+};
 const SeedInput = z.union([
   workerProtocolObject({ action: z.literal("apply"), key: SeedKey }),
   workerProtocolObject({
@@ -32,21 +44,8 @@ const SeedInput = z.union([
     maxAgeMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   }),
 ]);
-const identifier = (label: string, maxChars = IDENTIFIER_MAX_CHARS) =>
-  z.custom<string>(
-    (value) =>
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length <= maxChars &&
-      value.trim() === value &&
-      !value.includes("\0"),
-    { error: `INVALID_REQUEST: ${label} must be a bounded non-empty identifier` },
-  );
 const WorkspaceInput = workerProtocolObject({
-  gatewayNamespace: identifier("gatewayNamespace").refine(
-    (value) => typeof value === "string" && GATEWAY_NAMESPACE_PATTERN.test(value),
-    { error: "INVALID_REQUEST: gatewayNamespace must be a safe bounded path component" },
-  ),
+  gatewayNamespace: WorkerGatewayNamespace,
   environmentId: identifier("environmentId"),
   sessionId: identifier("sessionId"),
   sessionKey: identifier("sessionKey", 1_024).optional(),
@@ -93,11 +92,15 @@ const WorkspaceInput = workerProtocolObject({
     .optional(),
   transfer: NodeWorkerWorkspaceTransferInputSchema.optional(),
   seed: SeedInput.optional(),
+  process: WorkspaceProcess.optional(),
 });
 export type NodeWorkerWorkspaceSeedInput = z.infer<typeof SeedInput>;
 export type NodeWorkerWorkspaceExecInput = z.infer<typeof WorkspaceInput>;
 
-export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
+export type NodeWorkerWorkspaceExecResult = SpawnResult & {
+  workspaceDir: string;
+  process?: NodeWorkerWorkspaceProcessResult;
+};
 
 function parseJson(raw?: string | null): unknown {
   if (!raw || Buffer.byteLength(raw, "utf8") > WORKSPACE_INSPECTION_MAX_BYTES * 2) {
@@ -120,6 +123,9 @@ export function parseNodeWorkerWorkspaceExecInput(
     if (issue?.path[0] === "transfer") {
       throw new Error("INVALID_REQUEST: workspace transfer is invalid");
     }
+    if (issue?.path[0] === "process") {
+      throw new Error("INVALID_REQUEST: workspace process operation is invalid");
+    }
     if (issue?.path[0] === "seed") {
       const validKey =
         isRecord(value) && isRecord(value.seed) && SeedKey.safeParse(value.seed.key).success;
@@ -134,6 +140,18 @@ export function parseNodeWorkerWorkspaceExecInput(
     );
   }
   const input = parsed.data;
+  if (input.process && (input.seed || input.transfer || input.resetWorkspace !== undefined)) {
+    throw new Error("INVALID_REQUEST: workspace process owns its operation");
+  }
+  if (
+    input.process &&
+    input.process.action !== "start" &&
+    (input.argv.length !== 1 ||
+      input.argv[0] !== "openclaw-internal-workspace-process" ||
+      input.input !== undefined)
+  ) {
+    throw new Error("INVALID_REQUEST: workspace process control accepts no command");
+  }
   const inspection = isWorkspaceInspectionCommand(input.argv);
   if (
     input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND &&
@@ -141,6 +159,7 @@ export function parseNodeWorkerWorkspaceExecInput(
       input.input !== undefined ||
       input.transfer !== undefined ||
       input.seed !== undefined ||
+      input.process !== undefined ||
       input.resetWorkspace !== undefined)
   ) {
     throw new Error("INVALID_REQUEST: workspace drain owns its operation");
@@ -150,6 +169,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     (!inspection ||
       input.transfer !== undefined ||
       input.seed !== undefined ||
+      input.process !== undefined ||
       input.resetWorkspace !== undefined)
   ) {
     throw new Error("INVALID_REQUEST: workspace inspection owns its operation");
@@ -175,68 +195,38 @@ export function parseNodeWorkerWorkspaceExecInput(
   return input;
 }
 
-function isBoundedText(value: unknown, maxBytes: number): value is string {
-  return typeof value === "string" && Buffer.byteLength(value, "utf8") <= maxBytes;
-}
-
-function isAbsoluteHostPath(value: string): boolean {
-  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
-}
+const TruncatedBytes = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional();
+const WorkspaceResult = workerProtocolObject({
+  workspaceDir: z
+    .string()
+    .max(4_096)
+    .refine((value) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value)),
+  stdout: z.string(),
+  stderr: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= STDERR_MAX_BYTES),
+  code: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER).nullable(),
+  signal: z.string().min(1).max(32).nullable(),
+  killed: z.boolean(),
+  termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]),
+  stdoutTruncatedBytes: TruncatedBytes,
+  stderrTruncatedBytes: TruncatedBytes,
+  noOutputTimedOut: z.boolean().optional(),
+  outputLimitExceeded: z.boolean().optional(),
+  outputErrorStream: z.enum(["stdout", "stderr"]).optional(),
+  process: workerProtocolObject({
+    processId: WorkspaceProcessId,
+    state: z.enum(["running", "exited"]),
+  }).optional(),
+});
 
 export function parseNodeWorkerWorkspaceExecResult(
   value: unknown,
   argv: readonly string[] = [],
 ): NodeWorkerWorkspaceExecResult | null {
+  const parsed = WorkspaceResult.safeParse(value);
   if (
-    !isRecord(value) ||
-    !hasExactOwnKeys(
-      value,
-      ["workspaceDir", "stdout", "stderr", "code", "signal", "killed", "termination"],
-      [
-        "stdoutTruncatedBytes",
-        "stderrTruncatedBytes",
-        "noOutputTimedOut",
-        "outputLimitExceeded",
-        "outputErrorStream",
-      ],
-    ) ||
-    typeof value.workspaceDir !== "string" ||
-    !isAbsoluteHostPath(value.workspaceDir) ||
-    value.workspaceDir.length > 4_096 ||
-    !isBoundedText(
-      value.stdout,
-      isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES,
-    ) ||
-    !isBoundedText(value.stderr, STDERR_MAX_BYTES) ||
-    (value.code !== null &&
-      (!Number.isSafeInteger(value.code) || typeof value.code !== "number")) ||
-    (value.signal !== null &&
-      (typeof value.signal !== "string" ||
-        value.signal.length === 0 ||
-        value.signal.length > 32)) ||
-    typeof value.killed !== "boolean" ||
-    (value.termination !== "exit" &&
-      value.termination !== "timeout" &&
-      value.termination !== "no-output-timeout" &&
-      value.termination !== "signal")
-  ) {
-    return null;
-  }
-  for (const key of ["stdoutTruncatedBytes", "stderrTruncatedBytes"] as const) {
-    const count = value[key];
-    if (
-      count !== undefined &&
-      (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
-    ) {
-      return null;
-    }
-  }
-  if (
-    (value.noOutputTimedOut !== undefined && typeof value.noOutputTimedOut !== "boolean") ||
-    (value.outputLimitExceeded !== undefined && typeof value.outputLimitExceeded !== "boolean") ||
-    (value.outputErrorStream !== undefined &&
-      value.outputErrorStream !== "stdout" &&
-      value.outputErrorStream !== "stderr")
+    !parsed.success ||
+    Buffer.byteLength(parsed.data.stdout, "utf8") >
+      (isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES)
   ) {
     return null;
   }

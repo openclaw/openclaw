@@ -8,16 +8,16 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
 
 /** Builds the status JSON object from a completed scan plus optional runtime/deep probes. */
 export async function resolveStatusJsonOutput(params: {
   scan: StatusJsonScanResult;
-  opts: {
+  opts: StatusGatewayProbeBudget & {
     deep?: boolean;
     usage?: boolean;
     agent?: string;
-    timeoutMs?: number;
   };
   includeSecurityAudit: boolean;
   includePluginCompatibility?: boolean;
@@ -30,10 +30,15 @@ export async function resolveStatusJsonOutput(params: {
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
       timeoutMs: opts.timeoutMs,
+      gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
       ...(opts.agent ? { agentId: opts.agent } : {}),
       usage: opts.usage,
       deep: opts.deep,
       gatewayReachable: scan.gatewayReachable,
+      ...(scan.gatewayProbe?.startupPhase
+        ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
+        : {}),
+      ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
       includeSecurityAudit: params.includeSecurityAudit && !scan.collection,
       suppressHealthErrors: params.suppressHealthErrors,
       ...(scan.collection && opts.usage

@@ -35,6 +35,24 @@ function snapshot(params: {
 
 describe("canCallGatewayMethod", () => {
   it.each([
+    ["models.list", "operator.read", true],
+    ["chat.metadata", "operator.read", true],
+    ["chat.startup", "operator.read", true],
+    ["chat.history", "operator.read", true],
+    ["sessions.create", "operator.write", false],
+    ["chat.send", "operator.write", false],
+    ["config.get", "operator.admin", false],
+  ] as const)("uses the server scope for %s", (method, requestedScope, allowed) => {
+    expect(
+      canCallGatewayMethod(
+        snapshot({ methods: [method], scopes: ["operator.sessions.write"] }),
+        method,
+        requestedScope,
+      ),
+    ).toBe(allowed);
+  });
+
+  it.each([
     ["disconnected", { connected: false }],
     ["method unavailable", { methods: [], scopes: ["operator.admin"] }],
     ["scope insufficient", { methods: ["skills.update"], scopes: ["operator.write"] }],

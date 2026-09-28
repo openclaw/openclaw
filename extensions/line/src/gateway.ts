@@ -1,4 +1,3 @@
-// Line plugin module implements gateway behavior.
 import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";

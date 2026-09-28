@@ -1,4 +1,3 @@
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { t } from "../i18n/index.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
@@ -14,7 +13,7 @@ registerSettingsEnglish();
 registerUpdateActionsEnglish();
 
 export function presentUpdateFailureTriage(
-  context: ApplicationContext<NavigationRouteId>,
+  context: ApplicationContext,
   failure: UpdateFailureTriage,
   admission: UpdateTriageAdmission,
 ): void {

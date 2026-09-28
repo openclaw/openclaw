@@ -19,7 +19,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { scheduleGatewayRestart } from "../../infra/restart.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
@@ -193,33 +193,6 @@ function resolveConfigRestartRequest(params: unknown): {
   };
 }
 
-function buildConfigRestartSentinelPayload(params: {
-  kind: RestartSentinelPayload["kind"];
-  mode: string;
-  configPath: string;
-  requiresRestart: boolean;
-  sessionKey: string | undefined;
-  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
-  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
-  note: string | undefined;
-}): RestartSentinelPayload {
-  return {
-    kind: params.kind,
-    status: "ok",
-    ts: Date.now(),
-    sessionKey: params.sessionKey,
-    deliveryContext: params.deliveryContext,
-    threadId: params.threadId,
-    message: params.note ?? null,
-    doctorHint: formatDoctorNonInteractiveHint(),
-    stats: {
-      mode: params.mode,
-      root: params.configPath,
-      requiresRestart: params.requiresRestart,
-    },
-  };
-}
-
 async function tryWriteRestartSentinelPayload(payload: RestartSentinelPayload): Promise<boolean> {
   try {
     await writeRestartSentinel(payload);
@@ -308,7 +281,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
 }): Promise<{
   payload: RestartSentinelPayload;
   sentinelPersisted: boolean;
-  restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
+  restart: ReturnType<typeof scheduleGatewayRestart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
@@ -317,19 +290,24 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     previousConfig: params.previousConfig,
     nextConfig: params.nextConfig,
   });
-  const payload = buildConfigRestartSentinelPayload({
+  const payload: RestartSentinelPayload = {
     kind: params.kind,
-    mode: params.mode,
-    configPath: params.configPath,
-    requiresRestart: restartRequirement.requiresRestart,
+    status: "ok",
+    ts: Date.now(),
     sessionKey,
     deliveryContext,
     threadId,
-    note,
-  });
+    message: note ?? null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: params.mode,
+      root: params.configPath,
+      requiresRestart: restartRequirement.requiresRestart,
+    },
+  };
   const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
   const restart = restartRequirement.scheduleDirectRestart
-    ? scheduleGatewaySigusr1Restart({
+    ? scheduleGatewayRestart({
         delayMs: restartDelayMs,
         reason: params.mode,
         audit: {

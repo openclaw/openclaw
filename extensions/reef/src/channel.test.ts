@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -152,7 +155,7 @@ describe("Reef conversation directory", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-    runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("reef", {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
@@ -249,7 +252,7 @@ describe("Reef gateway account ownership", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-    runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("reef", {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },

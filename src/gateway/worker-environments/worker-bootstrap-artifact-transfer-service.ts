@@ -21,6 +21,8 @@ export function createWorkerBootstrapArtifactTransferService(
         ...params,
         artifactKey: params.artifact.tarballSha256,
         ttlMs: BOOTSTRAP_TRANSFER_TTL_MS,
+        // Proxies can finish receiving an archive before resetting the node's connection.
+        maxServes: 3,
       });
     },
   };

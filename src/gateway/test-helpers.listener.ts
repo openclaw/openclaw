@@ -1,6 +1,58 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { hasErrnoCode } from "../infra/errno.js";
+import {
+  acquireTestPortBlock,
+  reserveTestPortListener,
+  type TestPortClaim,
+} from "../test-utils/port-claims.js";
+import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
+import type { GatewayServer } from "./server.js";
+
+export async function getGatewayTestPort(): Promise<number> {
+  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
+}
+
+export function canRetryPort(error: unknown): boolean {
+  const causes = collectNestedErrorCandidates(error);
+  return (
+    !causes.some((cause) => cause instanceof GatewayStartupCleanupError) &&
+    causes.some((cause) => hasErrnoCode(cause, "EADDRINUSE"))
+  );
+}
+
+export async function startClaimedGateway(
+  port: number | TestPortClaim,
+  start: () => Promise<GatewayServer>,
+) {
+  const claim =
+    typeof port === "number"
+      ? await acquireTestPortBlock({ port, offsets: [0, 1, 2, 3, 4] })
+      : port;
+  try {
+    const server = await start();
+    const close = server.close.bind(server);
+    let closePromise: Promise<void> | undefined;
+    server.close = (...args) =>
+      (closePromise ??= (async () => {
+        await close(...args);
+        await claim.release();
+      })());
+    return server;
+  } catch (error) {
+    if (
+      !collectNestedErrorCandidates(error).some(
+        (cause) => cause instanceof GatewayStartupCleanupError,
+      )
+    ) {
+      await claim.release();
+    }
+    throw error;
+  }
+}
 
 type ListenerReservation = {
   listener: ReturnType<typeof createServer>;
@@ -33,25 +85,22 @@ let activeDispatcher:
 
 /** Retain the exact loopback listener until the real Gateway transport adopts it. */
 export async function reserveGatewayTestListener(port = 0) {
-  const listener = createServer();
   const rejectEarlyConnection = (socket: Socket) => socket.destroy();
-  listener.on("connection", rejectEarlyConnection);
+  const { claim, listener, releaseListener } = await reserveTestPortListener({
+    offsets: [0, 1, 2, 3, 4],
+    ...(port ? { port } : {}),
+    createListener: () => createServer().on("connection", rejectEarlyConnection),
+  });
   let adopted = false;
   const closeUnadopted = async () => {
     if (!adopted && listener.listening) {
-      await new Promise<void>((resolve, reject) => {
-        listener.close((error) => (error ? reject(error) : resolve()));
-      });
+      await releaseListener();
+    }
+    if (!listener.listening) {
+      await claim.release();
     }
   };
   try {
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(port, "127.0.0.1", () => {
-        listener.off("error", reject);
-        resolve();
-      });
-    });
     const address = listener.address();
     assert(address && typeof address !== "string");
     return {

@@ -35,7 +35,6 @@ const dependencies = [
         "json5",
         "koffi",
         "kysely",
-        "ms",
         "p-map",
         "semver",
         "string-width",

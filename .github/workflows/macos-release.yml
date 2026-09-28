@@ -24,7 +24,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   validate_macos_release_request:
@@ -100,5 +100,5 @@ jobs:
             echo "- Run \`openclaw/releases/.github/workflows/openclaw-macos-validate.yml\` with tag \`${RELEASE_TAG}\` and wait for the macOS validation lane to pass."
             echo "- Run \`openclaw/releases/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\` and \`preflight_only=true\` for the full macOS preflight."
             echo "- For the real publish path, run the same macOS publish workflow from \`main\` with the successful preflight \`preflight_run_id\` so it promotes the prepared artifacts instead of rebuilding them."
-            echo "- For stable releases, the publish workflow also publishes the signed \`appcast.xml\` to public \`main\`, or opens an appcast PR if direct push is blocked."
+            echo "- For stable releases, the publish workflow uploads universal, arm64, and x86_64 assets and publishes their signed Sparkle appcasts to public \`main\`, or opens an appcast PR if direct push is blocked."
           } >> "$GITHUB_STEP_SUMMARY"

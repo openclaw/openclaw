@@ -9,8 +9,10 @@ function rejectRuntimeImport(moduleName: string) {
 }
 
 vi.mock("./src/node-host/file-fetch.js", rejectRuntimeImport("node-host/file-fetch"));
+vi.mock("./src/node-host/file-stat.js", rejectRuntimeImport("node-host/file-stat"));
 vi.mock("./src/node-host/dir-list.js", rejectRuntimeImport("node-host/dir-list"));
 vi.mock("./src/node-host/dir-fetch.js", rejectRuntimeImport("node-host/dir-fetch"));
+vi.mock("./src/node-host/file-create.js", rejectRuntimeImport("node-host/file-create"));
 vi.mock("./src/node-host/file-write.js", rejectRuntimeImport("node-host/file-write"));
 vi.mock("./src/tools/file-fetch-tool.js", rejectRuntimeImport("tools/file-fetch-tool"));
 vi.mock("./src/tools/dir-list-tool.js", rejectRuntimeImport("tools/dir-list-tool"));
@@ -20,8 +22,10 @@ vi.mock("./src/shared/node-invoke-policy.js", rejectRuntimeImport("shared/node-i
 
 afterAll(() => {
   vi.doUnmock("./src/node-host/file-fetch.js");
+  vi.doUnmock("./src/node-host/file-stat.js");
   vi.doUnmock("./src/node-host/dir-list.js");
   vi.doUnmock("./src/node-host/dir-fetch.js");
+  vi.doUnmock("./src/node-host/file-create.js");
   vi.doUnmock("./src/node-host/file-write.js");
   vi.doUnmock("./src/tools/file-fetch-tool.js");
   vi.doUnmock("./src/tools/dir-list-tool.js");
@@ -33,23 +37,31 @@ afterAll(() => {
 
 describe("file-transfer plugin entry", () => {
   it("registers static command and tool descriptors without importing runtime handlers", () => {
+    const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
     const registerCli = vi.fn();
 
     pluginEntry.register({
       registerCli,
+      registerNodeHostCommand,
       registerNodeInvokePolicy,
       registerTool,
     } as never);
 
     expect(pluginEntry.nodeHostCommands?.map((entry) => entry.command)).toEqual([
+      "file.stat",
       "file.fetch",
       "dir.list",
       "dir.fetch",
+      "file.create",
       "file.write",
     ]);
-    expect(registerNodeInvokePolicy).toHaveBeenCalledTimes(1);
+    expect(registerNodeHostCommand.mock.calls.map(([entry]) => entry.command)).toEqual([
+      "workspace.memory",
+      "workspace.skills",
+    ]);
+    expect(registerNodeInvokePolicy).toHaveBeenCalledTimes(3);
     expect(registerCli.mock.calls[0]?.[1]?.descriptors).toEqual([
       {
         name: "file-transfer",
@@ -57,11 +69,16 @@ describe("file-transfer plugin entry", () => {
         hasSubcommands: true,
       },
     ]);
-    expect(registerNodeInvokePolicy.mock.calls[0]?.[0].commands).toEqual([
+    const filePolicy = registerNodeInvokePolicy.mock.calls.find(([entry]) =>
+      entry.commands.includes("file.fetch"),
+    )?.[0];
+    expect(filePolicy?.commands).toEqual([
       "file.fetch",
+      "file.stat",
       "dir.list",
       "dir.fetch",
       "file.write",
+      "file.create",
     ]);
     expect(registerTool.mock.calls.map(([tool]) => tool.name)).toEqual([
       "file_fetch",
@@ -78,6 +95,7 @@ describe("file-transfer plugin entry", () => {
   });
 
   it("fails closed if the lazy policy module cannot load", async () => {
+    const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
     const registerCli = vi.fn();
@@ -85,11 +103,14 @@ describe("file-transfer plugin entry", () => {
 
     pluginEntry.register({
       registerCli,
+      registerNodeHostCommand,
       registerNodeInvokePolicy,
       registerTool,
     } as never);
 
-    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0];
+    const policy = registerNodeInvokePolicy.mock.calls.find(([entry]) =>
+      entry.commands.includes("file.fetch"),
+    )?.[0];
     await expect(
       policy.handle({
         nodeId: "node-1",

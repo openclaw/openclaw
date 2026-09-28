@@ -2,6 +2,7 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexNotificationForTurn } from "./app-server/notification-correlation.js";
 import {
@@ -59,7 +60,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
     }
     if (notification.method === "item/agentMessage/delta") {
       const itemId = normalizeOptionalString(params.itemId) ?? "assistant";
-      const delta = readTextString(params, "delta");
+      const delta = readNonEmptyStringPreservingWhitespace(params.delta);
       if (!delta) {
         return;
       }
@@ -143,10 +144,5 @@ export function createCodexConversationTurnCollector(threadId: string) {
 function readAssistantReplyText(item: JsonObject): string | undefined {
   return item.phase === "commentary" || item.delivery === "async"
     ? undefined
-    : readTextString(item, "text");
-}
-
-function readTextString(record: Record<string, unknown> | JsonObject | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+    : readNonEmptyStringPreservingWhitespace(item.text);
 }

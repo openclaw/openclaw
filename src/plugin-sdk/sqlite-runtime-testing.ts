@@ -13,6 +13,7 @@ export async function appendSqliteSessionTranscriptEventForTest(
   await appendTranscriptEvent(params, params.event);
 }
 
+export { withSessionHistoryBudgetSweepsForTest } from "../config/sessions/session-history-budget.test-support.js";
 export { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
 export { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 export {
@@ -34,3 +35,5 @@ export {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+
+export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";

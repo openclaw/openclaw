@@ -12,47 +12,38 @@ import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
+import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
-const cases = [
-  { name: "no restart", restart: false, compatible: false, current: false, refresh: true },
-  { name: "replacement", restart: true, compatible: false, current: false, refresh: true },
-  { name: "compatible", restart: true, compatible: true, current: false, refresh: true },
-  {
-    name: "foreign service",
-    restart: true,
-    compatible: false,
-    current: false,
-    refresh: true,
-    owned: false,
-  },
-  { name: "current replacement", restart: true, compatible: false, current: true, refresh: true },
-  {
-    name: "current sealed service",
-    restart: true,
-    compatible: false,
-    current: true,
-    refresh: false,
-  },
-  { name: "current no restart", restart: false, compatible: false, current: true, refresh: true },
-  {
-    name: "current stopped service",
-    restart: true,
-    compatible: false,
-    current: true,
-    refresh: true,
-    running: false,
-  },
-];
-
-it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, entry, { json }))))(
-  "previews package runtime admission without mutation ($name, json=$json)",
-  async ({ restart, compatible, current, refresh, json, owned = true, running = true }) => {
+it.each([
+  { name: "no restart", restart: false },
+  { name: "replacement" },
+  { name: "compatible", compatible: true },
+  { name: "foreign service", owned: false },
+  { name: "current replacement", current: true },
+  { name: "current sealed service", current: true, refresh: false },
+  { name: "current no restart", current: true, restart: false },
+  { name: "current stopped service", current: true, running: false },
+  { name: "text refusal", restart: false, json: false },
+])(
+  "previews installed package runtime admission without mutation ($name)",
+  async ({
+    restart = true,
+    compatible = false,
+    current = false,
+    refresh = true,
+    json = true,
+    owned = true,
+    running = true,
+  }) => {
     fixture.managedServiceNodeRunner = "/service/node";
+    const provisionRuntime = vi
+      .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")
+      .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));
     vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
     vi.spyOn(gatewaySupervision, "assertGatewayServiceMutationAllowed").mockReturnValue();
     const service = createMockGatewayService({
@@ -194,7 +185,9 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
     if (!current) {
-      await expect(updateCommand({ ...opts, json: true })).rejects.toBeInstanceOf(Error);
+      await expect(
+        updateCommand({ ...opts, json: true, admission: "installed" }),
+      ).rejects.toBeInstanceOf(Error);
       if (compatible || replacement) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
@@ -222,6 +215,7 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
       }
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
     }
+    expect(provisionRuntime).not.toHaveBeenCalled();
   },
 );
 

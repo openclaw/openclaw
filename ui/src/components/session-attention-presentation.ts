@@ -144,9 +144,11 @@ export function renderSessionIdleState(session: SidebarRecentSession) {
         ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
         : status === "timeout"
           ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
-          : status === "failed"
-            ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
-            : null;
+          : status === "interrupted"
+            ? { icon: icons.pause, label: t("sessionsView.statusInterrupted") }
+            : status === "failed"
+              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
+              : null;
   return statusBadge
     ? html`<span
         class="sidebar-child-session__status sidebar-child-session__status--${status}"
@@ -166,38 +168,28 @@ export function renderTeamSessionSlots(
   groupConflicts = 0,
 ) {
   const attention = summarizeSidebarSessionAttention(
-    rows.flatMap((row) => [
-      row.ownAttention ?? row.attention,
-      ...((includeChildren ? row : row.subagentSummary)?.childAttention ?? []),
-    ]),
+    rows.flatMap((row) =>
+      includeChildren
+        ? [row.attention]
+        : [
+            row.ownAttention ?? row.attention,
+            ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
+          ],
+    ),
   );
-  const active = rows.reduce(
-    (n, row) =>
-      n +
-      Number(row.hasActiveRun) +
-      ((includeChildren ? row : row.subagentSummary)?.runningChildCount ?? 0),
-    0,
-  );
-  const queued = rows.reduce(
-    (n, row) =>
-      n +
-      Number(row.hasActiveRun && row.status === "queued") +
-      ((includeChildren ? row : row.subagentSummary)?.queuedChildCount ?? 0),
-    0,
-  );
-  const unread = rows.reduce(
-    (n, row) =>
-      n +
-      Number(row.unread) +
-      ((includeChildren ? row : row.subagentSummary)?.unreadChildCount ?? 0),
-    0,
-  );
-  const failed = rows.some(
-    (row) =>
-      row.status === "failed" ||
-      row.status === "timeout" ||
-      ((includeChildren ? row : row.subagentSummary)?.failedChildCount ?? 0) > 0,
-  );
+  let active = 0;
+  let queued = 0;
+  let unread = 0;
+  let failed = false;
+  for (const row of rows) {
+    const children = includeChildren ? row : row.subagentSummary;
+    active += Number(row.hasActiveRun) + (children?.runningChildCount ?? 0);
+    queued +=
+      Number(row.hasActiveRun && row.status === "queued") + (children?.queuedChildCount ?? 0);
+    unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
+    failed ||=
+      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+  }
   const state =
     attention && attention.kind !== "none"
       ? renderSessionAttentionIcon(attention, true)

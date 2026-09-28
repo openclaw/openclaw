@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import { execBusctlSystem, execSystemctl, readSystemctlDetail } from "./systemd-exec.js";
 
 type SystemSystemdOwnership =
@@ -295,11 +296,11 @@ function formatSystemSystemdOwnershipError(ownership: SystemSystemdConflict): st
   ].join("\n");
 }
 
-class SystemSystemdOwnershipError extends Error {
+class SystemSystemdOwnershipError extends ServiceOwnershipRefusalError {
   readonly code = "SYSTEM_SYSTEMD_OWNERSHIP";
 
   constructor(readonly ownership: SystemSystemdConflict) {
-    super(formatSystemSystemdOwnershipError(ownership));
+    super("systemd-competing-managers", formatSystemSystemdOwnershipError(ownership));
     this.name = "SystemSystemdOwnershipError";
   }
 }

@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
   env?: Record<string, string>;
+  if?: string;
   name?: string;
   run?: string;
   with?: Record<string, unknown>;
@@ -212,33 +213,63 @@ function prepareConfig(
 }
 
 describe("security-fast workflow", () => {
-  it.each([0, 1, 2, 3, 130])(
-    "propagates audit exit %s in ordinary and scheduled CI",
-    (auditExit) => {
-      const repo = tempDirs.make("openclaw-audit-ci-");
-      mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
-      writeFileSync(
-        join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
-        `process.exit(${auditExit});\n`,
-      );
-      const result = runStep(securityStep("Audit production dependencies"), repo, {});
-      expect(result.status).toBe(auditExit);
-      expect(result.stdout).toBe("");
-      const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
-        jobs: { audit: { steps: WorkflowStep[] } };
-      };
-      const strictStep = scheduled.jobs.audit.steps.find(
-        (step) => step.name === "Audit production dependencies",
-      );
-      if (!strictStep) {
-        throw new Error("scheduled production audit step is missing");
+  it.each([false, true])(
+    "installs workflow scanners only for changed workflow files: %s",
+    (changed) => {
+      const fixture = createFixture();
+      if (changed) {
+        mkdirSync(join(fixture.repo, ".github", "workflows"));
+        writeFileSync(join(fixture.repo, ".github", "workflows", "example.yml"), "name: fixture\n");
+        runGit(fixture.repo, "add", ".github/workflows/example.yml");
+        runGit(fixture.repo, "commit", "-m", "workflow input");
       }
-      const summary = join(repo, "summary.md");
-      const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
-      expect(strict.status).toBe(auditExit);
-      expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+      const output = join(fixture.runnerTemp, "output");
+      const result = runStep(securityStep("Detect changed GitHub workflows"), fixture.repo, {
+        ...fixture.environment,
+        BASE_SHA: fixture.baseSha,
+        GITHUB_OUTPUT: output,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readGitHubEnvironment(output).changed).toBe(changed ? "true" : undefined);
+      expect(readFileSync(join(fixture.runnerTemp, "security-workflow-files"), "utf8")).toBe(
+        changed ? ".github/workflows/example.yml\n" : "",
+      );
+      for (const name of [
+        "Install security scanners",
+        "Audit changed GitHub workflows with zizmor",
+      ]) {
+        expect(securityStep(name).if).toBe("steps.workflow_scope.outputs.changed == 'true'");
+        expect(securityStepIndex("Detect changed GitHub workflows")).toBeLessThan(
+          securityStepIndex(name),
+        );
+      }
     },
   );
+
+  it.each([0, 1, 130])("propagates audit exit %s in ordinary and scheduled CI", (auditExit) => {
+    const repo = tempDirs.make("openclaw-audit-ci-");
+    mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
+    writeFileSync(
+      join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
+      `process.exit(${auditExit});\n`,
+    );
+    const result = runStep(securityStep("Audit production dependencies"), repo, {});
+    expect(result.status).toBe(auditExit);
+    expect(result.stdout).toBe("");
+    const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
+      jobs: { audit: { steps: WorkflowStep[] } };
+    };
+    const strictStep = scheduled.jobs.audit.steps.find(
+      (step) => step.name === "Audit production dependencies",
+    );
+    if (!strictStep) {
+      throw new Error("scheduled production audit step is missing");
+    }
+    const summary = join(repo, "summary.md");
+    const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
+    expect(strict.status).toBe(auditExit);
+    expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+  });
 
   it("generates the exact local-only scanner contract from trusted policy", () => {
     const job = securityJob();
@@ -254,7 +285,7 @@ describe("security-fast workflow", () => {
     expect(checkoutHarness.with?.["sparse-checkout"]).toContain(scannerPath);
     expect(job.steps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
     expect(install.run).toContain("python3 --version");
-    expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.29.0");
+    expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
     expect(install.run).not.toContain("pre-commit-hooks");
     expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
     // The first-party key scan runs before any package install can fail or

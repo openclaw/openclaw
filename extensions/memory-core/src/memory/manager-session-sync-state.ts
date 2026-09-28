@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager session sync state behavior.
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,

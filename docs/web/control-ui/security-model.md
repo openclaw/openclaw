@@ -19,12 +19,12 @@ In practice:
 
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
-- Local `blob:` URLs created by the Control UI still render.
+- Local `blob:` URLs created by the Control UI still render. Text attachment previews can read those local bytes before the attachment is sent.
 - HTTPS transcript images render in Chat image galleries and Activity previews. The browser contacts the image host directly, disclosing its network address; thumbnails, the expanded image viewer, and neighboring-image preloads send no page referrer.
 - Markdown attachment and Skill Workshop previews keep remote images as click-to-open links. Plugin README and agent-file previews automatically load HTTPS images and contact their hosts directly from the browser.
 - Verified GitHub account avatars render from `avatars.githubusercontent.com`; avatar helpers continue to reject arbitrary remote avatar URLs.
 - GitHub link preview avatars are fetched by the Gateway from GitHub's fixed avatar host and returned as bounded `data:` URLs; the operator browser never contacts the remote avatar host.
-- Link favicons are on by default. The authenticated Control UI requests them through the Gateway; the browser never contacts link destinations directly. The Gateway requests only each public hostname's HTTPS `/favicon.ico`, with strict DNS-pinned SSRF checks on the original URL and every redirect plus bounded time, bytes, concurrency, and image validation. Private, internal, and IP-literal destinations are rejected. This discloses linked hostnames and the Gateway's network address to those sites. Set `gateway.controlUi.automaticallyFetchFavicons: false` to prevent all favicon route requests and destination fetches.
+- Link favicons are on by default. The authenticated Control UI requests them through the Gateway; the browser never contacts link destinations directly. The link-favicon route requests each public hostname's HTTPS `/favicon.ico`, with strict DNS-pinned SSRF checks on the original URL and every redirect plus bounded time, bytes, concurrency, and image validation. Private, internal, and IP-literal destinations are rejected. This discloses linked hostnames and the Gateway's network address to those sites. Browser-tab cards and ordinary external-link hover previews also fetch the public page’s title, bounded description, declared favicon, and Open Graph or Twitter social image through the authenticated Gateway. These anonymous requests never use browser cookies or site credentials; HTML, redirects, and images receive the same public-network checks and bounded resource limits. The browser receives validated image data, not remote image URLs. This also discloses the target page URL (including path and query) to that site and image requests to its declared image hosts. Ordinary link previews start on deliberate hover or keyboard focus, not transcript prefetch; touch taps retain normal navigation. Wizard sign-in actions stay external and are not fetched for previews. Plugin-owned previews keep their own routing and credential policy. Set `gateway.controlUi.automaticallyFetchFavicons: false` to disable link favicon requests, browser-tab page previews, and ordinary external-link previews. Live browser screenshots are separate and remain available.
 - Animated PNG (APNG) icons are accepted as PNG images. Workspace icons and managed channel avatars retain their animation; remote plugin, catalog, and link icons use a resized PNG preview.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
@@ -66,6 +66,13 @@ Concurrent profile-photo requests can share a Gravatar lookup. Each HTTP request
 keeps its own timeout and disconnect lifecycle, so one expired or disconnected
 request does not interrupt another client loading the same photo.
 
+Saved profile photos use a bounded in-memory cache tied to the Gateway's profile
+catalog. Committed profile edits and merges invalidate cached representations;
+authentication still runs before cached responses and `304 Not Modified`.
+Cold photo reads have a separate concurrency budget to preserve shared-state read
+capacity. During overload, the endpoint returns `503 Service Unavailable` with
+`Retry-After: 1` instead of a permanent lookup failure.
+
 ## Assistant media route auth
 
 Local image previews follow the chat's filesystem permissions. Project chats use
@@ -82,6 +89,11 @@ Selecting a project does not grant access to sibling worktrees.
 Trusted audio attachments use the same session workspace boundary during playback.
 Mixed replies retain a separate failure card for each rejected attachment alongside
 successfully delivered media.
+
+Attachment staging and trusted audio retain the requesting sender's read
+restrictions. Pending reads and copies stop when the source session's permission
+mode, workspace, or execution placement changes, or the turn is canceled. Rejected
+staged files are cleaned up before delivery.
 
 Sessions dispatched to a cloud worker cannot read Gateway-local file paths,
 even with Full Access. Dispatch also revokes pending local previews and downloads.
@@ -109,7 +121,7 @@ before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
-Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
+Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

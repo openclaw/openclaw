@@ -224,7 +224,7 @@ function createClient(options: { liveTestFailures?: number } = {}) {
     if (method === "config/mcpServer/reload") {
       return undefined;
     }
-    if (method === "thread/unsubscribe" || method === "thread/archive") {
+    if (method === "thread/unsubscribe") {
       expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });
       return undefined;
     }

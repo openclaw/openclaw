@@ -21,6 +21,7 @@ import {
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
+import { publishServiceFile } from "./service-stage.js";
 import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -29,6 +30,7 @@ import {
   type GatewayServiceInstallArgs,
   type GatewayServiceManageArgs,
 } from "./service-types.js";
+import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import {
   assertSystemdAvailable,
@@ -39,6 +41,7 @@ import {
   readSystemctlDetail,
   reloadSystemdUserManager,
 } from "./systemd-exec.js";
+import { captureSystemdInstallRecovery } from "./systemd-install-recovery.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
   isNodeSystemdEnvironment,
@@ -52,6 +55,7 @@ import {
 } from "./systemd-service-files.js";
 import {
   buildSystemdUnit,
+  preserveSystemdUnitPolicy,
   parseSystemdEnvAssignments,
   renderSystemdEnvAssignment,
   splitSystemdLogicalLines,
@@ -262,156 +266,155 @@ async function writeSystemdUnit(
     environment,
     environmentValueSources,
     description,
-    beforeLoad,
+    definitionTransaction,
+    warn,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
-  load?: () => Promise<void>,
+  load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
-  await assertSystemdAvailable(env);
-  await assertNoSystemGatewayOwnership(env);
+  await withGatewayServiceInstallationRecovery(
+    async () => {
+      await assertSystemdAvailable(env);
+      await assertNoSystemGatewayOwnership(env);
+    },
+    async () => false,
+  );
 
   const unitPath = resolveSystemdUnitPath(env);
-  return await withSystemdDefinitionMutation(env, environment ?? env, async (mutation) => {
-    const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
-      resolveManagedGatewayServiceCommand(await readSystemdServiceExecStart(env))?.environment,
-    );
-    const stateDir = resolveStateDir({ ...env, ...environment });
-    const environmentFilePath = resolveSystemdEnvironmentFilePath({ stateDir, environment });
-    const environmentFileSnapshot = isNodeSystemdEnvironment(env)
-      ? undefined
-      : (mutation.snapshots.get(environmentFilePath) ?? null);
-    const existingUnit = mutation.snapshots.get(unitPath) ?? null;
-    const backupPath = `${unitPath}.bak`;
-    const existingBackup = mutation.snapshots.get(backupPath) ?? null;
-    const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
-      readStateDirDotEnvFromStateDir(stateDir);
-    const stateDirDotEnvVars = new Map(
-      Object.entries(stateDirDotEnvEntries).filter(([key, value]) => {
-        const inlineValue = environment?.[key];
-        return typeof inlineValue !== "string" || inlineValue.trim() === value.trim();
-      }),
-    );
-    const inlineManagedKeys = collectSystemdInlineManagedKeys({
-      environment,
-      environmentValueSources,
-    });
-    const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
-    const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
-
-    const backupSource = existingUnit ?? existingBackup;
-    if (backupSource) {
-      await mutation.publish(
-        backupPath,
-        sanitizeSystemdUnitBackupContent({
-          content: backupSource.contents.toString("utf8"),
-          fileManagedKeys,
-        }),
-        restrictSystemdArtifactMode(backupSource.mode),
-      );
-    }
-    try {
-      const incoming = collectSystemdFileBackedEnvironment({ environment, fileManagedKeys });
-      for (const [key, value] of Object.entries(incoming)) {
-        if (/[\r\n]/.test(value)) {
-          throw new Error(
-            `state-dir .env contains a multiline value for ${key}; systemd EnvironmentFile values must be single-line`,
-          );
-        }
-      }
-      // Deleted managed values remain managed. Drop their stale file copies so
-      // EnvironmentFile precedence cannot shadow inline values or runtime .env edits.
-      const managedKeysToDrop = normalizeServiceEnvKeys([
-        ...inlineManagedKeys,
-        ...fileManagedKeys,
-        ...priorManagedKeys,
-        ...stateDirDotEnvVars.keys(),
-        ...skippedShellReferenceKeys,
-      ]);
-      const { existing, literalShellReferenceKeys } = existingEnvironment;
-      const operatorOnly = Object.fromEntries(
-        Object.entries(existing).filter(([key, value]) => {
-          const normalized = normalizeServiceEnvKey(key);
-          if (normalized && managedKeysToDrop.has(normalized)) {
-            return false;
-          }
-          // Quoted/escaped $VAR is operator intent; bare references can be stale
-          // values copied from the state-dir dotenv file.
-          return literalShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);
-        }),
-      );
-      const merged = { ...operatorOnly, ...incoming };
-      const hasGeneratedValues = Object.keys(merged).length > 0;
-      const environmentKeys = normalizeServiceEnvKeys(Object.keys(merged));
-      // Keep an existing empty file readable until the manager drops its reference.
-      if (hasGeneratedValues || mutation.snapshots.has(environmentFilePath)) {
-        const content = hasGeneratedValues ? `${serializeSystemdEnvironmentFile(merged)}\n` : "";
-        await mutation.publish(environmentFilePath, content, 0o600);
-      }
-      const environmentSansDotEnvEntries = Object.fromEntries(
-        Object.entries(environment ?? {}).filter(([key, value]) => {
-          if (typeof value !== "string") {
-            return false;
-          }
-          const source = readEnvironmentValueSource(environmentValueSources, key);
-          const normalized = normalizeServiceEnvKey(key);
-          const generated =
-            normalized && environmentKeys.has(normalized) && !inlineManagedKeys.has(normalized);
-          return (
-            !(hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) &&
-            !generated &&
-            value.trim() !== stateDirDotEnvVars.get(key)?.trim()
-          );
-        }),
-      );
-      const unit = buildSystemdUnit({
-        description: resolveGatewayServiceDescription({ env, description }),
-        programArguments,
-        workingDirectory,
-        environment: environmentSansDotEnvEntries,
-        environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
-      });
-      await assertNoSystemGatewayOwnership(env);
-      await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
-      try {
-        await assertNoSystemGatewayOwnership(env);
-      } catch (ownershipError) {
-        await mutation.restore(unitPath, existingUnit);
-        throw ownershipError;
-      }
-    } catch (error) {
-      let rollbackError: unknown;
-      try {
-        await mutation.restore(backupPath, existingBackup);
-      } catch (cause) {
-        rollbackError = cause;
-      }
-      if (environmentFileSnapshot !== undefined) {
-        try {
-          await mutation.restore(environmentFilePath, environmentFileSnapshot);
-        } catch (cause) {
-          rollbackError ??= cause;
-        }
-      }
-      if (rollbackError) {
-        const failureDetail = error instanceof Error ? error.message : String(error);
-        const rollbackDetail =
-          rollbackError instanceof Error ? rollbackError.message : "unknown rollback error";
-        throw new Error(`${failureDetail}\nSystemd rollback failed: ${rollbackDetail}`, {
-          cause: error,
+  return await withSystemdDefinitionMutation(
+    env,
+    environment ?? env,
+    async (mutation) => {
+      const stateDir = resolveStateDir({ ...env, ...environment });
+      const environmentFilePath = resolveSystemdEnvironmentFilePath({ stateDir, environment });
+      const existingUnit = mutation.snapshots.get(unitPath) ?? null;
+      const backupPath = `${unitPath}.bak`;
+      const existingBackup = mutation.snapshots.get(backupPath) ?? null;
+      const recovery =
+        load && !definitionTransaction
+          ? await withGatewayServiceInstallationRecovery(
+              () => captureSystemdInstallRecovery(env, existingUnit !== null),
+              async () => false,
+            )
+          : null;
+      const restore = async () => {
+        const restored = await mutation.restoreAll();
+        await recovery?.restore();
+        return restored;
+      };
+      const publish = async () => {
+        const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
+          resolveManagedGatewayServiceCommand(await readSystemdServiceExecStart(env))?.environment,
+        );
+        const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
+          readStateDirDotEnvFromStateDir(stateDir);
+        const stateDirDotEnvVars = new Map(
+          Object.entries(stateDirDotEnvEntries).filter(([key, value]) => {
+            const inlineValue = environment?.[key];
+            return typeof inlineValue !== "string" || inlineValue.trim() === value.trim();
+          }),
+        );
+        const inlineManagedKeys = collectSystemdInlineManagedKeys({
+          environment,
+          environmentValueSources,
         });
+        const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
+        const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
+
+        const backupSource = existingUnit ?? existingBackup;
+        if (backupSource) {
+          await mutation.publish(
+            backupPath,
+            sanitizeSystemdUnitBackupContent({
+              content: backupSource.contents.toString("utf8"),
+              fileManagedKeys,
+            }),
+            restrictSystemdArtifactMode(backupSource.mode),
+          );
+        }
+        const incoming = collectSystemdFileBackedEnvironment({ environment, fileManagedKeys });
+        for (const [key, value] of Object.entries(incoming)) {
+          if (/[\r\n]/.test(value)) {
+            throw new Error(
+              `state-dir .env contains a multiline value for ${key}; systemd EnvironmentFile values must be single-line`,
+            );
+          }
+        }
+        // Deleted managed values remain managed. Drop their stale file copies so
+        // EnvironmentFile precedence cannot shadow inline values or runtime .env edits.
+        const managedKeysToDrop = normalizeServiceEnvKeys([
+          ...inlineManagedKeys,
+          ...fileManagedKeys,
+          ...priorManagedKeys,
+          ...stateDirDotEnvVars.keys(),
+          ...skippedShellReferenceKeys,
+        ]);
+        const { existing, literalShellReferenceKeys } = existingEnvironment;
+        const operatorOnly = Object.fromEntries(
+          Object.entries(existing).filter(([key, value]) => {
+            const normalized = normalizeServiceEnvKey(key);
+            if (normalized && managedKeysToDrop.has(normalized)) {
+              return false;
+            }
+            // Quoted/escaped $VAR is operator intent; bare references can be stale
+            // values copied from the state-dir dotenv file.
+            return literalShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);
+          }),
+        );
+        const merged = { ...operatorOnly, ...incoming };
+        const hasGeneratedValues = Object.keys(merged).length > 0;
+        const environmentKeys = normalizeServiceEnvKeys(Object.keys(merged));
+        // Keep an existing empty file readable until the manager drops its reference.
+        if (hasGeneratedValues || mutation.snapshots.has(environmentFilePath)) {
+          const content = hasGeneratedValues ? `${serializeSystemdEnvironmentFile(merged)}\n` : "";
+          await mutation.publish(environmentFilePath, content, 0o600);
+        }
+        const environmentSansDotEnvEntries = Object.fromEntries(
+          Object.entries(environment ?? {}).filter(([key, value]) => {
+            if (typeof value !== "string") {
+              return false;
+            }
+            const source = readEnvironmentValueSource(environmentValueSources, key);
+            const normalized = normalizeServiceEnvKey(key);
+            const generated =
+              normalized && environmentKeys.has(normalized) && !inlineManagedKeys.has(normalized);
+            return (
+              !(hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) &&
+              !generated &&
+              value.trim() !== stateDirDotEnvVars.get(key)?.trim()
+            );
+          }),
+        );
+        const unit = preserveSystemdUnitPolicy(
+          buildSystemdUnit({
+            description: resolveGatewayServiceDescription({ env, description }),
+            programArguments,
+            workingDirectory,
+            environment: environmentSansDotEnvEntries,
+            environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
+          }),
+          existingUnit?.contents.toString("utf8") ?? "",
+          definitionTransaction?.preservePolicy,
+        );
+        await assertNoSystemGatewayOwnership(env);
+        await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
+        await assertNoSystemGatewayOwnership(env);
+      };
+      if (definitionTransaction) {
+        await publish();
+      } else {
+        await withGatewayServiceInstallationRecovery(publish, restore);
       }
-      throw error;
-    }
-    // Do not catch a seal refusal as publication failure: retain staged material,
-    // leave native state untouched, and let recovery reconcile the pending intent.
-    if (load) {
-      if (beforeLoad) {
-        await beforeLoad({ files: structuredClone(mutation.stagedFiles) });
-        await mutation.assertCurrent();
+      if (load) {
+        if (recovery) {
+          await withGatewayServiceInstallationRecovery(() => load(recovery.beforeAction), restore);
+        } else {
+          await load();
+        }
       }
-      await load();
-    }
-    return { unitPath, backedUp: existingUnit !== null };
-  });
+      return { unitPath, backedUp: existingUnit !== null };
+    },
+    { definitionTransaction, warn },
+  );
 }
 
 async function readSystemdGatewayEnvironmentFiles(
@@ -475,8 +478,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     return;
   }
   const content = serializeSystemdEnvironmentFile(remaining);
-  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(envFilePath, 0o600);
+  await publishServiceFile({ filePath: envFilePath, contents: `${content}\n`, mode: 0o600 });
 }
 
 function reportSystemdServicePublication(
@@ -501,7 +503,11 @@ export async function stageSystemdService({
   return { unitPath };
 }
 
-async function activateSystemdService(params: { env: GatewayServiceEnv }) {
+async function activateSystemdService(params: {
+  env: GatewayServiceEnv;
+  preserveAutoStart?: boolean;
+  beforeAction?: (action: string) => void;
+}) {
   const unitName = `${resolveSystemdServiceName(params.env)}.service`;
   // A system unit may appear after publication. Refuse before the user manager
   // can load a second supervisor for the same gateway name.
@@ -511,6 +517,7 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
     retryMissing = true,
   ): Promise<void> => {
     const args = action === "daemon-reload" ? [action] : [action, unitName];
+    params.beforeAction?.(action);
     const result = await execSystemctlUser(params.env, args);
     if (result.code === 0) {
       return;
@@ -531,6 +538,9 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
     throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
   };
   for (const action of ["daemon-reload", "enable", "restart"] as const) {
+    if (action === "enable" && params.preserveAutoStart) {
+      continue;
+    }
     await runActivation(action);
   }
 }
@@ -538,11 +548,13 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const load = () => activateSystemdService({ env: args.env });
-  const { unitPath, backedUp } = await writeSystemdUnit(args, args.beforeLoad ? load : undefined);
-  if (!args.beforeLoad) {
-    await load();
-  }
+  const load = (beforeAction?: (action: string) => void) =>
+    activateSystemdService({
+      env: args.env,
+      beforeAction,
+      preserveAutoStart: args.preserveAutoStart,
+    });
+  const { unitPath, backedUp } = await writeSystemdUnit(args, load);
   if (
     args.warn &&
     hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))

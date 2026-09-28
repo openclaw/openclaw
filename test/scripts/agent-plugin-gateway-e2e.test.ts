@@ -2,10 +2,17 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
+const scriptUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.agentPluginGatewayE2e);
 const fixtures = createFixtureLifetime();
 afterEach(() => fixtures.cleanup());
 const cases = [
@@ -33,14 +40,14 @@ it.skipIf(process.platform === "win32").for(cases)(
       const ready = createDeferred();
       const receivedSignal = createDeferred();
       let child: ChildProcess | undefined;
+      const scriptArgs = resolveRuntimeWorkerArgv(scriptUrl, resolveTestNodeExecPath());
       const command = fixtures.track(
         runNodeScript(
           [
-            "--import",
-            "./scripts/tsx.mjs",
+            ...scriptArgs.slice(0, -1),
             "--import",
             new URL("./fixtures/agent-plugin-gateway-cancellation.mjs", import.meta.url).href,
-            "scripts/agent-plugin-gateway-e2e.ts",
+            ...scriptArgs.slice(-1),
           ],
           {
             PATH: process.env.PATH,

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { compileFunction } from "node:vm";
 import { root as fsRoot, sanitizeUntrustedFileName, type Root } from "../infra/fs-safe.js";
 import type { MediaFact } from "./media-facts.js";
+
+/** Existing per-file allowance for staging task inputs. */
+export const STAGED_INPUT_MAX_BYTES = 50 * 1024 * 1024;
 
 const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
 export const STAGED_INPUT_GIT_PATHSPEC = `:(glob)${STAGED_INPUT_DIRECTORY_PREFIX}*/**`;
@@ -12,12 +16,18 @@ const STAGED_INPUT_GITIGNORE_SHA256 = createHash("sha256")
   .update(STAGED_INPUT_GITIGNORE)
   .digest("hex");
 
-/** A producer-shaped name is only a candidate; the marker establishes ownership. */
-export function stagedInputPathDirectory(relativePath: string): string | undefined {
+// Host and remote inventories execute this same source, independent of the
+// module loader's import rewriting and function-name helpers.
+export const STAGED_INPUT_PATHS_JS = String.raw`
+const STAGED_INPUT_DIRECTORY_PREFIX = ${JSON.stringify(STAGED_INPUT_DIRECTORY_PREFIX)};
+const STAGED_INPUT_GITIGNORE = ${JSON.stringify(STAGED_INPUT_GITIGNORE)};
+const STAGED_INPUT_GITIGNORE_SHA256 = ${JSON.stringify(STAGED_INPUT_GITIGNORE_SHA256)};
+// A producer-shaped name is only a candidate; the marker establishes ownership.
+function stagedInputPathDirectory(relativePath) {
   if (!relativePath.startsWith(STAGED_INPUT_DIRECTORY_PREFIX)) {
     return undefined;
   }
-  const identity = relativePath.slice(STAGED_INPUT_DIRECTORY_PREFIX.length).split("/")[0]!;
+  const identity = relativePath.slice(STAGED_INPUT_DIRECTORY_PREFIX.length).split("/")[0];
   const match =
     /^(?:[a-f0-9]{64}|[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/u.exec(
       identity,
@@ -25,10 +35,42 @@ export function stagedInputPathDirectory(relativePath: string): string | undefin
   return match?.[0] === identity ? STAGED_INPUT_DIRECTORY_PREFIX + identity : undefined;
 }
 
-export function isStagedInputPath(relativePath: string, directories: ReadonlySet<string>): boolean {
+function isStagedInputPath(relativePath, directories) {
   const directory = stagedInputPathDirectory(relativePath);
   return directory !== undefined && directories.has(directory);
 }
+
+// Complete manifests bind the regular marker's exact bytes through their file digest.
+function stagedInputDirectoriesFromEntries(entries) {
+  const directories = new Set();
+  for (const entry of entries) {
+    const directory = stagedInputPathDirectory(entry.path);
+    if (
+      directory &&
+      entry.path === directory + "/.gitignore" &&
+      entry.type === "file" &&
+      entry.size === STAGED_INPUT_GITIGNORE.length &&
+      entry.sha256 === STAGED_INPUT_GITIGNORE_SHA256
+    ) {
+      directories.add(directory);
+    }
+  }
+  return directories;
+}`;
+
+export const {
+  stagedInputPathDirectory,
+  isStagedInputPath,
+  stagedInputDirectoriesFromEntries,
+}: {
+  stagedInputPathDirectory: (relativePath: string) => string | undefined;
+  isStagedInputPath: (relativePath: string, directories: ReadonlySet<string>) => boolean;
+  stagedInputDirectoriesFromEntries: (
+    entries: readonly { path: string; type: string; size?: number; sha256?: string }[],
+  ) => Set<string>;
+} = compileFunction(
+  `${STAGED_INPUT_PATHS_JS}\nreturn { stagedInputPathDirectory, isStagedInputPath, stagedInputDirectoriesFromEntries };`,
+)();
 
 /** Capture-scoped, including negative results: never read the marker once per file. */
 export function createStagedInputPathMatcher(
@@ -53,34 +95,6 @@ export function createStagedInputPathMatcher(
     return await owned;
   };
 }
-
-/** Complete manifests bind the regular marker's exact bytes through their file digest. */
-export function stagedInputDirectoriesFromEntries(
-  entries: readonly { path: string; type: string; size?: number; sha256?: string }[],
-): Set<string> {
-  const directories = new Set<string>();
-  for (const entry of entries) {
-    const directory = stagedInputPathDirectory(entry.path);
-    if (
-      directory &&
-      entry.path === `${directory}/.gitignore` &&
-      entry.type === "file" &&
-      entry.size === STAGED_INPUT_GITIGNORE.length &&
-      entry.sha256 === STAGED_INPUT_GITIGNORE_SHA256
-    ) {
-      directories.add(directory);
-    }
-  }
-  return directories;
-}
-
-export const STAGED_INPUT_PATHS_JS = `
-const STAGED_INPUT_DIRECTORY_PREFIX = ${JSON.stringify(STAGED_INPUT_DIRECTORY_PREFIX)};
-const STAGED_INPUT_GITIGNORE = ${JSON.stringify(STAGED_INPUT_GITIGNORE)};
-const STAGED_INPUT_GITIGNORE_SHA256 = ${JSON.stringify(STAGED_INPUT_GITIGNORE_SHA256)};
-const stagedInputPathDirectory = ${stagedInputPathDirectory.toString()};
-const isStagedInputPath = ${isStagedInputPath.toString()};
-const stagedInputDirectoriesFromEntries = ${stagedInputDirectoriesFromEntries.toString()};`;
 
 export function stagedInputDirectory(identity: string): string {
   return `${STAGED_INPUT_DIRECTORY_PREFIX}${identity}`;
@@ -129,12 +143,22 @@ export function resolveStagedInputMediaPaths(
   return paths;
 }
 
+type StagedInputFileSystem = {
+  exists: (filePath: string) => Promise<boolean>;
+  readText: (filePath: string, options: { maxBytes: number }) => Promise<string>;
+  create: (
+    filePath: string,
+    data: string,
+    options: { mode: number; assertBeforeMutation: () => void },
+  ) => Promise<unknown>;
+};
+
 export async function ensureStagedInputDirectory(
-  rootDir: string,
+  rootDir: string | StagedInputFileSystem,
   directory: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const root = await fsRoot(rootDir);
+  const root = typeof rootDir === "string" ? await fsRoot(rootDir) : rootDir;
   const ignorePath = `${directory}/.gitignore`;
   if (await root.exists(directory)) {
     if ((await root.readText(ignorePath, { maxBytes: 1024 })) !== STAGED_INPUT_GITIGNORE) {

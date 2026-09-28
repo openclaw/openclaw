@@ -1,7 +1,6 @@
-// Discord plugin module implements ui behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { Container } from "./internal/discord.js";
-import { normalizeDiscordAccentColor, resolveDiscordAccentColor } from "./ui-colors.js";
+import { normalizeDiscordAccentColor } from "./ui-colors.js";
 
 type DiscordContainerComponents = ConstructorParameters<typeof Container>[0];
 
@@ -13,9 +12,7 @@ export class DiscordUiContainer extends Container {
     accentColor?: string;
     spoiler?: boolean;
   }) {
-    const accentOverride = normalizeDiscordAccentColor(params.accentColor);
-    const accentColor =
-      accentOverride ?? resolveDiscordAccentColor({ cfg: params.cfg, accountId: params.accountId });
+    const accentColor = normalizeDiscordAccentColor(params.accentColor) ?? "#5865F2";
     super(params.components, { accentColor, spoiler: params.spoiler });
   }
 }

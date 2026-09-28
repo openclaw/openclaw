@@ -156,6 +156,16 @@ suite.define(() => {
         true,
       );
       expect(await options.isDisabled()).toBe(true);
+      await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
+      await gateway.emitGatewayEvent("task.suggestion", {
+        action: "resolved",
+        taskId: suggestion.id,
+        resolution: "accepted",
+      });
+      await card.getByText(suggestion.prompt, { exact: true }).waitFor({ state: "visible" });
+      expect(await card.getByRole("button", { name: "Starting…", exact: true }).isDisabled()).toBe(
+        true,
+      );
       await gateway.resolveDeferred("taskSuggestions.accept", {
         taskId: suggestion.id,
         key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
@@ -163,7 +173,9 @@ suite.define(() => {
 
       const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
       expect(acceptRequest.params).toEqual({ taskId: "task_123", mode });
-      await card.waitFor({ state: "hidden" });
+      await card.getByRole("status").filter({ hasText: "Task started" }).waitFor();
+      await card.getByRole("link", { name: "Open session", exact: true }).waitFor();
+      expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
       expect(page.url()).toBe(sourceUrl);
       expect(await composer.inputValue()).toBe(draft);
       expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(1);
@@ -368,53 +380,108 @@ suite.define(() => {
     }
   });
 
-  it("stacks follow-up suggestions without obscuring the composer", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 720, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "taskSuggestions.dismiss",
-      ],
-      methodResponses: {
-        "taskSuggestions.list": {
-          suggestions: Array.from({ length: 12 }, (_, index) => ({
-            id: `task_overflow_${index}`,
-            title: `Follow-up ${index}`,
-            prompt: "Inspect the related implementation and tests. ".repeat(12),
-            tldr: "This follow-up remains useful but must not hide the composer.",
-            cwd: "/projects/example",
-            sessionKey: "main",
-            agentId: "main",
-            createdAt: Date.now() + index,
-          })),
+  it.each([
+    { width: 1280, height: 720 },
+    { width: 390, height: 720 },
+    { width: 900, height: 500 },
+  ])(
+    "shows readable follow-up summaries and reachable actions at $width×$height",
+    async ({ width, height }) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height, width },
+      });
+      const page = await context.newPage();
+      const suggestions = Array.from({ length: 12 }, (_, index) => ({
+        id: `task_overflow_${index}`,
+        title: `Follow-up ${index}`,
+        prompt: "Inspect the related implementation and tests. ".repeat(12),
+        tldr: "The attached tool fails in coordination mode even with all selectors omitted, while a classless fixed-lease CLI warmup succeeds. Make the adapter preserve omitted selectors so both entry points select the same default and the follow-up can run without extra configuration.",
+        cwd: "/projects/example",
+        sessionKey: "main",
+        agentId: "main",
+        createdAt: Date.now() + index,
+      }));
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "taskSuggestions.list",
+          "taskSuggestions.accept",
+          "taskSuggestions.dismiss",
+        ],
+        methodResponses: {
+          "taskSuggestions.list": { suggestions },
         },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const tray = page.locator(".task-suggestions");
-      await tray.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
-      expect(await tray.getByText("1 / 12", { exact: true }).count()).toBe(1);
-      await tray.getByRole("button", { name: "Next suggested task" }).click();
-      expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const tray = page.locator(".task-suggestions");
+        await tray.waitFor({ state: "visible", timeout: 10_000 });
+        expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
+        expect(await tray.getByText("1 / 12", { exact: true }).count()).toBe(1);
+        await tray.getByRole("button", { name: "Next suggested task" }).click();
+        expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
+        const summary = tray.locator(".task-suggestion:visible .task-suggestion__summary");
+        await captureUiProof(suite, page, "task-suggestions", `summary-${width}x${height}.png`);
+        expect(
+          await summary.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
+        ).toBe(true);
 
-      const composer = page.locator(".agent-chat__composer-shell");
-      await composer.waitFor({ state: "visible", timeout: 10_000 });
-      const box = await composer.boundingBox();
-      expect(box).not.toBeNull();
-      expect((box?.y ?? 720) + (box?.height ?? 0)).toBeLessThanOrEqual(720);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+        expect(
+          await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+        ).toBe(true);
+
+        const verboseSuggestion = { ...suggestions[1]!, tldr: "W".repeat(1_024) };
+        suggestions[1] = verboseSuggestion;
+        await gateway.setMethodResponse("taskSuggestions.list", { suggestions });
+        await gateway.emitGatewayEvent("task.suggestion", {
+          action: "created",
+          suggestion: verboseSuggestion,
+        });
+        await expect.poll(() => summary.textContent()).toBe(verboseSuggestion.tldr);
+        expect(
+          await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+        ).toBe(true);
+        expect(
+          await summary.evaluate((element) => {
+            element.scrollTop = element.scrollHeight;
+            return (
+              element.scrollTop > 0 &&
+              element.scrollTop + element.clientHeight >= element.scrollHeight - 1
+            );
+          }),
+        ).toBe(true);
+
+        const card = tray.locator(".task-suggestion:visible");
+        await card.getByText("Show instructions", { exact: true }).click();
+        const start = card.getByRole("button", { name: "Start in a new session", exact: true });
+        await captureUiProof(suite, page, "task-suggestions", `verbose-${width}x${height}.png`);
+        for (const control of [card.getByRole("button", { name: "Copy prompt" }), start]) {
+          expect(
+            await control.evaluate((element) => {
+              const bounds = element.getBoundingClientRect();
+              return element.contains(
+                document.elementFromPoint(
+                  bounds.x + bounds.width / 2,
+                  bounds.y + bounds.height / 2,
+                ),
+              );
+            }),
+          ).toBe(true);
+        }
+        await start.click({ trial: true });
+
+        const composer = page.locator(".agent-chat__composer-shell");
+        await composer.waitFor({ state: "visible", timeout: 10_000 });
+        const box = await composer.boundingBox();
+        expect(box).not.toBeNull();
+        expect((box?.y ?? height) + (box?.height ?? 0)).toBeLessThanOrEqual(height);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
 });

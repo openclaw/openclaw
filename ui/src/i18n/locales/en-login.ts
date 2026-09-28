@@ -7,6 +7,7 @@ const enLogin = {
     heading: "Connect to OpenClaw",
     lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
     gatewayUrl: "Gateway URL",
+    gatewaySettings: "Gateway settings",
     secret: "Gateway secret",
     setupCodeHint:
       "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
@@ -37,6 +38,16 @@ const enLogin = {
           "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
         stepSharedSecret:
           "For trusted local operator access, use the shared Gateway token or password.",
+      },
+      accessDenied: {
+        title: "No access to this Gateway",
+        summary:
+          "You're signed in, but this Gateway hasn't granted your account access, or that access has ended.",
+        stepAdmin:
+          "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
+        stepFindProfile:
+          "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
+        stepReconnect: "This page reconnects on its own once access is granted.",
       },
       authRequired: {
         title: "This Gateway expects its token",

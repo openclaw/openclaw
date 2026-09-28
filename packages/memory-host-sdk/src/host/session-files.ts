@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
@@ -41,6 +43,7 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { collectRawSessionText, projectSessionEntryRecord } from "./session-entry-projection.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
@@ -439,38 +442,7 @@ export function parseCanonicalSessionSyncTargetFromPath(
 }
 
 function normalizeSessionText(value: string): string {
-  return value
-    .replace(/\s*\n+\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function collectRawSessionText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      parts.push(record.text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
-}
-
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isLowSurrogate(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function splitLongSessionLine(
@@ -502,14 +474,7 @@ function splitLongSessionLine(
         break;
       }
     }
-    if (
-      splitAt < normalized.length &&
-      splitAt > cursor &&
-      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
-      isLowSurrogate(normalized.charCodeAt(splitAt))
-    ) {
-      splitAt -= 1;
-    }
+    splitAt = avoidTrailingHighSurrogateBreak(normalized, cursor, splitAt);
     segments.push(normalized.slice(cursor, splitAt).trim());
     cursor = splitAt;
     while (cursor < normalized.length && normalized[cursor] === " ") {
@@ -635,19 +600,15 @@ export function statSessionEntrySync(
     const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
     return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
-  try {
-    const stat = fsSync.statSync(absPath);
-    return stat.isFile()
-      ? {
-          absPath,
-          path: sessionPathForFile(absPath),
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-        }
-      : null;
-  } catch {
-    return null;
-  }
+  const stat = safeStatSync(absPath);
+  return stat?.isFile()
+    ? {
+        absPath,
+        path: sessionPathForFile(absPath),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      }
+    : null;
 }
 
 async function yieldSessionEntryParseIfNeeded(
@@ -711,7 +672,10 @@ export async function buildSessionEntryInProcess(
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   try {
     const snapshot = sqliteIdentity
-      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity)
+      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
+          // Observers require original messages and run only after the snapshot closes.
+          projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+        })
       : null;
     const sqliteSource =
       snapshot && sqliteIdentity

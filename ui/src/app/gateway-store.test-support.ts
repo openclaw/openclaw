@@ -40,6 +40,10 @@ class FakeGatewayClient {
     this.instanceId = opts.instanceId ?? "";
   }
 
+  get gatewayUrl() {
+    return this.opts.url;
+  }
+
   start() {
     this.started += 1;
   }

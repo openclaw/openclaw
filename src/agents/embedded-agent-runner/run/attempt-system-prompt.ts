@@ -1,6 +1,3 @@
-/**
- * Builds the system prompt inputs for a single embedded-agent attempt.
- */
 import {
   splitSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
@@ -33,7 +30,7 @@ type BuildAttemptSystemPromptParams = {
 type AttemptSystemPrompt = {
   baseSystemPrompt: string;
   systemPrompt: string;
-  refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice: string) => string;
+  refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => string;
 };
 
 const ATTEMPT_PROMPT_SECTION =
@@ -86,7 +83,9 @@ export function buildAttemptSystemPrompt(
       if (params.isRawModelRun) {
         return currentSystemPrompt;
       }
-      const nextNotice = renderAttemptPromptSection("PERMISSION", permissionNotice);
+      const nextNotice = permissionNotice
+        ? renderAttemptPromptSection("PERMISSION", permissionNotice)
+        : undefined;
       let replacedNotice = false;
       // Hooks can return any older generation. Replace owned segments by identity,
       // not their prior text; external additions and whole-prompt overrides survive.
@@ -95,12 +94,12 @@ export function buildAttemptSystemPrompt(
         (_match, section: string) => {
           if (section === "PERMISSION") {
             replacedNotice = true;
-            return nextNotice;
+            return nextNotice ?? _match;
           }
           return section === "STABLE" ? stablePrompt : dynamicPrompt;
         },
       );
-      return replacedNotice ? refreshed : `${refreshed}\n\n${nextNotice}`;
+      return replacedNotice || !nextNotice ? refreshed : `${refreshed}\n\n${nextNotice}`;
     },
   };
 }

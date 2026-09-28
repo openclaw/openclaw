@@ -39,6 +39,21 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         reasoning: true,
         textVerbosity: "low",
       };
+    case "gpt-6-sol":
+    case "gpt-6-luna":
+      return {
+        modelId,
+        templateId: "gpt-5.6-sol",
+        templateName: "GPT-5.6 Sol",
+        cost:
+          modelId === "gpt-6-sol"
+            ? { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
+            : { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
     case "gpt-5.6":
     case "gpt-5.6-sol":
     case "gpt-5.6-terra":

@@ -139,10 +139,14 @@ export function detectWindowsSpawnCommandInlineArgs(
   };
 }
 
-/** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
-export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
+/** Resolve PATH/PATHEXT before inspecting wrappers; relative paths use the supplied child cwd. */
+export function resolveWindowsExecutablePath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd?: string,
+): string {
   if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
-    return command;
+    return cwd && !path.isAbsolute(command) ? path.resolve(cwd, command) : command;
   }
 
   const pathValue =
@@ -162,11 +166,12 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
       );
 
   for (const dir of pathEntries) {
+    const directory = cwd ? path.resolve(cwd, dir) : dir;
     for (const ext of pathExt) {
       const normalizedExt = normalizeLowercaseStringOrEmpty(ext);
       const uppercaseExt = ext.toUpperCase();
       for (const candidateExt of [ext, normalizedExt, uppercaseExt]) {
-        const candidate = path.join(dir, `${command}${candidateExt}`);
+        const candidate = path.join(directory, `${command}${candidateExt}`);
         if (isFilePath(candidate)) {
           return candidate;
         }

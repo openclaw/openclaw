@@ -5,6 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
+import { renderKeyboardShortcut, renderShortcutText } from "../../components/kbd.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsEmpty,
@@ -19,8 +20,8 @@ import type {
   CommandLaneDynamicSummary,
   CommandLaneSnapshot,
 } from "../../lib/gateway-diagnostics.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
-import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
 
 type DebugProps = {
@@ -47,11 +48,11 @@ type DebugProps = {
   onCall: () => void;
 };
 
-function renderJsonRow(title: unknown, value: unknown) {
+function renderJsonRow(title: string, value: unknown) {
   return renderSettingsRow({
     title,
     stacked: true,
-    control: html`<pre class="code-block">
+    control: html`<pre class="code-block" role="group" aria-label=${title} tabindex="0">
 ${guard([value], () => unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2))))}</pre>`,
   });
 }
@@ -103,18 +104,13 @@ function renderDiagnosticsError(error: string | null) {
   `;
 }
 
-function renderSnapshotActivity(props: DebugProps) {
-  const active = props.connected ? props.loading : props.offlineStable;
-  if (!active) {
+function renderSnapshotOffline(props: DebugProps) {
+  if (props.connected || !props.offlineStable) {
     return nothing;
   }
-  const refreshing = props.connected;
   return renderSettingsRow({
-    title: renderSettingsStatus({
-      kind: refreshing ? "accent" : "muted",
-      label: t(refreshing ? "common.refreshing" : "common.offline"),
-    }),
-    description: t(refreshing ? "debug.refreshingSnapshots" : "debug.offlineSnapshots"),
+    title: renderSettingsStatus({ kind: "muted", label: t("common.offline") }),
+    description: t("debug.offlineSnapshots"),
   });
 }
 
@@ -123,7 +119,7 @@ function renderEventRow(evt: EventLogEntry) {
     title: evt.event,
     description: formatTimeMs(evt.ts, undefined, ""),
     stacked: true,
-    control: html`<pre class="code-block">
+    control: html`<pre class="code-block" role="group" aria-label=${evt.event} tabindex="0">
 ${guard([evt.payload], () => unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload))))}</pre>`,
   });
 }
@@ -145,7 +141,7 @@ export function renderDebug(props: DebugProps) {
       `,
     },
     html`
-      ${renderSnapshotActivity(props)} ${renderDiagnosticsError(props.diagnosticsError)}
+      ${renderSnapshotOffline(props)} ${renderDiagnosticsError(props.diagnosticsError)}
       ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
       ${renderJsonRow(t("debug.health"), props.health)}
       ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}
@@ -161,7 +157,12 @@ export function renderDebug(props: DebugProps) {
           ${
             isNativeEmbedHost()
               ? t("debug.overlay.open")
-              : t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })
+              : renderShortcutText(
+                  t("debug.overlay.openWithShortcut", { shortcut: "{shortcut}" }),
+                  renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, {
+                    inline: true,
+                  }),
+                )
           }
         </button>
       `,
@@ -230,9 +231,15 @@ export function renderDebug(props: DebugProps) {
       ${
         props.callError
           ? html`
-              <div class="settings-row settings-row--stacked">
+              <div class="settings-row settings-row--stacked" role="alert">
                 ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
-                <pre class="code-block">${props.callError}</pre>
+                <pre
+                  class="code-block"
+                  role="group"
+                  aria-label=${t("debug.callFailed")}
+                  tabindex="0"
+                >
+${props.callError}</pre>
               </div>
             `
           : nothing
@@ -242,7 +249,12 @@ export function renderDebug(props: DebugProps) {
           ? html`
               <div class="settings-row settings-row--stacked">
                 ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-                <pre class="code-block">
+                <pre
+                  class="code-block"
+                  role="group"
+                  aria-label=${`${props.callMethod}: ${t("common.ok")}`}
+                  tabindex="0"
+                >
 ${guard([props.callResult], () => unsafeHTML(highlightJsonHtml(props.callResult!)))}</pre>
               </div>
             `
@@ -255,7 +267,7 @@ ${guard([props.callResult], () => unsafeHTML(highlightJsonHtml(props.callResult!
     { title: t("debug.modelsTitle"), description: t("debug.modelsSubtitle") },
     html`
       <div class="settings-row settings-row--stacked">
-        <pre class="code-block">
+        <pre class="code-block" role="group" aria-label=${t("debug.modelsTitle")} tabindex="0">
 ${guard([props.models], () => unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2))))}</pre>
       </div>
     `,

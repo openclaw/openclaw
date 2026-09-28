@@ -102,17 +102,20 @@ export function listMemorySessionTombstones(params: {
   return result.found ? result.value : [];
 }
 
-export function recordMemorySessionTombstones(params: {
-  agentId: string;
-  sessionIds: readonly string[];
-  reason?: string;
-  createdAt?: number;
-}): number {
+/** Record on the supplied connection; the caller retains write admission. */
+export function recordMemorySessionTombstonesInDatabase(
+  db: DatabaseSync,
+  params: {
+    agentId: string;
+    sessionIds: readonly string[];
+    reason?: string;
+    createdAt?: number;
+  },
+): number {
   const sessionIds = [...new Set(params.sessionIds)];
   if (sessionIds.length === 0) {
     return 0;
   }
-  const db = openOpenClawAgentDatabase({ agentId: params.agentId }).db;
   ensureMemorySessionTombstones(db);
   const reason = params.reason ?? "forgotten";
   const createdAt = params.createdAt ?? Date.now();
@@ -165,7 +168,7 @@ export function recordMemoryEntryOrigins(params: {
   );
 }
 
-export function deleteMemoryEntryOrigins(params: {
+function deleteMemoryEntryOrigins(params: {
   agentId: string;
   entryKeys: readonly string[];
   sessionIds?: readonly string[];
@@ -190,7 +193,21 @@ export function deleteMemoryEntryOrigins(params: {
   if (!existing.found || !existing.value) {
     return 0;
   }
-  const db = openMemoryOriginDatabase(params.agentId);
+  return deleteMemoryEntryOriginsInDatabase(openMemoryOriginDatabase(params.agentId), params);
+}
+
+/** Mutate only the supplied connection; callers retain its admission and lifetime. */
+export function deleteMemoryEntryOriginsInDatabase(
+  db: DatabaseSync,
+  params: { agentId: string; entryKeys: readonly string[]; sessionIds?: readonly string[] },
+): number {
+  if (
+    params.entryKeys.length === 0 ||
+    params.sessionIds?.length === 0 ||
+    !tableExists(db, "memory_entry_origins")
+  ) {
+    return 0;
+  }
   return runSqliteImmediateTransactionSync(db, () => {
     const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
     let query = kysely
@@ -274,7 +291,9 @@ export async function pruneMemoryEntryOrigins(params: {
   }
   // Keep diary origins through backup rotation; callers hold the workspace lock.
   const diaries = await Promise.all(
-    DREAMS_FILENAMES.map((name) => readDreamsFile(path.join(params.workspaceDir, name))),
+    DREAMS_FILENAMES.map((name) =>
+      readDreamsFile(path.join(params.workspaceDir, name), params.workspaceDir),
+    ),
   );
   const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
   for (const agentId of new Set(params.agentIds)) {

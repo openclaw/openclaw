@@ -56,7 +56,10 @@ beforeEach(() => {
   });
   runtime.runUpdateRepairTurn.mockResolvedValue(turnResult());
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("runUpdateRepairLoop", () => {
   it("validates before inference and returns immediately for an already healthy target", async () => {
@@ -66,12 +69,8 @@ describe("runUpdateRepairLoop", () => {
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 
-  it("uses the selected owner route and validates every turn before declaring repair", async () => {
-    const validate = vi
-      .fn()
-      .mockResolvedValueOnce(unhealthy(-2))
-      .mockResolvedValueOnce(unhealthy(-1))
-      .mockResolvedValueOnce(healthy);
+  it("uses the selected owner route and validates its single turn before declaring repair", async () => {
+    const validate = vi.fn().mockResolvedValueOnce(unhealthy(-2)).mockResolvedValueOnce(healthy);
     const events: string[] = [];
     const result = await runUpdateRepairLoop({
       ...params(validate),
@@ -80,16 +79,10 @@ describe("runUpdateRepairLoop", () => {
     expect(result.status).toBe("repaired");
     expect(
       result.attempts.map((attempt) => [attempt.turn, attempt.toolCalls, attempt.summary]),
-    ).toEqual([
-      [1, 1, "Corrected the installation."],
-      [2, 1, "Corrected the installation."],
-    ]);
+    ).toEqual([[1, 1, "Corrected the installation."]]);
     expect(events).toEqual([
       "validation",
       "route-selected",
-      "turn-started",
-      "validation",
-      "turn-finished",
       "turn-started",
       "validation",
       "turn-finished",
@@ -102,35 +95,35 @@ describe("runUpdateRepairLoop", () => {
       maxToolCalls: 40,
       timeoutMs: 300_000,
     });
-    expect(validate).toHaveBeenCalledTimes(3);
+    expect(validate).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    { scores: [-3, -2, -2], status: "improved", attempts: 2 },
-    { scores: [-3, -3], status: "unrepaired", attempts: 1 },
-    { scores: [-3, -2, -3], status: "unrepaired", attempts: 2 },
-  ])("stops on no improvement or regression: $scores", async ({ scores, status, attempts }) => {
+    { scores: [-3, -3], reason: "Validation did not improve." },
+    { scores: [-3, -4], reason: "Validation regressed after repair." },
+  ])("stops on no improvement or regression: $scores", async ({ scores, reason }) => {
     const validate = vi.fn();
     for (const score of scores) {
       validate.mockResolvedValueOnce(unhealthy(score));
     }
     const result = await runUpdateRepairLoop(params(validate));
-    expect(result.status).toBe(status);
-    expect(result.attempts).toHaveLength(attempts);
-    expect(runtime.runUpdateRepairTurn).toHaveBeenCalledTimes(attempts);
+    expect(result).toMatchObject({ status: "unrepaired", reason });
+    expect(result.attempts).toHaveLength(1);
+    expect(runtime.runUpdateRepairTurn).toHaveBeenCalledOnce();
   });
 
-  it("honors the turn budget even while every turn improves", async () => {
+  it("stops after one improving turn", async () => {
     const validate = vi
       .fn()
       .mockResolvedValueOnce(unhealthy(-4))
       .mockResolvedValueOnce(unhealthy(-3));
-    const result = await runUpdateRepairLoop({ ...params(validate), budget: { maxTurns: 1 } });
+    const result = await runUpdateRepairLoop(params(validate));
     expect(result).toMatchObject({ status: "improved", reason: "turn-budget" });
     expect(result.attempts).toHaveLength(1);
   });
 
   it("aborts the turn at its deadline and validates any partial edits after draining", async () => {
+    vi.useFakeTimers();
     let drained = false;
     runtime.runUpdateRepairTurn.mockImplementationOnce(
       ({ signal }) =>
@@ -151,13 +144,16 @@ describe("runUpdateRepairLoop", () => {
       }
       return unhealthy(-1);
     });
-    const result = await runUpdateRepairLoop({ ...params(validate), budget: { perTurnMs: 10 } });
+    const pending = runUpdateRepairLoop({ ...params(validate), budget: { perTurnMs: 10 } });
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
     expect(result).toMatchObject({ status: "aborted", reason: "per-turn-budget" });
     expect(validate).toHaveBeenCalledTimes(2);
     expect(result.attempts).toHaveLength(1);
   });
 
   it("cancels and drains an oracle at the wall deadline and prevents late turns", async () => {
+    vi.useFakeTimers();
     let drained = false;
     const validate = vi.fn(
       (signal: AbortSignal) =>
@@ -172,40 +168,38 @@ describe("runUpdateRepairLoop", () => {
           );
         }),
     );
-    const result = await runUpdateRepairLoop({ ...params(validate), budget: { wallClockMs: 10 } });
+    const pending = runUpdateRepairLoop({ ...params(validate), budget: { wallClockMs: 10 } });
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
     expect(result).toMatchObject({ status: "aborted", reason: "wall-clock-budget" });
     expect(drained).toBe(true);
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 
   it("returns at the wall deadline even if a read-only oracle never settles", async () => {
+    vi.useFakeTimers();
     const validate = vi.fn(() => new Promise<UpdateRepairValidation>(() => {}));
-    const result = await runUpdateRepairLoop({ ...params(validate), budget: { wallClockMs: 10 } });
+    const pending = runUpdateRepairLoop({ ...params(validate), budget: { wallClockMs: 10 } });
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
     expect(result).toMatchObject({ status: "aborted", reason: "wall-clock-budget" });
     expect(runtime.withUpdateRepairEnvironment).not.toHaveBeenCalled();
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 
-  it.each([{ calls: [2] }, { calls: [1, 1] }])(
-    "shares the tool budget across improving turns: $calls",
-    async ({ calls }) => {
-      for (const toolCalls of calls) {
-        runtime.runUpdateRepairTurn.mockResolvedValueOnce(turnResult("Partial repair", toolCalls));
-      }
-      const validate = vi.fn(async () => unhealthy(-4 + validate.mock.calls.length));
-      const result = await runUpdateRepairLoop({
-        ...params(validate),
-        budget: { maxToolCalls: 2 },
-      });
-      expect(result).toMatchObject({ status: "aborted", reason: "tool-call-budget" });
-      expect(result.attempts.map((attempt) => attempt.toolCalls)).toEqual(calls);
-      expect(runtime.runUpdateRepairTurn.mock.calls.map(([input]) => input.maxToolCalls)).toEqual(
-        calls.length === 1 ? [2] : [2, 1],
-      );
-      expect(validate).toHaveBeenCalledTimes(calls.length + 1);
-      expect(result.attempts.at(-1)?.validation).toEqual(unhealthy(-3 + calls.length));
-    },
-  );
+  it("validates partial edits before reporting tool-budget exhaustion", async () => {
+    runtime.runUpdateRepairTurn.mockResolvedValueOnce(turnResult("Partial repair", 2));
+    const validate = vi.fn(async () => unhealthy(-4 + validate.mock.calls.length));
+    const result = await runUpdateRepairLoop({
+      ...params(validate),
+      budget: { maxToolCalls: 2 },
+    });
+    expect(result).toMatchObject({ status: "aborted", reason: "tool-call-budget" });
+    expect(result.attempts.map((attempt) => attempt.toolCalls)).toEqual([2]);
+    expect(runtime.runUpdateRepairTurn.mock.calls[0]?.[0].maxToolCalls).toBe(2);
+    expect(validate).toHaveBeenCalledTimes(2);
+    expect(result.attempts[0]?.validation).toEqual(unhealthy(-2));
+  });
 
   it.each([
     ['REPAIR_RESULT: {"status":"partial","summary":"One error remains."}', "One error remains."],
@@ -279,8 +273,7 @@ describe("runUpdateRepairLoop", () => {
         ),
       ),
     );
-    // Wait for the oracle's admission, not a sleep or the eventual task result.
-    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(release).toBeTypeOf("function");
     expect((await runUpdateRepairLoop(params())).status).toBe("unavailable");
     release(healthy);
     await first;

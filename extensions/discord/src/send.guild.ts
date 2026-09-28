@@ -1,4 +1,3 @@
-// Discord plugin module implements send.guild behavior.
 import type {
   APIGuild,
   APIGuildMember,
@@ -216,5 +215,3 @@ export async function banMemberDiscord(
   });
   return { ok: true };
 }
-
-// Channel management functions

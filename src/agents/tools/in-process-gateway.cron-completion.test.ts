@@ -6,11 +6,10 @@ const mocks = vi.hoisted(() => ({ context: {} as GatewayRequestContext, dispatch
 vi.mock("../../gateway/method-scopes.js", () => ({
   resolveLeastPrivilegeOperatorScopesForMethod: () => ["operator.write"],
 }));
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: mocks.dispatch,
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : mocks.context,
-  hasInProcessGatewayContext: () => true,
   runWithOperatorToolGatewayCleanupContext: <T>(run: () => T) => run(),
 }));
 vi.mock("./gateway.js", () => ({ callGatewayTool: vi.fn() }));

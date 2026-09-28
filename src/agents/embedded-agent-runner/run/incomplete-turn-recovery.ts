@@ -4,11 +4,9 @@ import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js"
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
+import { resolveReplyCompletion, resolveReplyExpectation } from "../../reply-completion.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
-import {
-  hasCommittedMessagingToolDeliveryEvidence,
-  hasCompletedMessagingToolDeliveryEvidence,
-} from "../delivery-evidence.js";
+import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import {
   hasAsyncActivity,
@@ -18,7 +16,6 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
-  hasExplicitSilentAssistantReply,
   hasPositiveOutputTokenUsage,
   isOllamaIncompleteTurnProvider,
   isReasoningOnlyAssistantTurn,
@@ -59,15 +56,13 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return false;
-  }
-  if (hasAttemptTerminalState(params.attempt)) {
-    return false;
-  }
   // Current-attempt evidence avoids blocking on prior committed effects; older
   // harnesses retain the cumulative, fail-closed behavior.
-  if (!isCurrentAttemptReplaySafe(params.attempt)) {
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    hasAttemptTerminalState(params.attempt) ||
+    !isCurrentAttemptReplaySafe(params.attempt)
+  ) {
     return false;
   }
 
@@ -86,7 +81,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
+  if (content.every((block) => block.type === "text" && !block.text.trim())) {
     // Rejected arguments can consume tokens without output; the preceding guards own replay safety.
     return (
       !hasPositiveOutputTokenUsage(assistant) ||
@@ -131,33 +126,18 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  // NO_REPLY is an authored outcome, not missing output: a successful reaction
-  // can be the entire reply. Agents: classify it before the side-effect retry
-  // guard, or it becomes a false missing-summary warning (or a repeated tool).
-  // Actual failures, aborts and pending work still pass through the guards below.
-  const terminalReplyOptional = params.terminalReplyExpectation === "optional";
-  const explicitSilentReply =
-    params.payloadCount === 0 && hasExplicitSilentAssistantReply(params.attempt);
-  const tolerateSideEffects = terminalReplyOptional || explicitSilentReply;
-  if (
-    (!params.allowEmptyAssistantReplyAsSilent && !explicitSilentReply) ||
-    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects })
-  ) {
-    return false;
-  }
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
-    return false;
-  }
-  if (explicitSilentReply) {
-    return true;
-  }
-  // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
-  // Bare empty and reasoning-only stops are provider failures, even when the
-  // conversation policy permits deliberate silence.
-  if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
-    return false;
-  }
-  return classifyAssistantTurn(params).nonVisibleEligibleForSilentReply;
+  const completion = resolveReplyCompletion(
+    resolveReplyExpectation(params),
+    params.payloadCount === 0 ? "empty" : "ready",
+  );
+  const assistant = classifyAssistantTurn(params);
+  return (
+    completion.outcome === "silent" &&
+    !shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: true }) &&
+    resolveSourceReplyDelivery(params.attempt) === "missing" &&
+    (!params.onlyExplicitSilentReply || assistant.silent) &&
+    assistant.nonVisibleEligibleForSilentReply
+  );
 }
 
 /**
@@ -173,33 +153,16 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (shouldSkipNonVisibleTurnRetry(params)) {
-    return null;
-  }
-
-  if (
-    !shouldApplyNonVisibleTurnRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      executionContract: params.executionContract,
-    })
-  ) {
+  if (shouldSkipNonVisibleTurnRetry(params) || !shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
 
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return null;
-  }
-  if (assistant?.stopReason === "error") {
-    return null;
-  }
-  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
-    return null;
-  }
-
-  return REASONING_ONLY_RETRY_INSTRUCTION;
+  return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
+    assistant?.stopReason !== "error" &&
+    (isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant))
+    ? REASONING_ONLY_RETRY_INSTRUCTION
+    : null;
 }
 
 type SettledToolCall = { id: string | null; name: string | null };
@@ -362,7 +325,6 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   );
   if (
     params.payloadCount !== 0 ||
-    (!params.allowEmptyStopContinuation && hasExplicitSilentAssistantReply(attempt)) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
@@ -380,17 +342,10 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (attempt.hasToolMediaBlockReply || hasCompletedMessagingToolDeliveryEvidence(attempt)) {
+  if (attempt.hasToolMediaBlockReply || resolveSourceReplyDelivery(attempt) !== "missing") {
     return null;
   }
-  if (
-    !shouldApplyNonVisibleTurnRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      executionContract: params.executionContract,
-    })
-  ) {
+  if (!shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
   return allToolsProvenSettled && failedToolNames.size > 0
@@ -431,12 +386,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   if (
-    shouldApplyNonVisibleTurnRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      executionContract: params.executionContract,
-    }) ||
+    shouldApplyNonVisibleTurnRetryGuard(params) ||
     // Keep the generic zero-usage stop retry for providers that expose a
     // provider-neutral "nothing was generated" signal, even outside the
     // provider allowlist above.

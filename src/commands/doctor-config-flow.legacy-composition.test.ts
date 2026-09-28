@@ -1,7 +1,8 @@
 // Exercises legacy values through the actual snapshot, Doctor, atomic write, and reread.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
@@ -15,9 +16,12 @@ import {
   createBuiltRuntime,
   runBuiltRuntime,
 } from "./doctor-config-preflight.process.test-support.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const CLI_CHILD_TIMEOUT_MS = 60_000;
+const runtimeDirs = useAutoCleanupTempDirTracker(afterAll);
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+let runtimeRoot: string | undefined;
 
 async function repairConfig(configPath: string) {
   const ctx = await prepareDoctorContext(configPath);
@@ -66,7 +70,12 @@ describe("Doctor legacy config composition", () => {
         }
         raw.gateway.port = await getFreePort();
         const configPath = await writeOpenClawConfig(home, raw);
-        const runtimeRoot = createBuiltRuntime(path.join(home, "cli"));
+        if (!runtimeRoot) {
+          runtimeRoot = createBuiltRuntime(runtimeDirs.make("openclaw-doctor-legacy-runtime-"));
+          // The source marker disables installed-package compile caching in every CLI child.
+          await fs.unlink(path.join(runtimeRoot, "src"));
+        }
+        const cliRuntime = runtimeRoot;
         const env: NodeJS.ProcessEnv = {
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
@@ -77,10 +86,11 @@ describe("Doctor legacy config composition", () => {
           TMPDIR: home,
           OPENCLAW_STATE_DIR: path.dirname(configPath),
           OPENCLAW_CONFIG_PATH: configPath,
+          NODE_COMPILE_CACHE: path.join(cliRuntime, "node-compile-cache"),
           NO_COLOR: "1",
         };
         const run = async (args: string[], expected = 0) => {
-          const result = await runBuiltRuntime(runtimeRoot, env, args, CLI_CHILD_TIMEOUT_MS);
+          const result = await runBuiltRuntime(cliRuntime, env, args, CLI_CHILD_TIMEOUT_MS);
           const output = `${result.stdout}\n${result.stderr}`;
           expect(result.code, output).toBe(expected);
         };
@@ -481,20 +491,44 @@ describe("Doctor legacy config composition", () => {
       });
     });
   });
-  it.each(["${DOCTOR_MEMORY_KEY}", "$${DOCTOR_MEMORY_KEY}"])(
-    "preserves migrated default memory references %s and explicit canonical values",
-    async (apiKey) => {
+  it.each([
+    { apiKey: "${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    { apiKey: "$${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "${DOCTOR_MEMORY_PROVIDER}",
+      canonicalApiKey: undefined,
+    },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "auto",
+      canonicalApiKey: "${DOCTOR_CANONICAL_MEMORY_KEY}",
+    },
+  ])(
+    "preserves migrated $apiKey and canonical $canonicalApiKey references while canonicalizing $provider",
+    async ({ apiKey, provider, canonicalApiKey }) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await withEnvAsync(
-          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", DOCTOR_MEMORY_KEY: "memory-secret-canary" },
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            DOCTOR_MEMORY_KEY: "memory-secret-canary",
+            DOCTOR_MEMORY_PROVIDER: "auto",
+            DOCTOR_CANONICAL_MEMORY_KEY: "canonical-secret-canary",
+          },
           async () => {
             const configPath = await writeOpenClawConfig(home, {
-              memory: { search: { enabled: false, query: { maxResults: 9 } } },
+              memory: {
+                search: {
+                  enabled: false,
+                  query: { maxResults: 9 },
+                  ...(canonicalApiKey ? { remote: { apiKey: canonicalApiKey } } : {}),
+                },
+              },
               agents: {
                 defaults: {
                   memorySearch: {
                     enabled: true,
-                    provider: "auto",
+                    provider,
                     query: { maxResults: 7 },
                     remote: { apiKey },
                   },
@@ -509,16 +543,40 @@ describe("Doctor legacy config composition", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
-            const repaired = await repairConfig(configPath);
+            const ctx = await prepareDoctorContext(configPath);
+            await withEnvAsync(
+              {
+                DOCTOR_MEMORY_KEY: "rotated-memory-secret-canary",
+                DOCTOR_CANONICAL_MEMORY_KEY: "rotated-canonical-secret-canary",
+              },
+              async () => {
+                await runInitialConfigWriteHealth(ctx);
+                const snapshot = await readConfigFileSnapshot();
+                expect(snapshot.valid).toBe(true);
+                expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+                  canonicalApiKey
+                    ? "rotated-canonical-secret-canary"
+                    : apiKey.startsWith("$$")
+                      ? "${DOCTOR_MEMORY_KEY}"
+                      : "rotated-memory-secret-canary",
+                );
+              },
+            );
+            const repaired = ctx.configResult;
+            expect(ctx.configWriteRefusal).toBeUndefined();
             expect(repaired.cfg.memory?.search?.remote?.apiKey).toBe(
-              apiKey.startsWith("$$") ? "${DOCTOR_MEMORY_KEY}" : "memory-secret-canary",
+              canonicalApiKey
+                ? "canonical-secret-canary"
+                : apiKey.startsWith("$$")
+                  ? "${DOCTOR_MEMORY_KEY}"
+                  : "memory-secret-canary",
             );
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved.memory.search).toEqual({
               enabled: false,
               provider: "openai",
               query: { maxResults: 9 },
-              remote: { apiKey },
+              remote: { apiKey: canonicalApiKey ?? apiKey },
             });
             expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
             expect(saved.agents.entries.ops.memory.search).toEqual({

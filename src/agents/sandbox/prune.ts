@@ -5,30 +5,43 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
  * Removes stale runtime containers and browser bridges on a best-effort schedule.
  */
 import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getSandboxBackendManager, usesSandboxRuntimeReservations } from "./backend.js";
 import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
+  assertSandboxBrowserRegistryEntryCurrent,
   readBrowserRegistry,
   readRegistry,
-  removeBrowserRegistryEntry,
+  removeSandboxRegistryGeneration,
   removeSandboxRegistryRuntime,
+  withSandboxRegistryEntryLock,
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
-import type { SandboxConfig } from "./types.js";
+import { resolveSandboxAgentId } from "./shared.js";
+import type { SandboxPruneConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
 
 type PruneableRegistryEntry = Pick<
   SandboxRegistryEntry,
-  "containerName" | "backendId" | "createdAtMs" | "lastUsedAtMs"
+  "containerName" | "backendId" | "createdAtMs" | "lastUsedAtMs" | "sessionKey"
 >;
 
-function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: PruneableRegistryEntry) {
-  const idleHours = cfg.prune.idleHours;
-  const maxAgeDays = cfg.prune.maxAgeDays;
+function resolveEntryPruneConfig(config: OpenClawConfig, entry: PruneableRegistryEntry) {
+  return resolveSandboxConfigForAgent(config, resolveSandboxAgentId(entry.sessionKey)).prune;
+}
+
+function shouldPruneSandboxEntry(
+  prune: SandboxPruneConfig,
+  now: number,
+  entry: PruneableRegistryEntry,
+) {
+  const idleHours = prune.idleHours;
+  const maxAgeDays = prune.maxAgeDays;
   if (idleHours === 0 && maxAgeDays === 0) {
     return false;
   }
@@ -45,7 +58,7 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
 
 /** Removes expired registry entries and their backing runtime resources. */
 async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
-  cfg: SandboxConfig;
+  config: OpenClawConfig;
   read: () => Promise<{ entries: TEntry[] }>;
   remove: (
     entry: TEntry,
@@ -53,16 +66,15 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
   ) => Promise<void>;
 }) {
   const now = Date.now();
-  if (params.cfg.prune.idleHours === 0 && params.cfg.prune.maxAgeDays === 0) {
-    return;
-  }
   const registry = await params.read();
   for (const entry of registry.entries) {
-    if (!shouldPruneSandboxEntry(params.cfg, now, entry)) {
+    if (!shouldPruneSandboxEntry(resolveEntryPruneConfig(params.config, entry), now, entry)) {
       continue;
     }
     try {
-      await params.remove(entry, (current) => shouldPruneSandboxEntry(params.cfg, now, current));
+      await params.remove(entry, (current) =>
+        shouldPruneSandboxEntry(resolveEntryPruneConfig(params.config, current), now, current),
+      );
     } catch (error) {
       const message =
         error instanceof Error
@@ -78,10 +90,9 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
 }
 
 /** Prunes ordinary sandbox runtime containers from the configured backend manager. */
-async function pruneSandboxContainers(cfg: SandboxConfig) {
-  const config = getRuntimeConfig();
+async function pruneSandboxContainers(config: OpenClawConfig) {
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
-    cfg,
+    config,
     read: readRegistry,
     remove: (entry, shouldRemove) =>
       removeSandboxRegistryRuntime(
@@ -94,7 +105,11 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
               `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
             );
           }
-          await manager.removeRuntime({ entry: current, config });
+          await manager.removeRuntime({
+            entry: current,
+            config,
+            agentId: resolveSandboxAgentId(current.sessionKey),
+          });
         },
         {
           reserveRuntime: usesSandboxRuntimeReservations(entry.backendId ?? "docker"),
@@ -105,8 +120,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
 }
 
 /** Prunes browser bridge containers and closes matching in-process bridge servers. */
-async function pruneSandboxBrowsers(cfg: SandboxConfig) {
-  const config = getRuntimeConfig();
+async function pruneSandboxBrowsers(config: OpenClawConfig) {
   await pruneSandboxRegistryEntries<
     SandboxBrowserRegistryEntry & {
       backendId?: string;
@@ -114,34 +128,51 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
       configLabelKind?: string;
     }
   >({
-    cfg,
+    config,
     read: readBrowserRegistry,
-    remove: async (entry) => {
-      await stopCachedBrowserBridgesForContainer(entry.containerName);
-      await dockerSandboxBackendManager.removeRuntime({
-        entry: {
-          ...entry,
-          backendId: "docker",
-          runtimeLabel: entry.containerName,
-          configLabelKind: "Image",
-        },
-        config,
+    remove: async (entry, shouldRemove) => {
+      await withSandboxRegistryEntryLock({ ...entry, backendId: "docker" }, async () => {
+        const current = (await readBrowserRegistry()).entries.find(
+          (candidate) => candidate.containerName === entry.containerName,
+        );
+        if (!current || !shouldRemove(current)) {
+          return;
+        }
+        try {
+          assertSandboxBrowserRegistryEntryCurrent(entry);
+        } catch {
+          return;
+        }
+        await stopCachedBrowserBridgesForContainer(current.containerName);
+        await dockerSandboxBackendManager.removeRuntime({
+          entry: {
+            ...current,
+            backendId: "docker",
+            runtimeLabel: current.containerName,
+            configLabelKind: "Image",
+          },
+          config,
+          agentId: resolveSandboxAgentId(current.sessionKey),
+        });
+        removeSandboxRegistryGeneration("browser", current, () =>
+          assertSandboxBrowserRegistryEntryCurrent(current),
+        );
       });
-      await removeBrowserRegistryEntry(entry.containerName);
     },
   });
 }
 
 /** Runs sandbox pruning at most once per throttle window. */
-export async function maybePruneSandboxes(cfg: SandboxConfig) {
+export async function maybePruneSandboxes(config?: OpenClawConfig) {
   const now = Date.now();
   if (now - lastPruneAtMs < 5 * 60 * 1000) {
     return;
   }
   lastPruneAtMs = now;
   try {
-    await pruneSandboxContainers(cfg);
-    await pruneSandboxBrowsers(cfg);
+    const currentConfig = config ?? getRuntimeConfig();
+    await pruneSandboxContainers(currentConfig);
+    await pruneSandboxBrowsers(currentConfig);
   } catch (error) {
     const message =
       error instanceof Error

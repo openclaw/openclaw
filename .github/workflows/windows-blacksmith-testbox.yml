@@ -162,14 +162,10 @@ jobs:
           Write-Host ("architecture=" + [Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
           Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
 
-          # Only the stock native OpenSSH service and administrator key-file contract are supported.
-          $sshd = "$env:WINDIR\System32\OpenSSH\sshd.exe"
-          $keygen = "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe"
-          $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
-          if (-not $service -or $service.State -ne "Running" -or $service.StartName -ne "LocalSystem" -or
-              $service.PathName.Trim().Trim('"') -ine $sshd) {
-            throw "Expected the running stock LocalSystem Windows OpenSSH service without arguments."
-          }
+          . "$env:GITHUB_WORKSPACE/scripts/windows-testbox-openssh.ps1"
+          $installation = Get-WindowsTestboxOpenSshInstallation
+          $sshd = $installation.Sshd
+          $keygen = $installation.Keygen
           $effectiveConfig = & $sshd -T -C "user=$nativeUser" 2>&1
           if ($LASTEXITCODE -ne 0) { throw "Could not inspect native Windows OpenSSH configuration." }
           $keySetting = @($effectiveConfig | Where-Object { $_ -match '^authorizedkeysfile\s' })

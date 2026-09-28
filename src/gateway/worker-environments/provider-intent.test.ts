@@ -213,7 +213,7 @@ describe("prepared worker intent admission", () => {
         await requireGit(f.projectPath, ["worktree", "add", "--detach", linked, "HEAD"]);
         profileSnapshot.project.root = linked;
       }
-      const stored = support.testState.store.createIntent({
+      const stored = await support.testState.store.createIntent({
         ...deriveEnvironmentIntent("display-replay"),
         providerId: original.providerId,
         profileId: "development",
@@ -291,7 +291,7 @@ describe("prepared worker intent admission", () => {
   it("rechecks profile policy after awaited artifact preparation and during retention", async () => {
     const f = await fixture();
     const intent = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
-    const record = support.testState.store.createIntent({
+    const record = await support.testState.store.createIntent({
       environmentId: "retained",
       providerId: intent.providerId,
       profileId: "development",
@@ -301,7 +301,7 @@ describe("prepared worker intent admission", () => {
     const retention = await f.owner.prepareRetention(record);
     expect(retention).toBeDefined();
     f.provider.supportsProjectPreparation = () => false;
-    expect(() => retention!.assertCurrent()).toThrow("retention policy changed");
+    expect(retention!.isCurrent()).toBe(false);
     f.provider.supportsProjectPreparation = () => true;
     const entered = createDeferredCore();
     const release = createDeferredCore();

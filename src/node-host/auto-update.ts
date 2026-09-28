@@ -24,7 +24,7 @@ const IDLE_CHECK_INTERVAL_MS = 30_000;
 const MIN_ACTIVATION_INTERVAL_MS = 12 * CHECK_INTERVAL_MS;
 
 type NodeUpdateRuntime = {
-  tryPauseForUpdate(): boolean;
+  tryPauseForUpdate(): Promise<boolean>;
   resumeAfterUpdate(): void;
 };
 
@@ -93,7 +93,7 @@ export function startNodeHostAutoUpdate(params: {
       return CHECK_INTERVAL_MS;
     }
     signal.throwIfAborted();
-    if (!params.runtime.tryPauseForUpdate()) {
+    if (!(await params.runtime.tryPauseForUpdate())) {
       if (!waitingLogged) {
         params.log(
           `node auto-update ${candidate.version} is ready; waiting for active work to finish`,
@@ -149,10 +149,15 @@ export function startNodeHostAutoUpdate(params: {
       }
       return await tryActivate();
     }
+    // Bun-only installs have no npm to spawn; read the registry in-process there,
+    // as `openclaw update` does for installs npm does not manage.
     const available = await resolveNpmChannelTag({
       channel: policy.channel,
       env,
-      runCommand: (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
+      signal,
+      runCommand: process.versions.bun
+        ? undefined
+        : (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
     });
     signal.throwIfAborted();
     if (available.error) {

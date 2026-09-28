@@ -23,12 +23,6 @@ export function parseConfigPath(
   raw: string,
 ): { ok: true; path: string[] } | { ok: false; error: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return {
-      ok: false,
-      error: "Invalid path. Use dot notation (e.g. foo.bar).",
-    };
-  }
   const parts = trimmed.split(".").map((part) => part.trim());
   if (parts.some((part) => !part)) {
     return {

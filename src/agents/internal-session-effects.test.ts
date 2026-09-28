@@ -19,7 +19,6 @@ import {
   createInternalSessionEffectsCleanup,
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
-  resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 
 describe("internal session effects", () => {
@@ -133,7 +132,7 @@ describe("internal session effects", () => {
 
   it("escapes the reserved prefix for a durable internal-effects run id", async () => {
     await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
-      const target = resolveInternalSessionEffectsTarget({
+      const target = await prepareInternalSessionEffectsSession({
         agentId: "main",
         runId: "incognito-not-private",
         storePath: path.join(dir, "sessions.json"),

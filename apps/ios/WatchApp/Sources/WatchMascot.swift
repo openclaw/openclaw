@@ -31,12 +31,8 @@ func watchInboxMascotMood(
     hasApprovals: Bool,
     hasChats: Bool) -> OpenClawMascotMood
 {
-    // Approval decisions demand attention above every other inbox state.
     if hasApprovals { return .attentive }
-    // No snapshot means the watch is still waiting and thinking.
     if !hasSnapshot { return .thinking }
-    // A synchronized inbox with nothing waiting can settle into sleep.
     if !hasChats { return .sleepy }
-    // Existing chats keep the mascot present but neutral.
     return .idle
 }

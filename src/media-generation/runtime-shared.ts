@@ -1,4 +1,3 @@
-// Shares media-generation runtime polling and response helpers across providers.
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
@@ -13,11 +12,9 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { isProviderApiKeyConfigured } from "../plugin-sdk/provider-auth.js";
+import { isProviderApiKeyConfigured } from "../plugins/provider-auth-availability.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
-// Shared media-generation runtime helpers for provider fallback, request
-// timeout normalization, model selection, and capability value normalization.
 export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
 type ParsedProviderModelRef = {
@@ -277,9 +274,7 @@ export function resolveCapabilityModelCandidates(params: {
     candidates.push(candidate);
   };
 
-  const override = (() => {
-    return resolveCandidate(params.modelOverride, { useProviderMetadata: true });
-  })();
+  const override = resolveCandidate(params.modelOverride, { useProviderMetadata: true });
   if (override) {
     // Explicit model overrides are authoritative and should not be expanded into
     // auto provider fallback candidates.
@@ -679,12 +674,7 @@ function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
 
 function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
   const message = attempt.error.trim().toLowerCase();
-  return (
-    message === "this operation was aborted" ||
-    message === "operation was aborted" ||
-    message.includes("operation was aborted") ||
-    message.includes("request was aborted")
-  );
+  return message.includes("operation was aborted") || message.includes("request was aborted");
 }
 
 /** Formats setup guidance when no model is configured for a media capability. */

@@ -1,4 +1,5 @@
 // Doctor lint flow runs lint-like doctor checks and formats findings.
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import {
@@ -73,10 +74,17 @@ export async function runDoctorLintChecks(
         findings.push(f);
       }
     } catch (err) {
+      const aborted =
+        err instanceof OpenClawStateLeaseAcquisitionError && err.outcome.kind === "aborted"
+          ? err.outcome
+          : undefined;
       findings.push({
         checkId: check.id,
-        severity: "error",
-        message: `health check threw: ${scrubDoctorErrorMessage(err)}`,
+        severity: aborted ? "info" : "error",
+        ...(aborted ? { errorCode: "OPENCLAW_STATE_LEASE_ABORTED" } : {}),
+        message: aborted
+          ? `state lease inspection not performed: aborted after ${aborted.elapsedMs} ms by the caller's signal`
+          : `health check threw: ${scrubDoctorErrorMessage(err)}`,
       });
     }
   }

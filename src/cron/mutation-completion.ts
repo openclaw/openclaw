@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 
 const mutationMethods = new Set([
@@ -10,7 +11,12 @@ const mutationMethods = new Set([
   "cron.scratch.set",
 ]);
 
-type MutationState = { method: string; open: boolean; committed: boolean };
+type MutationState = {
+  method: string;
+  open: boolean;
+  committed: boolean;
+  trackAdmission?: ReturnType<typeof captureAsyncWorkTracker>;
+};
 const currentMutation = new AsyncLocalStorage<MutationState>();
 
 export type CronMutationCompletion = {
@@ -23,7 +29,14 @@ export function createCronMutationCompletion(method: string): CronMutationComple
   if (!mutationMethods.has(method)) {
     return undefined;
   }
-  const state: MutationState = { method, open: true, committed: false };
+  const state: MutationState = {
+    method,
+    open: true,
+    committed: false,
+    // Gateway dispatch installs its own work scope. Keep the originating tool's
+    // resource owner on this exact receipt, without capturing authorization.
+    ...(method === "cron.run" ? { trackAdmission: captureAsyncWorkTracker() } : {}),
+  };
   return {
     isCommitted: () => state.committed,
     run: async <T>(run: () => Promise<T>) => {
@@ -36,6 +49,23 @@ export function createCronMutationCompletion(method: string): CronMutationComple
         state.open = false;
       }
     },
+  };
+}
+
+/** Capture before acceptance; late callbacks cannot retain a settled or successor invocation. */
+export function captureCronRunAdmissionTracker():
+  | ReturnType<typeof captureAsyncWorkTracker>
+  | undefined {
+  const state = currentMutation.getStore();
+  const track = state?.trackAdmission;
+  if (!state?.open || state.method !== "cron.run" || !track) {
+    return undefined;
+  }
+  return async (run) => {
+    if (!state.open) {
+      throw new Error("Cron mutation completion has already settled.");
+    }
+    return await track(run);
   };
 }
 
@@ -53,7 +83,7 @@ export function captureCronMutationCommit(method: string): (() => undefined) | u
   };
 }
 
-/** Record the SQL commit before fallible coordinator cleanup, preserving existing hooks. */
+/** Record the SQL commit before fallible reporting, preserving existing hooks. */
 export function withCronMutationCommitHook(
   method: string,
   hooks?: CronStoreTransactionHooks,
@@ -64,9 +94,9 @@ export function withCronMutationCommitHook(
   }
   return {
     ...hooks,
-    afterWrite: (db) => {
+    afterWrite: (db, receiptSchema) => {
       deferSqlitePostCommitPublication(db, committed);
-      return hooks?.afterWrite?.(db);
+      return hooks?.afterWrite?.(db, receiptSchema);
     },
   };
 }

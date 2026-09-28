@@ -13,8 +13,15 @@ import {
 } from "./loader-runtime-core.js";
 import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  releasePluginCacheInstance,
+  retirePluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
@@ -127,7 +134,7 @@ async function acquireRegistryResources(
         .map((instance) => instance.dispose()),
     );
     for (const instance of instances) {
-      cache.instances.delete(instance);
+      releasePluginCacheInstance(instance, cache);
     }
     try {
       await retirePluginCache(cache);
@@ -144,6 +151,7 @@ async function acquireRegistryResources(
     }
   });
   try {
+    inheritPluginNativeAdmissions(getPluginCache(), cache);
     const registry = withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {

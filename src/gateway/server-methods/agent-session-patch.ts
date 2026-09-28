@@ -21,10 +21,12 @@ import {
 } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  mergeDeliveryContext,
+  normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
@@ -33,7 +35,7 @@ import {
   requestGroupMatchesTrusted,
   resolveTrustedGroupMetadata,
   type TrustedGroupMetadata,
-} from "./agent-task-tracking.js";
+} from "./agent-subagent-registration.js";
 
 export type AgentSessionPatchBuild = {
   patch: Partial<SessionEntry>;

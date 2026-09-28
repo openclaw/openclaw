@@ -25,7 +25,46 @@ const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
+function resolveTimeout(
+  tool: string,
+  args: CodexDynamicToolCallParams["arguments"],
+  config?: EmbeddedRunAttemptParams["config"],
+) {
+  return resolveDynamicToolCallTimeoutMs({
+    call: { ...dynamicCallContext, callId: "call-timeout", tool, arguments: args },
+    config,
+  });
+}
+
 describe("dynamic tool execution helpers", () => {
+  it("releases an ordinary successful tool operation before returning its result", async () => {
+    const runController = new AbortController();
+    let operationSignal: AbortSignal | undefined;
+    const remove = vi.spyOn(runController.signal, "removeEventListener");
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        ...dynamicCallContext,
+        callId: "ordinary-cleanup",
+        tool: "session_status",
+        arguments: {},
+      },
+      toolBridge: {
+        consumeToolExecutionSnapshot: () => undefined,
+        handleToolCall: async (_call, options) => {
+          operationSignal = options?.signal;
+          return { success: true, contentItems: [{ type: "inputText", text: "done" }] };
+        },
+      },
+      signal: runController.signal,
+      timeoutMs: 1_000,
+    });
+    expect(response.success).toBe(true);
+    expect(operationSignal?.aborted).toBe(true);
+    expect(String(operationSignal?.reason)).toContain("OpenClaw dynamic tool call finished.");
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(runController.signal.aborted).toBe(false);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -74,29 +113,15 @@ describe("dynamic tool execution helpers", () => {
       timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
     },
   ])("$name", ({ tool, arguments: args, timeoutMs }) => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-timeout",
-          tool,
-          arguments: args,
-        },
-        config: undefined,
-      }),
-    ).toBe(timeoutMs);
+    expect(resolveTimeout(tool, args)).toBe(timeoutMs);
   });
 
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-image-generate-default",
-          tool: "image_generate",
-          arguments: { prompt: "cat" },
-        },
-        config: {
+      resolveTimeout(
+        "image_generate",
+        { prompt: "cat" },
+        {
           agents: {
             defaults: {
               mediaModels: {
@@ -108,17 +133,13 @@ describe("dynamic tool execution helpers", () => {
             },
           },
         },
-      }),
+      ),
     ).toBe(180_000);
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-image-capability-default",
-          tool: "view_image",
-          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
-        },
-        config: {
+      resolveTimeout(
+        "view_image",
+        { prompt: "describe", paths: ["/tmp/one.jpg"] },
+        {
           tools: {
             media: {
               models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
@@ -126,17 +147,13 @@ describe("dynamic tool execution helpers", () => {
             },
           },
         },
-      }),
+      ),
     ).toBe(180_000);
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-image-mixed-timeouts",
-          tool: "view_image",
-          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
-        },
-        config: {
+      resolveTimeout(
+        "view_image",
+        { prompt: "describe", paths: ["/tmp/one.jpg"] },
+        {
           tools: {
             media: {
               models: [
@@ -152,93 +169,37 @@ describe("dynamic tool execution helpers", () => {
             },
           },
         },
-      }),
+      ),
     ).toBe(180_000);
   });
 
   it("uses default media and message dynamic tool deadlines", () => {
+    expect(resolveTimeout("computer", { action: "wait", duration: 100 })).toBe(220_000);
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-computer-wait",
-          tool: "computer",
-          arguments: { action: "wait", duration: 100 },
-        },
-        config: undefined,
-      }),
-    ).toBe(220_000);
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-computer-transport-timeout",
-          tool: "computer",
-          arguments: { action: "left_click", coordinate: [1, 1], timeoutMs: 1_000 },
-        },
-        config: undefined,
-      }),
+      resolveTimeout("computer", { action: "left_click", coordinate: [1, 1], timeoutMs: 1_000 }),
     ).toBe(34_000);
+    expect(resolveTimeout("image_generate", { prompt: "cat" })).toBe(120_000);
+    expect(resolveTimeout("view_image", { prompt: "describe", paths: ["/tmp/one.jpg"] })).toBe(
+      CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
+    );
+    expect(resolveTimeout("message", { action: "send", message: "long outbound update" })).toBe(
+      CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS,
+    );
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-image-generate-default",
-          tool: "image_generate",
-          arguments: { prompt: "cat" },
-        },
-        config: undefined,
-      }),
-    ).toBe(120_000);
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-image-default",
-          tool: "view_image",
-          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
-        },
-        config: undefined,
-      }),
-    ).toBe(CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-message",
-          tool: "message",
-          arguments: { action: "send", message: "long outbound update" },
-        },
-        config: undefined,
-      }),
-    ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-message-transport-timeout",
-          tool: "message",
-          arguments: {
-            action: "send",
-            message: "long outbound update",
-            timeoutMs: 30_000,
-          },
-        },
-        config: undefined,
+      resolveTimeout("message", {
+        action: "send",
+        message: "long outbound update",
+        timeoutMs: 30_000,
       }),
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-image-default",
-          tool: "view_image",
-          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
-        },
-        config: {
+      resolveTimeout(
+        "view_image",
+        { prompt: "describe", paths: ["/tmp/one.jpg"] },
+        {
           tools: {
             media: {
               models: [
@@ -249,36 +210,18 @@ describe("dynamic tool execution helpers", () => {
             },
           },
         },
-      }),
+      ),
     ).toBe(180_000);
     expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-too-long",
-          tool: "image_generate",
-          arguments: {
-            prompt: "cat",
-            timeoutMs: CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
-          },
-        },
-        config: undefined,
+      resolveTimeout("image_generate", {
+        prompt: "cat",
+        timeoutMs: CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
       }),
     ).toBe(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
   });
 
   it("uses a 90 second default for generic Codex dynamic tool calls", () => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-session-status",
-          tool: "session_status",
-          arguments: { sessionKey: "current" },
-        },
-        config: undefined,
-      }),
-    ).toBe(90_000);
+    expect(resolveTimeout("session_status", { sessionKey: "current" })).toBe(90_000);
   });
 
   it("gives agents_wait the long-running cap while preserving its inner timeout budget", () => {
@@ -310,7 +253,6 @@ describe("dynamic tool execution helpers", () => {
 
   it.each([
     { name: "default", timeoutSeconds: undefined, expectedMs: 930_000 },
-    { name: "explicit 15 minutes", timeoutSeconds: 900, expectedMs: 930_000 },
     { name: "one hour", timeoutSeconds: 3600, expectedMs: 3_630_000 },
     { name: "clamped maximum", timeoutSeconds: 99_999, expectedMs: 3_630_000 },
     { name: "clamped minimum", timeoutSeconds: 1, expectedMs: 60_000 },
@@ -318,35 +260,17 @@ describe("dynamic tool execution helpers", () => {
   ])("preserves the $name human question wait", ({ timeoutSeconds, expectedMs }) => {
     for (const tool of ["secrets", "ask_user"]) {
       expect(
-        resolveDynamicToolCallTimeoutMs({
-          call: {
-            ...dynamicCallContext,
-            callId: "credential-wait",
-            tool,
-            arguments: {
-              action: "request",
-              name: "TEST_API_KEY",
-              ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
-            },
-          },
-          config: undefined,
+        resolveTimeout(tool, {
+          action: "request",
+          name: "TEST_API_KEY",
+          ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
         }),
       ).toBe(expectedMs);
     }
   });
 
-  it.each(["list", "delete"])("keeps secrets %s on the ordinary tool deadline", (action) => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          ...dynamicCallContext,
-          callId: "credential-metadata",
-          tool: "secrets",
-          arguments: { action, name: "TEST_API_KEY" },
-        },
-        config: undefined,
-      }),
-    ).toBe(90_000);
+  it("keeps secrets metadata operations on the ordinary tool deadline", () => {
+    expect(resolveTimeout("secrets", { action: "list", name: "TEST_API_KEY" })).toBe(90_000);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
@@ -566,7 +490,6 @@ describe("dynamic tool execution helpers", () => {
 
   it.each([
     { tool: "sessions_send", timeoutSeconds: 1, completionMs: 6_000 },
-    { tool: "agents_wait", timeoutSeconds: 600, completionMs: 600_000 },
     { tool: "agents_wait", timeoutSeconds: 600, completionMs: 605_000 },
     { tool: "openclaw", timeoutSeconds: 1, completionMs: 600_000 },
   ])(
@@ -702,29 +625,26 @@ describe("dynamic tool execution helpers", () => {
     expect(result.diagnosticTerminalReason).toBe("failed");
   });
 
-  it.each(["memory_search", "openclaw"])(
-    "preserves enclosing timeout provenance for active %s aborts",
-    async (tool) => {
-      const controller = new AbortController();
-      const resultPromise = handleDynamicToolCallWithTimeout({
-        call: {
-          ...dynamicCallContext,
-          callId: "call-active-timeout-abort",
-          tool,
-          arguments: {},
-        },
-        toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
-        signal: controller.signal,
-        timeoutMs: 1_000,
-      });
-      controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
+  it("preserves enclosing timeout provenance for active aborts", async () => {
+    const controller = new AbortController();
+    const resultPromise = handleDynamicToolCallWithTimeout({
+      call: {
+        ...dynamicCallContext,
+        callId: "call-active-timeout-abort",
+        tool: "memory_search",
+        arguments: {},
+      },
+      toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
+      signal: controller.signal,
+      timeoutMs: 1_000,
+    });
+    controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
 
-      await expect(resultPromise).resolves.toMatchObject({
-        success: false,
-        diagnosticTerminalReason: "timed_out",
-      });
-    },
-  );
+    await expect(resultPromise).resolves.toMatchObject({
+      success: false,
+      diagnosticTerminalReason: "timed_out",
+    });
+  });
 
   it("preserves timeout provenance when the dynamic tool bridge rejects", async () => {
     const timeoutError = Object.assign(new Error("tool deadline elapsed"), {

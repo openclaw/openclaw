@@ -6,6 +6,7 @@ import {
   readChatInputReceipt,
 } from "../chat/history-message-identity.ts";
 import { formatUiError } from "../format-error.ts";
+import type { SessionCapability } from "./session-capability.ts";
 import { isUiGlobalSessionKey } from "./session-key.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -24,7 +25,7 @@ import {
 
 export type SessionPlacementDraftAdvanceResult =
   | { status: "started"; messageId: string }
-  | { status: "accepted" }
+  | { status: "accepted"; consumedByEventId?: string }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
   | { status: "cancelled"; cleanupError?: string; recoveryPersisted: boolean }
   | { status: "interrupted" }
@@ -34,6 +35,7 @@ type SessionPlacementRecoveryRetirement = "resolved" | "interrupted";
 
 export async function advanceSessionPlacementDraft(params: {
   client: Pick<GatewayBrowserClient, "request">;
+  describe: SessionCapability["describe"];
   recovery: SessionPlacementRecovery;
   persistRecovery?: boolean;
   cleanupOnCancellation: () => boolean;
@@ -54,6 +56,14 @@ export async function advanceSessionPlacementDraft(params: {
   // Dispatch and send require both fences. After accepted delivery, inspect
   // them separately so lifecycle interruption is not reported as takeover.
   const isCurrentOwner = () => params.isLifecycleCurrent() && params.ownsRecovery();
+  const deleteDraft = async (recovered = recovering) => {
+    const cleanup = recovered ? deleteRecoveredSessionPlacementDraft : deleteSessionPlacementDraft;
+    const error = await cleanup(params, recovery.sessionKey, recovery.agentId);
+    if (!error) {
+      params.clearRecovery("resolved");
+    }
+    return error;
+  };
   if (
     recovery.phase === "sending" ||
     (recovery.phase === "paused" && recovery.reason === "unconfirmed")
@@ -83,8 +93,14 @@ export async function advanceSessionPlacementDraft(params: {
     const inputReceipt = readChatInputReceipt(history, input);
     if (inputReceipt || findChatSubmissionMessage(history.messages, recovery.messageId, true)) {
       params.clearRecovery("resolved");
+      const receipt = history.inputReceipts?.find((item) => item.runId === recovery.messageId);
       return inputReceipt
-        ? { status: "accepted" }
+        ? {
+            status: "accepted",
+            ...(receipt?.state === "consumed"
+              ? { consumedByEventId: receipt.consumedByEventId }
+              : {}),
+          }
         : { status: "started", messageId: recovery.messageId };
     }
     return pause(
@@ -112,16 +128,7 @@ export async function advanceSessionPlacementDraft(params: {
         ? existingRecovery?.messageId === recovery.messageId
         : writeSessionPlacementRecoveryIfAvailable(recovery)
       : false;
-    const cleanupError = recovering
-      ? await deleteRecoveredSessionPlacementDraft(
-          params.client,
-          recovery.sessionKey,
-          recovery.agentId,
-        )
-      : await deleteSessionPlacementDraft(params.client, recovery.sessionKey, recovery.agentId);
-    if (!cleanupError) {
-      params.clearRecovery("resolved");
-    }
+    const cleanupError = await deleteDraft();
     return {
       status: "cancelled",
       cleanupError,
@@ -144,21 +151,12 @@ export async function advanceSessionPlacementDraft(params: {
         recoveryPersisted: false,
       };
     }
-    const cleanupError = recovering
-      ? await deleteRecoveredSessionPlacementDraft(
-          params.client,
-          recovery.sessionKey,
-          recovery.agentId,
-        )
-      : await deleteSessionPlacementDraft(params.client, recovery.sessionKey, recovery.agentId);
-    if (!cleanupError) {
-      params.clearRecovery("resolved");
-    }
+    const cleanupError = await deleteDraft();
     return { status: "cancelled", cleanupError, recoveryPersisted };
   }
 
   const placementStart = await startSessionPlacementInitialTurn(
-    params.client,
+    params,
     {
       key: recovery.sessionKey,
       agentId: recovery.agentId,
@@ -200,14 +198,7 @@ export async function advanceSessionPlacementDraft(params: {
     return placementStart;
   }
   if (placementStart.status === "cancelled") {
-    const cleanupError = await deleteSessionPlacementDraft(
-      params.client,
-      recovery.sessionKey,
-      recovery.agentId,
-    );
-    if (!cleanupError) {
-      params.clearRecovery("resolved");
-    }
+    const cleanupError = await deleteDraft(false);
     return { status: "cancelled", cleanupError, recoveryPersisted: persistRecovery };
   }
   if (placementStart.status === "cleanup-rejected") {

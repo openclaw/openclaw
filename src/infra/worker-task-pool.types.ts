@@ -7,10 +7,12 @@ import type { WorkerNativeSectionState } from "./worker-task-native-sections.js"
 export type WorkerTaskPoolOptions<Output> = {
   workerUrl: URL;
   workerOptions?: Omit<WorkerOptions, "eval">;
-  /** Shallow per-Worker overrides; returned scratch stays owned until Worker exit. */
+  /** Shallow per-Worker overrides; resources stay owned until confirmed Worker exit. */
   prepareWorker?: () => {
     options: Omit<WorkerOptions, "eval">;
     temporaryDirectory?: string;
+    /** Runs after temporary-directory cleanup; terminal close joins completion. */
+    releaseResources?: () => Promise<void>;
   };
   maxWorkers?: number;
   /** Share CPU admission with other stateless compute pools in this isolate. */
@@ -35,7 +37,7 @@ export type WorkerTaskResponse = {
   onConsumed?: () => void;
 };
 
-export type WorkerTaskRequestContext = {
+type WorkerTaskRequestContext = {
   /** Task lifetime: closes on completion/checkpoint as well as cancellation. */
   signal: AbortSignal;
   /** Queue pressure requests a checkpoint; it does not cancel underlying host work. */
@@ -43,6 +45,11 @@ export type WorkerTaskRequestContext = {
 };
 
 export type WorkerTaskInput<Input> = Input | (() => Input | Promise<Input>);
+
+type WorkerTaskExecutionSettlement = {
+  /** True only after this task's worker termination has been joined. */
+  retired: boolean;
+};
 
 export type WorkerTaskOptions<Input> = {
   /** Known retained input bytes, including inputs captured by a factory. No serialization pass. */
@@ -53,6 +60,22 @@ export type WorkerTaskOptions<Input> = {
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
   onInputConsumed?: () => void;
+  /** Native task receipt before its result; async input preparation and host effects are not joined. */
+  onExecutionSettled?: (settlement: WorkerTaskExecutionSettlement) => void;
+};
+
+/** Internal custody: a result alone does not release its slot or notify execution settlement. */
+export type OwnedWorkerTask<Output> = {
+  result: Promise<Output>;
+  /** Joins cleanup and its execution receipt; failure can also begin cleanup automatically. */
+  close(options?: { retire?: true }): Promise<void>;
+};
+
+type TaskOwner = {
+  closed: boolean;
+  retire: boolean;
+  closing?: Promise<void>;
+  complete?: () => void;
 };
 
 type WorkerHostExchange = {
@@ -68,6 +91,7 @@ export type Task<Input, Output> = Deferred<Output> & {
   controller: AbortController;
   exchange?: WorkerHostExchange;
   inputConsumed: boolean;
+  executionNotified: boolean;
   exchangeSequence: number;
   input?: WorkerTaskInput<Input>;
   options: WorkerTaskOptions<Input>;
@@ -76,7 +100,9 @@ export type Task<Input, Output> = Deferred<Output> & {
   done: boolean;
   slot?: Slot<Input, Output>;
   admitted: boolean;
-  preparing: boolean;
+  /** Present only while the input factory is pending. */
+  preparation?: Deferred;
+  owner?: TaskOwner;
   inputBytes: number;
   computePermit?: WorkerComputePermit;
   enqueuedAt: number;
@@ -87,10 +113,23 @@ export type Task<Input, Output> = Deferred<Output> & {
 export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;
   worker?: Worker;
-  temporaryDirectory?: string;
+  releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;
   idleTimer?: NodeJS.Timeout;
   retiring?: Promise<void>;
+  /** The retirement owner has joined this exact slot's native termination barrier. */
+  retired?: true;
   retirementFailed?: boolean;
   completions?: Array<() => void>;
+};
+
+export type WorkerTaskPoolDispatch = {
+  close(error: Error): Promise<void>;
+  getSnapshot(): {
+    maxWorkers: number;
+    workers: number;
+    workersCreated: number;
+    activeTasks: number;
+    pendingTasks: number;
+  };
 };

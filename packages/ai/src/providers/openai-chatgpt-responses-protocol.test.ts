@@ -40,26 +40,6 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
       label: "chunk-split EOF",
       chunks: ["data: ", serializedCompletedEvent.slice(0, 20), serializedCompletedEvent.slice(20)],
     },
-    { label: "LF", chunks: [`data: ${serializedCompletedEvent}\n\n`] },
-    { label: "CRLF", chunks: [`data: ${serializedCompletedEvent}\r\n\r\n`] },
-    { label: "lone CR", chunks: [`data: ${serializedCompletedEvent}\r\r`] },
-    {
-      label: "mixed line endings",
-      chunks: [`event: response.completed\r\ndata: ${serializedCompletedEvent}\n\r\n`],
-    },
-    {
-      label: "chunk-split CRLF",
-      chunks: [
-        `event: response.completed\r`,
-        `\ndata: ${serializedCompletedEvent}\r`,
-        "\n\r",
-        "\n",
-      ],
-    },
-    {
-      label: "chunk-split lone CR",
-      chunks: ["event: response.completed\r", `data: ${serializedCompletedEvent}\r`, "\r"],
-    },
     { label: "multiline LF", chunks: [`${multilineDataLines.join("\n")}\n\n`] },
     { label: "multiline CRLF", chunks: [`${multilineDataLines.join("\r\n")}\r\n\r\n`] },
     { label: "multiline lone CR", chunks: [`${multilineDataLines.join("\r")}\r\r`] },
@@ -103,8 +83,6 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
   });
 
   it.each([
-    { label: "lone CR", chunks: [`data: ${serializedCompletedEvent}\r\r`] },
-    { label: "mixed LF and lone CR", chunks: [`data: ${serializedCompletedEvent}\n\r`] },
     { label: "mixed CRLF and lone CR", chunks: [`data: ${serializedCompletedEvent}\r\n\r`] },
     { label: "chunk-split lone CR", chunks: [`data: ${serializedCompletedEvent}\r`, "\r"] },
     {

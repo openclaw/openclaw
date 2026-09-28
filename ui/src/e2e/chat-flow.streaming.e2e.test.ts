@@ -121,7 +121,7 @@ suite.define(() => {
         }
       };
       await reveal();
-      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
+      expect(await activeGroup.locator(".chat-group-footer > *").count()).toBe(0);
       await page.mouse.move(0, 0);
       await expect
         .poll(() => footerPresentation(earlierAssistant))
@@ -164,7 +164,7 @@ suite.define(() => {
       } else {
         await reveal();
       }
-      expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
+      expect(await activeGroup.locator(".chat-group-footer > *").count()).toBe(0);
 
       await gateway.emitChatFinal({
         runId,
@@ -525,7 +525,9 @@ suite.define(() => {
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(errorText);
         expect(await details.getAttribute("open")).not.toBeNull();
-        expect(await alert.getByRole("button").count()).toBe(1);
+        expect(await alert.getByRole("button", { name: /^(Copy error|Copied!)$/u }).count()).toBe(
+          1,
+        );
         await summary.press("Space");
         await alert.locator("pre").waitFor({ state: "hidden" });
         if (label === "mobile") {
@@ -836,13 +838,16 @@ suite.define(() => {
     }
   });
 
-  it("keeps one live assistant message growing through tool activity", async () => {
+  it("keeps chat-only assistant text exact through tool activity and finalization", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+
+      const connect = await gateway.waitForRequest("connect");
+      expect(requireRecord(connect.params).caps).toContain("chat-only-assistant-text");
 
       const prompt = "stream before tool";
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
@@ -886,11 +891,6 @@ suite.define(() => {
       const nextStream = "\n\n```ts\nconst answer = 42;";
       await gateway.emitGatewayEvent("chat", {
         deltaText: nextStream,
-        message: {
-          content: [{ text: initialStream + nextStream, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
         runId,
         sessionKey: "main",
         state: "delta",
@@ -901,10 +901,81 @@ suite.define(() => {
 
       const stream = transcript.locator(".chat-bubble.streaming");
       expect(await stream.count()).toBe(1);
-      expect(await stream.textContent()).toContain("I will inspect the file.");
-      expect(await stream.textContent()).toContain("const answer = 42;");
+      expect((await stream.locator(".chat-text p").textContent())?.trim()).toBe(
+        initialStream.trim(),
+      );
+      expect((await stream.locator("code.language-ts").textContent())?.trim()).toBe(
+        "const answer = 42;",
+      );
       expect(await toolBubble.count()).toBe(1);
       expect(await transcript.getByText("I will inspect the file.").count()).toBe(1);
+
+      await gateway.emitChatFinal({
+        runId,
+        text: `${initialStream}${nextStream}\n\`\`\`\n\nDone.`,
+      });
+      const finalReply = transcript.locator(".chat-bubble", {
+        has: page.locator("code.language-ts"),
+      });
+      await finalReply.getByText("Done.", { exact: true }).waitFor();
+      expect(await stream.count()).toBe(0);
+      expect(await finalReply.count()).toBe(1);
+      expect(
+        (await finalReply.locator(".chat-text p").allTextContents()).map((text) => text.trim()),
+      ).toEqual([initialStream.trim(), "Done."]);
+      expect((await finalReply.locator("code.language-ts").textContent())?.trim()).toBe(
+        "const answer = 42;",
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("preserves normalized content across cumulative browser updates", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill("prove prefix reuse");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const chunks = ["## reuse-proof\r\n", "second-line\u2028", "third-line\r", "\nfourth-line"];
+      let cumulative = "";
+      for (const chunk of chunks) {
+        cumulative += chunk;
+        await gateway.emitGatewayEvent("chat", {
+          deltaText: chunk,
+          message: {
+            content: [{ text: cumulative, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        const expectedTail = chunk
+          .replace(/\r\n?|[\u2028\u2029]/g, "\n")
+          .trim()
+          .replace(/^## /, "");
+        await expect
+          .poll(() => page.locator(".chat-bubble.streaming").textContent())
+          .toContain(expectedTail);
+      }
+
+      const stream = page.locator(".chat-bubble.streaming");
+      await expect.poll(() => stream.textContent()).toContain("fourth-line");
+      await expect.poll(() => stream.locator("h2").textContent()).toBe("reuse-proof");
+      console.info(
+        "stream-normalization-browser-proof",
+        JSON.stringify({ cumulativeLength: cumulative.length, updates: chunks.length }),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

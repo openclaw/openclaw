@@ -14,7 +14,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  readClosedTranscriptTurn,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -23,6 +22,7 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -396,7 +396,7 @@ describe("host-owned current admission annotation", () => {
             .all(f.target.sessionId);
         const searchBefore = searchRows();
         const projectionWork = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-          sql.includes("session_transcript_fts")
+          /\bsession_transcript_fts\b/i.test(sql)
             ? "fts"
             : sql.includes("octet_length")
               ? "size"
@@ -419,7 +419,7 @@ describe("host-owned current admission annotation", () => {
           before.slice(0, -1),
         );
         expect(
-          readClosedTranscriptTurn({
+          readClosedTranscriptTurnInDatabase(db, {
             boundary: { admission: original, terminal: refreshed },
             maxEvents: 20,
             maxBytes: 10000,
@@ -689,7 +689,7 @@ describe("host-owned current admission annotation", () => {
         sessionId: f.target.sessionId,
         ownerEpoch: 7,
       });
-      let placement = placements.startDispatch(f.target);
+      let placement = await placements.startDispatch(f.target);
       placement = placements.transition({
         sessionId: f.target.sessionId,
         from: "requested",
@@ -721,7 +721,7 @@ describe("host-owned current admission annotation", () => {
         expectedGeneration: placement.generation,
         patch: { activeOwnerEpoch: 7 },
       });
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...f.target,
         runId: f.attempt.runId,
         claimId: "current-claim",
@@ -759,7 +759,7 @@ describe("host-owned current admission annotation", () => {
           "worker annotation",
         )(nativeAnnotation()),
       ).rejects.toThrow("claim");
-      placements.releaseTurn(claim);
+      await placements.releaseTurn(claim);
       release.resolve();
       await locked;
       try {
@@ -855,7 +855,7 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it.each(["unpersisted", "suppressed", "internal", "copied"] as const)(
+  it.each(["unpersisted", "suppressed", "excluded", "copied"] as const)(
     "does not issue current-row authority for %s recorders",
     async (kind) => {
       await withAdmission(
@@ -881,7 +881,10 @@ describe("host-owned current admission annotation", () => {
         {
           persist: kind !== "unpersisted",
           suppress: kind === "suppressed",
-          input: kind === "internal" ? { display: false, text: "prompt" } : undefined,
+          input:
+            kind === "excluded"
+              ? { display: false, excludeFromContext: true, text: "prompt" }
+              : undefined,
         },
       );
     },

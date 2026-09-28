@@ -81,6 +81,18 @@ console.log(frame.id, frame.method);
 the validator for the selected method's `params`; the root entry point exports those
 validators as `validate*Params` functions.
 
+External lifecycle controllers can validate suspension responses with
+`validateGatewaySuspendPrepareResult` and `validateGatewaySuspendStatusResult`.
+These use the canonical result schemas without changing the payload. Preserve
+optional `writeCustody`: absence means unknown custody, not an empty list. Phase
+names are open strings; consumers must not discard an unfamiliar owner phase.
+Validation does not authorize a stop or replace lease, process-identity, and
+readiness checks owned by the controller.
+
+Leave `includeLifecycle` unset when using older published status validators.
+Request `includeLifecycle: true` only with a validator that supports `ownerId`
+and `phase`.
+
 ## Guard an event without TypeBox
 
 Use the lightweight guards when code only needs safe frame discrimination. They

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -14,6 +14,7 @@ import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { recordPluginError } from "./loader-records.js";
 import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
@@ -112,12 +113,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
       : undefined;
   if (runtimeEntry && runtimeEntry.source !== params.safeSource) {
     const { source: runtimeModuleSource, rootDir: runtimeModuleRoot } = runtimeEntry;
-    const runtimeOpened = openRootFileSync({
-      absolutePath: runtimeModuleSource,
+    const runtimeOpened = openPluginRootFileSync({
+      filePath: runtimeModuleSource,
       rootPath: runtimeModuleRoot,
-      boundaryLabel: "plugin root",
       rejectHardlinks: params.rejectHardlinks,
-      skipLexicalRootCheck: true,
     });
     if (!runtimeOpened.ok) {
       params.pushPluginLoadError(

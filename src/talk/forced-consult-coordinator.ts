@@ -89,7 +89,6 @@ export type RealtimeVoiceForcedConsultCoordinator<TContext = unknown> = {
 
 type StoredForcedConsult<TContext> = {
   handle: RealtimeVoiceForcedConsultHandle<TContext>;
-  createdAt: number;
   nativeCallIds: Set<string>;
   questions: string[];
   pending: boolean;
@@ -168,14 +167,13 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     if (!question) {
       return undefined;
     }
-    const stored = [...state.values()]
+    return [...state.values()]
       .toReversed()
       .find((candidate) =>
         candidate.questions.some((candidateQuestion) =>
           questionsMatch(candidateQuestion, question),
         ),
       );
-    return stored;
   };
 
   const rememberStoredQuestion = (
@@ -236,7 +234,6 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       };
       state.set(handle.id, {
         handle,
-        createdAt: now(),
         nativeCallIds: new Set(),
         questions: [trimmed],
         pending: true,
@@ -333,10 +330,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
         stored.nativeCallIds.add(nativeCallId);
       }
       rememberStoredQuestion(stored, question);
-      if (stored.cancelled) {
-        return { kind: "already_delivered", question, handle: stored.handle };
-      }
-      if (stored.delivered) {
+      if (stored.cancelled || stored.delivered) {
         return { kind: "already_delivered", question, handle: stored.handle };
       }
       if (stored.started) {

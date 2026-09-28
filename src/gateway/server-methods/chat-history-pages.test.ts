@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
 import { enrichChatHistoryCompactionMarkers } from "./chat-history-page-kernel.js";
 
 describe("enrichChatHistoryCompactionMarkers", () => {
-  it("joins checkpoint token metrics to the matching transcript marker", () => {
+  it("joins retained legacy token metrics to the matching transcript marker", () => {
     const marker = {
       role: "system",
       __openclaw: { kind: "compaction", id: "compact-entry-1", seq: 4 },
     };
     const entry = {
+      sessionId: "session-1",
+      updatedAt: 1_000,
       compactionCheckpoints: [
         {
           checkpointId: "checkpoint-1",
@@ -22,7 +23,7 @@ describe("enrichChatHistoryCompactionMarkers", () => {
           postCompaction: { sessionId: "session-1", entryId: "compact-entry-1" },
         },
       ],
-    } as SessionEntry;
+    };
 
     const result = enrichChatHistoryCompactionMarkers([marker], entry);
 
@@ -37,7 +38,7 @@ describe("enrichChatHistoryCompactionMarkers", () => {
     expect(marker["__openclaw"]).not.toHaveProperty("tokensBefore");
   });
 
-  it("preserves message identity without a matching checkpoint", () => {
+  it("preserves message identity without legacy token metrics", () => {
     const marker = {
       role: "system",
       __openclaw: { kind: "compaction", id: "compact-entry-1" },
@@ -46,5 +47,16 @@ describe("enrichChatHistoryCompactionMarkers", () => {
     const result = enrichChatHistoryCompactionMarkers([marker], undefined);
 
     expect(result[0]).toBe(marker);
+  });
+
+  it("keeps readable history when legacy checkpoint metadata is malformed", () => {
+    const marker = {
+      role: "system",
+      __openclaw: { kind: "compaction", id: "compact-entry-1" },
+    };
+    const entry = { sessionId: "session-1", updatedAt: 1_000, compactionCheckpoints: [{}] };
+    const messages = [marker];
+
+    expect(enrichChatHistoryCompactionMarkers(messages, entry)).toBe(messages);
   });
 });

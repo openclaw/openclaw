@@ -1,25 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import { writePackageRoot } from "./package-update-steps.test-support.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import { detectGlobalInstallManagerForRoot, resolveGlobalInstallTarget } from "./update-global.js";
-
-async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
-  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await Promise.all([
-    fs.writeFile(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-      "utf8",
-    ),
-    fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8"),
-  ]);
-  await writePackageDistInventory(packageRoot);
-}
 
 describe("custom Bun global installation ownership", () => {
   it("preserves ownership when the original BUN_INSTALL is unavailable", async () => {
@@ -81,14 +68,36 @@ describe("custom Bun global installation ownership", () => {
             BUN_INSTALL_BIN: owningBin,
           };
           const originalCallerEnv = { ...callerEnv };
-          const runStep = vi.fn(async ({ name, argv, cwd, env }) => {
-            expect(argv).toEqual(["bun", "add", "-g", "--trust", "openclaw@2.0.0"]);
+          const runCommand = vi.fn<CommandRunner>(async (argv, { env }) => {
+            expect(argv).toEqual(["bun", "pm", "bin", "-g"]);
             expect(env).toMatchObject({
               BUN_INSTALL: bunInstall,
               BUN_INSTALL_GLOBAL_DIR: globalProject,
               BUN_INSTALL_BIN: owningBin,
             });
-            await writePackageRoot(packageRoot, "2.0.0");
+            return { code: 0, stdout: `${owningBin}\n`, stderr: "" };
+          });
+          const runStep = vi.fn(async ({ name, argv, cwd, env }) => {
+            expect(argv).toEqual(["bun", "add", "-g", "--trust", "openclaw@2.0.0"]);
+            const stageProject = env?.BUN_INSTALL_GLOBAL_DIR;
+            const stageBin = env?.BUN_INSTALL_BIN;
+            if (!stageProject || !stageBin) {
+              throw new Error("Bun staging destinations missing");
+            }
+            expect(env?.BUN_INSTALL).toBe(bunInstall);
+            expect(path.dirname(stageProject)).toBe(path.dirname(globalProject));
+            expect(stageProject).not.toBe(globalProject);
+            expect(stageBin).not.toBe(owningBin);
+            expect(cwd).toBe(stageProject);
+            await expect(
+              fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+            ).resolves.toContain('"version":"1.0.0"');
+            const stagedPackageRoot = path.join(stageProject, "node_modules", "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
+            await fs.symlink(
+              path.relative(stageBin, path.join(stagedPackageRoot, "dist", "index.js")),
+              path.join(stageBin, "openclaw"),
+            );
             return { name, command: argv.join(" "), cwd: cwd ?? base, durationMs: 1, exitCode: 0 };
           });
 
@@ -97,15 +106,29 @@ describe("custom Bun global installation ownership", () => {
             installSpec: "openclaw@2.0.0",
             packageName: "openclaw",
             packageRoot,
-            runCommand: vi.fn<CommandRunner>(),
+            runCommand,
             runStep,
             timeoutMs: 1000,
             ...(supplyEnv ? { env: callerEnv } : {}),
           });
 
-          expect(result.failedStep).toBeNull();
-          expect(result.afterVersion).toBe("2.0.0");
-          expect(runStep).toHaveBeenCalledOnce();
+          expect(runCommand).toHaveBeenCalledOnce();
+          if (process.platform === "win32") {
+            expect(result.failedStep?.stderrTail).toContain("Bun Windows binary launchers");
+            expect(runStep).not.toHaveBeenCalled();
+          } else {
+            expect(result.failedStep).toBeNull();
+            expect(result.afterVersion).toBe("2.0.0");
+            expect(runStep).toHaveBeenCalledOnce();
+            await expect(fs.realpath(path.join(owningBin, "openclaw"))).resolves.toBe(
+              await fs.realpath(path.join(packageRoot, "dist", "index.js")),
+            );
+          }
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain(`"version":"${process.platform === "win32" ? "1.0.0" : "2.0.0"}"`);
+          await expect(fs.stat(conflictingInstall)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.stat(conflictingGlobalProject)).rejects.toMatchObject({ code: "ENOENT" });
           expect(callerEnv).toEqual(originalCallerEnv);
           expect(process.env.BUN_INSTALL).toBe(conflictingInstall);
           expect(process.env.BUN_INSTALL_GLOBAL_DIR).toBe(conflictingGlobalProject);

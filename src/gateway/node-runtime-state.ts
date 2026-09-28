@@ -167,17 +167,13 @@ export function removePendingNodeAction(params: {
   });
 }
 
-function clearPendingNodeActions(nodeId: string): void {
-  pendingNodeActionsById.delete(nodeId);
-}
-
 export function clearRemovedNodeRuntimeState(params: {
   nodeId: string;
   context: {
     nodeRegistry: Pick<NodeRegistry, "updateSurface">;
   };
 }) {
-  clearPendingNodeActions(params.nodeId);
+  pendingNodeActionsById.delete(params.nodeId);
   clearNodePendingWork(params.nodeId);
   invalidateNodeWakeState(params.nodeId);
   params.context.nodeRegistry.updateSurface(params.nodeId, {

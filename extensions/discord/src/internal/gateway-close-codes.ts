@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway close codes behavior.
 import { GatewayCloseCodes } from "discord-api-types/v10";
 
 const fatalGatewayCloseCodes = new Set<GatewayCloseCodes>([

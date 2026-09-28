@@ -165,7 +165,12 @@ server.listen(port, "127.0.0.1", () => {
       });
       expect(observed.pid).not.toBe(child.pid);
       expect(readWindowsProcessArgsSync(observed.pid)).toEqual(observed.argv);
-      const installed = await readScheduledTaskCommand(env, { requireEffective: true });
+      if (!normalized) {
+        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+          "Effective Scheduled Task service command could not be inspected.",
+        );
+      }
+      const installed = await readScheduledTaskCommand(env, { requireEffective: normalized });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
       if (normalized) {

@@ -1,9 +1,11 @@
 /** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
+import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   compareCliGatewayStateDirs,
   GATEWAY_SERVICE_PATHS_UNVERIFIED,
@@ -12,6 +14,9 @@ import {
 } from "../cli/state-dir-gateway-check.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+import { hasActiveGatewayExecCredential } from "../flows/doctor-gateway-exec-credential.js";
+import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
 import {
   buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails,
@@ -27,10 +32,13 @@ import type {
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
+import { readGatewayLastInstallationReplacement } from "../infra/gateway-boot-lifecycle.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
 import { projectDoctorSecretRuntimeDegradations } from "./doctor-secret-runtime-degradation.js";
+import { isServiceRepairExternallyManaged } from "./doctor-service-repair-policy.js";
+import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -43,6 +51,136 @@ import {
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
+
+function formatGatewayHealthDiagnostic(value: unknown): string {
+  const raw = value instanceof Error ? value.message : String(value);
+  return scrubDoctorErrorMessage(sanitizeTerminalText(redactSensitiveUrlLikeString(raw)));
+}
+
+function readLocalInstallationReplacement(
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): string | undefined {
+  const replacement =
+    cfg.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement(env);
+  return replacement
+    ? `Previous installation replacement (${new Date(replacement.completedAtMs).toISOString()}): ${formatGatewayHealthDiagnostic(replacement.reason)}`
+    : undefined;
+}
+
+export async function collectGatewayHealthFindings(
+  ctx: Pick<HealthCheckContext, "cfg" | "configPath" | "env" | "allowExecSecretRefs">,
+): Promise<readonly HealthFinding[]> {
+  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  const gatewayPath = mode === "remote" ? "gateway.remote.url" : "gateway.mode";
+  const replacement = readLocalInstallationReplacement(ctx.cfg, ctx.env);
+  const historyFindings: HealthFinding[] = replacement
+    ? [
+        {
+          checkId: "core/doctor/gateway-health",
+          severity: "info",
+          message: replacement,
+          path: "gateway.mode",
+        },
+      ]
+    : [];
+  let probeDetails: Awaited<ReturnType<typeof buildGatewayProbeConnectionDetails>> | undefined;
+  const warning = (message: string, fixHint: string): HealthFinding => ({
+    checkId: "core/doctor/gateway-health",
+    severity: "warning",
+    message,
+    path: probeDetails || mode === "remote" ? gatewayPath : "gateway",
+    ...(probeDetails ? { target: formatGatewayHealthDiagnostic(probeDetails.url) } : {}),
+    fixHint,
+  });
+  try {
+    probeDetails = await buildGatewayProbeConnectionDetails({
+      config: ctx.cfg,
+      configPath: ctx.configPath,
+    });
+    if (
+      ctx.allowExecSecretRefs !== true &&
+      (await hasActiveGatewayExecCredential({
+        cfg: ctx.cfg,
+        env: ctx.env,
+        targetUrl: probeDetails.url,
+      }))
+    ) {
+      return [
+        ...historyFindings,
+        warning(
+          "Authenticated Gateway health inspection was intentionally skipped because an active credential uses an exec SecretRef.",
+          "Rerun `openclaw doctor --lint --only core/doctor/gateway-health --allow-exec` to permit configured secret execution.",
+        ),
+      ];
+    }
+    const status = await callGateway<StatusSummary>({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      sharedStateMode: "read-only",
+      config: ctx.cfg,
+      configPath: ctx.configPath,
+      tlsFingerprint: probeDetails.tlsFingerprint,
+      preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
+    });
+    const findings: HealthFinding[] = projectDoctorSecretRuntimeDegradations(status).map(
+      (owner) => ({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: `Secret runtime degradation: ${owner.message}`,
+        path: owner.path,
+        target: owner.target,
+        fixHint: `Retry: ${owner.retryHint}`,
+      }),
+    );
+    const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
+    if (sqliteWalWarning) {
+      findings.push(
+        warning(`SQLite WAL: ${sqliteWalWarning}`, "Inspect openclaw status --deep output."),
+      );
+    }
+    if (status.installationReplacementWarning) {
+      findings.push(
+        warning(
+          formatGatewayHealthDiagnostic(status.installationReplacementWarning),
+          "Wait for the service manager to restart the Gateway; for a foreground Gateway, run `openclaw gateway run` again after it exits.",
+        ),
+      );
+    }
+    return [...historyFindings, ...findings];
+  } catch (error) {
+    if (!probeDetails) {
+      return [
+        ...historyFindings,
+        warning(
+          `Gateway health inspection could not be prepared: ${formatGatewayHealthDiagnostic(error)}`,
+          "Fix Gateway connection configuration, then rerun `openclaw doctor --lint --only core/doctor/gateway-health`.",
+        ),
+      ];
+    }
+    const diagnostic = gatewayConnectErrorWasRateLimited(error)
+      ? {
+          message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+          fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
+        }
+      : isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error)
+        ? {
+            message:
+              "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+            fixHint:
+              "Configure the Gateway token/password or pair this device, then rerun the selected health check.",
+          }
+        : {
+            message: `Gateway status could not be inspected: ${formatGatewayHealthDiagnostic(error)}`,
+            fixHint:
+              mode === "remote"
+                ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
+                : "Inspect the service with `openclaw gateway status --deep`, or run `openclaw doctor` for guided checks.",
+          };
+    return [...historyFindings, warning(diagnostic.message, diagnostic.fixHint)];
+  }
+}
 
 type GatewayMemoryProbe = {
   checked: boolean;
@@ -120,7 +258,7 @@ function noteGatewayStateDirectory(
 async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs: number) {
   // A remote Gateway can use a loopback tunnel or have no configured URL.
   // Neither case makes the local installed service authoritative.
-  if (cfg.gateway?.mode === "remote") {
+  if (cfg.gateway?.mode === "remote" || isServiceRepairExternallyManaged()) {
     return;
   }
   try {
@@ -149,19 +287,36 @@ export async function checkGatewayHealth(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
+  const replacement = readLocalInstallationReplacement(params.cfg);
+  if (replacement) {
+    note(replacement, "Previous Gateway installation replacement");
+  }
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
+    typeof params.timeoutMs === "number" && params.timeoutMs > 0
+      ? params.timeoutMs
+      : DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
   let healthOk = false;
   let status: StatusSummary | undefined;
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
   try {
+    const remainingMs = await waitForGatewayDiagnostic(
+      {
+        config: params.cfg,
+        timeoutMs,
+        serviceMode: isServiceRepairExternallyManaged() ? "external" : "native",
+      },
+      params.runtime,
+    );
+    if (remainingMs === undefined) {
+      return { healthOk: true, authenticated: false };
+    }
     const statusStartedAt = performance.now();
     status = await callGateway<StatusSummary>({
       method: "status",
       params: { includeChannelSummary: false },
-      timeoutMs,
+      timeoutMs: remainingMs,
       config: params.cfg,
       onHelloOk: ({ snapshot }: GatewayHello) => {
         gatewaySnapshot = snapshot;
@@ -186,6 +341,9 @@ export async function checkGatewayHealth(params: {
     }
     if (status.startupRecoveryWarning) {
       note(sanitizeTerminalText(status.startupRecoveryWarning), "Startup session recovery");
+    }
+    if (status.installationReplacementWarning) {
+      note(sanitizeTerminalText(status.installationReplacementWarning), "Installation replaced");
     }
     const secretDegradations = projectDoctorSecretRuntimeDegradations(status);
     if (secretDegradations.length > 0) {
@@ -325,13 +483,7 @@ export async function probeGatewayMemoryStatus(params: {
       timeoutMs,
       config: params.cfg,
     });
-    // Propagate the gateway's checked flag. When the gateway skips the embedding
-    // probe (probe: false path), it returns checked: false to signal that no
-    // readiness determination was made. Mapping that to checked: true here would
-    // cause the renderer to treat a skipped probe as a checked-but-not-ready
-    // failure and emit a false-positive warning for key-optional providers.
-    // We also carry skipped: true so renderers can distinguish an intentional
-    // non-deep skip from a transport timeout (which also returns checked: false).
+    // An intentional shallow skip must not look like an embedding-readiness failure.
     const gatewayChecked = payload.embedding.checked !== false;
     return {
       checked: gatewayChecked,
@@ -342,18 +494,11 @@ export async function probeGatewayMemoryStatus(params: {
     };
   } catch (err) {
     const message = formatErrorMessage(err);
-    if (isGatewayCallTimeout(message)) {
-      return {
-        checked: false,
-        ready: false,
-        error: `gateway memory probe timed out: ${message}`,
-        skipped: false,
-      };
-    }
+    const timedOut = isGatewayCallTimeout(message);
     return {
-      checked: true,
+      checked: !timedOut,
       ready: false,
-      error: `gateway memory probe unavailable: ${message}`,
+      error: `gateway memory probe ${timedOut ? "timed out" : "unavailable"}: ${message}`,
       skipped: false,
     };
   }

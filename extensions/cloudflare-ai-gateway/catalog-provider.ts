@@ -1,7 +1,3 @@
-/**
- * Builds runtime model catalog entries from stored Cloudflare AI Gateway auth
- * profiles.
- */
 import {
   coerceSecretRef,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -37,19 +33,6 @@ function resolveCloudflareAiGatewayApiKey(cred: CloudflareAiGatewayCredential): 
   return normalizeOptionalString(cred.key);
 }
 
-function resolveCloudflareAiGatewayMetadata(cred: CloudflareAiGatewayCredential): {
-  accountId?: string;
-  gatewayId?: string;
-} {
-  if (!cred || cred.type !== "api_key") {
-    return {};
-  }
-  return {
-    accountId: normalizeOptionalString(cred.metadata?.accountId),
-    gatewayId: normalizeOptionalString(cred.metadata?.gatewayId),
-  };
-}
-
 /**
  * Returns a provider catalog entry when credentials and Gateway metadata are
  * complete enough to construct an Anthropic-compatible base URL.
@@ -64,16 +47,14 @@ export function buildCloudflareAiGatewayCatalogProvider(params: {
   if (!apiKey) {
     return null;
   }
-  const { accountId, gatewayId } = resolveCloudflareAiGatewayMetadata(params.credential);
+  const metadata = params.credential?.type === "api_key" ? params.credential.metadata : undefined;
+  const accountId = normalizeOptionalString(metadata?.accountId);
+  const gatewayId = normalizeOptionalString(metadata?.gatewayId);
   if (!accountId || !gatewayId) {
     return null;
   }
-  const baseUrl = resolveCloudflareAiGatewayBaseUrl({ accountId, gatewayId });
-  if (!baseUrl) {
-    return null;
-  }
   return {
-    baseUrl,
+    baseUrl: resolveCloudflareAiGatewayBaseUrl({ accountId, gatewayId }),
     api: "anthropic-messages" as const,
     apiKey,
     models: [buildCloudflareAiGatewayModelDefinition()],

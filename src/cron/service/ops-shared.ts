@@ -1,14 +1,13 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
 import { clearCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { markServiceCronJobActive } from "./run-receipts.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type { CronServiceState } from "./state.js";
-import { ensureLoadedForOperation, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoadedForOperation } from "./store.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import type { IsolatedAgentSetupTimeoutSignal } from "./timer.js";
 
@@ -63,9 +62,7 @@ export async function ensureLoadedForRead(state: CronServiceState) {
     return;
   }
   // Read repair is row-owned and never advances a past-due slot (#16156).
-  const maintenance = recomputeUnownedCronSchedules(state);
-  runPostPersistCronNotifications(state, maintenance.notifications);
-  applyCronRuntimeRowsToState(state, maintenance.jobs);
+  await recomputeUnownedCronSchedules(state);
 }
 
 /** Resolves the current configured default agent without caching reloadable state. */

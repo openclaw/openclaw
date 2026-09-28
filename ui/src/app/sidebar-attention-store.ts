@@ -1,5 +1,6 @@
 import {
   clearSidebarAttentionDismissal,
+  resolveSidebarAttentionKey,
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
 } from "../components/sidebar-attention-dismissals.ts";
@@ -61,7 +62,7 @@ export function createSidebarAttentionStore(
       scopes &&
       !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
     ) {
-      clearSidebarAttentionDismissal(sources.gateway.connection.gatewayUrl, "scopeUpgrade");
+      clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
     }
     controller?.syncDismissals();
   };

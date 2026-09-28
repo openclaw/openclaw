@@ -70,6 +70,7 @@ type State = {
   nextId: number;
   calls: Call[];
   verifierExit: number;
+  publicDownloadCache?: Record<string, string>;
   fault?: Fault;
   corruptDownload?: { tag: string; name: string };
   replaceReleaseAfterDownload?: { tag: string; name: string };
@@ -420,6 +421,12 @@ try {
     const entry = owner.assets.find((asset) => asset.name === name);
     if (owner.draft || !entry || fault("download", tag, name)) fail("HTTP 404: public asset unavailable");
     let bytes = Buffer.from(entry.bytes, "base64");
+    if (state.publicDownloadCache) {
+      const revalidate = args.includes("--header") && flag("--header") === "Cache-Control: no-cache";
+      const cached = state.publicDownloadCache[url];
+      if (cached && !revalidate) bytes = Buffer.from(cached, "base64");
+      state.publicDownloadCache[url] = bytes.toString("base64");
+    }
     if ((state.corruptDownload?.tag === tag && state.corruptDownload.name === name) ||
         (legacy && fault("legacy-readback", tag, name))) {
       delete state.corruptDownload;
@@ -466,7 +473,7 @@ function runFixtureCommand(binary: string, args: string[]): string {
   let stdout = "";
   let stderr = "";
   let status = 0;
-  const exit = Symbol("fixture exit");
+  const exit = new Error("fixture exit");
   const fixtureProcess = {
     argv: [process.execPath, binary, ...args],
     env: process.env,
@@ -762,6 +769,9 @@ it("retains the direct CLI entrypoint", () => {
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture();
   const original = f.seedLegacy();
+  f.update((state) => {
+    state.publicDownloadCache = {};
+  });
   const assetIds = new Set(releaseFrom(f.state(), tag).assets.map((entry) => entry.id));
   expect(succeeded(f.run("publish", tag, undefined, true))).toMatchObject({ state: "published" });
   const published = JSON.parse(f.bytes(tag, "OpenClaw-2026.9.3-linux.json").toString());
@@ -781,6 +791,11 @@ it("reuses complete public Linux assets without local build inputs", () => {
       ),
   ).toEqual([]);
   expect(f.state().calls.some((entry) => entry.tool === "minisign")).toBe(true);
+  f.addRelease(nextTag, true);
+  succeeded(f.run("publish", nextTag));
+  const advanced = f.bytes(nextTag, "OpenClaw-2026.9.4-linux.json");
+  expect(f.bytes(channel, "latest.json")).toEqual(advanced);
+  expect(f.bytes(nextTag, "latest.json")).toEqual(advanced);
 });
 
 it("reuses immutable publication bytes without local build inputs on replay", () => {
@@ -1556,6 +1571,8 @@ it.each([null, tag])(
 
 it.each([
   { releaseTag: nextTag, prerelease: false },
+  { releaseTag: "v2026.6.33", prerelease: false },
+  { releaseTag: "v2026.8.35", prerelease: false },
   { releaseTag: "v2026.9.4-alpha.1", prerelease: true },
   { releaseTag: "v2026.9.4-beta.1", prerelease: true },
 ])("honors explicit non-latest finalization of $releaseTag", ({ releaseTag, prerelease }) => {
@@ -1626,8 +1643,8 @@ it("refuses non-latest finalization that would demote the current latest", () =>
 it.each([
   {
     releaseTag: "v2026.6.33",
-    latest: "false",
-    message: "Unsupported core GitHub release train",
+    latest: "true",
+    message: "Extended-stable releases cannot become core latest",
   },
   {
     releaseTag: "v2026.9.04",

@@ -1,4 +1,5 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
@@ -9,6 +10,7 @@ import {
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
+  buildToolSchemaDirectoryPrompt,
   restrictToolSearchCatalog,
   type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
@@ -37,6 +39,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
   catalogRef?: ToolSearchCatalogRef;
   catalogEntries?: readonly ToolSearchCatalogEntry[];
   codeModeControlsEnabled: boolean;
+  toolSearchPrompt?: { config?: OpenClawConfig; contextTokenBudget?: number };
 }) {
   const baselineTools = [...params.tools];
   const currentCatalog = params.catalogRef?.current;
@@ -66,6 +69,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         finalizeAgentToolAvailability(executableTools);
         return {
           tools: allowedTools,
+          toolSchemaDirectoryPrompt: undefined,
           callableToolNames: normalizeUniqueStringEntries(allowedTools.map((tool) => tool.name)),
         };
       }
@@ -87,6 +91,13 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         tools.some((tool) => catalog.controlNames.has(normalizeToolPolicyName(tool.name)));
       return {
         tools,
+        toolSchemaDirectoryPrompt:
+          catalogReachable && params.toolSearchPrompt
+            ? buildToolSchemaDirectoryPrompt(
+                { config: params.toolSearchPrompt.config, catalogRef: catalog.ref },
+                { contextTokenBudget: params.toolSearchPrompt.contextTokenBudget },
+              )
+            : undefined,
         callableToolNames: normalizeUniqueStringEntries([
           ...tools.map((tool) => tool.name),
           ...(catalogReachable ? allowedEntries.map((entry) => entry.name) : []),

@@ -22,10 +22,12 @@ openclaw gateway run   # equivalent, explicit form
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
     - Startup automatically applies deterministic, prompt-free legacy-key migrations to eligible invalid single-file configs, including in non-interactive service runs. It writes only after full validation, including plugins, and keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer version are excluded. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
     - If automatic migration cannot make the config valid, an interactive terminal can offer to run `openclaw doctor --fix` and retry startup once after consent. Non-interactive runs print the command instead. If the repaired config is still invalid, startup remains stopped.
+    - Configuration read failures, including unavailable storage during SQLite inspection, stop startup with exit code `1` so service supervision can retry. They do not trigger config repair. Invalid configuration and required offline migrations retain exit code `78`, which prevents systemd restart loops; resolve the reported problem before restarting.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
-    - `SIGUSR1` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR1`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool is read-only; agents request restart through the `openclaw` delegation tool. Effective Full Access, including Default (Full Access), authorizes permitted delegated changes without an approval prompt; restricted runs require human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
+    - `SIGUSR2` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR2`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool is read-only; agents request restart through the `openclaw` delegation tool. Effective Full Access, including Default (Full Access), authorizes permitted delegated changes without an approval prompt; restricted runs require human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
+    - `SIGUSR1` is reserved for Node's inspector, so attaching a debugger does not restart the Gateway. Prefer `openclaw gateway restart` for restarts; update manual restart scripts to send `SIGUSR2`.
     - `SIGINT`/`SIGTERM` stop the process but do not restore custom terminal state — if you wrap the CLI in a TUI or raw-mode input, restore the terminal yourself before exit.
 
   </Accordion>
@@ -61,7 +63,7 @@ openclaw gateway run   # equivalent, explicit form
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
 <ParamField path="--ambient-channels" type="boolean">
-  Allow the Gateway to auto-configure channels from ambient environment variables. By default, channels require an explicit `channels.<id>` config block.
+  Allow the Gateway to auto-configure channels from ambient environment variables for this process, including config reloads. By default, foreground, dev, and service Gateways require explicit `channels.<id>` configuration, such as `channels.discord.enabled=true`. Configured channels can still read credentials from environment variables. For managed services, add the channel config block; this flag is not persisted by service installation.
 </ParamField>
 <ParamField path="--dev-ambient-channels" type="boolean">
   Deprecated alias for `--ambient-channels`.

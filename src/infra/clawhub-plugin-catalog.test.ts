@@ -1,4 +1,7 @@
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import { PluginDiscoveryDetailSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { joinClawHubPluginDetail } from "../plugins/catalog-discovery.js";
 import { jsonResponse, requestUrl } from "../test-helpers/http.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -17,6 +20,7 @@ const remotePlugin = {
   isOfficial: false,
   summary: "Long-term memory",
   ownerHandle: "alice",
+  ownerImage: "https://cdn.example.com/alice.png",
   categories: ["memory"],
   latestVersion: "1.2.3",
   runtimeId: "memory-plus",
@@ -124,6 +128,41 @@ describe("ClawHub plugin catalog client", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it("retains category priority identities from curated page metadata", async () => {
+    const category = {
+      slug: "models",
+      label: "Models",
+      description: "Models",
+      icon: "bot",
+      order: 1,
+      pinnedPackages: ["@vendor/model"],
+    };
+    const fetchImpl = vi.fn(async () => jsonResponse({ items: [], categories: [category] }));
+    expect(
+      await fetchClawHubPluginCatalog({ intent: "all", category: "models", fetchImpl }),
+    ).toEqual({ items: [], categories: [category] });
+  });
+
+  it("rejects ambiguous registry category priorities", async () => {
+    await expect(
+      fetchClawHubPluginCategories({
+        fetchImpl: async () =>
+          jsonResponse({
+            categories: [
+              {
+                slug: "models",
+                label: "Models",
+                description: "Models",
+                icon: "bot",
+                order: 1,
+                pinnedPackages: ["@vendor/model", "@vendor/model"],
+              },
+            ],
+          }),
+      }),
+    ).rejects.toThrow("duplicate or invalid pinned package");
+  });
+
   it("browses the combined plugin endpoint with an opaque cursor", async () => {
     let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
@@ -171,6 +210,7 @@ describe("ClawHub plugin catalog client", () => {
 
   it.each([
     [remotePlugin.icon, `https://example.com${remotePlugin.icon}`],
+    [null, remotePlugin.ownerImage],
     ["https://cdn.example.com/memory-plus.svg", "https://cdn.example.com/memory-plus.svg"],
   ])(
     "uses plugin search with a resolved icon and no invented pagination: %s",
@@ -224,7 +264,7 @@ describe("ClawHub plugin catalog client", () => {
     });
   });
 
-  it("requests official plugins first and download order for ordinary browse", async () => {
+  it("requests the curated category order instead of an official-first download order", async () => {
     let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       requestedUrl = requestUrl(input);
@@ -242,7 +282,7 @@ describe("ClawHub plugin catalog client", () => {
     const url = new URL(requestedUrl);
     expect(Object.fromEntries(url.searchParams)).toEqual({
       category: "models",
-      officialFirst: "true",
+      curated: "true",
       sort: "downloads",
       limit: "8",
     });
@@ -280,6 +320,7 @@ describe("ClawHub plugin catalog client", () => {
 
   it.each([
     ["agent-runtimes", "bot"],
+    ["voice", "mic"],
     ["integrations", "plug"],
     ["developer-tools", "code-xml"],
     ["infrastructure", "server"],
@@ -395,7 +436,15 @@ describe("ClawHub plugin catalog client", () => {
     },
   );
 
-  it("reads complete exact-version plugin detail in one request", async () => {
+  it.each([
+    { ui: ["widget", "page", "widget"], expected: ["page", "widget"] },
+    { ui: undefined, expected: undefined },
+    { ui: [], expected: [] },
+    { ui: "page", expected: undefined },
+    { ui: null, expected: undefined },
+    { ui: ["unknown"], expected: undefined },
+    { ui: ["page", 1], expected: undefined },
+  ])("reads complete exact-version detail with UI metadata $ui", async ({ ui, expected }) => {
     const requestedUrls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(requestUrl(input));
@@ -406,7 +455,7 @@ describe("ClawHub plugin catalog client", () => {
           topics: ["Retrieval"],
           createdAt: 100,
           updatedAt: 300,
-          compatibility: { minGatewayVersion: ">=1.0.0" },
+          compatibility: { minGatewayVersion: ">=2.0.0" },
           scanStatus: "clean",
         },
         owner: {
@@ -437,6 +486,10 @@ describe("ClawHub plugin catalog client", () => {
               { name: "apiKey", description: "Service API key", required: true, sensitive: true },
             ],
             mcpServers: [{ name: "memory" }],
+            contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+            providers: ["memory-model"],
+            channels: ["memory-chat"],
+            uiCapabilities: ui,
             bundledSkills: [
               {
                 name: "Recall",
@@ -509,6 +562,9 @@ describe("ClawHub plugin catalog client", () => {
         { name: "apiKey", description: "Service API key", required: true, sensitive: true },
       ],
       mcpServers: ["memory"],
+      contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+      providers: ["memory-model"],
+      channels: ["memory-chat"],
       skills: [{ name: "Recall", description: "Recall saved knowledge" }],
       versions: [
         { version: "1.2.3", createdAt: 300, changelog: "Current release", tags: ["latest"] },
@@ -529,6 +585,18 @@ describe("ClawHub plugin catalog client", () => {
         summary: "Exact release passed ClawHub security review.",
       },
     });
+    expect(detail.uiCapabilities).toEqual(expected);
+    const joined = joinClawHubPluginDetail({
+      remote: detail,
+      local: { plugins: [], diagnostics: [], mutationAllowed: true },
+    });
+    expect(joined.detail).toMatchObject({
+      contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+      providers: ["memory-model"],
+      channels: ["memory-chat"],
+    });
+    expect(joined.detail.uiCapabilities).toEqual(expected);
+    expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });
 
   it.each([undefined, null, {}])(
@@ -536,7 +604,11 @@ describe("ClawHub plugin catalog client", () => {
     async (security) => {
       const fetchImpl = vi.fn(async () =>
         jsonResponse({
-          package: { ...remotePlugin, latestVersion: undefined },
+          package: {
+            ...remotePlugin,
+            latestVersion: undefined,
+            compatibility: { minGatewayVersion: ">=2.0.0" },
+          },
           versions: { items: [] },
           version: null,
           readme: null,
@@ -552,6 +624,7 @@ describe("ClawHub plugin catalog client", () => {
       expect(detail).toMatchObject({ packageName: "memory-plus", versions: [], configFields: [] });
       expect(detail.readme).toBeUndefined();
       expect(detail.security).toBeUndefined();
+      expect(detail.compatibility).toEqual({ minGatewayVersion: ">=2.0.0" });
       expect(fetchImpl).toHaveBeenCalledOnce();
     },
   );

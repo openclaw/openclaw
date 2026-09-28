@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -81,7 +82,7 @@ function stringProperty(object: ts.ObjectLiteralExpression, key: string): string
       ts.isIdentifier(propertyName) || ts.isStringLiteral(propertyName)
         ? propertyName.text
         : undefined;
-    if (name === key && ts.isStringLiteralLike(property.initializer)) {
+    if (name === key && ts.isStringLiteralLikeNode(property.initializer)) {
       return property.initializer.text;
     }
   }
@@ -125,7 +126,12 @@ function collectMethodSpec(
   if (ts.isArrayLiteralExpression(element)) {
     const name = element.elements[0];
     const since = element.elements[3];
-    if (!name || !since || !ts.isStringLiteralLike(name) || !ts.isStringLiteralLike(since)) {
+    if (
+      !name ||
+      !since ||
+      !ts.isStringLiteralLikeNode(name) ||
+      !ts.isStringLiteralLikeNode(since)
+    ) {
       throw new Error(
         `${fileName}:${line} core method spec rows must use string literal names and vintage metadata.`,
       );
@@ -142,8 +148,7 @@ function collectMethodSpec(
   );
 }
 
-function collectMethodSpecs(sourceText: string, fileName: string): MethodSpec[] {
-  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
+function collectMethodSpecs(sourceFile: ts.SourceFile, fileName: string): MethodSpec[] {
   let specs: MethodSpec[] | undefined;
 
   function visit(node: ts.Node): void {
@@ -160,7 +165,7 @@ function collectMethodSpecs(sourceText: string, fileName: string): MethodSpec[] 
         );
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -186,13 +191,20 @@ function currentTrain(): string {
 }
 
 try {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const train = currentTrain();
   const mergeBase = resolveBaseCommit();
   const currentSource = fs.readFileSync(path.join(repoRoot, descriptorPath), "utf8");
-  const currentSpecs = collectMethodSpecs(currentSource, descriptorPath);
+  const currentSpecs = collectMethodSpecs(
+    parser.parseSourceFile(descriptorPath, currentSource),
+    descriptorPath,
+  );
   const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
   const baseNames = new Set(
-    collectMethodSpecs(baseSource, `${descriptorPath}@${mergeBase}`).map((s) => s.name),
+    collectMethodSpecs(
+      parser.parseSourceFile(descriptorPath, baseSource),
+      `${descriptorPath}@${mergeBase}`,
+    ).map((s) => s.name),
   );
   const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
   const restored = added.filter((spec) => spec.compatibilityRestored);

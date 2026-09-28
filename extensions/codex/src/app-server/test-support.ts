@@ -97,6 +97,20 @@ export function adaptCodexTestClientFactory(
     );
 }
 
+export function createCodexTestOAuthProfile(accountId: string) {
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+  ).toString("base64url");
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: `e30.${payload}.test-signature`,
+    refresh: "synthetic-refresh-token",
+    expires: Date.now() + 60_000,
+    accountId,
+  };
+}
+
 /** Builds a representative Codex-capable model fixture for app-server tests. */
 export function createCodexTestModel(provider = "openai", input = ["text"]): Model {
   return {

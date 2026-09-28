@@ -14,10 +14,6 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   runContextEngineMaintenance,
@@ -82,17 +78,21 @@ it("keeps SIGTERM cancellation attached through actual engine disposal", async (
 async function withResources(
   run: (
     db: DatabaseSync,
-    schedule: (contextEngine: ContextEngine) => Promise<void>,
+    schedule: (
+      contextEngine: ContextEngine,
+      onCompletion?: (work: Promise<void>) => void,
+    ) => Promise<void>,
   ) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-resources-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const db = new DatabaseSync(path.join(stateDir, "registration.sqlite"));
     db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
     const pending: Promise<void>[] = [];
-    const schedule = async (contextEngine: ContextEngine) => {
+    const schedule = async (
+      contextEngine: ContextEngine,
+      onCompletion?: (work: Promise<void>) => void,
+    ) => {
       await runContextEngineMaintenance({
         contextEngine,
         sessionId: "resources",
@@ -102,6 +102,7 @@ async function withResources(
         disposeDeferredContextEngineAfterMaintenance: true,
         onDeferredMaintenance: (promise) => {
           pending.push(promise);
+          onCompletion?.(promise);
         },
       });
     };
@@ -109,10 +110,10 @@ async function withResources(
       await run(db, schedule);
     } finally {
       await Promise.allSettled(pending);
-      db.close();
+      if (db.isOpen) {
+        db.close();
+      }
       resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -120,12 +121,7 @@ async function withResources(
 it.each(["maintenance", "disposal"] as const)(
   "joins actual %s descendants before maintenance completion",
   async (phase) => {
-    await withStateDirEnv("openclaw-maintenance-tail-", async ({ stateDir }) => {
-      resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-      const db = new DatabaseSync(path.join(stateDir, "registration.sqlite"));
-      db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
+    await withResources(async (db, schedule) => {
       const release = createDeferredCore();
       const entered = createDeferredCore();
       let tail: Promise<unknown> | undefined;
@@ -152,19 +148,11 @@ it.each(["maintenance", "disposal"] as const)(
       });
       contextEngine.dispose = dispose;
       try {
-        await runContextEngineMaintenance({
-          contextEngine,
-          sessionId: "tail",
-          sessionKey: "agent:main:maintenance-tail",
-          sessionFile: path.join(stateDir, "session.jsonl"),
-          reason: "turn",
-          disposeDeferredContextEngineAfterMaintenance: true,
-          onDeferredMaintenance: (promise) => {
-            completion = promise.then(() => {
-              returned = true;
-              db.close();
-            });
-          },
+        await schedule(contextEngine, (promise) => {
+          completion = promise.then(() => {
+            returned = true;
+            db.close();
+          });
         });
         await entered.promise;
         await new Promise<void>((resolve) => {
@@ -181,12 +169,6 @@ it.each(["maintenance", "disposal"] as const)(
       } finally {
         release.resolve();
         await Promise.allSettled([...(tail ? [tail] : []), ...(completion ? [completion] : [])]);
-        if (!returned) {
-          db.close();
-        }
-        resetCommandQueueStateForTest();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
       }
     });
   },
@@ -251,78 +233,73 @@ it("joins disposal of a superseded queued engine before reporting the active mai
   });
 });
 
-it.each(["parent completion", "gateway restart"] as const)(
-  "keeps accepted maintenance independent of %s",
-  async (mode) => {
-    await withResources(async (db, schedule) => {
-      const parent = new AsyncWorkScope();
-      const context = new AsyncLocalStorage<string>();
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const cancelled = vi.fn();
-      let tail: Promise<unknown> | undefined;
-      let maintenanceSignal: AbortSignal | undefined;
-      let parentClosed = false;
-      let closing: Promise<void> | undefined;
-      let cancellationCheckpoint: Promise<void> | undefined;
-      let checkpointPassed = false;
-      try {
-        await context.run("admitted", () =>
-          parent.track(() =>
-            schedule(
-              engine(async ({ abortSignal }) => {
-                maintenanceSignal = abortSignal;
-                const signal = getAsyncWorkSignal();
-                if (!signal) {
-                  throw new Error("expected maintenance work cancellation");
-                }
-                signal.addEventListener(
-                  "abort",
-                  () => {
-                    cancelled(context.getStore(), signal.reason);
-                    cancellationCheckpoint = waitForDeferredTurnMaintenanceForSession(
-                      "agent:main:maintenance-resources",
-                    ).then(() => {
-                      checkpointPassed = true;
-                    });
-                  },
-                  { once: true },
-                );
-                tail = trackAsyncWork(async () => {
-                  entered.resolve();
-                  await release.promise;
-                  return db.prepare("SELECT value FROM probe").get()?.value;
-                });
-                return unchanged;
-              }),
-            ),
+it("keeps accepted maintenance independent of parent completion until gateway restart", async () => {
+  await withResources(async (db, schedule) => {
+    const parent = new AsyncWorkScope();
+    const context = new AsyncLocalStorage<string>();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const cancelled = vi.fn();
+    let tail: Promise<unknown> | undefined;
+    let maintenanceSignal: AbortSignal | undefined;
+    let parentClosed = false;
+    let closing: Promise<void> | undefined;
+    let cancellationCheckpoint: Promise<void> | undefined;
+    let checkpointPassed = false;
+    try {
+      await context.run("admitted", () =>
+        parent.track(() =>
+          schedule(
+            engine(async ({ abortSignal }) => {
+              maintenanceSignal = abortSignal;
+              const signal = getAsyncWorkSignal();
+              if (!signal) {
+                throw new Error("expected maintenance work cancellation");
+              }
+              signal.addEventListener(
+                "abort",
+                () => {
+                  cancelled(context.getStore(), signal.reason);
+                  cancellationCheckpoint = waitForDeferredTurnMaintenanceForSession(
+                    "agent:main:maintenance-resources",
+                  ).then(() => {
+                    checkpointPassed = true;
+                  });
+                },
+                { once: true },
+              );
+              tail = trackAsyncWork(async () => {
+                entered.resolve();
+                await release.promise;
+                return db.prepare("SELECT value FROM probe").get()?.value;
+              });
+              return unchanged;
+            }),
           ),
-        );
-        await entered.promise;
-        closing = context
-          .run("unrelated", () => parent.drain())
-          .then(() => {
-            parentClosed = true;
-          });
-        await vi.waitFor(() => expect(parentClosed).toBe(true));
-        expect.soft(maintenanceSignal?.aborted).toBe(false);
-        expect.soft(cancelled).not.toHaveBeenCalled();
-        if (mode === "gateway restart") {
-          context.run("unrelated", () => markGatewayRestartDraining());
-          expect(maintenanceSignal?.aborted).toBe(true);
-          expect(cancelled).toHaveBeenCalledExactlyOnceWith("admitted", maintenanceSignal?.reason);
-          await vi.waitFor(() => expect(checkpointPassed).toBe(true));
-        }
-        release.resolve();
-        await expect(tail).resolves.toBe(42);
-      } finally {
-        release.resolve();
-        await tail;
-        await closing;
-        await parent.drain();
-        await cancellationCheckpoint;
-        resetGatewayWorkAdmission();
-      }
-    });
-  },
-);
+        ),
+      );
+      await entered.promise;
+      closing = context
+        .run("unrelated", () => parent.drain())
+        .then(() => {
+          parentClosed = true;
+        });
+      await vi.waitFor(() => expect(parentClosed).toBe(true));
+      expect.soft(maintenanceSignal?.aborted).toBe(false);
+      expect.soft(cancelled).not.toHaveBeenCalled();
+      context.run("unrelated", () => markGatewayRestartDraining());
+      expect(maintenanceSignal?.aborted).toBe(true);
+      expect(cancelled).toHaveBeenCalledExactlyOnceWith("admitted", maintenanceSignal?.reason);
+      await vi.waitFor(() => expect(checkpointPassed).toBe(true));
+      release.resolve();
+      await expect(tail).resolves.toBe(42);
+    } finally {
+      release.resolve();
+      await tail;
+      await closing;
+      await parent.drain();
+      await cancellationCheckpoint;
+      resetGatewayWorkAdmission();
+    }
+  });
+});

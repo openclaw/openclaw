@@ -11,7 +11,8 @@ import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import type {
   OpenAIQuicksilverSocket,
   OpenAIQuicksilverSocketFactory,
-} from "./realtime-quicksilver-sideband.js";
+} from "./realtime-quicksilver-socket.shared.js";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
 export class FakeSocket extends EventEmitter implements OpenAIQuicksilverSocket {
   readyState = 0;
@@ -77,7 +78,6 @@ export function createHarness(params?: {
   afterOpen?: (socket: FakeSocket) => void;
   model?: string;
   resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
-  mockDefaultSocket?: { mockImplementation: (factory: OpenAIQuicksilverSocketFactory) => void };
 }) {
   const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
   socket.deferClose = params?.deferClose ?? false;
@@ -87,7 +87,6 @@ export function createHarness(params?: {
     queueMicrotask(() => socket.open());
     return socket;
   };
-  params?.mockDefaultSocket?.mockImplementation(webSocketFactory);
   const onAudio: Mock<RealtimeVoiceBridgeCallbacks["onAudio"]> = vi.fn();
   const onClearAudio: Mock<RealtimeVoiceBridgeCallbacks["onClearAudio"]> = vi.fn();
   const onTranscript: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>> = vi.fn();
@@ -108,7 +107,7 @@ export function createHarness(params?: {
           ? { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }
           : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
-      ...(params?.mockDefaultSocket ? {} : { webSocketFactory }),
+      mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
       onAudio,
       onClearAudio,
       onTranscript,

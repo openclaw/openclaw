@@ -10,6 +10,7 @@ import {
   resolveControlUiAuthCandidates,
   type ControlUiAuthSource,
 } from "./control-ui-auth.ts";
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 function renewBrowserSession(url: URL, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
@@ -92,7 +93,21 @@ export function startBrowserAuthRecovery(
             <div class="exec-approval-actions">
               <button
                 class="btn primary"
-                @click=${() => {
+                @click=${async () => {
+                  if (webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways) {
+                    const { nativeGatewaysCapability } =
+                      await import("./native-gateways.runtime.ts");
+                    if (lifetime.signal.aborted || dismissed) {
+                      return;
+                    }
+                    const native = nativeGatewaysCapability();
+                    const currentId = native?.snapshot?.currentId;
+                    if (native && currentId) {
+                      // The app owns a separate cookie store; a normal browser tab cannot renew it.
+                      native.reconnect(currentId);
+                      return;
+                    }
+                  }
                   openedSignIn = true;
                   probeResult = undefined;
                   openExternalUrlSafe(root.href);

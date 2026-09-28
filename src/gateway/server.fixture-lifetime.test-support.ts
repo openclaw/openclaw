@@ -253,8 +253,8 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     const address = blocker.address();
     if (!address || typeof address === "string") throw new Error("expected owned TCP blocker");
     const retain = metadataModule.retainGatewayPluginMetadata;
-    const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation(() => {
-      const owner = retain();
+    const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation((...metadataArgs) => {
+      const owner = retain(...metadataArgs);
       metadataRetains++;
       return { ...owner, close: async (...args) => {
         const result = await own(owner.close(...args));
@@ -309,9 +309,12 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
         keyPath: path.join(dir, "synthetic-missing-key.pem"),
       } } }));
     }
-    acquisition = own(gateway.startTestGatewayServer(address.port, {
+    const startupOptions = {
       bind: "loopback", auth: { mode: "none" }, controlUiEnabled: false,
-    }));
+    };
+    acquisition = own(scenario.failCleanup && !scenario.missingTls
+      ? gateway.startGatewayServerWithRetries({ port: address.port, opts: startupOptions })
+      : gateway.startTestGatewayServer(address.port, startupOptions));
     const [acquired] = await Promise.allSettled([acquisition]);
     expect(acquired.status).toBe("rejected");
     const failure = acquired.reason;

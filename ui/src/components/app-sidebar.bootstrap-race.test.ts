@@ -147,7 +147,7 @@ describe("AppSidebar initial managed-list hydration", () => {
           agentId: "main",
           reason: "create",
         });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(listQueries.filter((query) => query.involvingMe === true)).toHaveLength(1);
         laterBootstrap.resolve();
         await heldLater;

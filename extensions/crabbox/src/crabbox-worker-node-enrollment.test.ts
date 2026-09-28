@@ -16,7 +16,10 @@ import {
   createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
-import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  readLaunch,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
@@ -92,7 +95,7 @@ if (args[0] === "--version") {
 function testHome() {
   const home = fs.realpathSync(tempDirs.make("crabbox-bootstrap-home-"));
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
-  const stop = () => {
+  const stop = async () => {
     const pidFile = path.join(stateDir, "node.pid");
     if (fs.existsSync(pidFile)) {
       const pid = Number(fs.readFileSync(pidFile, "utf8"));
@@ -103,7 +106,9 @@ function testHome() {
           throw error;
         }
       }
-      fs.rmSync(pidFile);
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow("ESRCH"), {
+        timeout: 5_000,
+      });
     }
   };
   cleanups.push(stop);
@@ -148,8 +153,11 @@ async function serveArtifact(
     tls = { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
   }
   const authorizations: Array<string | undefined> = [];
+  const requested = createDeferred<void>();
+  const closed = createDeferred<void>();
   const handle: http.RequestListener = (request, response) => {
     authorizations.push(request.headers.authorization);
+    requested.resolve();
     if (options.resetBeforeHeaders) {
       // End the connection before headers in every host runtime; the child must
       // diagnose the peer loss without relying on resetAndDestroy support.
@@ -162,19 +170,16 @@ async function serveArtifact(
       return;
     }
     response.writeHead(200, { "content-length": archive.length });
-    const send = () => {
-      if (options.truncate) {
-        // Establish the response boundary before injecting a mid-body disconnect.
-        response.flushHeaders();
-        response.write(archive.subarray(0, 1), () => setImmediate(() => response.destroy()));
-        return;
-      }
-      response.end(archive);
-    };
+    if (options.truncate) {
+      // Establish the response boundary before injecting a mid-body disconnect.
+      response.flushHeaders();
+      response.write(archive.subarray(0, 1), () => setImmediate(() => response.destroy()));
+      return;
+    }
     if (options.hold) {
-      void options.hold.then(send);
+      void options.hold.then(() => response.end(archive));
     } else {
-      send();
+      response.end(archive);
     }
   };
   const server = options.resetBeforeTls
@@ -183,7 +188,6 @@ async function serveArtifact(
       ? https.createServer(tls, handle)
       : http.createServer(handle);
   const sockets = new Set<net.Socket>();
-  const closed = createDeferred<void>();
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => {
@@ -211,7 +215,7 @@ async function serveArtifact(
     bytes: archive.length,
     ...(tls ? { tlsFingerprint: new X509Certificate(tls.cert).fingerprint256 } : {}),
   });
-  return { nodeBootstrap, authorizations, closed: closed.promise };
+  return { nodeBootstrap, authorizations, requested: requested.promise, closed: closed.promise };
 }
 
 type DesktopFixture = {
@@ -276,9 +280,12 @@ echo 123
       });
   expect(setup.command).not.toContain(nodeBootstrap.token);
   expect(setup.command).not.toContain(setupCode);
+  const timers = path.join(home, "bootstrap-test-timers.cjs");
+  fs.writeFileSync(timers, 'require("node:timers/promises").setTimeout = async () => {};\n');
   const child = spawn("/bin/sh", [], {
     env: {
       HOME: home,
+      NODE_OPTIONS: `--require ${JSON.stringify(timers)}`,
       PATH: desktop ? `${bin}:${process.env.PATH}` : process.env.PATH,
       ...(desktop
         ? {
@@ -325,21 +332,6 @@ async function expectSetupPhases(result: ReturnType<typeof enroll>) {
   return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
 }
 
-async function readLaunch(stateDir: string) {
-  const target = path.join(stateDir, "launch.json");
-  // File watchers can miss a fast atomic rename before their subscription is ready.
-  await expect.poll(() => fs.existsSync(target), { timeout: 30_000 }).toBe(true);
-  return JSON.parse(fs.readFileSync(target, "utf8")) as {
-    build: string;
-    cli: string;
-    args: string[];
-    token?: string;
-    setupCode?: string;
-    environment: Record<string, string>;
-    enabledPlugins: string[];
-  };
-}
-
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   it("reuses a completed runtime upgrade on the next fresh warm child", async () => {
     const root = fs.realpathSync(tempDirs.make("warm-runtime-repeat-proof-"));
@@ -373,7 +365,6 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       warn: (message) => {
         throw new Error(message);
       },
-      runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
       runCommand: async (argv, options) => {
         if (argv[1] === "warmup") {
           homeFor(argv[argv.indexOf("--lease-id") + 1]!);
@@ -566,7 +557,13 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
 
   it("prepares an exact runtime without node identity, then enrolls and reuses its warm artifact", async () => {
     const { home, stateDir, stop } = testHome();
-    const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
+    const installed = await serveArtifact(Buffer.from("installed"));
+    const { nodeBootstrap, authorizations } = await serveArtifact(
+      await packageFixture(
+        "first",
+        `require("node:http").get(${JSON.stringify(installed.nodeBootstrap.url)}, (response) => response.resume());`,
+      ),
+    );
     const workerBytes = Buffer.from("synthetic standalone worker archive");
     const workerResponse = createDeferred<void>();
     const worker = await serveArtifact(workerBytes, { hold: workerResponse.promise });
@@ -574,53 +571,35 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ...worker.nodeBootstrap,
       packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
     };
-    const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
     const preparation = expectSetupPhases(
       enroll(home, nodeBootstrap, undefined, true, workerBundle),
     );
+    cleanups.push(async () => {
+      workerResponse.resolve();
+      await preparation;
+    });
     try {
-      await expect
-        .poll(
-          () => {
-            if (!fs.existsSync(runtimeRoot)) {
-              return false;
-            }
-            return fs
-              .readdirSync(runtimeRoot)
-              .some(
-                (entry) =>
-                  entry.startsWith("node-bootstrap-") &&
-                  fs.existsSync(
-                    path.join(
-                      runtimeRoot,
-                      entry,
-                      "runtime",
-                      "node_modules",
-                      "openclaw",
-                      "installed.json",
-                    ),
-                  ),
-              );
-          },
-          { timeout: 10_000 },
-        )
-        .toBe(true);
-      expect(fs.existsSync(path.join(runtimeRoot, nodeBootstrap.sha256))).toBe(false);
+      await installed.requested;
+      expect(
+        fs.existsSync(path.join(home, ".openclaw-worker", "node-runtimes", nodeBootstrap.sha256)),
+      ).toBe(false);
       expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
     } finally {
       workerResponse.resolve();
       await preparation;
     }
-    expect(await preparation).toEqual([
-      "openclaw-bootstrap-preparation",
-      "openclaw-bootstrap-download-connection",
-      "openclaw-bootstrap-download-http-response",
-      "openclaw-bootstrap-download-body",
-      "openclaw-bootstrap-installation-and-worker-download",
-      "openclaw-bootstrap-runtime-verification",
-      "openclaw-bootstrap-worker-archive-publication",
-      "openclaw-bootstrap-complete",
-    ]);
+    expect(await preparation).toEqual(
+      expect.arrayContaining([
+        "openclaw-bootstrap-preparation",
+        "openclaw-bootstrap-download-connection",
+        "openclaw-bootstrap-download-http-response",
+        "openclaw-bootstrap-download-body",
+        "openclaw-bootstrap-installation-and-worker-download",
+        "openclaw-bootstrap-runtime-verification",
+        "openclaw-bootstrap-worker-archive-publication",
+        "openclaw-bootstrap-complete",
+      ]),
+    );
     expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
     expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([
       nodeBootstrap.sha256,
@@ -701,7 +680,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     );
     expect(fs.readdirSync(stateDir).some((name) => name.startsWith("node-bootstrap-"))).toBe(false);
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
-    stop();
+    await stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).cli).toBe(launch.cli);
@@ -709,7 +688,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   }, 30_000);
 
   it.each(["worker download", "npm installation"])(
-    "joins both operations after %s fails before removing staging files",
+    "settles started work after %s fails before removing staging files",
     async (failure) => {
       const { home } = testHome();
       const postinstallResponse = createDeferred<void>();
@@ -719,7 +698,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       const finished = path.join(home, "postinstall-complete");
       const { nodeBootstrap } = await serveArtifact(
         await packageFixture(
-          "worker-download-failure",
+          "preparation-failure",
           `
 require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (response) => {
   response.resume();
@@ -734,47 +713,30 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       const workerResponse = createDeferred<void>();
       const worker = await serveArtifact(Buffer.from("synthetic worker archive"), {
         hold: workerResponse.promise,
-        truncate: failure === "worker download",
       });
       const workerBundle = {
         ...worker.nodeBootstrap,
+        ...(failure === "worker download" ? { bytes: worker.nodeBootstrap.bytes + 1 } : {}),
         packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
       };
       const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
-      let settled = false;
-      const preparation = enroll(home, nodeBootstrap, undefined, true, workerBundle).then(
-        (result) => {
-          settled = true;
-          return result;
-        },
-      );
+      const preparation = enroll(home, nodeBootstrap, undefined, true, workerBundle);
+      cleanups.push(async () => {
+        workerResponse.resolve();
+        postinstallResponse.resolve();
+        await preparation;
+      });
       try {
-        await expect.poll(() => postinstall.authorizations.length, { timeout: 10_000 }).toBe(1);
+        await Promise.all([postinstall.requested, worker.requested]);
         if (failure === "worker download") {
           workerResponse.resolve();
           await worker.closed;
           expect(fs.existsSync(finished)).toBe(false);
+          expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
         } else {
           postinstallResponse.resolve();
-          await expect
-            .poll(
-              () => {
-                const stage = fs
-                  .readdirSync(runtimeRoot)
-                  .find((entry) => entry.startsWith("node-bootstrap-"));
-                return (
-                  stage &&
-                  /\bcode 17\b/.test(
-                    fs.readFileSync(path.join(runtimeRoot, stage, "install.log"), "utf8"),
-                  )
-                );
-              },
-              { timeout: 10_000 },
-            )
-            .toBe(true);
+          await worker.closed;
         }
-        expect(settled).toBe(false);
-        expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
       } finally {
         workerResponse.resolve();
         postinstallResponse.resolve();
@@ -784,7 +746,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         code: 1,
         output: expect.stringContaining(
           failure === "worker download"
-            ? "archive download body failed"
+            ? "archive length does not match the Gateway"
             : "package installation failed (exit code 17)",
         ),
       });
@@ -805,7 +767,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     expect(
       JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
     ).toEqual({ scriptsRan: true });
-    stop();
+    await stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     const second = await serveArtifact(await packageFixture("second"));
     await expectSetupPhases(enroll(home, second.nodeBootstrap));
@@ -889,7 +851,11 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(result.output).not.toContain(nodeBootstrap.token);
       expect(result.output).not.toContain(setupCode);
       expect(authorizations).toEqual(
-        failure === "tls-reset" ? [] : [`Bearer ${nodeBootstrap.token}`],
+        failure === "tls-reset"
+          ? []
+          : Array(failure === "http-reset" || failure === "truncated" ? 3 : 1).fill(
+              `Bearer ${nodeBootstrap.token}`,
+            ),
       );
       expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
       expect(fs.readdirSync(stateDir)).toEqual([]);

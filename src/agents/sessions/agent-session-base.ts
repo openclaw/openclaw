@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,10 +11,8 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import {
-  takeCodeModeResponseSource,
-  prepareCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
+import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
+import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -78,7 +75,6 @@ export abstract class AgentSessionBase {
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
 
-  // Event subscription state
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
 
@@ -89,21 +85,17 @@ export abstract class AgentSessionBase {
   /** Messages queued to be included with the next user prompt as context ("asides"). */
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
-  // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
 
-  // Branch summarization state
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
 
-  // Retry state
   protected retryAbortController: AbortController | undefined = undefined;
   protected retryCount = 0;
 
-  // Extension system
   protected currentExtensionRunner!: ExtensionRunner;
   private turnIndex = 0;
 
@@ -126,7 +118,6 @@ export abstract class AgentSessionBase {
   protected extensionErrorUnsubscriber?: () => void;
   private readonly cleanupProviderSessionResourcesOnDispose: boolean;
 
-  // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
 
   // Tool registry for extension getTools/setTools
@@ -288,10 +279,6 @@ export abstract class AgentSessionBase {
       executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
-  // =========================================================================
-  // Event Subscription
-  // =========================================================================
-
   /** Copy-on-write listener registration keeps dispatch stable without per-event snapshots. */
   protected emit(event: AgentSessionEvent): void {
     for (const l of this.eventListeners) {
@@ -383,13 +370,14 @@ export abstract class AgentSessionBase {
 
     const sourceSlots =
       event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
-    // Emit to extensions first
-    let messageChanged = await this.emitExtensionEvent(event);
+    let messageChanged = false;
+    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      messageChanged = await this.emitExtensionEvent(event);
+    }
     // Extensions can replace the final result. Protect listeners before publishing it.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
-    // Notify all listeners
     if (event.type === "agent_end") {
       await this.emitTerminal({
         ...event,
@@ -402,11 +390,8 @@ export abstract class AgentSessionBase {
     // Persist the same prepared bytes after synchronous listener changes.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
 
-    // Handle session persistence
     if (event.type === "message_end") {
-      // Check if this is a custom message from extensions
       if (event.message.role === "custom") {
-        // Persist as CustomMessageEntry
         const message = event.message;
         await withSessionManagerWrite(this.sessionManager, () =>
           this.sessionManager.appendCustomMessageEntry(
@@ -421,25 +406,17 @@ export abstract class AgentSessionBase {
         event.message.role === "assistant" ||
         event.message.role === "toolResult"
       ) {
-        // Regular LLM message - persist as SessionMessageEntry
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
-          // Normalize live delivery facts before persistence makes its redacted copy.
-          // Stored arguments must never replace the values used for tool execution.
-          applyAssistantDeliveryDirectives(event.message);
-          const appendOptions = {
+          const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-          };
-          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
-          const message = event.message;
-          await withSessionManagerWrite(this.sessionManager, () => {
-            const entryId = this.sessionManager.appendMessage(message, appendOptions);
-            if (message.role === "assistant") {
-              this.lastAssistantEntryId = entryId;
-            }
+            sourceAppend: sourceSlots,
           });
+          if (event.message.role === "assistant") {
+            this.lastAssistantEntryId = entryId;
+          }
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);
@@ -578,7 +555,6 @@ export abstract class AgentSessionBase {
   subscribe(listener: AgentSessionEventListener): () => void {
     this.eventListeners = [...this.eventListeners, listener];
 
-    // Return unsubscribe function for this specific listener
     return () => {
       const index = this.eventListeners.indexOf(listener);
       if (index !== -1) {
@@ -638,10 +614,6 @@ export abstract class AgentSessionBase {
       cleanupSessionResources(this.sessionId);
     }
   }
-
-  // =========================================================================
-  // Read-only State Access
-  // =========================================================================
 
   /** Full agent state */
   get state(): AgentState {
@@ -715,7 +687,6 @@ export abstract class AgentSessionBase {
     }
     this.agent.state.tools = tools;
 
-    // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
     this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }

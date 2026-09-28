@@ -79,16 +79,8 @@ function normalizeHeartbeatReply(
   const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
   notifyFalse.silent ||= isSilentReply;
   const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
-  if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
-    return {
-      shouldSkip: true,
-      text: "",
-      hasMedia,
-      isInternalPlaceholderOnly,
-      ...(notifyFalse.silent ? { silent: true } : {}),
-    };
-  }
-  let finalText = isInternalPlaceholderOnly ? "" : notifyFalse.text;
+  let finalText =
+    (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
@@ -190,9 +182,11 @@ export function classifyHeartbeatAgentOutcome(params: {
       mediaUrls: undefined,
     });
   const shouldSkipMain =
-    normalized.shouldSkip &&
-    !normalized.hasMedia &&
-    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly);
+    // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
+    (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
+    (normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
   if (hasExplicitFailure) {
     return {
       kind: "failure",

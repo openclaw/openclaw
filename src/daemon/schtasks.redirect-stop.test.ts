@@ -16,22 +16,42 @@ import {
 const spawnSync = vi.hoisted(() =>
   vi.fn<(exe: string, args?: readonly string[]) => SpawnSyncReturns<string>>(),
 );
+const timeState = vi.hoisted(() => ({ now: 0 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync,
 }));
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  sleep: async (ms: number) => {
+    timeState.now += ms;
+  },
+}));
 
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  timeState.now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
   spawnSync.mockReset();
-  spawnSync.mockImplementation((exe: string) => ({
-    pid: 0,
-    output: [null, "No tasks", ""],
-    stdout: "No tasks",
-    stderr: "",
-    status: /(?:taskkill|tasklist)\.exe$/i.test(exe) ? 0 : 1,
-    signal: null,
-  }));
+  spawnSync.mockImplementation((exe: string, args) => {
+    const encoded = args?.indexOf("-EncodedCommand") ?? -1;
+    const taskQuery =
+      encoded >= 0 &&
+      Buffer.from(args?.[encoded + 1] ?? "", "base64")
+        .toString("utf16le")
+        .includes("Schedule.Service");
+    const stdout = taskQuery
+      ? JSON.stringify({ state: 3, lastRunResult: 0, lastRunTime: "2026-09-27T00:00:00Z" })
+      : "No tasks";
+    return {
+      pid: 0,
+      output: [null, stdout, ""],
+      stdout,
+      stderr: "",
+      status: taskQuery || /(?:taskkill|tasklist)\.exe$/i.test(exe) ? 0 : 1,
+      signal: null,
+    };
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -66,6 +86,8 @@ it.each([
         (err: unknown) => err,
       );
 
+      expect(timeState.now).toBe(5_000);
+      expect(inspectPortUsageMock).toHaveBeenCalledWith(18789, { probeHosts: ["127.0.0.1"] });
       expect(spawnSync.mock.calls.filter(([exe]) => /taskkill\.exe$/i.test(exe))).toEqual([]);
       expect(killProcessTreeMock).not.toHaveBeenCalled();
       expect(String(failure)).toContain("remaining listener ownership could not be verified");

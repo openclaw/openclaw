@@ -1,7 +1,11 @@
 // Gateway log-tail helpers for status diagnostics.
 // Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
-import { extractBalancedJsonPrefix, safeParseJson } from "@openclaw/normalization-core";
+import {
+  extractBalancedJsonPrefix,
+  safeParseJson,
+  safeParseJsonRecord,
+} from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -10,9 +14,6 @@ import { readGatewayLogTailLines } from "../../daemon/diagnostics.js";
 /** Reads the last non-empty lines from a gateway log file, returning an empty list on read failure. */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const lines = await readGatewayLogTailLines(filePath).catch(() => []);
-  if (lines.length === 0) {
-    return [];
-  }
   const out = lines.slice(Math.max(0, lines.length - maxLines));
   return out.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
 }
@@ -78,9 +79,10 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     if (
       trimmedStart.startsWith('"') ||
       trimmedStart.startsWith("}") ||
-      trimmedStart.startsWith("{")
+      (trimmedStart.startsWith("{") && !safeParseJsonRecord(trimmedStart))
     ) {
-      // Tail can cut in the middle of a JSON blob; drop orphaned JSON fragments.
+      // Tail can cut in the middle of a JSON blob; drop orphaned fragments,
+      // but retain complete JSON console records and their structured context.
       continue;
     }
 
@@ -139,13 +141,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     out[g.index] = `${g.base} ×${g.count}`;
   }
 
-  const deduped: string[] = [];
-  for (const line of out) {
-    if (deduped[deduped.length - 1] === line) {
-      continue;
-    }
-    deduped.push(line);
-  }
+  const deduped = out.filter((line, index) => index === 0 || line !== out[index - 1]);
 
   if (deduped.length <= maxLines) {
     return deduped;
@@ -153,10 +149,9 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
 
   const head = Math.min(6, Math.floor(maxLines / 3));
   const tail = Math.max(1, maxLines - head - 1);
-  const kept = [
+  return [
     ...deduped.slice(0, head),
     `… ${deduped.length - head - tail} lines omitted …`,
     ...deduped.slice(-tail),
   ];
-  return kept;
 }

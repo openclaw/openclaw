@@ -1,84 +1,30 @@
-import type { SkillsProposalsListResultSchema } from "@openclaw/gateway-protocol";
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { Static } from "typebox";
-import { formatBytes } from "../../lib/agents/display.ts";
 import type {
-  SkillWorkshopEvaluation,
-  SkillWorkshopProposal,
-  SkillWorkshopProposalStatus,
-} from "../../lib/skill-workshop/index.ts";
-
-type SkillProposalStatus = SkillWorkshopProposalStatus;
-type SkillProposalKind = SkillWorkshopProposal["kind"];
-export type SkillProposalManifest = Static<typeof SkillsProposalsListResultSchema>;
-type SkillProposalManifestEntry = SkillProposalManifest["proposals"][number];
-
-type SkillProposalSupportFileRecord = {
-  path: string;
-  sizeBytes: number;
-};
-
-type SkillProposalOrigin = {
-  agentId?: string;
-  sessionKey?: string;
-  runId?: string;
-  messageId?: string;
-};
-
-type SkillProposalRecord = {
-  id: string;
-  kind: SkillProposalKind;
-  status: SkillProposalStatus;
-  title: string;
-  description: string;
-  createdAt: string;
-  updatedAt: string;
-  appliedAt?: string;
-  proposedVersion: string;
-  draftHash: string;
-  evaluation?: SkillWorkshopEvaluation;
-  origin?: SkillProposalOrigin;
-  supportFiles?: SkillProposalSupportFileRecord[];
-  target: {
-    skillName: string;
-    skillKey: string;
-    source?: string;
-  };
-};
-
-type SkillProposalSupportFile = {
-  path: string;
-  content: string;
-};
-
-export type SkillProposalInspectResult = {
-  record: SkillProposalRecord;
-  revisionHash?: string;
-  content: string;
-  supportFiles?: SkillProposalSupportFile[];
-};
-
-export type SkillProposalEvaluateResult = {
-  record: SkillProposalRecord;
-  evaluation: SkillWorkshopEvaluation;
-};
+  SkillsProposalEvaluateResult,
+  SkillsProposalInspectResult,
+  SkillsProposalRecordResult,
+  SkillsProposalsListResult,
+} from "@openclaw/gateway-protocol";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { formatBytes } from "../../lib/agents/display.ts";
+import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 
 export function parseDateMs(value: string | undefined): number {
   return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
-function startOfLocalDay(ms: number): number {
+function startOfLocalDay(ms: number, daysAgo = 0): number {
   const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - daysAgo).getTime();
 }
 
 function recencyGroup(ms: number): SkillWorkshopProposal["recencyGroup"] {
-  const today = startOfLocalDay(Date.now());
+  const now = Date.now();
+  const today = startOfLocalDay(now);
   const day = startOfLocalDay(ms);
   if (day === today) {
     return "today";
   }
-  if (day === today - 24 * 60 * 60 * 1000) {
+  if (day === startOfLocalDay(now, 1)) {
     return "yesterday";
   }
   return "earlier";
@@ -115,7 +61,7 @@ function stripProposalFrontmatter(content: string): string {
 }
 
 function supportFilesFromInspect(
-  result: SkillProposalInspectResult,
+  result: SkillsProposalInspectResult,
 ): SkillWorkshopProposal["supportFiles"] {
   const sizes = new Map(
     (result.record.supportFiles ?? []).map((file) => [file.path, file.sizeBytes]),
@@ -132,7 +78,7 @@ function supportFilesFromInspect(
 }
 
 export function proposalFromManifest(
-  entry: SkillProposalManifestEntry,
+  entry: SkillsProposalsListResult["proposals"][number],
   previous: SkillWorkshopProposal | undefined,
 ): SkillWorkshopProposal {
   const updatedAt = parseDateMs(entry.updatedAt);
@@ -167,7 +113,7 @@ export function proposalFromManifest(
   };
 }
 
-function proposalBaseFromRecord(record: SkillProposalRecord) {
+function proposalBaseFromRecord(record: SkillsProposalRecordResult) {
   const updatedAt = parseDateMs(record.updatedAt);
   const createdAt = parseDateMs(record.createdAt);
   return {
@@ -186,7 +132,7 @@ function proposalBaseFromRecord(record: SkillProposalRecord) {
 }
 
 export function proposalFromInspect(
-  result: SkillProposalInspectResult,
+  result: SkillsProposalInspectResult,
   previous: SkillWorkshopProposal | undefined,
 ): SkillWorkshopProposal {
   const record = result.record;
@@ -209,7 +155,7 @@ export function proposalFromInspect(
 }
 
 export function proposalFromEvaluation(
-  result: SkillProposalEvaluateResult,
+  result: SkillsProposalEvaluateResult,
   previous: SkillWorkshopProposal,
 ): SkillWorkshopProposal {
   const record = result.record;
@@ -230,7 +176,7 @@ export function proposalFromEvaluation(
 
 // Terminal actions keep the reviewed draft; the record owns lifecycle metadata.
 export function proposalFromActionRecord(
-  record: SkillProposalRecord,
+  record: SkillsProposalRecordResult,
   previous: SkillWorkshopProposal | undefined,
 ): SkillWorkshopProposal {
   return {

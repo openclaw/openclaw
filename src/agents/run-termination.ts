@@ -7,6 +7,7 @@ import {
   type AgentRunTimeoutPhase,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   type FailoverError,
   findErrorProperty,
@@ -41,10 +42,9 @@ const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
 export function createAgentRunDirectAbortError(): Error {
-  const error = new Error(AGENT_RUN_ABORTED_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_DIRECT_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
+    code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
+  });
 }
 
 function hasAgentRunAbortCode(value: unknown, code: string): boolean {
@@ -60,17 +60,15 @@ export function isAgentRunDirectAbortReason(value: unknown): boolean {
 }
 
 export function createAgentRunRestartAbortError(): Error {
-  const error = new Error(AGENT_RUN_RESTART_ABORT_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_RESTART_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_RESTART_ABORT_ERROR), {
+    code: AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+  });
 }
 
 export function createAgentRunSupersededAbortError(): Error {
-  const error = new Error(AGENT_RUN_SUPERSEDED_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_SUPERSEDED_ERROR), {
+    code: AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE,
+  });
 }
 
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
@@ -94,8 +92,7 @@ const SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE =
 
 /** Mark loss of the turn's settlement lifetime without asserting a successor exists. */
 export function createSessionPlacementSettlementClosedAbortError(): Error {
-  return Object.assign(new Error("session placement turn settlement is closed"), {
-    name: "AbortError",
+  return Object.assign(createAbortError("session placement turn settlement is closed"), {
     code: SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
   });
 }
@@ -162,13 +159,7 @@ function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
 export function resolveAgentRunErrorLifecycleFields(
   error: unknown,
   signal: AbortSignal | undefined,
-): {
-  aborted?: true;
-  stopReason?:
-    | typeof AGENT_RUN_ABORTED_STOP_REASON
-    | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
-    | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
-    | "timeout";
+): ReturnType<typeof resolveAgentRunAbortLifecycleFields> & {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
 } {

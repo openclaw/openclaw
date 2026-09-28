@@ -8,13 +8,11 @@ import { pathToFileURL } from "node:url";
 import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
-import {
-  createChannelIngressQueue,
-  getChannelIngressKysely,
-} from "../../../../src/channels/message/ingress-queue.js";
+import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
 import type { ModelDefinitionConfig } from "../../../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
+import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
 import { withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -174,7 +172,7 @@ async function readTelegramIngressStatuses(stateDir: string, eventIds: string[])
   try {
     return executeSqliteQuerySync(
       database.db,
-      getChannelIngressKysely(database.db)
+      getNodeSqliteKysely<Pick<DB, "channel_ingress_events">>(database.db)
         .selectFrom("channel_ingress_events")
         .select([
           "account_id as accountId",
@@ -248,7 +246,7 @@ async function startControlledSourceGateway(params: {
     resolveBuiltModule({
       distDir,
       prefix: "server-",
-      exportMarker: "resetPreparedModelCatalogForTest, startGatewayServer, truncateCloseReason",
+      exportMarker: "startGatewayServer, truncateCloseReason",
     }),
     resolveBuiltModule({
       distDir,
@@ -1034,28 +1032,23 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           await gateway.request("mark");
           queueCallback(10, `mdl_list_${REPLACEMENT_PROVIDER}_1`);
           queueCallback(11, "mdl_prov");
-          // Wait for a durable stale-catalog retry, not merely the initial pending enqueue.
+          // A claimed callback waits for the pending publication instead of retrying stale data.
           await expect
-            .poll(
-              async () => {
-                const first = (await readTelegramIngressStatuses(stateDir, eventIds))[0];
-                return first ? { ...first, retryRecorded: Number(first.attempts) >= 1 } : first;
-              },
-              {
-                interval: 25,
-                timeout: 30_000,
-              },
-            )
+            .poll(async () => (await readTelegramIngressStatuses(stateDir, eventIds))[0], {
+              interval: 25,
+              timeout: 30_000,
+            })
             .toEqual(
               expect.objectContaining({
                 accountId: "picker",
                 eventId: eventIds[0],
-                lastAttemptAt: expect.any(Number),
-                lastError: expect.stringContaining("Model catalog is not ready"),
-                retryRecorded: true,
-                status: "pending",
+                attempts: 0,
+                lastAttemptAt: null,
+                lastError: null,
+                status: "claimed",
               }),
             );
+          expect(telegramCalls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
 
           await gateway.request("replace");
 
@@ -1073,7 +1066,6 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           );
           expect(firstPickerEdit).toBeDefined();
           expect(hasCallback(firstPickerEdit!, `mdl_sel_${REPLACEMENT_MODEL_REF}`)).toBe(true);
-          // A durable retry may re-acknowledge a callback; require coverage of both callback ids.
           expect(
             new Set(
               telegramCalls
@@ -1097,9 +1089,9 @@ test("recovers a replaced model catalog and drains the following Telegram callba
               claims: 0,
               failed: 0,
               pending: 0,
-              statuses: eventIds.map((eventId, index) => ({
+              statuses: eventIds.map((eventId) => ({
                 accountId: "picker",
-                attempts: index === 0 ? expect.any(Number) : 0,
+                attempts: 0,
                 eventId,
                 laneKey: `telegram:${CHAT_ID}`,
                 lastAttemptAt: null,

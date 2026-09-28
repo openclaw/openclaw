@@ -10,10 +10,14 @@ import {
   listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
-import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
+import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import {
+  listUnsettledRequesterChildrenInRuns,
+  markRequesterTurnYieldedInRuns,
+} from "./subagent-registry-requester-yield.js";
 import {
   getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForRunIds,
+  prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
 
@@ -88,25 +92,31 @@ export function createSubagentRegistryPublicApi(config: {
     return findRunById(readRuns(), runId.trim());
   }
 
-  function getSubagentRunsByRunIds(runIds: readonly string[]): {
-    entries: Map<string, SubagentRunRecord>;
-  } {
-    const byId = new Map<string, SubagentRunRecord>();
+  async function prepareSubagentRunsByRunIds(
+    runIds: readonly string[],
+  ): Promise<PreparedSubagentRunsRead> {
     // Waiters need only their targets; retained results must not expand every wake's maps.
-    const selected = getSubagentRunsSnapshotForRunIds(runs, runIds);
-    for (const entry of selected.values()) {
-      byId.set(entry.runId, entry);
-      if (entry.swarmRunId) {
-        byId.set(entry.swarmRunId, entry);
-      }
-    }
+    const prepared = await prepareSubagentRunsSnapshotForRunIds(runs, runIds);
     return {
-      entries: new Map(
-        runIds.flatMap((runId) => {
-          const entry = byId.get(runId.trim());
-          return entry ? [[runId, entry] as const] : [];
-        }),
-      ),
+      consume(consume) {
+        return prepared.consume((selected) => {
+          const byId = new Map<string, SubagentRunRecord>();
+          for (const entry of selected.values()) {
+            byId.set(entry.runId, entry);
+            if (entry.swarmRunId) {
+              byId.set(entry.swarmRunId, entry);
+            }
+          }
+          return consume(
+            new Map(
+              runIds.flatMap((runId) => {
+                const entry = byId.get(runId.trim());
+                return entry ? [[runId, entry] as const] : [];
+              }),
+            ),
+          );
+        });
+      },
     };
   }
 
@@ -203,12 +213,24 @@ export function createSubagentRegistryPublicApi(config: {
     });
   }
 
+  /** Lists announcing children whose completion this requester session still awaits. */
+  function listUnsettledRequesterChildren(params: {
+    requesterSessionKey: string;
+    requesterAgentId?: string;
+    excludeRequesterTurnRunId?: string;
+  }) {
+    restoreOnce();
+    // Same live-map view as the yield claim: rows this turn just registered
+    // count, and rows the registry already retired do not.
+    return listUnsettledRequesterChildrenInRuns({ ...params, runs });
+  }
+
   return {
     leasePendingAgentSteeringItems,
     ackPendingAgentSteeringItems,
     releasePendingAgentSteeringItems,
     getSubagentRunByRunId,
-    getSubagentRunsByRunIds,
+    prepareSubagentRunsByRunIds,
     completeCollectorLaunchCleanup,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
@@ -216,5 +238,6 @@ export function createSubagentRegistryPublicApi(config: {
     countActiveRunsForSession,
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
+    listUnsettledRequesterChildren,
   };
 }

@@ -1,10 +1,18 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { buildLatestSubagentRunReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  buildLatestSubagentSessionListReadIndex,
+  getLatestLiveSubagentRunByChildSessionKey,
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval-store.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
@@ -100,9 +108,9 @@ function resolveApprovalSessionAudienceFromSources(params: {
 
 function createRuntimeApprovalSessionAudienceSources(
   cfg: OpenClawConfig,
+  persisted: boolean,
   sourceAgentId?: string | null,
 ): ApprovalSessionAudienceSources {
-  const subagentRuns = buildLatestSubagentRunReadIndex();
   const resolveStorageTarget = (sessionKey: string): { agentId: string; sessionKey: string } => {
     const parsed = parseAgentSessionKey(sessionKey);
     if (parsed?.rest.toLowerCase() === "global") {
@@ -126,7 +134,10 @@ function createRuntimeApprovalSessionAudienceSources(
       });
       return canonical ? resolveApprovalSourceStreamKey(canonical, relativeAgentId) : canonical;
     },
-    getLatestSubagentLineage: (sessionKey) => subagentRuns.getLatestSubagentRun(sessionKey),
+    getLatestSubagentLineage: (sessionKey) =>
+      persisted
+        ? buildLatestSubagentSessionListReadIndex([sessionKey]).getLatestSubagentRun(sessionKey)
+        : getLatestLiveSubagentRunByChildSessionKey(sessionKey),
     getStoredSessionLineage: (sessionKey) => {
       const target = resolveStorageTarget(sessionKey);
       return loadSessionEntryReadOnly({
@@ -137,18 +148,6 @@ function createRuntimeApprovalSessionAudienceSources(
       });
     },
   };
-}
-
-/** Resolves an approval audience from the live registry and session stores. */
-function resolveApprovalSessionAudience(
-  sourceSessionKey: string,
-  sourceAgentId?: string | null,
-): string[] {
-  const cfg = getRuntimeConfig();
-  return resolveApprovalSessionAudienceFromSources({
-    sourceSessionKey,
-    sources: createRuntimeApprovalSessionAudienceSources(cfg, sourceAgentId),
-  });
 }
 
 /** Canonicalize one source key against config: agent scoping, main-key aliases, global sentinel. */
@@ -172,20 +171,25 @@ function canonicalizeApprovalSourceStreamKey(
   return resolveApprovalSourceStreamKey(canonical, ownerAgentId);
 }
 
-/**
- * Fallback audience key when the lineage walk fails. Config-only
- * canonicalization (agent scope, configured main-key aliases) still applies
- * when the config loads; the pure-string form is the true last resort.
- */
-/** Non-throwing audience resolver for injection into the approval manager.
- * Lineage is routing metadata, not an approval safety prerequisite; when
- * session stores are unavailable this preserves the agent-scoped source. */
-export function resolveApprovalSessionAudienceWithFallback(
+/** Preserves source routing when lineage is unavailable, after read preparation settles. */
+export async function resolveApprovalSessionAudienceWithFallback(
   sourceSessionKey: string,
   sourceAgentId?: string | null,
-): string[] {
+): Promise<string[]> {
+  let persisted: boolean;
+  do {
+    persisted = await prepareOptionalSubagentSessionListReadCache();
+    getAsyncWorkSignal()?.throwIfAborted();
+  } while (persisted && !getSubagentSessionListReadSnapshotIdentity());
   try {
-    return resolveApprovalSessionAudience(sourceSessionKey, sourceAgentId);
+    return resolveApprovalSessionAudienceFromSources({
+      sourceSessionKey,
+      sources: createRuntimeApprovalSessionAudienceSources(
+        getRuntimeConfig(),
+        persisted,
+        sourceAgentId,
+      ),
+    });
   } catch {
     return [resolveApprovalFallbackAudienceSessionKey(sourceSessionKey, sourceAgentId)];
   }

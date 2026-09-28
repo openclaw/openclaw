@@ -26,11 +26,15 @@ export {
   type SqliteStrictMigrationResult,
 } from "../infra/sqlite-strict.js";
 export type {
+  OpenAsyncKeyedStoreOptions,
+  OpenRetainedKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateCompareIntent,
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRange,
   PluginStateKeyedStore,
+  PluginStateMoveEntries,
   PluginStateObservation,
   PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";

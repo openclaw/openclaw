@@ -13,7 +13,39 @@ import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
-import { EscalationReason, type CuaToolResult } from "./driver-client.js";
+import type { CuaToolResult } from "./driver-client.js";
+
+type ComputerExecution = Awaited<ReturnType<typeof execution>>;
+type WindowObservation = {
+  observation: { observationId: string; elements: Array<{ elementRef: string }> };
+};
+
+async function listWindow(computer: ComputerExecution) {
+  const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
+    details: { windows: Array<{ windowRef: string }> };
+  };
+  return listed.details.windows[0]!.windowRef;
+}
+
+async function observeWindow(computer: ComputerExecution, windowRef: string) {
+  return JSON.parse(
+    await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
+  ) as WindowObservation;
+}
+
+function windowDriver(handle: (name: string) => CuaToolResult = () => cuaToolResult({})) {
+  const native = driver();
+  native.callTool.mockImplementation(async (name) => {
+    if (name === "list_windows") {
+      return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
+    }
+    if (name === "get_window_state") {
+      return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
+    }
+    return handle(name);
+  });
+  return native;
+}
 
 describe("cua-computer provider", () => {
   it("settles the native driver during node preparation without opening a computer execution", async () => {
@@ -169,11 +201,60 @@ describe("cua-computer provider", () => {
     expect(createDriver).toHaveBeenCalledOnce();
 
     const stop = provider.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
-    await Promise.resolve();
+    await stop?.();
     expect(clearInterval).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "joins availability disposal through concurrent and later stops when it will %s",
+    async (outcome) => {
+      const { session, dispose } = driver();
+      const retiring = createDeferred<void>();
+      const entered = createDeferred<void>();
+      const failure = new Error("availability driver retirement failed");
+      dispose.mockImplementation(() => {
+        entered.resolve();
+        return retiring.promise;
+      });
+      const provider = createCuaComputerProvider({
+        platform: "linux",
+        createDriver: () => session,
+      });
+      const stop = provider.watchAvailability?.({ config: {}, env: {} }, vi.fn());
+      const first = Promise.resolve(stop?.());
+      const second = Promise.resolve(stop?.());
+      let settled = false;
+      const results = Promise.allSettled([first, second]).then((values) => {
+        settled = true;
+        return values;
+      });
+      try {
+        await entered.promise;
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        if (outcome === "reject") {
+          retiring.reject(failure);
+          expect(await results).toEqual([
+            { status: "rejected", reason: failure },
+            { status: "rejected", reason: failure },
+          ]);
+          await expect(Promise.resolve(stop?.())).rejects.toBe(failure);
+        } else {
+          retiring.resolve();
+          expect(await results).toEqual([
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]);
+          await stop?.();
+        }
+        expect(dispose).toHaveBeenCalledOnce();
+      } finally {
+        retiring.resolve();
+        await results;
+      }
+    },
+  );
 
   it("passes node invocation cancellation to the direct SDK", async () => {
     const { session, getDesktopState } = driver();
@@ -269,26 +350,10 @@ describe("cua-computer provider", () => {
   );
 
   it("rejects forged window, observation, and element refs before native resolution", async () => {
-    const { session, callTool } = driver();
-    callTool.mockImplementation(async (name) => {
-      if (name === "list_windows") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-      }
-      if (name === "get_window_state") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-      }
-      return cuaToolResult({});
-    });
+    const { session, callTool } = windowDriver();
     const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as {
-      observation: { observationId: string; elements: Array<{ elementRef: string }> };
-    };
+    const windowRef = await listWindow(computer);
+    const observed = await observeWindow(computer, windowRef);
     const callsBeforeHostileRefs = callTool.mock.calls.length;
 
     for (const input of [
@@ -314,7 +379,7 @@ describe("cua-computer provider", () => {
   });
 
   it("maps window pixels, app lifecycle, menu, zoom, and escalation tools", async () => {
-    const { session, callTool, escalateScope } = driver();
+    const { session, callTool, getSessionState } = driver();
     const zoomImage = (
       await resizeToJpeg({
         buffer: createSolidPngBuffer(300, 200, { r: 70, g: 125, b: 180 }),
@@ -350,13 +415,8 @@ describe("cua-computer provider", () => {
       details: { apps: Array<{ app: string }> };
     };
     const app = apps.details.apps[0]!.app;
-    const windows = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = windows.details.windows[0]!.windowRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as { observation: { observationId: string } };
+    const windowRef = await listWindow(computer);
+    const observed = await observeWindow(computer, windowRef);
 
     await computer.act(JSON.stringify({ action: "launch_app", app }));
     await computer.act(JSON.stringify({ action: "kill_app", app }));
@@ -412,10 +472,7 @@ describe("cua-computer provider", () => {
       { pid: 4242, window_id: 99, path: ["File", "Save"] },
       undefined,
     );
-    expect(escalateScope).toHaveBeenCalledWith(
-      EscalationReason.BackgroundDeliveryFailed,
-      undefined,
-    );
+    expect(getSessionState).toHaveBeenCalledWith(undefined);
   });
 
   it.each([
@@ -527,14 +584,7 @@ describe("cua-computer provider", () => {
   );
 
   it("maps the complete Linux window pointer and keyboard family", async () => {
-    const { session, callTool } = driver();
-    callTool.mockImplementation(async (name) => {
-      if (name === "list_windows") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-      }
-      if (name === "get_window_state") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-      }
+    const { session, callTool } = windowDriver(() => {
       return cuaToolResult(
         {},
         {
@@ -544,15 +594,8 @@ describe("cua-computer provider", () => {
       );
     });
     const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as {
-      observation: { observationId: string; elements: Array<{ elementRef: string }> };
-    };
+    const windowRef = await listWindow(computer);
+    const observed = await observeWindow(computer, windowRef);
     const observationId = observed.observation.observationId;
     const elementRef = observed.observation.elements[0]!.elementRef;
     const pixelTarget = { windowRef, observationId, x: 20, y: 30 };
@@ -602,14 +645,7 @@ describe("cua-computer provider", () => {
   });
 
   it("maps remaining discovery, window lifecycle, and semantic actions", async () => {
-    const { session, callTool, getCursorPosition } = driver();
-    callTool.mockImplementation(async (name) => {
-      if (name === "list_windows") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-      }
-      if (name === "get_window_state") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-      }
+    const { session, callTool, getCursorPosition } = windowDriver((name) => {
       if (name === "get_accessibility_tree") {
         return cuaToolResult({
           processes: [{ pid: 4242, name: "Editor" }],
@@ -634,15 +670,8 @@ describe("cua-computer provider", () => {
     await expect(computer.act('{"action":"get_cursor_position"}')).resolves.toContain('"x":11');
     expect(getCursorPosition).toHaveBeenCalledWith(undefined);
 
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as {
-      observation: { observationId: string; elements: Array<{ elementRef: string }> };
-    };
+    const windowRef = await listWindow(computer);
+    const observed = await observeWindow(computer, windowRef);
     await computer.act(JSON.stringify({ action: "bring_to_front", windowRef }));
     await computer.act(
       JSON.stringify({
@@ -672,14 +701,7 @@ describe("cua-computer provider", () => {
   });
 
   it("maps window delivery refusals to the closed computer error prefix", async () => {
-    const { session, callTool } = driver();
-    callTool.mockImplementation(async (name) => {
-      if (name === "list_windows") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
-      }
-      if (name === "get_window_state") {
-        return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
-      }
+    const { session } = windowDriver(() => {
       return cuaToolResult(
         { code: "background_occluded" },
         {
@@ -690,13 +712,8 @@ describe("cua-computer provider", () => {
       );
     });
     const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
-    const observed = JSON.parse(
-      await computer.act(JSON.stringify({ action: "get_window_state", windowRef })),
-    ) as { observation: { observationId: string } };
+    const windowRef = await listWindow(computer);
+    const observed = await observeWindow(computer, windowRef);
     await expect(
       computer.act(
         JSON.stringify({
@@ -718,10 +735,7 @@ describe("cua-computer provider", () => {
         : cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true }),
     );
     const computer = await execution(session);
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const windowRef = listed.details.windows[0]!.windowRef;
+    const windowRef = await listWindow(computer);
     setGeneration("execution-2");
 
     await expect(

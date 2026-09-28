@@ -15,6 +15,7 @@ export function initialModelFallbackAttemptOptions(
       requestedProvider: params.provider,
       requestedModel: params.model,
       stage: "initial",
+      selectionChanged: false,
     },
   };
 }
@@ -28,6 +29,7 @@ export function fallbackModelAttemptOptions(
       requestedProvider: params.provider,
       requestedModel: params.model,
       stage: "fallback",
+      selectionChanged: false,
       fallbackReason,
     },
   };

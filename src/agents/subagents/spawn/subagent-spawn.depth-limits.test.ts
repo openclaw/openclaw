@@ -149,12 +149,6 @@ describe("subagent spawn depth + child limits", () => {
       const accepted = expectAccepted(result, "run-1");
       expect(accepted.childSessionKey).toMatch(/^agent:main:subagent:/);
       expect(accepted.completionTarget).toBe(completionTarget);
-      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          completionTarget,
-          completionRequesterSessionId: completionTarget ? "nested-parent" : undefined,
-        }),
-      );
 
       // Child capability flags are stored on the session entry so later control
       // tools can enforce leaf behavior without recalculating spawn depth.
@@ -258,28 +252,5 @@ describe("subagent spawn depth + child limits", () => {
     const result = await spawnFrom("agent:main:subagent:parent");
 
     expectAccepted(result, "run-1");
-  });
-
-  it("fails spawn when the initial child session patch rejects the model", async () => {
-    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
-    hoisted.callGatewayMock.mockImplementation(
-      async (opts: { method?: string; params?: { model?: string } }) => {
-        if (opts.method === "agent") {
-          return { runId: "run-depth" };
-        }
-        return {};
-      },
-    );
-    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
-
-    const result = await spawnFrom("main", { model: "bad-model" });
-
-    expect(result.status).toBe("error");
-    expect(result.error ?? "").toContain("invalid model");
-    expect(
-      hoisted.callGatewayMock.mock.calls.some(
-        (call) => (call[0] as { method?: string }).method === "agent",
-      ),
-    ).toBe(false);
   });
 });

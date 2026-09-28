@@ -3,7 +3,7 @@ import {
   parseRetryAfterErrorSeconds,
 } from "@openclaw/ai/internal/retry-after";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import milliseconds from "ms";
+import { durationUnitMs } from "../../infra/format-time/duration-units.js";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractErrorHttpStatus,
@@ -34,6 +34,31 @@ const SHORT_WINDOW_RATE_LIMIT_RE =
 const RETRY_AFTER_VALUE_RE =
   /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
 const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
+const RETRY_AFTER_UNIT_MS = new Map<string, number>([
+  ["milliseconds", durationUnitMs.millisecond],
+  ["millisecond", durationUnitMs.millisecond],
+  ["msecs", durationUnitMs.millisecond],
+  ["msec", durationUnitMs.millisecond],
+  ["ms", durationUnitMs.millisecond],
+  ["seconds", durationUnitMs.second],
+  ["second", durationUnitMs.second],
+  ["secs", durationUnitMs.second],
+  ["sec", durationUnitMs.second],
+  ["s", durationUnitMs.second],
+  ["minutes", durationUnitMs.minute],
+  ["minute", durationUnitMs.minute],
+  ["mins", durationUnitMs.minute],
+  ["min", durationUnitMs.minute],
+  ["m", durationUnitMs.minute],
+  ["hours", durationUnitMs.hour],
+  ["hour", durationUnitMs.hour],
+  ["hrs", durationUnitMs.hour],
+  ["hr", durationUnitMs.hour],
+  ["h", durationUnitMs.hour],
+  ["days", durationUnitMs.day],
+  ["day", durationUnitMs.day],
+  ["d", durationUnitMs.day],
+]);
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
 
 /** Extract guarded HTTP status evidence for retry and diagnostic consumers. */
@@ -83,16 +108,13 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
       return undefined;
     }
     const unit = secondsMatch[2]?.toLowerCase();
-    if (
-      unit &&
-      !/^(?:milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)$/.test(
-        unit,
-      )
-    ) {
+    const unitMilliseconds = RETRY_AFTER_UNIT_MS.get(unit ?? "s");
+    if (unitMilliseconds === undefined) {
       return undefined;
     }
-    const unitMilliseconds = milliseconds(`1${unit ?? "s"}` as Parameters<typeof milliseconds>[0]);
-    return unitMilliseconds === 1 ? value / 1000 : value * (unitMilliseconds / 1000);
+    return unitMilliseconds === durationUnitMs.millisecond
+      ? value / durationUnitMs.second
+      : value * (unitMilliseconds / durationUnitMs.second);
   }
   const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);

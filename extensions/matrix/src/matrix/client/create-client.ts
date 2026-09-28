@@ -1,4 +1,3 @@
-// Matrix plugin module implements create client behavior.
 import fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -63,10 +62,7 @@ export async function createMatrixClient(params: {
     : null;
 
   if (storagePaths) {
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env: process.env,
-    });
+    await maybeMigrateLegacyStorage({ storagePaths });
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     await writeStorageMeta({
       storagePaths,

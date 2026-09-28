@@ -247,7 +247,6 @@ internal class WearProxyBridge(
         resyncRequired = true
         operations.trySend(WearBridgeOperation.Overflow).getOrThrow()
       }
-      resyncRequired = true
       if (terminal) {
         if (pendingTerminalEvents.size == MAX_PENDING_TERMINAL_EVENTS) {
           pendingTerminalEvents.removeFirst()
@@ -319,13 +318,13 @@ internal class WearProxyBridge(
     discoverPeers(forceRefresh = terminalChatEvent, bypassNegativeCache = terminalChatEvent)
     val initialPeers = peerSnapshot()
     if (initialPeers.isEmpty()) return
-    val initialResult = sendToPeers(initialPeers, encoded)
-    if (initialResult.failed.isEmpty()) return
+    val delivered = sendToPeers(initialPeers, encoded)
+    if (initialPeers.all { it.nodeId in delivered }) return
 
     // Refresh after any stale peer, but do not redeliver the sequence to watches
     // that already accepted it. Newly reachable and recovered peers get one retry.
     discoverPeers(forceRefresh = true, bypassNegativeCache = true)
-    val retryPeers = peerSnapshot().filterNot { it.nodeId in initialResult.delivered }
+    val retryPeers = peerSnapshot().filterNot { it.nodeId in delivered }
     sendToPeers(retryPeers, encoded)
   }
 
@@ -348,17 +347,14 @@ internal class WearProxyBridge(
   private suspend fun sendToPeers(
     peers: List<PeerRegistration>,
     data: ByteArray,
-  ): WearPeerSendResult {
+  ): Set<String> {
     val delivered = linkedSetOf<String>()
-    val failed = linkedSetOf<String>()
     for (peer in peers) {
       if (sendToPeer(peer, WearProtocol.EVENT_PATH, data)) {
         delivered += peer.nodeId
-      } else {
-        failed += peer.nodeId
       }
     }
-    return WearPeerSendResult(delivered = delivered, failed = failed)
+    return delivered
   }
 
   private suspend fun sendResponseToPeer(
@@ -479,11 +475,6 @@ internal class WearProxyBridge(
 
   internal fun peerCountForTests(): Int = synchronized(peerLock) { peers.size }
 
-  private data class WearPeerSendResult(
-    val delivered: Set<String>,
-    val failed: Set<String>,
-  )
-
   private companion object {
     const val MAX_PEERS = 8
     const val MAX_BUFFERED_EVENTS = 32
@@ -543,7 +534,8 @@ internal class WearChatStreamProjector {
     }
     val delta = (projected["deltaText"] as? JsonPrimitive)?.contentOrNull.orEmpty()
     val replace = (projected["replace"] as? JsonPrimitive)?.contentOrNull == "true"
-    val fullMessage = projectedWearMessageText(projected["message"])
+    // Bound the live tail after reading the snapshot; message transport truncation keeps its prefix.
+    val fullMessage = wearStreamMessageText((payload as? JsonObject)?.get("message"))
     if (streamKey == null && fullMessage == null && !replace) {
       // Events without a session cannot affect a selected watch transcript.
       return projected

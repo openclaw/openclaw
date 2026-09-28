@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { constants, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspectManagedProcessGroup } from "../lib/managed-child-process.mts";
 
 const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
@@ -77,6 +78,7 @@ writeFileSync(
 for (const relative of [
   "pr-lib/github.sh",
   "pr-lib/github.mjs",
+  "pr-lib/gh-api-preflight.mjs",
   "lib/plain-gh.mjs",
   "lib/direct-run.mjs",
 ]) {
@@ -137,25 +139,21 @@ function exitCodeForSignal(signal) {
   return typeof signalNumber === "number" ? 128 + signalNumber : 1;
 }
 
-function processGroupStatus(pgid) {
+function processGroupStatus() {
   if (operationGroupGone) {
     return "dead";
   }
-  if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid > 0x7fffffff) {
-    return "indeterminate";
+  // The shared owner distinguishes exited Linux threads awaiting reaping from
+  // live descendants. Only this supervisor's observed child exit permits that check.
+  const state = inspectManagedProcessGroup(child, {
+    deadlineAt: killDeadline,
+    errorPolicy: "indeterminate",
+  });
+  if (state === "dead") {
+    // Never let later PGID reuse redirect a delayed signal or liveness probe.
+    operationGroupGone = true;
   }
-  try {
-    process.kill(-pgid, 0);
-    return "live";
-  } catch (error) {
-    if (error?.code === "ESRCH") {
-      // Once absent, this operation group is gone forever. Never let later
-      // PGID reuse redirect a delayed signal or liveness probe.
-      operationGroupGone = true;
-      return "dead";
-    }
-    return "indeterminate";
-  }
+  return state;
 }
 
 function processGroupRows(pgid) {
@@ -479,7 +477,7 @@ function childResultAllowsLockRelease() {
   return completedCleanly || failedDuringValidation;
 }
 
-const postExitGroupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
+const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
 if (postExitGroupStatus === "indeterminate") {
   notificationFailure ??= new Error("scripts/pr process-group state became indeterminate");
 } else if (postExitGroupStatus === "live") {
@@ -498,7 +496,7 @@ if (postExitGroupStatus === "indeterminate") {
 
 async function waitForOperationDrain() {
   while (true) {
-    const groupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
+    const groupStatus = child.pid ? processGroupStatus() : "dead";
     if (groupStatus === "indeterminate") {
       throw new Error("scripts/pr process-group state became indeterminate");
     }

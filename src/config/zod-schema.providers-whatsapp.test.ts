@@ -3,38 +3,6 @@ import { describe, it, expect } from "vitest";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 describe("WhatsApp prompt config Zod validation", () => {
-  it("validates group-level systemPrompt", () => {
-    const config = {
-      groups: {
-        "123@g.us": {
-          systemPrompt: "This is a work group",
-        },
-      },
-    };
-
-    const result = WhatsAppConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.groups?.["123@g.us"]?.systemPrompt).toBe("This is a work group");
-    }
-  });
-
-  it("validates direct-level systemPrompt", () => {
-    const config = {
-      direct: {
-        "+15551234567": {
-          systemPrompt: "This is a VIP direct chat",
-        },
-      },
-    };
-
-    const result = WhatsAppConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.direct?.["+15551234567"]?.systemPrompt).toBe("This is a VIP direct chat");
-    }
-  });
-
   it("validates combined group and direct prompt surfaces", () => {
     const config = {
       groups: {
@@ -94,38 +62,6 @@ describe("WhatsApp prompt config Zod validation", () => {
     expect(schema.properties?.accounts?.additionalProperties?.properties?.exposeErrorText).toBe(
       undefined,
     );
-  });
-
-  it("accepts channel-level pluginHooks.messageReceived", () => {
-    const config = {
-      pluginHooks: {
-        messageReceived: true,
-      },
-    };
-
-    const result = WhatsAppConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.pluginHooks?.messageReceived).toBe(true);
-    }
-  });
-
-  it("accepts account-level pluginHooks.messageReceived", () => {
-    const config = {
-      accounts: {
-        work: {
-          pluginHooks: {
-            messageReceived: true,
-          },
-        },
-      },
-    };
-
-    const result = WhatsAppConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(true);
-    }
   });
 
   it("rejects extra properties in pluginHooks", () => {

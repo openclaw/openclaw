@@ -5,9 +5,9 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 export {
   bindSessionPendingInputSources,
-  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   readSessionPendingInput,
   readSessionSubmittedInput,
@@ -45,7 +45,6 @@ export type {
   SessionAbortTargetResult,
   SessionAccessScope,
   SessionArchivedTranscriptCleanupRule,
-  SessionCompactionCheckpointMutationResult,
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
   SessionBranchListParams,
@@ -131,7 +130,7 @@ export type {
 export type {
   RecordInboundSessionMetaParams,
   UpdateSessionLastRouteParams,
-} from "./session-accessor.entry-mutation.js";
+} from "./runtime-types.js";
 export {
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
@@ -148,13 +147,16 @@ export {
   loadExactSessionEntry,
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
+  loadExactSessionEntryFromStoreReadOnly,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
+  loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,
   patchSessionEntryCore,
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
+  prepareQualifiedSessionEntryTarget,
   readSessionUpdatedAtCore,
   readSessionStoreSummaryReadOnly,
   replaceSessionEntry,
@@ -190,6 +192,7 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+export { updateSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 export {
   MAX_SESSION_PARTICIPANTS,
   recordSessionParticipant,
@@ -246,7 +249,6 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   loadTranscriptSuffixEventsBoundedSync,
   persistCompactionBoundaryWithSessionEntrySync,
   preflightSessionTranscriptForManualCompact,
@@ -278,10 +280,6 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
-export {
-  readClosedTranscriptTurn,
-  type ClosedTranscriptTurnReadResult,
-} from "./session-accessor.transcript-range.js";
 export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
@@ -320,3 +318,7 @@ export {
   readLatestSessionTranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.js";
 export { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+export { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
+
+export { readSessionBackingFacts, type SessionBackingFact } from "./session-backing-facts.js";
+export { readSessionBackingFactsInWorker } from "./session-backing-facts-runtime.js";

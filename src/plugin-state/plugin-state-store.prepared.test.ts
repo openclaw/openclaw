@@ -13,7 +13,8 @@ import {
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
-import { lookupPluginStateEntry, registerPluginStateEntry } from "./plugin-state-store.kernel.js";
+import { lookupPluginStateEntry } from "./plugin-state-store.kernel.js";
+import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
 import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
   clearPluginStateStoreForTests,
@@ -48,17 +49,13 @@ describe("plugin state prepared queries", () => {
     const options = { database, env: testState.env };
     const entry = { ...scope, maxEntries: 1, overflowPolicy: "evict-oldest" as const };
     runOpenClawStateWriteTransaction(() => {
-      registerPluginStateEntry(database, { ...entry, key: "original", valueJson: '"owned"' }, 10);
+      registerPluginStateEntry(database, { ...entry, key: "original", valueJson: '"owned"' });
     }, options);
 
     const aborted = new Error("abort the caller's transaction");
     expect(() =>
       runOpenClawStateWriteTransaction(() => {
-        registerPluginStateEntry(
-          database,
-          { ...entry, key: "pending", valueJson: '"pending"' },
-          10,
-        );
+        registerPluginStateEntry(database, { ...entry, key: "pending", valueJson: '"pending"' });
         expect(lookupPluginStateEntry(database, { ...scope, key: "pending" })).toBe("pending");
         expect(lookupPluginStateEntry(database, { ...scope, key: "original" })).toBeUndefined();
         throw aborted;
@@ -177,7 +174,7 @@ describe("plugin state prepared queries", () => {
                   'select count(*) as "count" from "plugin_state_entries"',
                 ),
             );
-            expect(counts).toHaveLength(2);
+            expect(counts).toHaveLength(1);
           } finally {
             compile.mockRestore();
           }

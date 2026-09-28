@@ -32,6 +32,12 @@ export function createCodexTestHostCapabilities(
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive: () => {},
+    retainSourceAuthority: () => undefined,
+    bindModelExecution: () => ({
+      signal: new AbortController().signal,
+      assertCurrent: () => host.assertActive(),
+      release: () => {},
+    }),
     bindToolSurface: (tools) => tools,
     createToolSurface: (options, bindingOptions) =>
       host.bindToolSurface(

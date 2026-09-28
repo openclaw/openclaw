@@ -16,6 +16,7 @@ import {
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import {
+  createLivePreviewLifecycle,
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -79,9 +80,10 @@ function createRecordingMattermostClient(recorder: WireRecorder): MattermostClie
       });
       return result as T;
     }
-    if (path.startsWith("/posts/")) {
-      const postId = path.slice("/posts/".length);
-      if (method === "DELETE") {
+    const postRoute = /^\/posts\/([^/]+)(\/patch)?$/.exec(path);
+    const postId = postRoute?.[1];
+    if (postId) {
+      if (method === "DELETE" && !postRoute?.[2]) {
         recorder.recordWireCall({
           method: `DELETE ${path}`,
           target: postId,
@@ -89,9 +91,11 @@ function createRecordingMattermostClient(recorder: WireRecorder): MattermostClie
         });
         return { status: "OK" } as T;
       }
-      const result = { id: postId };
-      recorder.recordWireCall({ method: `${method} ${path}`, target: postId, payload, result });
-      return result as T;
+      if (method === "PUT" && postRoute?.[2] === "/patch") {
+        const result = { id: postId };
+        recorder.recordWireCall({ method: `${method} ${path}`, target: postId, payload, result });
+        return result as T;
+      }
     }
     throw new Error(`Unexpected Mattermost request: ${method} ${path}`);
   };
@@ -120,7 +124,9 @@ function setupMattermostTrace(recorder: WireRecorder) {
       await draftStream.forceNewMessage();
     },
   });
-  const previewState = { finalizedViaPreviewPost: false };
+  const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
+    draft: { ...draftStream, id: draftStream.postId },
+  });
   let lastPartialText = "";
 
   // Replicas of the monitor's inline final-text resolution glue
@@ -271,10 +277,9 @@ function setupMattermostTrace(recorder: WireRecorder) {
           info: { kind: "final" },
           kind: "channel",
           client,
-          draftStream,
+          previewLifecycle,
           effectiveReplyToId: ROOT_ID,
           resolvePreviewFinalText,
-          previewState,
           logVerboseMessage: () => {},
           deliverPayload,
         });
@@ -283,6 +288,7 @@ function setupMattermostTrace(recorder: WireRecorder) {
         // Mirrors the monitor's finally block: stop flushes the last pending
         // preview text and keeps the post.
         await draftStream.stop();
+        await previewLifecycle.cleanup();
         break;
       case "wire-fault":
         throw new Error("mattermost trace scenarios do not script wire faults");

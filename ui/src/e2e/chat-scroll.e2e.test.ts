@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -53,6 +54,44 @@ suite.define(() => {
       const input = page.locator(".agent-chat__input");
       const originalTop = await thread.evaluate((element) => element.scrollTop);
       const composerBounds = await input.boundingBox();
+
+      // Chromium's blocked-input warning must not crash while resolving the
+      // conversation's listener. Age trusted input instead of stalling the UI.
+      const devtools = await page.context().newCDPSession(page);
+      await devtools.send("Log.enable");
+      await devtools.send("Log.startViolationsReport", {
+        config: [{ name: "blockedEvent", threshold: 1 }],
+      });
+      const threadBounds = await thread.boundingBox();
+      if (!threadBounds) {
+        throw new Error("Expected a visible transcript");
+      }
+      const crash = createDeferred<never>();
+      let rendererCrashed = false;
+      const onCrash = () => {
+        rendererCrashed = true;
+        crash.reject(new Error("Renderer crashed on delayed transcript wheel"));
+      };
+      page.on("crash", onCrash);
+      try {
+        await Promise.race([
+          devtools.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: threadBounds.x + threadBounds.width / 2,
+            y: threadBounds.y + threadBounds.height / 2,
+            deltaX: 0,
+            deltaY: -1,
+            timestamp: Date.now() / 1_000 - 2,
+          }),
+          crash.promise,
+        ]);
+        expect(await thread.evaluate((element) => element.isConnected)).toBe(true);
+      } finally {
+        page.off("crash", onCrash);
+        if (!rendererCrashed) {
+          await devtools.detach();
+        }
+      }
 
       await composer.hover();
       await page.mouse.wheel(0, -300);

@@ -7,7 +7,7 @@ import {
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
-import { findProviderRuntimePluginInRegistry } from "./provider-registry-selection.js";
+import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { createProviderRegistryResolver } from "./providers.runtime-core.js";
 import type {
@@ -160,16 +160,19 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
+    const registration = selection
+      ? findProviderRuntimeRegistrationInRegistry({
+          registry: selection.registry,
+          provider: params.provider,
+          ownerRefs,
+          isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
+        })
+      : undefined;
     return {
       ...params,
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),
-      plugin: selection
-        ? findProviderRuntimePluginInRegistry({
-            registry: selection.registry,
-            provider: params.provider,
-            ownerRefs,
-            isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
-          })
+      plugin: registration
+        ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
         : undefined,
     };
   }
@@ -207,13 +210,16 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
-    return selection
-      ? findProviderRuntimePluginInRegistry({
+    const registration = selection
+      ? findProviderRuntimeRegistrationInRegistry({
           registry: selection.registry,
           provider: params.provider,
           ownerRefs: [],
           isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
         })
+      : undefined;
+    return registration
+      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
       : undefined;
   }
 

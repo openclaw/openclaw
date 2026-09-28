@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -19,6 +20,7 @@ import type {
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
+  WorkboardCardReadScope,
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
@@ -27,6 +29,7 @@ import type {
 import {
   asBlobContent,
   blobToBase64,
+  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -41,7 +44,12 @@ import {
 } from "./sqlite-store-records.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
 import { bindNull, insertCard } from "./sqlite-store-write.js";
-import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
+import {
+  MAX_WORKER_CONTEXT_PARENTS,
+  MAX_WORKER_CONTEXT_RECENT_CARDS,
+  workboardCardConsumesOwnerSlot,
+  workboardCardSlotOwner,
+} from "./store-constants.js";
 
 type SyncStore<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => R : never;
@@ -205,23 +213,96 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     return this.db.prepare("DELETE FROM workboard_cards WHERE id = ?").run(key);
   }
 
-  entries(boardId?: string): Array<{ key: string; value: PersistedWorkboardCard }> {
+  private workerContextCardIds(
+    scope: Extract<WorkboardCardReadScope, { kind: "worker-context" }>,
+  ): string[] {
+    const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
+    const doneParents = new Set(
+      scope.parentIds.length === 0
+        ? []
+        : Array.from(
+            iterateSqliteQuerySync(
+              this.db,
+              query
+                .selectFrom("workboard_cards")
+                .select("id")
+                .where("id", "in", sqliteStringSet(scope.parentIds))
+                .where("status", "=", "done"),
+            ),
+            (row) => requiredString(row, "id"),
+          ),
+    );
+    const parents = scope.parentIds
+      .filter((id) => doneParents.has(id))
+      .slice(-MAX_WORKER_CONTEXT_PARENTS);
+    const recent = scope.agentId
+      ? Array.from(
+          iterateSqliteQuerySync(
+            this.db,
+            query
+              .selectFrom("workboard_cards")
+              .select("id")
+              .where("board_id", "=", scope.boardId)
+              .where("agent_id", "=", scope.agentId)
+              .where("status", "=", "done")
+              .where("id", "!=", scope.cardId)
+              // Match the stable updated-time sort after the normal card order.
+              .orderBy("updated_at", "desc")
+              .orderBy("position", "asc")
+              .orderBy("created_at", "asc")
+              .orderBy("id", "asc")
+              .limit(MAX_WORKER_CONTEXT_RECENT_CARDS),
+          ),
+          (row) => requiredString(row, "id"),
+        )
+      : [];
+    return [...new Set([...parents, ...recent])];
+  }
+
+  entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
+    // Selection and hydration must agree if another connection changes a parent or sibling.
+    return scope?.kind === "worker-context"
+      ? runSqliteDeferredTransactionSync(this.db, () => this.readEntries(scope))
+      : this.readEntries(scope);
+  }
+
+  private readEntries(
+    scope?: WorkboardCardReadScope,
+  ): Array<{ key: string; value: PersistedWorkboardCard }> {
     let query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
       .selectFrom("workboard_cards")
       .selectAll()
       .orderBy("created_at", "asc")
       .orderBy("id", "asc");
-    if (boardId !== undefined) {
-      query = query.where("board_id", "=", boardId);
+    if (scope?.kind === "board") {
+      query = query.where("board_id", "=", scope.boardId);
+    } else if (scope?.kind === "session") {
+      // Empty direct keys decode as absent; execution keys require an execution record.
+      query = query.where((eb) =>
+        eb.or([
+          eb("session_key", "=", scope.sessionKey),
+          eb.and([
+            eb.or([eb("session_key", "is", null), eb("session_key", "=", "")]),
+            eb("execution_id", "!=", ""),
+            eb("execution_session_key", "=", scope.sessionKey),
+          ]),
+        ]),
+      );
+    } else if (scope?.kind === "worker-context") {
+      const ids = this.workerContextCardIds(scope);
+      if (ids.length === 0) {
+        return [];
+      }
+      query = query.where("id", "in", sqliteStringSet(ids));
     }
     const rows = Array.from(iterateSqliteQuerySync(this.db, query));
-    if (boardId !== undefined && rows.length === 0) {
+    if (scope !== undefined && rows.length === 0) {
       return [];
     }
     // One query per child table for the selected cards instead of one per table per card.
     const preloaded = loadCardChildRows(
       this.db,
-      boardId === undefined ? undefined : rows.map((row) => requiredString(row, "id")),
+      scope === undefined ? undefined : rows.map((row) => requiredString(row, "id")),
     );
     return rows.map((row) => ({
       key: requiredString(row, "id"),
@@ -343,23 +424,19 @@ function readBoard(row: Row): PersistedWorkboardBoard {
     | undefined;
   return {
     version: 1,
-    board: {
+    board: definedFields({
       id: requiredString(row, "id"),
-      ...(stringValue(row, "name") ? { name: stringValue(row, "name") } : {}),
-      ...(stringValue(row, "description") ? { description: stringValue(row, "description") } : {}),
-      ...(stringValue(row, "icon") ? { icon: stringValue(row, "icon") } : {}),
-      ...(stringValue(row, "color") ? { color: stringValue(row, "color") } : {}),
-      ...(stringValue(row, "automation_job_id")
-        ? { automationJobId: stringValue(row, "automation_job_id") }
-        : {}),
+      name: stringValue(row, "name"),
+      description: stringValue(row, "description"),
+      icon: stringValue(row, "icon"),
+      color: stringValue(row, "color"),
+      automationJobId: stringValue(row, "automation_job_id"),
       ...(defaultWorkspace ? { defaultWorkspace } : {}),
       ...(orchestration ? { orchestration } : {}),
       createdAt: requiredNumber(row, "created_at"),
       updatedAt: requiredNumber(row, "updated_at"),
-      ...(numberValue(row, "archived_at") !== undefined
-        ? { archivedAt: numberValue(row, "archived_at") }
-        : {}),
-    },
+      archivedAt: numberValue(row, "archived_at"),
+    }),
   };
 }
 
@@ -444,27 +521,21 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
     | undefined;
   return {
     version: 1,
-    subscription: {
+    subscription: definedFields({
       id: requiredString(row, "id"),
       boardId: requiredString(row, "board_id"),
-      ...(stringValue(row, "card_id") ? { cardId: stringValue(row, "card_id") } : {}),
-      ...(stringValue(row, "session_key") ? { sessionKey: stringValue(row, "session_key") } : {}),
-      ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
-      ...(stringValue(row, "target") ? { target: stringValue(row, "target") } : {}),
+      cardId: stringValue(row, "card_id"),
+      sessionKey: stringValue(row, "session_key"),
+      runId: stringValue(row, "run_id"),
+      target: stringValue(row, "target"),
       ...(eventKinds ? { eventKinds } : {}),
-      ...(numberValue(row, "last_event_at") !== undefined
-        ? { lastEventAt: numberValue(row, "last_event_at") }
-        : {}),
-      ...(stringValue(row, "last_event_id")
-        ? { lastEventId: stringValue(row, "last_event_id") }
-        : {}),
-      ...(numberValue(row, "last_event_sequence") !== undefined
-        ? { lastEventSequence: numberValue(row, "last_event_sequence") }
-        : {}),
+      lastEventAt: numberValue(row, "last_event_at"),
+      lastEventId: stringValue(row, "last_event_id"),
+      lastEventSequence: numberValue(row, "last_event_sequence"),
       ...(deliveredEventIds ? { deliveredEventIds } : {}),
       createdAt: requiredNumber(row, "created_at"),
       updatedAt: requiredNumber(row, "updated_at"),
-    },
+    }),
   };
 }
 

@@ -325,7 +325,7 @@ function canonicalizeDirectCronRouteSessionKey(params: {
 // Does NOT persist the route — the caller must commit it after successful
 // platform delivery, matching the post-success invariant in message-action-send
 // and gateway server-methods/send.
-async function resolveCronDeliveryRouteSessionKey(params: {
+export async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
@@ -594,26 +594,26 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
   mirror: DirectCronTranscriptMirror;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  const storePath = params.mirror.storePath;
-  const initial = storePath
-    ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
-    : undefined;
-  const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
-  const expectedLifecycleRevision =
-    params.mirror.expectedLifecycleRevision ?? initial?.lifecycleRevision;
-  if (!storePath || !expectedSessionId) {
-    await logCronDeliveryWarn(
-      `[cron:${params.job.id}] skipped transcript mirror without an exact session identity`,
-    );
-    return;
-  }
-  const admittedMirror = {
-    ...params.mirror,
-    expectedSessionId,
-    ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-  };
-
   try {
+    const storePath = params.mirror.storePath;
+    const initial = storePath
+      ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
+      : undefined;
+    const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
+    const expectedLifecycleRevision =
+      params.mirror.expectedLifecycleRevision ?? initial?.lifecycleRevision;
+    if (!storePath || !expectedSessionId) {
+      await logCronDeliveryWarn(
+        `[cron:${params.job.id}] skipped transcript mirror without an exact session identity`,
+      );
+      return;
+    }
+    const admittedMirror = {
+      ...params.mirror,
+      expectedSessionId,
+      ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+    };
+
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [
@@ -635,7 +635,9 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
             `Session "${params.mirror.sessionKey}" changed before transcript mirror.`,
           );
         }
-        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest);
+        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest, {
+          purpose: "accepted-result-settlement",
+        });
         if (archivedError) {
           throw new Error(archivedError);
         }

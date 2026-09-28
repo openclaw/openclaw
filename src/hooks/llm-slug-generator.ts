@@ -1,7 +1,3 @@
-/**
- * LLM-based slug generator for session memory filenames
- */
-
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -63,9 +59,6 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
   return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
 }
 
-/**
- * Generate a short 1-2 word filename slug from session content using LLM
- */
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
@@ -121,27 +114,18 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
         authProfileFailurePolicy: "local",
       });
 
-      // Extract text from payloads
-      if (result.payloads && result.payloads.length > 0) {
-        const payload = result.payloads[0];
-        const text = payload?.text;
-        if (text) {
-          if (isErrorSlugPayload(payload)) {
-            return null;
-          }
-          // Clean up the response - extract just the slug
-          const slug = normalizeLowercaseStringOrEmpty(text)
-            .replace(/[^a-z0-9-]/g, "-")
-            .replace(/-+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .slice(0, 30)
-            .replace(/^-+|-+$/g, ""); // Max 30 chars
-
-          return slug || null;
-        }
+      const payload = result.payloads?.[0];
+      const text = payload?.text;
+      if (!text || isErrorSlugPayload(payload)) {
+        return null;
       }
-
-      return null;
+      const slug = normalizeLowercaseStringOrEmpty(text)
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 30)
+        .replace(/^-+|-+$/g, "");
+      return slug || null;
     } finally {
       preparedRunAdmission.close();
     }

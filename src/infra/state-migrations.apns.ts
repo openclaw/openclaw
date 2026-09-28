@@ -12,13 +12,13 @@ import {
 import { readLegacyJsonObjectStream } from "./legacy-json-object-stream.js";
 import {
   apnsRegistrationFromRow,
-  apnsRegistrationToRow,
   isValidApnsNodeId,
   normalizeApnsEnvironment,
   normalizeApnsNodeId,
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
@@ -323,6 +323,18 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
+  const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "APNs",
+    includeFilePath: false,
+    claimSuffix: APNS_DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
+  });
+  await source.recoverLinkedMove();
   const receipt = readLegacyMigrationReceipt(
     resolveLegacyMigrationSourceKey("apns-json", params.detected.sourcePath),
     params.env,
@@ -343,17 +355,6 @@ async function migrateWithExclusiveStateOwnership(params: {
     return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
   }
 
-  const sourcePath = params.detected.sourcePath;
-  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
-    stateRoot: params.stateRoot,
-    stateDir: params.stateDir,
-    sourcePath,
-    label: "APNs",
-    includeFilePath: false,
-    claimSuffix: APNS_DOCTOR_CLAIM_SUFFIX,
-    readSnapshot: (snapshotPath) =>
-      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
-  });
   const hasSource = await source.exists();
   const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {
@@ -391,24 +392,15 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  if (activePath === sourcePath) {
-    try {
+  let result: ReturnType<typeof importAndRecordReceipt>;
+  try {
+    if (activePath === sourcePath) {
       snapshot = await source.claim({
         snapshot,
         mismatchMessage: "legacy APNs source changed before Doctor could claim it",
         beforeClaim: params.beforeClaim,
       });
-    } catch (error) {
-      const restoreError = await source.restore();
-      warnings.push(
-        `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      );
-      return { changes, warnings };
     }
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
     result = importAndRecordReceipt({
       env: params.env,
       sourcePath,

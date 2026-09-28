@@ -38,8 +38,8 @@ import {
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
+export const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
+export const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
 const MIGRATION_KIND = "legacy-exec-approvals-json";
 const TARGET_TABLE = "exec_approvals_config";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
@@ -177,23 +177,14 @@ function decideAndRecordMigration(params: {
       } else if (receiptImportedSameSource && canonicalFile) {
         decision = "receipt-authoritative";
         removeSource = true;
-      } else if (!canonical) {
+      } else if (!canonical || !canonicalFile) {
         writeExecApprovalsConfigRow({
           db,
           file: legacyFile,
           raw: importedRaw ?? undefined,
           now,
         });
-        decision = "legacy-imported";
-        removeSource = true;
-      } else if (!canonicalFile) {
-        writeExecApprovalsConfigRow({
-          db,
-          file: legacyFile,
-          raw: importedRaw ?? undefined,
-          now,
-        });
-        decision = "invalid-canonical-repaired";
+        decision = canonical ? "invalid-canonical-repaired" : "legacy-imported";
         removeSource = true;
       } else {
         decision = "canonical-preserved";

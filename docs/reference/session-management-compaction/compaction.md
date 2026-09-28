@@ -91,13 +91,9 @@ Set `enabled: false` to disable threshold-driven auto-compaction inside the embe
 
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
 
-OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Branch/restore checkpoint actions use a returned successor when present; legacy pre-compaction checkpoint files remain readable while referenced.
+OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Compaction summaries and token savings remain in transcript history; ordinary session forking remains available.
 
-Recovery follows the active successor's tool-result projections and timeout state.
-A checkpoint branch or restore preserves its selected model and workspace and
-follows the normal creator and isolation rules. It starts without the source run's writer claim,
-native CLI binding, pending delivery, or recovery work. Starting a checkpoint
-branch does not interrupt its source conversation.
+Compaction checkpoint browsing, branching, and restoration are no longer available. OpenClaw does not create new checkpoint metadata or snapshot files. Existing transcript generations and files are not deleted by this change. A read-only legacy metadata reader preserves historical token measurements and existing cleanup protections while older records still refer to those transcripts. Removing that reader requires a separately approved migration that preserves those facts; this removal changes no retention policy or database schema version.
 
 ## Pluggable compaction providers
 

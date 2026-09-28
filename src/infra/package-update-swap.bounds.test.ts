@@ -5,6 +5,10 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  createPackageIntegrityReader,
+  PackageIntegrityLimitError,
+} from "./package-update-integrity.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -31,6 +35,22 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it("distinguishes entry and byte budget exhaustion from integrity failures", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-budget-type-" }, async (base) => {
+      const { packageRoot, launcher } = await createPackageSwapFixture(base);
+      await expect(createPackageIntegrityReader().entries(packageRoot, 1)).rejects.toBeInstanceOf(
+        PackageIntegrityLimitError,
+      );
+      await fs.truncate(launcher, 1024 * 1024 + 1);
+      await expect(createPackageIntegrityReader().launcher(launcher)).rejects.toMatchObject({
+        resource: "byte",
+      });
+      await expect(createPackageIntegrityReader().launcher(packageRoot)).rejects.not.toBeInstanceOf(
+        PackageIntegrityLimitError,
+      );
+    });
+  });
+
   it.each([
     { timeoutMs: 55_000, elapsedMs: 31_000, incomplete: false },
     { timeoutMs: 55_000, elapsedMs: 55_001, incomplete: true },
@@ -88,7 +108,9 @@ describe("package verification bounds", () => {
         const activated = await swapStagedPackageInstall({
           ...params,
           timeoutMs,
-          onTransaction: (transaction) => transactions.push(transaction),
+          onTransaction: (transaction) => {
+            transactions.push(transaction);
+          },
         });
         expect(activated.status).toBe("committed");
         expect(activated.step.advisory).toBeUndefined();
@@ -161,7 +183,7 @@ describe("package verification bounds", () => {
             "baseline package fingerprint incomplete",
           );
           expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
-            expect.objectContaining({ step: "warning:global install swap", status: "completed" }),
+            expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
           );
           expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
           if (!transaction) {
@@ -209,54 +231,52 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each([1024 * 1024 + 1, 1024 * 1024 * 1024 + 1])(
-    "rejects manifest growth to %i bytes without attempting an oversized metadata allocation",
-    async (size) => {
-      await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
-        const { params, packageRoot } = await createPackageSwapFixture(base);
-        const manifest = path.join(packageRoot, "package.json");
-        const open = fs.open.bind(fs);
-        let manifestOpens = 0;
-        let grew = false;
-        let oversizedRead = false;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (String(args[0]) !== manifest) {
-            return handle;
-          }
-          if (++manifestOpens === 1) {
-            const close = handle.close.bind(handle);
-            vi.spyOn(handle, "close").mockImplementation(async () => {
-              await close();
-              await fs.truncate(manifest, size);
-              grew = true;
-            });
-          } else {
-            // Intercept either read path before buffering an oversized sparse file.
-            const rejectOversizedRead = async () => {
-              oversizedRead = true;
-              throw new Error("oversized metadata allocation intercepted");
-            };
-            vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
-            vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
-          }
+  it("rejects manifest growth past the byte limit without an oversized metadata allocation", async () => {
+    const size = 1024 * 1024 + 1;
+    await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
+      const { params, packageRoot } = await createPackageSwapFixture(base);
+      const manifest = path.join(packageRoot, "package.json");
+      const open = fs.open.bind(fs);
+      let manifestOpens = 0;
+      let grew = false;
+      let oversizedRead = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) !== manifest) {
           return handle;
-        });
-        const beforeActivate = vi.fn();
-        const onLiveMutation = vi.fn();
-        const result = await swapStagedPackageInstall({
-          ...params,
-          beforeActivate,
-          onLiveMutation,
-        });
-        expect(grew).toBe(true);
-        expect(result.status).toBe("failed");
-        expect(oversizedRead).toBe(false);
-        expect(beforeActivate).not.toHaveBeenCalled();
-        expect(onLiveMutation).not.toHaveBeenCalled();
+        }
+        if (++manifestOpens === 1) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            await close();
+            await fs.truncate(manifest, size);
+            grew = true;
+          });
+        } else {
+          // Intercept either read path before buffering an oversized sparse file.
+          const rejectOversizedRead = async () => {
+            oversizedRead = true;
+            throw new Error("oversized metadata allocation intercepted");
+          };
+          vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
+          vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
+        }
+        return handle;
       });
-    },
-  );
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({
+        ...params,
+        beforeActivate,
+        onLiveMutation,
+      });
+      expect(grew).toBe(true);
+      expect(result.status).toBe("failed");
+      expect(oversizedRead).toBe(false);
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+    });
+  });
 
   it("accepts a valid manifest at the metadata byte limit", async () => {
     await withTestDir({ prefix: "openclaw-rollback-metadata-valid-" }, async (base) => {
@@ -268,7 +288,9 @@ describe("package verification bounds", () => {
       const transactions: PackageUpdateTransaction[] = [];
       const result = await swapStagedPackageInstall({
         ...params,
-        onTransaction: (transaction) => transactions.push(transaction),
+        onTransaction: (transaction) => {
+          transactions.push(transaction);
+        },
       });
       expect(result.status).toBe("committed");
       expect(transactions).toHaveLength(1);
