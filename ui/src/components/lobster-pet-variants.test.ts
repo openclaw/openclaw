@@ -111,7 +111,7 @@ describe("lobster pet variants", () => {
     ["clawiestardust", "Clawie Stardust"],
     ["taylorpinch", "Taylor Pinch"],
     ["clawtoodeetoo", "Clawtoo Deetoo"],
-    ["leonardodepinchy", "Leonardo de Pinchy"],
+    ["leonardodepinchy", "Leonardo DaPinchy"],
     ["shellvis", "Shellvis"],
     ["alexandergrahamshell", "Alexander Graham Shell"],
   ] as const)(

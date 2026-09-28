@@ -77,7 +77,7 @@ describe("renderLobsterdex", () => {
     ],
     [
       "leonardodepinchy",
-      "Leonardo de Pinchy",
+      "Leonardo DaPinchy",
       "A little Renaissance is washing ashore.",
       "Every shell is a canvas.",
     ],
